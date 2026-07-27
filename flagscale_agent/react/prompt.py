@@ -101,6 +101,14 @@ WHEN ERROR:
 - Second failure (same category) → stop, diagnose root cause, try different approach
 - If new approach deviates from user intent → explain and confirm before proceeding
 
+## Package & Source Location Rule
+
+When you need to locate a software package or source code directory (e.g., FlagScale, Megatron-LM-FL, TransformerEngine-FL, or any dependency):
+- **DO NOT** blindly search with find/ls/grep to locate the package
+- **DO** ask the user directly: "Where is the source code for X?" or "Which conda environment has X installed?"
+- Only proceed after the user provides the path or environment location
+- Exception: locating your own source (flagscale_agent) — use the python import trick below
+
 ## Tool Guide
 
 - Read/edit files → read_file / edit_file / write_file (NOT cat/sed/echo)

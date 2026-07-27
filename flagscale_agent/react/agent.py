@@ -93,6 +93,7 @@ from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
 from flagscale_agent.react.guard.experiment_tracking import ExperimentTrackingGuard
 from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
 from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
+from flagscale_agent.react.guard.package_search import PackageSearchGuard
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
@@ -352,6 +353,7 @@ class WorkerAgent:
             guard_registry.register(ExperimentTrackingGuard())
             guard_registry.register(OutputDirReuseGuard())
             guard_registry.register(MegatronPathGuard())
+            guard_registry.register(PackageSearchGuard())
             guard_registry.register(DebugDisciplineGuard())
             from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
             guard_registry.register(ComprehensionGateGuard())
@@ -2443,8 +2445,25 @@ class WorkerAgent:
         return self._tool_executor.execute_single(tool_call, skip_confirm=skip_confirm)
 
     def _append_tool_results(self, tool_results: list[dict]):
-        for tr in tool_results:
-            self.history.append(tr)
+        """Append tool results, merging them into a single user message.
+
+        Anthropic API requires all tool_results for a batch of tool_uses
+        to be in the SAME user message (immediately following the assistant message).
+        """
+        if not tool_results:
+            return
+        if len(tool_results) == 1:
+            self.history.append(tool_results[0])
+        else:
+            # Merge all tool_result blocks into one user message
+            merged_content = []
+            for tr in tool_results:
+                content = tr.get("content", [])
+                if isinstance(content, list):
+                    merged_content.extend(content)
+                elif isinstance(content, str):
+                    merged_content.append({"type": "text", "text": content})
+            self.history.append({"role": "user", "content": merged_content})
 
     @staticmethod
     def _tool_display_summary(tool_name: str, arguments: dict) -> str:
