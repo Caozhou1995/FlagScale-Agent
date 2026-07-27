@@ -92,6 +92,22 @@ class SwapStore:
         """Check if an index exists in the store."""
         return os.path.isfile(self._path_for(index))
 
+    def load_metadata(self, index: int) -> Optional[dict]:
+        """Load metadata for an evicted message.
+
+        Returns:
+            The metadata dict, or None if not found or no metadata.
+        """
+        path = self._path_for(index)
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("metadata")
+        except (json.JSONDecodeError, IOError):
+            return None
+
     def delete(self, index: int) -> bool:
         """Delete a stored entry (e.g., after permanent eviction).
 

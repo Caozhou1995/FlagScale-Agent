@@ -366,6 +366,17 @@ class HistoryManager:
         msg = self._messages[index]
         if not msg.get("_evicted"):
             return False
+        # Deserialize JSON content back to original structure if possible
+        # (swap_store serializes lists/dicts to JSON strings; restore them for
+        # proper _has_tool_use / _is_tool_result detection on re-eviction)
+        if isinstance(content, str):
+            stripped = content.strip()
+            if stripped.startswith(("[", "{")):
+                try:
+                    import json as _json
+                    content = _json.loads(stripped)
+                except (ValueError, TypeError):
+                    pass
         msg["content"] = content
         # Clear _evicted flag to allow this message to be evicted again
         del msg["_evicted"]

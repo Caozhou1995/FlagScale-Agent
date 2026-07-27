@@ -2296,13 +2296,24 @@ class WorkerAgent:
             if paired:
                 paired_idx = paired["index"]
                 paired_content = paired["content"]
-                if not isinstance(paired_content, str):
-                    paired_content = json.dumps(paired_content, ensure_ascii=False)
-                self._swap_store.save(paired_idx, paired_content, {"role": "user", "tokens": paired["tokens"]})
+                paired_content_str = paired_content
+                if not isinstance(paired_content_str, str):
+                    paired_content_str = json.dumps(paired_content, ensure_ascii=False)
+                paired_meta = {
+                    "role": "user",
+                    "tokens": paired["tokens"],
+                    "paired_with": idx,  # Link back so recall can restore both
+                }
+                self._swap_store.save(paired_idx, paired_content_str, paired_meta)
                 evicted_count += 1
                 freed_tokens += paired["tokens"]
-                # Add to summary list
-                messages_for_summary.append((paired_idx, "user", None, f"[paired tool_result for index {idx}]"))
+                # Save primary's metadata with paired_idx so recall can restore both
+                primary_meta = result.get("metadata", {})
+                primary_meta["paired_with"] = paired_idx
+                self._swap_store.save(idx, content, primary_meta)
+                # Add paired to summary with actual content
+                paired_summary_content = paired_content_str[:500] if paired_content_str else f"[tool_result paired with index {idx}]"
+                messages_for_summary.append((paired_idx, "user", None, paired_summary_content))
 
         # Generate summaries via LLM for newly evicted messages
         if messages_for_summary:
@@ -2414,6 +2425,14 @@ class WorkerAgent:
         # Restore the original content back into history so subsequent LLM calls
         # see it in-place (not just as this turn's tool_result).
         restored = self.history.recall_message(index, content)
+
+        # Also restore paired message to maintain tool_use/tool_result pairing
+        metadata = self._swap_store.load_metadata(index)
+        paired_idx = metadata.get("paired_with") if metadata else None
+        if paired_idx is not None:
+            paired_content = self._swap_store.load(paired_idx)
+            if paired_content is not None:
+                self.history.recall_message(paired_idx, paired_content)
 
         summary_entry = self._evict_summary.get(index)
         summary_hint = summary_entry.get("summary", "") if summary_entry else ""
