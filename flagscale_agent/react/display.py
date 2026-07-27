@@ -152,20 +152,29 @@ def _visible_width(text):
 
 
 def _truncate_to_width(text, max_width):
-    """Truncate text so display width fits within max_width."""
+    """Truncate text so display width fits within max_width, preserving ANSI codes."""
     if _visible_width(text) <= max_width:
         return text
-    plain = re.sub(r"\033\[[0-9;]*m", "", text)
+    # Walk through text keeping ANSI sequences intact
     width = 0
-    cut = 0
-    for i, c in enumerate(plain):
-        cw = _char_width(c)
+    result = []
+    i = 0
+    while i < len(text):
+        # Skip ANSI escape sequences (don't count toward width)
+        if text[i] == '\033' and i + 1 < len(text) and text[i + 1] == '[':
+            j = i + 2
+            while j < len(text) and text[j] not in 'mGHJK':
+                j += 1
+            result.append(text[i:j + 1])
+            i = j + 1
+            continue
+        cw = _char_width(text[i])
         if width + cw > max_width - 3:
-            cut = i
             break
+        result.append(text[i])
         width += cw
-        cut = i + 1
-    return plain[:cut] + "..." + "\033[0m"
+        i += 1
+    return ''.join(result) + "...\033[0m"
 
 
 def _fmt_tokens(n):
@@ -193,6 +202,9 @@ _TOOL_ICONS = {
     "plan_update": "📋",
     "plan_status": "📋",
     "find_latest_log": "📄",
+    "evict": "🗑️",
+    "recall": "↩️",
+    "evict_list": "📑",
 }
 
 
@@ -457,12 +469,8 @@ def tool_start(name, args_summary=""):
     label = f"  {icon} {name}"
     if args_summary:
         label += f" {args_summary}"
-    tw = _term_width()
-    # For shell commands, don't truncate — show full command
-    if name == "shell":
-        _print(dim(label), end="", flush=True)
-    else:
-        _print(_truncate_to_width(dim(label), tw), end="", flush=True)
+    # Display full label without truncation for reviewer visibility
+    _print(dim(label), end="", flush=True)
     if name == "shell":
         _active_spinner = _Spinner()
         _print()
@@ -668,6 +676,15 @@ def parallel_tools_finish():
         _parallel_display = None
 
 
+# ── Guard display ──────────────────────────────────────────────────────────────
+
+def _guard_truncate_line(line: str, max_chars: int = 120) -> str:
+    """Truncate a single guard message line to max_chars."""
+    if len(line) <= max_chars:
+        return line
+    return line[:max_chars] + "..."
+
+
 # ── Turn / session summary ──────────────────────────────────────────────
 
 def warn(message):
@@ -682,32 +699,45 @@ def guard_overridden(guard_name, reason):
 
 
 def guard_inject(message):
-    """Display a guard inject message to the terminal (visible to user)."""
+    """Display a guard inject message to the terminal (visible to user).
+    
+    Shows all lines with icon, subsequent lines indented to align with text.
+    No truncation for reviewer visibility.
+    """
     lines = [l for l in message.strip().split('\n') if l.strip()]
-    for i, line in enumerate(lines):
-        if i == 0:
-            _print(f"  {dim('🛡')} {dim(line.strip())}")
-        else:
-            _print(f"      {dim(line.strip())}")
+    if not lines:
+        return
+    _print(f"  {dim('🛡')} {dim(lines[0].strip())}")
+    for line in lines[1:]:
+        _print(f"     {dim(line.strip())}")
 
 
 def guard_block(message):
-    """Display a guard block message to the terminal (visible to user)."""
-    # Show block messages prominently
-    for line in message.strip().split('\n'):
-        if line.strip():
-            _print(f"  {red('🚫')} {line.strip()}")
+    """Display a guard block message to the terminal (visible to user).
+    
+    First line: red icon + summary. Subsequent lines indented.
+    No truncation for reviewer visibility.
+    """
+    lines = [l for l in message.strip().split('\n') if l.strip()]
+    if not lines:
+        return
+    _print(f"  {red('🚫')} {lines[0].strip()}")
+    for line in lines[1:]:
+        _print(f"     {line.strip()}")
 
 
 def guard_escalate(message):
     """Display a guard escalate message to the terminal (visible to user).
     
     Escalate is stronger than inject but not a block — it demands attention
-    but doesn't prevent execution.
+    but doesn't prevent execution. No truncation for reviewer visibility.
     """
-    for line in message.strip().split('\n'):
-        if line.strip():
-            _print(f"  {yellow('⚠️')} {line.strip()}")
+    lines = [l for l in message.strip().split('\n') if l.strip()]
+    if not lines:
+        return
+    _print(f"  {yellow('⚠️')} {lines[0].strip()}")
+    for line in lines[1:]:
+        _print(f"     {line.strip()}")
 
 
 def turn_summary(turn_num, elapsed, input_tokens, output_tokens):

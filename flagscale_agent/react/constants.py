@@ -29,6 +29,7 @@ CORE_TOOLS = {
     "load_skill", "web_fetch", "memory_write", "memory_read",
     "memory_list", "monitor", "workspace_experiment",
     "plan_create", "plan_update", "plan_status",
+    "evict", "evict_list", "recall",
 }
 
 PHASE_TOOL_SETS = {
@@ -37,6 +38,7 @@ PHASE_TOOL_SETS = {
         "web_fetch", "workspace_experiment", "find_latest_log",
         "plan_create", "plan_status", "memory_write", "write_file",
         "edit_file", "monitor", "validate_config",
+        "evict", "recall",
     },
     "analysis": {
         "read_file", "shell", "memory_read", "memory_list",
@@ -45,6 +47,7 @@ PHASE_TOOL_SETS = {
         "plan_create", "plan_update", "plan_status",
         "write_file", "edit_file", "inspect_checkpoint",
         "validate_config",
+        "evict", "recall",
     },
     "implementation": {
         "read_file", "write_file", "edit_file", "shell",
@@ -52,6 +55,7 @@ PHASE_TOOL_SETS = {
         "plan_update", "plan_status", "workspace_experiment",
         "find_latest_log", "monitor", "validate_config",
         "inspect_checkpoint", "parse_training_metrics",
+        "evict", "recall",
     },
     "verification": {
         "read_file", "shell", "write_file", "edit_file",
@@ -59,6 +63,7 @@ PHASE_TOOL_SETS = {
         "memory_write", "memory_read", "workspace_experiment",
         "plan_update", "plan_status", "load_skill",
         "inspect_checkpoint", "validate_config",
+        "evict", "recall",
     },
 }
 

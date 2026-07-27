@@ -114,7 +114,8 @@ class ConstraintTrigger:
 class Constraint:
     """A hard constraint extracted from a skill.
 
-    All constraints block on violation. No warning-only mode.
+    Explicit constraints (from constraints: section) block on violation.
+    Auto-extracted constraints (from prose) default to inject-only (non-blocking).
     """
     id: str
     description: str
@@ -125,6 +126,10 @@ class Constraint:
 
     # Correction message shown when violated
     correction: str = ""
+
+    # If True, this constraint can only inject (warn), never block.
+    # Auto-extracted constraints from prose get this set to True.
+    inject_only: bool = False
 
 
 

@@ -138,28 +138,26 @@ constraints:
     NVTE_FRAMEWORK=pytorch pip install --no-build-isolation . Pre-built whls are NOT acceptable.
     On non-NVIDIA accelerator platforms, prepend TE_FL_SKIP_CUDA=1 to the build command."
 - id: train_env_setup_pytorch_must_match_driver
-  description: PyTorch CUDA tag should match the driver's max supported CUDA to avoid source-build mismatches. While torch+cu128 CAN run on driver 535 (forward compat), it causes problems when source-building Apex/TE/Flash-Attn because system nvcc (12.4) mismatches torch.version.cuda (12.8). Exception — if nvcc > torch CUDA (e.g., nvcc 13.0 + torch cu128), this is acceptable because CUDA is forward-compatible, but requires an nvcc shim.
+  description: "PyTorch CUDA tag MUST match the system's actual CUDA version (nvcc --version), NOT what FlagScale's requirements specify. FlagScale's requirements/cuda/base.txt may be outdated relative to the hardware. Always check if a wheel exists for the system CUDA version first (e.g., system CUDA 13.0 → try cu130). Only fall back to lower CUDA tag + nvcc shim if no matching wheel exists."
   trigger:
     tools:
     - shell
     keywords:
     - pip install torch
     - pip3 install torch
-  prompt: "SCOPE: pip install torch/pytorch. CHECK: Does the CUDA tag match the driver's max supported CUDA? 
-    While torch+cu128 can technically RUN on driver 535 (CUDA forward compat), it creates a nvcc vs torch.version.cuda 
-    mismatch that breaks source builds of Apex/TE/Flash-Attn. For FlagScale training (which requires source builds), 
-    the CUDA tag MUST be resolvable with system nvcc.
-    Three cases:
-    (1) nvcc == torch CUDA → ideal, no action needed.
-    (2) nvcc < torch CUDA → PROBLEM. Must install matching toolkit or downgrade torch CUDA tag.
-    (3) nvcc > torch CUDA → ACCEPTABLE with shim. Create nvcc wrapper reporting torch's version. CUDA forward-compat guarantees correctness.
-    E.g., Driver 535.x + nvcc 12.4 → use cu124 tag. Driver 580.x + nvcc 13.0 but torch only has cu128 → use cu128 + shim."
-  correction: "PyTorch CUDA tag must be compatible with the system nvcc version.
-    If nvcc < torch CUDA: install matching CUDA toolkit or use a lower cu tag.
-    If nvcc > torch CUDA: create an nvcc shim (see CUDA version alignment section).
-    If nvcc == torch CUDA: no action needed.
-    E.g., Driver 535.x → max cu124, Driver 560.x → max cu126, Driver 570.x → max cu128, Driver 580.x → max cu130 (use cu128 + shim if no cu130 torch exists).
-    Note: the version+tag combination must also exist on PyPI — verify with --dry-run."
+  prompt: "SCOPE: pip install torch/pytorch. CHECK: Does the CUDA tag match the SYSTEM's actual CUDA version (from nvcc --version or /usr/local/cuda/version.txt)?
+    IMPORTANT: Do NOT blindly use FlagScale's requirements/cuda/base.txt CUDA tag — it may be outdated.
+    Resolution order:
+    (1) Check system CUDA version (nvcc --version)
+    (2) Check if PyTorch wheel exists for that exact version: pip index versions torch --extra-index-url https://download.pytorch.org/whl/cu<MAJOR><MINOR>
+    (3) If wheel exists → USE IT (e.g., system CUDA 13.0, torch 2.9.0+cu130 exists → use cu130)
+    (4) If no wheel for exact version → use closest lower tag + nvcc shim
+    E.g., Driver 580.x + CUDA 13.0 + torch 2.9.0+cu130 exists → use cu130, NOT cu128."
+  correction: "PyTorch CUDA tag must match the system's actual CUDA version.
+    Steps: (1) Detect system CUDA via nvcc --version. (2) Check if wheel exists for that version.
+    (3) If exists, install it. (4) If not, use closest lower + shim.
+    E.g., Driver 535.x → max cu124, Driver 560.x → max cu126, Driver 570.x → max cu128, Driver 580.x → cu130.
+    Note: the version+tag combination must also exist on PyPI — verify with pip index versions."
 - id: train_env_setup_torch_version_from_pypi_not_requirements
   description: PyTorch version+CUDA tag must be verified to exist on PyPI BEFORE installing. FlagScale's version often does NOT have a wheel for older CUDA tags (e.g., torch 2.9.0 has no cu124 wheel).
     Always try FlagScale's version first, but fall back to the latest version that has a wheel for the driver's CUDA tag.
@@ -223,7 +221,7 @@ constraints:
     - conda run pip install
   prompt: "SCOPE: Any pip/conda install command for GPU-related packages (torch, apex, flash-attn, transformer_engine, megatron_core).
     CHECK: Has the agent already run nvidia-smi (or equivalent) and determined the driver's max supported CUDA version
-    in THIS session? If the install command contains a CUDA tag (cu118/cu121/cu124/cu126/cu128) or installs a GPU package,
+    in THIS session? If the install command contains a CUDA tag (cu118/cu121/cu124/cu126/cu128/cu130) or installs a GPU package,
     but no prior nvidia-smi output exists in the conversation, this is a violation."
   correction: "Before installing GPU packages, complete compatibility analysis:
     1. Run nvidia-smi to get driver version and max CUDA version
@@ -249,7 +247,7 @@ constraints:
   correction: "Before installing torch, verify the wheel exists:
     1. pip index versions torch --index-url https://download.pytorch.org/whl/cuXXX
     2. Or: pip install torch==X.Y.Z+cuXXX --dry-run 2>&1 | head -5
-    Common mapping: cu124 → torch<=2.6.0, cu126 → torch<=2.7.0, cu128 → torch>=2.8.0.
+    Common mapping: cu124 → torch<=2.6.0, cu126 → torch<=2.7.0, cu128 → torch>=2.8.0, cu130 → torch>=2.9.0.
     Choose the latest version that actually has a wheel for your CUDA tag."
 - id: train_env_setup_source_build_must_limit_arch
   description: Source builds (flash-attn, apex, TransformerEngine) must set TORCH_CUDA_ARCH_LIST to only the current GPU's SM
@@ -340,7 +338,7 @@ The ONLY valid sources of truth for dependency versions are:
 ### General rules
 
 1. ALL installs go into the target conda environment — NEVER install into base or current environment. Use `conda run -n <env> pip install ...` for every pip command. To check dependency versions without installing, read setup.cfg/pyproject.toml from the source repo or use `pip index versions <pkg>`.
-2. PyTorch installs via official whl — choose the CUDA tag that matches the driver's max supported CUDA version (NOT necessarily what FlagScale's train.txt specifies)
+2. PyTorch installs via official whl — choose the CUDA tag that matches the system's actual CUDA version (from nvcc --version), NOT what FlagScale's train.txt specifies. Verify wheel availability with `pip index versions` first.
 3. Megatron-LM-FL, TransformerEngine-FL, Apex, and Flash-Attention MUST ALL be built from source. Pre-built whls (including from FlagScale PyPI) are NOT acceptable — they are compiled against a specific CUDA version that may not match the system. Source builds are the ONLY way to guarantee binary compatibility with the actual hardware. Never install from generic PyPI (pypi.org) either — those packages are either wrong (apex) or missing FL customizations
 4. Never modify dependency source code to work around errors — report to user
 5. **After EVERY pip install, VERIFY the import works.** DO NOT assume a successful pip exit code means the package is usable. Immediately test: `python -c "import <package>; print(<package>.__version__)"`. For large packages (torch, flash-attn, apex), if `import` hangs >10s, the install is corrupt and must be redone. On NFS/shared storage, use `timeout 15 python -c "import <package>"` to catch hangs quickly without blocking the session.
@@ -389,6 +387,7 @@ npu-smi info 2>/dev/null || true
 The `GPU_COUNT=` line gives the exact GPU count. Use that number in all subsequent references — never count nvidia-smi output lines manually.
 
 Driver → max CUDA version (for PyTorch wheel selection, NVIDIA platforms only):
+- Driver 580.x → CUDA ≤ 13.0 → wheels: cu118, cu121, cu124, cu126, cu128, cu130
 - Driver 570.x → CUDA ≤ 12.8 → wheels: cu118, cu121, cu124, cu126, cu128
 - Driver 560.x → CUDA ≤ 12.6 → wheels: cu118, cu121, cu124, cu126
 - Driver 550.x → CUDA ≤ 12.4 → wheels: cu118, cu121, cu124
@@ -402,11 +401,13 @@ PyTorch whl bundles its own CUDA runtime, so `torch+cu128` can run on a system w
 
 **MANDATORY resolution strategy:**
 
-1. **PyTorch MUST match the driver's max supported CUDA version.** Choose the PyTorch whl whose CUDA tag matches what the driver supports. E.g., Driver 535.x → max CUDA 12.4 → use `torch+cu124`. This guarantees all source builds are compatible with the system nvcc.
+1. **PyTorch CUDA tag MUST match the system's actual CUDA version (from nvcc --version or /usr/local/cuda/version.txt), NOT what FlagScale's requirements/cuda/base.txt specifies.** FlagScale's requirements may be out of date relative to your hardware. First check if a PyTorch wheel exists for the system's exact CUDA major.minor version using `pip index versions torch --extra-index-url https://download.pytorch.org/whl/cu<MAJOR><MINOR>`. E.g., system has CUDA 13.0 → check cu130 → if `torch==2.9.0+cu130` exists, use it. This eliminates all version conflicts between bundled libcudart and system libcudart.
 
-2. **If system nvcc is missing or wrong version**: Install the CUDA toolkit that matches the chosen PyTorch CUDA tag. E.g., torch+cu124 → install CUDA 12.4 toolkit, then set `CUDA_HOME=/usr/local/cuda-12.4` for all source builds.
+2. **If NO wheel exists for the exact system CUDA version**: Fall back to the closest lower version. E.g., system has CUDA 13.1 but only cu130 wheels exist → use cu130. This is safe because CUDA is forward-compatible.
 
-3. **If system nvcc version > PyTorch's CUDA version** (e.g., only nvcc 13.0 available but torch is cu128): This is common on cutting-edge systems where the driver/toolkit is newer than what PyTorch supports. In this case, create an **nvcc version shim** — a wrapper that reports the torch-compatible version while using the real nvcc for compilation. CUDA is forward-compatible (nvcc 13.0 can compile code targeting CUDA 12.8 without issues).
+3. **If system nvcc is missing or wrong version**: Install the CUDA toolkit that matches the chosen PyTorch CUDA tag. E.g., torch+cu124 → install CUDA 12.4 toolkit, then set `CUDA_HOME=/usr/local/cuda-12.4` for all source builds.
+
+4. **If system nvcc version > PyTorch's CUDA version** (e.g., only nvcc 13.0 available but NO cu130 torch wheel exists, so torch is cu128): This is common on cutting-edge systems where the driver/toolkit is newer than what PyTorch supports. In this case, create an **nvcc version shim** — a wrapper that reports the torch-compatible version while using the real nvcc for compilation. CUDA is forward-compatible (nvcc 13.0 can compile code targeting CUDA 12.8 without issues). **However, prefer finding a cu130 wheel first — the shim is a last resort for when no matching wheel exists.**
 
    **Shim creation procedure:**
    ```bash
@@ -478,7 +479,11 @@ cat setup.py
 ```
 
 **CRITICAL: FlagScale's train.txt torch version is REFERENCE ONLY, NOT authoritative.**
-FlagScale's `requirements/cuda/train.txt` may specify e.g. `torch==2.9.0+cu128`. **IGNORE this version for PyTorch installation.** The actual PyTorch version is determined SOLELY by the driver's max CUDA tag — query PyPI for the latest torch available with that tag (see Step 1d). Do NOT combine FlagScale's torch version number with the driver's CUDA tag (e.g., `torch==2.9.0+cu124` will likely NOT exist).
+FlagScale's `requirements/cuda/base.txt` may specify e.g. `torch==2.9.0` with `--extra-index-url .../whl/cu128`. **IGNORE this CUDA tag for PyTorch installation.** The actual PyTorch CUDA tag is determined by the system's installed CUDA version (nvcc --version). Steps:
+1. Detect system CUDA: `nvcc --version` or `cat /usr/local/cuda/version.txt`
+2. Check if wheel exists: `pip index versions torch --extra-index-url https://download.pytorch.org/whl/cu<MAJOR><MINOR>`
+3. Use FlagScale's torch VERSION number (e.g., 2.9.0) but with the SYSTEM's CUDA tag (e.g., cu130 for CUDA 13.0)
+4. E.g., system CUDA 13.0 + FlagScale specifies torch==2.9.0 → install `torch==2.9.0+cu130` from `https://download.pytorch.org/whl/cu130`
 
 Use FlagScale requirements ONLY to determine:
 - Python version requirement

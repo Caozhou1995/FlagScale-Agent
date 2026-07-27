@@ -78,6 +78,8 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
     """Short human-readable summary for a tool call display."""
     if tool_name == "shell":
         cmd = arguments.get("command", "")
+        if not isinstance(cmd, str):
+            cmd = str(cmd) if cmd else ""
         s = cmd.replace("\n", " ").replace("\r", "").strip()
         # Show full command — most shell commands are short enough to display completely
         return s
@@ -91,16 +93,7 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         return summary
     if tool_name == "edit_file":
         path = arguments.get("path", "") or arguments.get("file_path", "")
-        old = arguments.get("old_string", "")
-        new = arguments.get("new_string", "")
-        if old and new:
-            short = _short_path(path)
-            old_val = old.split(":")[-1].strip() if ":" in old else ""
-            new_val = new.split(":")[-1].strip() if ":" in new else ""
-            if old_val and new_val and len(old_val) < 30 and len(new_val) < 30:
-                return f"{short}: {old_val} → {new_val}"
-            old_line = old.strip().split("\n")[0][:60]
-            return f"{short}: {old_line}..."
+        # Just show path, no content comparison
         return _short_path(path)
     if tool_name == "write_file":
         path = arguments.get("path", "") or arguments.get("file_path", "")
@@ -162,6 +155,16 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         elif log_type != "both":
             summary += f" [{log_type}]"
         return summary
+    if tool_name == "evict":
+        indexes = arguments.get("indexes", [])
+        if isinstance(indexes, list) and len(indexes) > 5:
+            return f"[{', '.join(str(i) for i in indexes[:5])}, ...] ({len(indexes)} total)"
+        return str(indexes)
+    if tool_name == "recall":
+        return f"index={arguments.get('index', '?')}"
+    if tool_name == "evict_list":
+        kw = arguments.get("keyword", "")
+        return f"keyword='{kw}'" if kw else ""
     return ""
 
 
@@ -434,6 +437,8 @@ class ToolExecutor:
                     continue
                 if tc["name"] == "shell":
                     cmd = tc["arguments"].get("command", "")
+                    if not isinstance(cmd, str):
+                        cmd = str(cmd) if cmd else ""
                     if shell_tool.needs_confirm(cmd):
                         if not shell_tool.pre_confirm(cmd):
                             denied.add(i)
@@ -447,6 +452,8 @@ class ToolExecutor:
                 continue
             if tc["name"] == "shell":
                 cmd = tc["arguments"].get("command", "")
+                if not isinstance(cmd, str):
+                    cmd = str(cmd) if cmd else ""
                 if not agent.judge.classify("is_read_only_shell", {"command": cmd}, default=False):
                     write_shell_indices.append(i)
         if len(write_shell_indices) > 1:

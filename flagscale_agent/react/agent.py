@@ -73,6 +73,9 @@ from flagscale_agent.react.tools.plan_status import PlanStatusTool
 from flagscale_agent.react.tools.validate_config import ValidateConfigTool
 from flagscale_agent.react.tools.inspect_checkpoint import InspectCheckpointTool
 from flagscale_agent.react.tools.compact_context import CompactContextTool
+from flagscale_agent.react.tools.evict import EvictTool
+from flagscale_agent.react.tools.evict_list import EvictListTool
+from flagscale_agent.react.tools.recall import RecallTool
 
 from flagscale_agent.react.guard.safety import SafetyGuard
 from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
@@ -191,6 +194,13 @@ class WorkerAgent:
         experiments_dir = os.path.join(session_dir, "experiments")
         self._experiment_manager = _experiment_manager or ExperimentManager(experiments_dir)
 
+        # Swap store for context management V3 (evict/recall)
+        from flagscale_agent.react.swap_store import SwapStore
+        from flagscale_agent.react.evict_summary import EvictSummaryStore
+        swap_store_dir = os.path.join(session_dir, "swap_store")
+        self._swap_store = SwapStore(swap_store_dir)
+        self._evict_summary = EvictSummaryStore(session_dir)
+
         memory_dir = get_memory_dir()
         self.session_memory = _session_memory or SessionMemory(memory_dir, config.memory_ttl_days)
 
@@ -217,12 +227,6 @@ class WorkerAgent:
         self.local_memory._llm_fn = self.session_memory._llm_fn
 
         self.history = HistoryManager(max_context_tokens=config.max_context_tokens)
-        self.history.set_summarizer(self._summarize_for_compaction)
-        self.history.set_scorer(self._score_messages_for_compaction)
-        self.history.set_plan_summary_fn(
-            lambda: self.task_plan.context_for_prompt() if self.task_plan.get_active() else ""
-        )
-        self.history._pre_compaction_hook = self._extract_memories_before_compaction
 
         if not _tool_registry:
             self._register_tools()
@@ -331,7 +335,9 @@ class WorkerAgent:
         self._build_dynamic_constraints()
 
         guard_registry.register(ProgressGuard())
-        guard_registry.register(ContextPressureGuard())
+        guard_registry.register(ContextPressureGuard(
+            working_window_tokens=self.history.working_window if self.history else 0
+        ))
         guard_registry.register(PlanGuard(task_plan=self.task_plan))
 
         # Plan and experiment enforcement guards (Phase 7)
@@ -404,6 +410,9 @@ class WorkerAgent:
         self.tool_registry.register(ValidateConfigTool())
         self.tool_registry.register(InspectCheckpointTool())
         self.tool_registry.register(CompactContextTool(self.history))
+        self.tool_registry.register(EvictTool())
+        self.tool_registry.register(EvictListTool())
+        self.tool_registry.register(RecallTool())
 
     def _build_dynamic_constraints(self):
         """Build runtime-detected constraints and register with ConstraintGuard.
@@ -580,7 +589,7 @@ class WorkerAgent:
             tool_effects = tool.effects
         except (KeyError, AttributeError):
             pass
-        return GuardContext(
+        ctx = GuardContext(
             tool_name=tool_name,
             tool_args=tool_args or {},
             tool_result=tool_result,
@@ -588,6 +597,7 @@ class WorkerAgent:
             turn_count=self.turn_count,
             recent_tool_names=list(self._last_tool_calls_deque)[-10:],
             context_pressure=self.history.get_context_pressure() if self.history else 0.0,
+            evictable_indexes=self.history.get_evictable_indexes() if self.history else [],
             current_state=self._kernel.fsm.current_state,
             transitions_count=len(self._kernel.fsm.history),
             classify_fn=self.judge.classify,
@@ -596,6 +606,9 @@ class WorkerAgent:
             current_experiment_name=self._experiment_manager.get_current_experiment() if self._experiment_manager else "",
             assistant_text=self._get_last_assistant_text(),
         )
+        # Attach history reference for auto-evict in ContextPressureGuard
+        ctx._history = self.history
+        return ctx
 
     # ── Health judge (delegates to unified Judge) ───────────────────────────
 
@@ -1196,6 +1209,12 @@ class WorkerAgent:
         self.task_plan._dir = os.path.join(session_dir, "plans")
         self._experiment_manager._dir = os.path.join(session_dir, "experiments")
 
+        # Re-point swap store to restored session's dir
+        from flagscale_agent.react.swap_store import SwapStore
+        from flagscale_agent.react.evict_summary import EvictSummaryStore
+        self._swap_store = SwapStore(os.path.join(session_dir, "swap_store"))
+        self._evict_summary = EvictSummaryStore(session_dir)
+
         # Clean up the empty new session dir if it's different
         if old_session_dir != session_dir:
             try:
@@ -1436,6 +1455,24 @@ class WorkerAgent:
         last_text = self._get_last_assistant_text()
         if "[TASK_COMPLETE]" in last_text or "[NEED_USER_INPUT]" in last_text:
             return False
+        # Fallback: if response is extremely short (< 10 chars) and has no tool calls,
+        # it means the LLM was truncated or confused — force continue
+        if len(last_text.strip()) < 10:
+            # Check if there were tool calls in the last assistant message
+            has_tool_use = False
+            for msg in reversed(self.history.messages):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        has_tool_use = any(
+                            b.get("type") == "tool_use"
+                            for b in content
+                            if isinstance(b, dict)
+                        )
+                    break
+            if not has_tool_use:
+                # Extremely short response with no tool calls — auto continue
+                return True
         active_plan = self.task_plan.get_active()
         result = self.judge.complexity(last_text[:500], has_plan=active_plan is not None)
         if result.get("needs_plan"):
@@ -1957,30 +1994,9 @@ class WorkerAgent:
         usage = {}
         self._streaming_in_code_block = False
 
-        pressure = self.history.get_context_pressure()
-        if pressure >= 0.85:
-            self.history.force_compact(target_ratio=0.50)
-            messages = self.history.get_messages()
-
-        _overflow_attempts = [0]
-        _OVERFLOW_RATIOS = [0.50, 0.35, 0.25]
-
-        def _handle_context_overflow():
-            attempt = _overflow_attempts[0]
-            if attempt >= len(_OVERFLOW_RATIOS):
-                return False
-            ratio = _OVERFLOW_RATIOS[attempt]
-            _overflow_attempts[0] += 1
-            overflow_limit = self.history._actual_input_tokens or self.config.max_context_tokens
-            compacted = self.history.force_compact(target_ratio=ratio, base_limit=overflow_limit)
-            if compacted:
-                messages[:] = self.history.get_messages()
-            return compacted
-
         stream = retry_with_backoff(
             lambda: self.provider.chat_stream(messages, schemas),
             max_retries=3,
-            on_context_overflow=_handle_context_overflow,
         )
 
         thinking_cleared = False
@@ -2132,7 +2148,296 @@ class WorkerAgent:
     # ── Tool execution (delegated to ToolExecutor) ──────────────────────────
 
     def _execute_tools(self, tool_calls):
-        return self._tool_executor.execute_batch(tool_calls)
+        """Execute tools, intercepting evict/recall for special handling."""
+        # Separate evict/recall from normal tools
+        normal_calls = []
+        special_results = {}  # index in tool_calls -> result string
+
+        for i, tc in enumerate(tool_calls):
+            if tc["name"] == "evict":
+                special_results[i] = self._handle_evict(tc.get("arguments", {}))
+            elif tc["name"] == "recall":
+                special_results[i] = self._handle_recall(tc.get("arguments", {}))
+            elif tc["name"] == "evict_list":
+                special_results[i] = self._handle_evict_list(tc.get("arguments", {}))
+            else:
+                normal_calls.append((i, tc))
+
+        # Execute normal tools
+        if normal_calls:
+            normal_tc_list = [tc for _, tc in normal_calls]
+            normal_results = self._tool_executor.execute_batch(normal_tc_list)
+            for (orig_idx, _), result in zip(normal_calls, normal_results):
+                special_results[orig_idx] = result
+
+        # Reassemble in original order
+        return [special_results[i] for i in range(len(tool_calls))]
+
+    def _handle_evict(self, arguments: dict) -> str:
+        """Process an evict tool call against the message history."""
+        indexes = arguments.get("indexes", []) if arguments else []
+        # Display start
+        if indexes:
+            display.tool_start("evict", f"indexes={indexes[:10]}{'...' if len(indexes) > 10 else ''}")
+        else:
+            display.tool_start("evict", "")
+        t0 = time.time()
+
+        if not arguments:
+            result_msg = "ERROR: 'indexes' parameter is required and must be a non-empty list."
+            display.tool_done("evict", time.time() - t0, detail="missing indexes", error=True)
+            return result_msg
+
+        if not indexes:
+            result_msg = "ERROR: 'indexes' parameter is required and must be a non-empty list."
+            display.tool_done("evict", time.time() - t0, detail="empty indexes", error=True)
+            return result_msg
+
+        if not isinstance(indexes, list):
+            if isinstance(indexes, (int, float)):
+                indexes = [int(indexes)]
+            else:
+                result_msg = "ERROR: 'indexes' must be a list of integers."
+                display.tool_done("evict", time.time() - t0, detail="invalid type", error=True)
+                return result_msg
+
+        evicted_count = 0
+        freed_tokens = 0
+        errors = []
+        # Collect messages for batch summary before evicting
+        messages_for_summary = []  # [(index, role, tool_name, content)]
+
+        for idx in indexes:
+            if isinstance(idx, float) and idx == int(idx):
+                idx = int(idx)
+            if not isinstance(idx, int):
+                errors.append(f"index {idx}: not an integer")
+                continue
+
+            # Skip if already summarized (idempotent)
+            if self._evict_summary.has(idx):
+                # Already evicted and summarized previously, just skip
+                result = self.history.evict_message(idx)
+                if result:
+                    content = result["content"]
+                    if not isinstance(content, str):
+                        content = json.dumps(content, ensure_ascii=False)
+                    self._swap_store.save(idx, content, result.get("metadata"))
+                    evicted_count += 1
+                    freed_tokens += result.get("metadata", {}).get("tokens", 0)
+                continue
+
+            # Get message content BEFORE evicting (for summary generation)
+            msg = self.history.get_message_at(idx)
+            if msg is None:
+                errors.append(f"index {idx}: out of range")
+                continue
+
+            # Extract info for summary
+            role = msg.get("role", "unknown")
+            tool_name = None
+            content_for_summary = ""
+
+            if role == "tool":
+                # Tool result message
+                tool_name = msg.get("name") or msg.get("tool_name", "unknown")
+                content_for_summary = msg.get("content", "")
+                if isinstance(content_for_summary, list):
+                    content_for_summary = json.dumps(content_for_summary, ensure_ascii=False)
+            elif role == "assistant":
+                content_for_summary = msg.get("content", "")
+                if isinstance(content_for_summary, list):
+                    # Extract text blocks and tool_use names
+                    parts = []
+                    for block in content_for_summary:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                parts.append(block.get("text", ""))
+                            elif block.get("type") == "tool_use":
+                                tool_name = block.get("name", "")
+                                parts.append(f"[tool_use: {tool_name}({json.dumps(block.get('input', {}), ensure_ascii=False)[:200]})]")
+                    content_for_summary = "\n".join(parts)
+            elif role == "user":
+                content_for_summary = msg.get("content", "")
+                if isinstance(content_for_summary, list):
+                    parts = []
+                    for block in content_for_summary:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                parts.append(block.get("text", ""))
+                            elif block.get("type") == "tool_result":
+                                parts.append(f"[tool_result: {block.get('content', '')[:200]}]")
+                    content_for_summary = "\n".join(parts)
+
+            messages_for_summary.append((idx, role, tool_name, content_for_summary))
+
+            # Now evict
+            result = self.history.evict_message(idx)
+            if result is None:
+                errors.append(f"index {idx}: not evictable (already evicted, system prompt, protected tail)")
+                # Remove from summary list
+                messages_for_summary.pop()
+                continue
+
+            content = result["content"]
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            self._swap_store.save(idx, content, result.get("metadata"))
+            evicted_count += 1
+            freed_tokens += result.get("metadata", {}).get("tokens", 0)
+
+        # Generate summaries via LLM for newly evicted messages
+        if messages_for_summary:
+            self._generate_evict_summaries(messages_for_summary)
+
+        # Display result
+        result_msg = f"Evicted {evicted_count} message(s), freed ~{freed_tokens} tokens."
+        if errors:
+            result_msg += f" Skipped: {'; '.join(errors[:5])}"
+        elapsed = time.time() - t0
+        display.tool_done("evict", elapsed, detail=f"{evicted_count} evicted, ~{freed_tokens} tokens freed")
+
+        return result_msg
+
+    def _generate_evict_summaries(self, messages: list):
+        """Generate LLM summaries for evicted messages and store them.
+
+        Each message gets its own LLM call for precise summary.
+        Uses ThreadPoolExecutor for concurrent API calls.
+
+        Args:
+            messages: List of (index, role, tool_name, content_str) tuples.
+        """
+        if not messages:
+            return
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _summarize_one(idx: int, role: str, tool_name: str, content: str) -> tuple:
+            """Call LLM to generate one-line summary. Returns (index, summary)."""
+            prompt = (
+                "Summarize this evicted conversation message in ONE concise line (max 120 chars). "
+                "Focus on WHAT was done/discussed, not formatting.\n\n"
+                f"[role={role}"
+            )
+            if tool_name:
+                prompt += f", tool={tool_name}"
+            prompt += f"]\n{content}"
+
+            try:
+                response = self.provider.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    tools=[],
+                )
+                summary = ""
+                if isinstance(response, dict):
+                    resp_content = response.get("content", "")
+                    if isinstance(resp_content, list):
+                        for block in resp_content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                summary += block.get("text", "")
+                    elif isinstance(resp_content, str):
+                        summary = resp_content
+                    if not summary:
+                        msg = response.get("message", {})
+                        summary = msg.get("content", "") if isinstance(msg, dict) else ""
+                return (idx, summary.strip().split("\n")[0][:200])  # First line, max 200 chars
+            except Exception as e:
+                fallback = content[:100].replace("\n", " ") if content else f"[{role}]"
+                return (idx, f"[no-llm] {fallback}")
+
+        # Concurrent LLM calls
+        max_workers = min(len(messages), 10)  # Cap at 10 concurrent
+        results = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_summarize_one, idx, role, tool_name, content): idx
+                for idx, role, tool_name, content in messages
+            }
+            for future in as_completed(futures):
+                try:
+                    idx, summary = future.result(timeout=30)
+                    results[idx] = summary
+                except Exception:
+                    idx = futures[future]
+                    results[idx] = "[timeout] summary generation failed"
+
+        # Store all summaries and update placeholders in history
+        for idx, role, tool_name, _ in messages:
+            summary = results.get(idx, f"[{role}] {tool_name or 'message'}")
+            self._evict_summary.add(idx, role, summary, tool_name)
+            self.history.update_evict_placeholder(idx, summary)
+
+    def _handle_recall(self, arguments: dict) -> str:
+        """Process a recall tool call — retrieve evicted content from swap store."""
+        index = arguments.get("index") if arguments else None
+        display.tool_start("recall", f"index={index}")
+        t0 = time.time()
+
+        if not arguments:
+            display.tool_done("recall", time.time() - t0, detail="missing index", error=True)
+            return "ERROR: 'index' parameter is required."
+
+        if index is None:
+            display.tool_done("recall", time.time() - t0, detail="missing index", error=True)
+            return "ERROR: 'index' parameter is required."
+        if isinstance(index, float) and index == int(index):
+            index = int(index)
+        if not isinstance(index, int):
+            display.tool_done("recall", time.time() - t0, detail="invalid type", error=True)
+            return "ERROR: 'index' must be an integer."
+
+        content = self._swap_store.load(index)
+        if content is None:
+            display.tool_done("recall", time.time() - t0, detail=f"index {index} not found", error=True)
+            return f"ERROR: No evicted content found at index {index}."
+
+        # Restore the original content back into history so subsequent LLM calls
+        # see it in-place (not just as this turn's tool_result).
+        restored = self.history.recall_message(index, content)
+
+        summary_entry = self._evict_summary.get(index)
+        summary_hint = summary_entry.get("summary", "") if summary_entry else ""
+        restore_status = "restored" if restored else "returned"
+        elapsed = time.time() - t0
+        display.tool_done("recall", elapsed, detail=f"index={index} {restore_status} | {summary_hint[:60]}")
+
+        return content
+
+    def _handle_evict_list(self, arguments: dict) -> str:
+        """List all evicted message summaries for recall navigation."""
+        keyword = arguments.get("keyword", "") if arguments else ""
+        display.tool_start("evict_list", f"keyword='{keyword}'" if keyword else "")
+        t0 = time.time()
+
+        entries = self._evict_summary.list_all()
+        if not entries:
+            display.tool_done("evict_list", time.time() - t0, detail="0 entries")
+            return "No evicted messages with summaries found."
+
+        # Optional filter by keyword
+        kw_lower = keyword.lower()
+
+        lines = []
+        for e in entries:
+            if kw_lower and kw_lower not in e.get("summary", "").lower() and kw_lower not in (e.get("tool_name") or "").lower():
+                continue
+            tool_part = f" [{e['tool_name']}]" if e.get("tool_name") else ""
+            lines.append(f"  {e['index']:>5}: ({e['role']}{tool_part}) {e['summary']}")
+
+        if not lines:
+            display.tool_done("evict_list", time.time() - t0, detail=f"0 matching '{keyword}'")
+            return f"No evicted messages matching '{keyword}'."
+
+        header = f"Evicted messages ({len(lines)} entries):"
+        if keyword:
+            header = f"Evicted messages matching '{keyword}' ({len(lines)} entries):"
+
+        result = header + "\n" + "\n".join(lines)
+        elapsed = time.time() - t0
+        display.tool_done("evict_list", elapsed, detail=f"{len(lines)} entries")
+        return result
 
     def _execute_tool(self, tool_call, skip_confirm=False):
         return self._tool_executor.execute_single(tool_call, skip_confirm=skip_confirm)

@@ -66,6 +66,8 @@ class FastClassifier:
 
         Returns True/False if confident, None if needs LLM.
         """
+        if not isinstance(command, str):
+            return None
         cmd = command.strip().lower()
 
         # Definitely read-only
@@ -106,6 +108,8 @@ class FastClassifier:
 
         Returns True if definitely dangerous, False if definitely safe, None otherwise (escalate to LLM).
         """
+        if not isinstance(command, str):
+            return None
         cmd = command.strip().lower()
         first_word = cmd.split()[0] if cmd else ""
 
@@ -151,6 +155,8 @@ class FastClassifier:
 
         Returns True if definitely training, False if definitely not, None if uncertain.
         """
+        if not isinstance(command, str):
+            return None
         cmd = command.strip().lower()
         first_word = cmd.split()[0] if cmd else ""
 
@@ -176,6 +182,8 @@ class FastClassifier:
 
         Returns True/False if confident, None if uncertain.
         """
+        if not isinstance(command, str):
+            return None
         cmd = command.strip().lower()
         first_word = cmd.split()[0] if cmd else ""
 

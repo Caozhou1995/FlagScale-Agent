@@ -42,11 +42,13 @@ constraints:
     - write_file
     keywords:
     - global_batch_size
-  prompt: "For smoke test / environment validation / initial '跑通' runs, global_batch_size should equal
-    DP * micro_batch_size (or at most 8x that). If train_iters <= 50 or train_samples is small or this is
-    clearly an initial validation (not full pretraining), check if GBS is far larger than DP*mbs.
-    With DP=4 mbs=1, GBS should be 4 (not 2048). The GBS=2048 in getting-started.md examples is for
-    real pretraining — never copy it for validation runs."
+  prompt: "Check if this is a smoke test (train_iters <= 50 or intent is validation/跑通).
+    If NOT a smoke test (train_iters > 50 or full pretraining), this constraint DOES NOT APPLY — pass.
+    If it IS a smoke test: DP = total_gpus / (TP * PP). On single-node 8 GPU with TP=1 PP=1, DP=8.
+    GBS should be DP*mbs or at most DP*mbs*8. So for DP=8 mbs=1, GBS up to 64 is acceptable.
+    Only VIOLATE if GBS is clearly excessive for a smoke test (e.g., GBS=2048 with train_iters=20).
+    GBS=8 with DP=8 mbs=1 is EXACTLY the minimum — this PASSES.
+    Key rule: if you cannot determine DP precisely from the config, and GBS <= 64, PASS."
   correction: "GBS too large for smoke test — reduce to DP × micro_batch_size (e.g., GBS=4 for DP=4 mbs=1).
     Also set train_iters=20 and REMOVE train_samples entirely for smoke tests."
 - id: train_config_train_samples_too_large_for_smoke_test
@@ -88,7 +90,11 @@ constraints:
     - train_iters
     - global_batch_size
     - num_layers
-  prompt: Check if this is a new config that hasn't been smoke-tested yet
+  prompt: "Check if this config IS ITSELF a smoke test (train_iters <= 50). If yes, this constraint PASSES —
+    writing a smoke test config IS the smoke test, no further reminder needed.
+    Only VIOLATE if: (1) train_iters > 50 or train_iters is not set, AND (2) there's no evidence in the
+    tool history that a prior smoke test was already run for this model/config.
+    A config with train_iters=20 IS the smoke test — do NOT block it."
   correction: Run a smoke test (train_iters=20) before launching full training.
 context_injection:
   always:

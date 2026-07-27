@@ -14,15 +14,24 @@
 
 """MemoryDisciplineGuard — reminds the agent to use memory proactively.
 
-Simple logic:
+Logic:
 - Track tool calls since last memory read/write (or last reminder)
 - Every 10 calls without memory operation → inject a reminder
+- After memory_read/memory_list returns content → inject staleness check reminder
 - If LLM reads/writes memory, reset counter
 - If LLM overrides, reset counter
 - No cap — keeps reminding every 10 calls as long as memory isn't used
 """
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+
+
+_STALENESS_MSG = (
+    "[MemoryDiscipline] You just read memories. Verify each entry against "
+    "current code/state. If any memory is outdated (bug fixed, file deleted, "
+    "architecture changed), supersede or delete it NOW via memory_write(supersedes=[old_key]). "
+    "Do NOT leave stale memories uncorrected."
+)
 
 
 class MemoryDisciplineGuard(Guard):
@@ -38,12 +47,15 @@ class MemoryDisciplineGuard(Guard):
     def __init__(self):
         super().__init__()
         self._calls_since_memory = 0
+        self._staleness_reminded = False  # Only remind once per read batch
 
     _MEMORY_TOOLS = frozenset((
         "memory_write", "memory_read", "memory_list",
         "plan_status", "plan_create", "plan_update",
         "workspace_experiment",
     ))
+
+    _MEMORY_READ_TOOLS = frozenset(("memory_read", "memory_list"))
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         # Skip pre-iteration check (no specific tool being attempted)
@@ -53,6 +65,9 @@ class MemoryDisciplineGuard(Guard):
         # Memory tool call — reset counter
         if ctx.tool_name in self._MEMORY_TOOLS:
             self._calls_since_memory = 0
+            # memory_write after a read resets staleness reminder
+            if ctx.tool_name == "memory_write":
+                self._staleness_reminded = False
             return None
 
         self._calls_since_memory += 1
@@ -71,7 +86,28 @@ class MemoryDisciplineGuard(Guard):
         return None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        return None
+        """After memory_read/memory_list returns content, remind to verify staleness."""
+        if ctx.tool_name not in self._MEMORY_READ_TOOLS:
+            return None
+
+        # Don't remind if already reminded this batch (multiple reads in one turn)
+        if self._staleness_reminded:
+            return None
+
+        # Only trigger if there's actual content returned (not empty/error)
+        result = ctx.tool_result or ""
+        if not result or len(result) < 20:
+            return None
+        # Skip if result is just "No entries found" or similar
+        if "no entries" in result.lower() or "not found" in result.lower():
+            return None
+
+        self._staleness_reminded = True
+        return GuardVerdict.inject(
+            _STALENESS_MSG,
+            reason="memory_staleness_check",
+            category="memory_staleness_reminder",
+        )
 
     def was_inject_effective(self, ctx: GuardContext) -> bool | None:
         """If agent used a memory tool after our inject, it was effective.
@@ -91,12 +127,12 @@ class MemoryDisciplineGuard(Guard):
         """Full reset (decay/override)."""
         super().reset_state()
         self._calls_since_memory = 0
+        self._staleness_reminded = False
 
     def reset_turn(self):
         """Per-iteration — nothing to do."""
         pass
 
     def reset_new_turn(self):
-        """New user message — counter persists (memory usage gap doesn't
-        reset just because user sent a new message)."""
-        pass
+        """New user message — reset staleness flag so next read batch gets reminder."""
+        self._staleness_reminded = False

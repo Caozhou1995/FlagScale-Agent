@@ -131,8 +131,14 @@ class AgentKernel:
                 if verdict is not None:
                     blocked = self._apply_verdict(verdict, pre=True)
                     if blocked:
-                        result.stop_reason = f"blocked_by_guard: {verdict.reason}"
-                        break
+                        # Don't break — re-prompt LLM with the guard message in history
+                        # Guard message was injected by _apply_verdict, now give LLM a chance to respond
+                        if iteration >= max_iter - 1:
+                            # Safety: if we're at max_iter, stop to avoid infinite loop
+                            result.stop_reason = f"blocked_by_guard_at_max_iter: {verdict.reason}"
+                            break
+                        # Continue to next iteration — LLM will see the guard message
+                        continue
 
                 # ── LLM call ──
                 d.display.thinking()
@@ -265,8 +271,8 @@ class AgentKernel:
                     if blocked_indices:
                         blocked_msg = (
                             "[BLOCKED BY GUARD] This tool call was prevented. "
-                            "Read the guard message injected above carefully — it contains "
-                            "override instructions with an example. Follow them exactly to proceed."
+                            "Read the guard message injected above carefully and retry with a corrected tool call. "
+                            "Do NOT respond with plain text only — you MUST make a tool call in your next response."
                         )
                         if len(blocked_indices) == len(tool_calls):
                             # All blocked
@@ -398,6 +404,8 @@ class AgentKernel:
             tool_effects=tool_effects,
             turn_count=getattr(d.config, "_turn_count", 0),
             context_pressure=history.get_context_pressure() if history else 0.0,
+            evictable_indexes=history.get_evictable_indexes() if history else [],
+            messages=history.get_messages() if history else [],
             current_state=self.fsm.current_state,
             transitions_count=len(self.fsm.history),
             classify_fn=d.judge.classify,

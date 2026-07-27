@@ -709,6 +709,13 @@ class Orchestrator:
                         f"Stage {stage_idx}/{total_stages} ({sub.id}) failed: {result.summary[:200]}",
                         stage_results,
                     )
+                if result.status == "partial":
+                    upstream.update(result.artifacts)
+                    upstream[sub.id] = result.summary
+                    return (
+                        f"Stage {stage_idx}/{total_stages} ({sub.id}) incomplete (needs user input): {result.summary[:200]}",
+                        stage_results,
+                    )
                 if result.interrupted:
                     upstream.update(result.artifacts)
                     upstream[sub.id] = result.summary

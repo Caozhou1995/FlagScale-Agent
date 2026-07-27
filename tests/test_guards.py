@@ -199,12 +199,13 @@ class TestContextPressureGuard:
         assert result is not None
         assert result.action == "inject_msg"
 
-    def test_compact_at_force_threshold(self):
+    def test_block_at_hard_threshold(self):
         g = ContextPressureGuard()
         ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.96)
         result = g.check_post(ctx)
         assert result is not None
-        assert result.action == "force_compact"
+        assert result.action == "block"
+        assert "30%" in result.message or "MUST" in result.message
 
 
 # ── PlanGuard ─────────────────────────────────────────────────────────────

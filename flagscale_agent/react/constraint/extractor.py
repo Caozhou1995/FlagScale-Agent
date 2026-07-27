@@ -198,4 +198,5 @@ def _compile_one(item: dict, skill_name: str, index: int) -> Constraint | None:
         trigger=trigger,
         prompt=item.get("prompt", f"Does this tool call violate: {description}"),
         correction=correction,
+        inject_only=item.get("inject_only", True),  # Default True for extracted constraints
     )

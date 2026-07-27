@@ -67,28 +67,7 @@ _MONITOR_FAILURE_PATTERNS = (
 _MONITOR_FAILURE_RE = re.compile("|".join(_MONITOR_FAILURE_PATTERNS), re.IGNORECASE)
 
 
-# Auto-restart config templates
-_AUTO_RESTART_STRATEGIES = {
-    "oom": [
-        ("global_batch_size", "reduce by 50%", "halve"),
-        ("gradient_accumulation_steps", "increase to compensate", "double_gas"),
-        ("recompute_activations", "true", "enable_recompute"),
-    ],
-    "nccl": [
-        ("NCCL_IB_DISABLE", "1", "disable_ib"),
-        ("NCCL_SOCKET_IFNAME", "eth0", "set_nic"),
-        ("NCCL_DEBUG", "INFO", "enable_nccl_debug"),
-    ],
-    "cuda": [
-        ("precision", "bf16 -> fp16", "downgrade_precision"),
-        ("deterministic_mode", "false", "disable_deterministic"),
-    ],
-    "default": [
-        ("global_batch_size", "reduce by 50%", "halve_batch"),
-        ("tp", "reduce if >1", "reduce_tp"),
-        ("gradient_checkpointing", "true", "enable_ckpt"),
-    ],
-}
+
 
 
 class TrainingRuntimeGuard(Guard):
@@ -139,7 +118,10 @@ class TrainingRuntimeGuard(Guard):
 
             # Allow read-only diagnostic shell commands
             if ctx.tool_name == "shell":
-                cmd = ctx.tool_args.get("command", "").strip()
+                cmd = ctx.tool_args.get("command", "")
+                if not isinstance(cmd, str):
+                    cmd = ""
+                cmd = cmd.strip()
                 # Fast-path: common read-only prefixes don't need LLM
                 if self._is_read_only_shell_fast(cmd):
                     return None
@@ -282,23 +264,6 @@ class TrainingRuntimeGuard(Guard):
             self._last_train_failure_reasons.append(_failure_result[-300:])
             self._source_reads_since_last_failure = 0
 
-            failure_lower = _failure_result.lower()
-            strategy = _AUTO_RESTART_STRATEGIES["default"]
-            if "oom" in failure_lower or "out of memory" in failure_lower:
-                strategy = _AUTO_RESTART_STRATEGIES["oom"]
-            elif "nccl" in failure_lower:
-                strategy = _AUTO_RESTART_STRATEGIES["nccl"]
-            elif "cuda" in failure_lower:
-                strategy = _AUTO_RESTART_STRATEGIES["cuda"]
-
-            strategy_lines = "\n".join(f"  - {k}: {desc}" for k, desc, _ in strategy)
-            restart_msg = (
-                f"\n[AUTO-RESTART STRATEGY] Detected failure category, "
-                f"suggested config modifications before next attempt:\n"
-                f"{strategy_lines}\n"
-                "Apply fixes before next attempt."
-            )
-
             compare_msg = ""
             if ctx.current_experiment_name and ctx.experiment_diff_fn:
                 try:
@@ -318,13 +283,13 @@ class TrainingRuntimeGuard(Guard):
                     f"[TrainingRuntime] {self._consecutive_train_failures} "
                     "consecutive training failures. The current configuration "
                     "will not succeed without changes. Diagnose root cause "
-                    f"before retrying.{restart_msg}{compare_msg}",
+                    f"before retrying.{compare_msg}",
                     reason="consecutive training failures",
                 )
             elif compare_msg:
                 return GuardVerdict.inject(
-                    compare_msg.strip() + restart_msg,
-                    reason="config diff and restart strategy after failure",
+                    compare_msg.strip(),
+                    reason="config diff after failure",
                 )
         else:
             # Track source code reading (not a failure)

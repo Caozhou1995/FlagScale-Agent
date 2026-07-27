@@ -12,98 +12,132 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ContextPressureGuard — monitors context window pressure and triggers compaction."""
+"""Context pressure guard — advisory-only, LLM decides what to evict.
 
-from __future__ import annotations
-
-import re
+Monitors context token usage and injects reminders for the LLM to call evict().
+Never auto-evicts. Never suggests reducing work quality.
+"""
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
+
+
+# Thresholds
+SOFT_LIMIT_RATIO = 0.75
+HARD_LIMIT_RATIO = 0.90
 
 
 class ContextPressureGuard(Guard):
-    """Monitors context pressure and triggers warnings / forced compaction.
+    """Guard that monitors context pressure and reminds LLM to evict.
 
-    Activates in all states — context pressure is always relevant.
-    Enhanced: at soft threshold, scans recent context for memory candidates.
+    Design principles:
+    - NEVER auto-evict — LLM decides what to evict
+    - NEVER suggest reducing quality, skipping steps, or being concise
+    - Persistently remind until LLM takes action
+    - Provide actionable guidance: use evict_list to browse, then evict
     """
 
     name = "context_pressure"
-    priority = 40
-    activate_on_states = {AgentState.EXECUTING, AgentState.PLANNING, AgentState.REVIEWING}
+    priority = 10  # High priority
+    overridable = False
+    escalate_after = 5  # After 5 blocks, escalate
 
-    # ── Thresholds ──
-    _SOFT_THRESHOLD = 0.75
-    _HARD_THRESHOLD = 0.85
-    _FORCE_THRESHOLD = 0.95
+    # How many inject reminders before switching to block
+    INJECT_LIMIT = 5
 
-    def __init__(self):
-        self._soft_warned: bool = False
-        self._hard_warned: bool = False
+    def __init__(self, working_window_tokens: int = 0):
+        super().__init__()
+        self._soft_warned = False
+        self._hard_remind_count = 0
+        self._working_window_tokens = working_window_tokens
+
+    @property
+    def working_window_tokens(self) -> int:
+        """Return the working window size for display. Fallback to 120K if not set."""
+        return self._working_window_tokens or 120_000
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        """Check context pressure after tool execution."""
         pressure = ctx.context_pressure
+        if pressure < SOFT_LIMIT_RATIO * 0.9:
+            # Below hysteresis threshold — fully reset
+            self._soft_warned = False
+            self._hard_remind_count = 0
+            return None
 
-        if pressure >= self._FORCE_THRESHOLD:
-            return GuardVerdict.compact(
-                reason=f"pressure at {pressure:.0%}",
+        ww = self.working_window_tokens
+        estimated_tokens = int(pressure * ww)
+
+        # Hard limit — check if eviction is possible
+        if pressure >= HARD_LIMIT_RATIO:
+            evictable = ctx.evictable_indexes
+            
+            # If no evictable indexes, all old messages are already evicted
+            # Only the last 4 (protected tail) remain
+            if not evictable:
+                # Warn once with actionable guidance, then stop nagging
+                if self._hard_remind_count == 0:
+                    self._hard_remind_count = 999  # Prevent infinite reminders
+                    # Estimate tokens in protected tail (last 4 messages)
+                    tail_tokens = max(0, int((pressure - 0.6) * ww))
+                    return GuardVerdict.inject(
+                        f"[Context pressure CRITICAL: {int(pressure * 100)}% "
+                        f"({estimated_tokens}/{ww} tokens)] "
+                        f"All old messages already evicted. Only the last 4 messages remain (protected).\n\n"
+                        f"Why: The last 4 messages are always protected to preserve your recent working context. "
+                        f"They currently contain ~{tail_tokens} tokens of tool results and responses.\n\n"
+                        f"Next steps:\n"
+                        f"1. Use evict_list() to browse what's already evicted\n"
+                        f"2. If you need old content: recall(index=N) to retrieve, use it, then re-evict\n"
+                        f"3. If you don't need old content: summarize current progress to memory_write(), "
+                        f"wrap up this step, and let the next turn start with clean context\n"
+                        f"4. Continue work if critical task is incomplete — the last 4 messages are sufficient "
+                        f"for focused execution. Don't abandon work due to context pressure.",
+                        category="context_pressure_fully_evicted",
+                    )
+                # Don't block if nothing can be evicted — that creates a deadlock
+                return None
+            
+            # Normal case: evictable content exists
+            self._hard_remind_count += 1
+            idx_hint = f"Evictable indexes: {evictable[:30]}{'...' if len(evictable) > 30 else ''} ({len(evictable)} total)."
+
+            msg = (
+                f"[Context pressure CRITICAL: {int(pressure * 100)}% "
+                f"({estimated_tokens}/{ww} tokens)] "
+                f"Call evict(indexes=[...]) to free at least 30% of context. "
+                f"Do NOT reduce work quality — evict old tool results you no longer need. "
+                f"{idx_hint}"
             )
 
-        if pressure >= self._HARD_THRESHOLD and not self._hard_warned:
-            self._hard_warned = True
-            candidates = self._suggest_memory_candidates(ctx)
-            suggestion = ""
-            if candidates:
-                suggestion = " Suggested to memorize: " + "; ".join(candidates[:3])
-            return GuardVerdict.inject(
-                f"[ContextPressure] Context at {pressure:.0%}. "
-                f"Write key findings to memory NOW — compaction is imminent.{suggestion}",
-                reason=f"hard threshold reached: {pressure:.0%}",
-            )
+            if self._hard_remind_count >= self.INJECT_LIMIT:
+                return GuardVerdict.block(msg, category="context_pressure")
+            else:
+                return GuardVerdict.inject(msg, category="context_pressure")
 
-        if pressure >= self._SOFT_THRESHOLD and not self._soft_warned:
+        # Soft limit — first advisory
+        if pressure >= SOFT_LIMIT_RATIO and not self._soft_warned:
             self._soft_warned = True
-            candidates = self._suggest_memory_candidates(ctx)
-            suggestion = ""
-            if candidates:
-                suggestion = " Candidates: " + "; ".join(candidates[:3])
+            evictable = ctx.evictable_indexes
+            if evictable:
+                idx_hint = f" Evictable indexes: {evictable[:20]}{'...' if len(evictable) > 20 else ''} ({len(evictable)} total)."
+            else:
+                idx_hint = ""
             return GuardVerdict.inject(
-                f"[ContextPressure] Context at {pressure:.0%}. "
-                f"Consider writing intermediate results to memory.{suggestion}",
-                reason=f"soft threshold reached: {pressure:.0%}",
+                f"[Context pressure: {int(pressure * 100)}% "
+                f"({estimated_tokens}/{ww} tokens)] "
+                f"Consider calling evict(indexes=[...]) to free space."
+                f"{idx_hint}"
+                f" Reminder: if you need previously-seen content, use recall(index=N) instead of re-reading files.",
+                category="context_pressure",
             )
 
         return None
 
-    def _suggest_memory_candidates(self, ctx: GuardContext) -> list[str]:
-        """Scan recent tool results for memory-worthy content (heuristic, no LLM)."""
-        candidates = []
-        # Access recent messages from context if available
-        recent_text = ctx.tool_result or ""
-        if not recent_text and hasattr(ctx, "recent_outputs"):
-            recent_text = str(ctx.recent_outputs)
-
-        # Pattern 1: Error resolutions
-        if re.search(r'(?:fixed|solved|resolved|workaround)', recent_text, re.IGNORECASE):
-            candidates.append("error workaround found in recent output")
-
-        # Pattern 2: Path discoveries
-        paths = re.findall(r'/[\w/.-]{15,}(?:\.py|\.yaml|\.json|\.pt|\.safetensors)', recent_text)
-        if paths:
-            candidates.append(f"path: {paths[0][:80]}")
-
-        # Pattern 3: Configuration decisions
-        if re.search(r'(?:changed|set|using)\s+(?:tp|dp|pp|batch|lr|seq.len)', recent_text, re.IGNORECASE):
-            candidates.append("configuration decision")
-
-        # Pattern 4: Numerical results
-        if re.search(r'(?:loss|throughput|tokens.per.sec)\s*[:=]\s*[\d.]+', recent_text, re.IGNORECASE):
-            candidates.append("training metrics")
-
-        return candidates
+    def reset(self):
+        """Full reset of guard state."""
+        self._soft_warned = False
+        self._hard_remind_count = 0
 
     def reset_turn(self):
-        # Context pressure warnings fire at most once per session threshold crossing.
-        # Do NOT reset warned flags — they are session-level.
+        """Per-turn reset."""
         pass

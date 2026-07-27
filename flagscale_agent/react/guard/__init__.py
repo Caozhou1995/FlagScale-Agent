@@ -50,6 +50,10 @@ class GuardContext:
     recent_tool_names: list[str] = field(default_factory=list)
     recent_tool_history: list[dict] = field(default_factory=list)  # [{tool, args_summary, result_summary}]
     context_pressure: float = 0.0
+    evictable_indexes: list[int] = field(default_factory=list)  # Available indexes for eviction
+
+    # Full message history (for context-aware guards)
+    messages: list[dict] = field(default_factory=list)  # Current history (including evicted placeholders)
 
     # LLM response text (for guards that need to scan assistant replies)
     assistant_text: str = ""
@@ -392,6 +396,13 @@ class GuardRegistry:
         first_reason = ""
         fired_guards: set[str] = set()
 
+        # Context pressure override: when pressure is critical and nothing can be
+        # evicted, suppress all other guards' blocks to prevent deadlock
+        _suppress_other_blocks = (
+            ctx.context_pressure >= 0.90
+            and not ctx.evictable_indexes
+        )
+
         for guard in self._guards:
             if not guard.should_activate(ctx):
                 continue
@@ -423,6 +434,9 @@ class GuardRegistry:
                     self._shared_state.record_override(guard.name, ctx.override_reason)
                     display.guard_overridden(guard.name, ctx.override_reason)
                     continue
+                # Suppress non-critical blocks when context is full and un-evictable
+                if _suppress_other_blocks and guard.name != "context_pressure":
+                    continue
                 if first_hard_verdict is None:
                     first_hard_verdict = verdict
                     first_hard_guard = guard
@@ -448,6 +462,9 @@ class GuardRegistry:
 
                 if escalation_level == "escalate":
                     # Final level: hard escalate, LLM cannot bypass
+                    # But suppress if context is critically full with nothing to evict
+                    if _suppress_other_blocks and guard.name != "context_pressure":
+                        continue
                     esc_msg = (
                         f"[{guard.name}] ESCALATED: {verdict.message}\n\n"
                         f"This advisory has been ignored {guard.escalate_after * 2}+ times. "
@@ -465,6 +482,9 @@ class GuardRegistry:
 
                 elif escalation_level == "block":
                     # Mid level: block tool execution, LLM can override with reason
+                    # Suppress if context is critically full with nothing to evict
+                    if _suppress_other_blocks and guard.name != "context_pressure":
+                        continue
                     block_msg = (
                         f"[{guard.name}] BLOCKED: {verdict.message}\n\n"
                         f"This advisory has been ignored {guard.escalate_after}+ times. "
@@ -569,6 +589,14 @@ class GuardRegistry:
                 ):
                     self._shared_state.record_override(guard.name, ctx.override_reason)
                     display.guard_overridden(guard.name, ctx.override_reason)
+                    continue
+                # Suppress non-critical blocks when context is full and un-evictable
+                _suppress = (
+                    ctx.context_pressure >= 0.90
+                    and not ctx.evictable_indexes
+                    and guard.name != "context_pressure"
+                )
+                if _suppress:
                     continue
                 if first_hard_verdict is None:
                     first_hard_verdict = verdict

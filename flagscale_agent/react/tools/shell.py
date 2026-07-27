@@ -424,6 +424,8 @@ class ShellTool(Tool):
         """Check if a command would require user confirmation (without prompting)."""
         if not self._require_confirm:
             return False
+        if not isinstance(command, str):
+            return False  # Malformed command will be caught in execute()
         cleaned = _strip_heredoc_bodies(_strip_grep_patterns(command))
         if not _CONFIRM_RE.search(cleaned):
             return False
@@ -451,7 +453,9 @@ class ShellTool(Tool):
         return bool(result)
 
     def execute(self, **kwargs) -> str:
-        command = kwargs["command"]
+        command = kwargs.get("command", "")
+        if not command:
+            return "ERROR: 'command' parameter is required but was empty or missing (possible output truncation)."
         if not isinstance(command, str):
             return f"ERROR: shell command must be a string, got {type(command).__name__}: {repr(command)[:200]}"
         skip_confirm = kwargs.pop("_skip_confirm", False)
@@ -538,6 +542,10 @@ class ShellTool(Tool):
             last_output_snapshot = ""
             stall_count = 0
             health_reason = ""  # last health judge verdict for display
+            # Fast exit: if both IO threads finish (streams EOF) but process
+            # hasn't exited, it's hung in cleanup. Give a short grace then kill.
+            _streams_done_at = None
+            _STREAM_EOF_GRACE_SECS = 3
             while proc.poll() is None:
                 elapsed = time.time() - start
                 if elapsed > next_check:
@@ -685,6 +693,19 @@ class ShellTool(Tool):
                             if partial:
                                 return f"TERMINATED by user after {int(elapsed)}s. Partial output:\n{partial}"
                             return f"TERMINATED by user after {int(elapsed)}s."
+                # Fast exit: if both IO reader threads have finished (meaning
+                # stdout and stderr pipes hit EOF) but proc.poll() is still
+                # None, the process is hung in cleanup/exit. Kill it.
+                if not t_out.is_alive() and not t_err.is_alive():
+                    if _streams_done_at is None:
+                        _streams_done_at = time.time()
+                    elif time.time() - _streams_done_at > _STREAM_EOF_GRACE_SECS:
+                        proc.kill()
+                        proc.wait(timeout=3)
+                        break
+                else:
+                    _streams_done_at = None
+
                 time.sleep(0.2)
 
             t_out.join(timeout=5)
