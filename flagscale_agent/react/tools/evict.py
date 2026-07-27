@@ -24,7 +24,7 @@ class EvictTool(Tool):
         "Swap out conversation messages to free context space. "
         "Replaces message content with a lightweight placeholder. "
         "Can evict ANY message (tool_result, assistant, user) except the system prompt and "
-        "the last 4 messages. Tool results are lowest priority (evict those first). "
+        "the last 4 messages. "
         "Use wide index ranges (e.g. indexes=[1,2,3,...,100]) to free large amounts. "
         "Each evicted message shows [evicted | index=N | ...] as placeholder — "
         "use recall(index=N) later if you need the content back."

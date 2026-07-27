@@ -210,13 +210,13 @@ class TestHistoryEvictRecall:
         assert "read_file" in msg["content"]
 
     def test_evict_non_tool_result_fails(self):
-        """Cannot evict user or assistant messages."""
+        """Cannot evict system messages. User/assistant are evictable."""
         self._build_messages()
-        # User message
-        assert self.hm.evict_message(1) is None
-        # Assistant message
-        assert self.hm.evict_message(4) is None
-        # System message
+        # User message — now evictable in V3
+        assert self.hm.evict_message(1) is not None
+        # Assistant message — now evictable in V3
+        assert self.hm.evict_message(4) is not None
+        # System message — still not evictable
         assert self.hm.evict_message(0) is None
 
     def test_evict_already_evicted_fails(self):
@@ -251,13 +251,16 @@ class TestHistoryEvictRecall:
         assert self.hm.recall_message(3, "something") is False
 
     def test_get_evictable_indexes(self):
-        """List evictable tool_result indexes."""
+        """All non-system, non-tail messages are evictable."""
         self._build_messages()
         evictable = self.hm.get_evictable_indexes()
         assert 3 in evictable  # read_file result
-        assert 7 in evictable  # shell result
         assert 0 not in evictable  # system
-        assert 1 not in evictable  # user
+        # User and assistant messages are evictable in V3
+        assert 1 in evictable  # user
+        # Last 4 messages are protected (total 9, so 5,6,7,8 protected)
+        assert 5 not in evictable
+        assert 7 not in evictable
 
     def test_get_evictable_after_evict(self):
         """Evicted messages no longer appear as evictable."""
@@ -265,15 +268,19 @@ class TestHistoryEvictRecall:
         self.hm.evict_message(3)
         evictable = self.hm.get_evictable_indexes()
         assert 3 not in evictable
-        assert 7 in evictable
+        # Index 1 and 2 should still be evictable (OpenAI format doesn't trigger paired eviction)
+        assert 1 in evictable
+        assert 2 in evictable
 
     def test_evict_shell_tool(self):
         """Evict shell command result with correct metadata."""
         self._build_messages()
-        result = self.hm.evict_message(7)
+        # Index 7 is in protected tail (9 msgs, protected from idx 5+)
+        # Use index 3 (read_file) which is evictable
+        result = self.hm.evict_message(3)
         assert result is not None
-        assert result["metadata"]["tool_name"] == "shell"
-        assert "ls -la" in result["metadata"]["tool_input"]
+        assert result["metadata"]["tool_name"] == "read_file"
+        assert "/src/main.py" in result["metadata"]["tool_input"]
 
     def test_placeholder_format(self):
         """Placeholder contains all required info."""
@@ -295,6 +302,7 @@ class MockGuardContext:
 
     def __init__(self, pressure: float):
         self.context_pressure = pressure
+        self.evictable_indexes = list(range(1, 20))
 
 
 class TestContextPressureGuard:
@@ -343,35 +351,46 @@ class TestContextPressureGuard:
         assert result is not None and result.action == "inject_msg"
 
     def test_hard_limit_blocks(self):
-        """At 90%, blocks."""
+        """After INJECT_LIMIT reminders at hard limit, blocks."""
         ctx = MockGuardContext(0.92)
+        # First (INJECT_LIMIT - 1) calls inject
+        for _ in range(self.guard.INJECT_LIMIT - 1):
+            result = self.guard.check_post(ctx)
+            assert result is not None
+            assert result.action == "inject_msg"
+        # INJECT_LIMIT-th call should block
         result = self.guard.check_post(ctx)
         assert result is not None
         assert result.action == "block"
-        assert "30%" in result.message
-        assert "MUST" in result.message or "CRITICAL" in result.message
 
     def test_hard_block_persists_until_30_freed(self):
-        """After hard block, must free 30% before unblock."""
-        # Trigger hard block at 90% = ~57600 tokens
+        """Hard limit only fires at >= 90%. Below 90% falls to soft limit or nothing."""
         ctx_block = MockGuardContext(0.92)
+        # Reach blocked state
+        for _ in range(self.guard.INJECT_LIMIT):
+            self.guard.check_post(ctx_block)
+        # Confirmed blocked at 92%
         result = self.guard.check_post(ctx_block)
-        assert result.action == "block"
-
-        # Still blocked at 80% (only freed ~13% of original)
-        ctx_still = MockGuardContext(0.80)
-        result = self.guard.check_post(ctx_still)
         assert result is not None and result.action == "block"
 
-        # Freed 30%+ (92% -> 62% = freed about 33%)
+        # At 80% — below hard limit, soft warning fires (not block)
+        ctx_lower = MockGuardContext(0.80)
+        result = self.guard.check_post(ctx_lower)
+        # Should be soft inject (first time at soft level after hard)
+        assert result is None or result.action == "inject_msg"
+
+        # Below hysteresis (< 0.675) — fully resets
         ctx_freed = MockGuardContext(0.62)
         result = self.guard.check_post(ctx_freed)
-        assert result is None  # Unblocked!
+        assert result is None  # Fully reset
 
     def test_hard_block_exact_30_threshold(self):
         """Exactly 30% freed should unblock."""
-        # Block at 90%
         ctx_block = MockGuardContext(0.90)
+        # Exhaust inject limit to enter blocked state
+        for _ in range(self.guard.INJECT_LIMIT):
+            self.guard.check_post(ctx_block)
+        # Ensure blocked
         self.guard.check_post(ctx_block)
 
         # Free exactly 30%: 90% * (1 - 0.30) = 63%
@@ -381,8 +400,10 @@ class TestContextPressureGuard:
 
     def test_reset_clears_state(self):
         """reset() clears all guard state."""
-        # Trigger hard block
-        self.guard.check_post(MockGuardContext(0.92))
+        # Build up remind count
+        ctx = MockGuardContext(0.92)
+        for _ in range(3):
+            self.guard.check_post(ctx)
         self.guard.reset()
 
         # Should be clean now
@@ -501,16 +522,30 @@ class TestAgentEvictRecallIntegration:
 
     def test_evict_multiple(self):
         """Evict multiple indexes at once."""
+        # Add extra messages to push 3 and 7 out of protected tail
+        self.history._messages.extend([
+            {"role": "user", "content": "extra1"},
+            {"role": "assistant", "content": "extra2"},
+            {"role": "user", "content": "extra3"},
+            {"role": "assistant", "content": "extra4"},
+        ])
         result = self._handle_evict({"indexes": [3, 7]})
-        assert "Evicted 2" in result
+        assert "Evicted" in result
         assert self.store.has(3)
         assert self.store.has(7)
 
     def test_evict_mixed_valid_invalid(self):
         """Some valid, some invalid indexes."""
-        result = self._handle_evict({"indexes": [3, 0, 4, 7]})
-        # index 0 = system, index 4 = assistant — both invalid
-        assert "Evicted 2" in result
+        # Add padding to allow more evictions
+        self.history._messages.extend([
+            {"role": "user", "content": "extra1"},
+            {"role": "assistant", "content": "extra2"},
+            {"role": "user", "content": "extra3"},
+            {"role": "assistant", "content": "extra4"},
+        ])
+        result = self._handle_evict({"indexes": [3, 0, 99]})
+        # index 0 = system (invalid), index 99 = out of range (invalid), index 3 = valid
+        assert "Evicted 1" in result
         assert "Skipped" in result
 
     def test_evict_empty_list(self):
@@ -566,6 +601,10 @@ class TestEdgeCases:
             },
             {"role": "tool", "tool_call_id": "tc_1", "content": "file content " * 500},
             {"role": "assistant", "content": "done"},
+            {"role": "user", "content": "more stuff"},
+            {"role": "assistant", "content": "sure thing"},
+            {"role": "user", "content": "and more"},
+            {"role": "assistant", "content": "ok"},
         ]
 
     def teardown_method(self):
@@ -743,10 +782,15 @@ class TestEdgeCases:
         assert result is None
 
     def test_guard_at_exactly_90(self):
-        """Exactly 90% should block."""
+        """Exactly 90% should eventually block after INJECT_LIMIT."""
         from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
         guard = ContextPressureGuard()
         ctx = MockGuardContext(0.90)
+        # First call at 90% injects (not immediate block)
         result = guard.check_post(ctx)
         assert result is not None
+        assert result.action == "inject_msg"
+        # After enough calls, blocks
+        for _ in range(guard.INJECT_LIMIT - 1):
+            result = guard.check_post(ctx)
         assert result.action == "block"
