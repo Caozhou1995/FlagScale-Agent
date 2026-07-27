@@ -417,15 +417,20 @@ class ToolExecutor:
                 print(display.yellow(
                     f"     {verdict.message[:500]}"
                 ))
-                # Inject the escalation message so the LLM sees it
-                agent._kernel.deps.inject_message_fn(verdict.message)
+                # Do NOT call inject_message_fn here — that would break
+                # tool_use/tool_result pairing. The escalation message is already
+                # embedded in the tool result string above.
                 break
             elif verdict and verdict.action == "inject_msg":
-                # Inject: tool still executes, but inject warning into conversation
-                # so the LLM sees it and can change behavior
-                agent._kernel.deps.inject_message_fn(verdict.message)
+                # Inject: tool still executes, but append advisory AFTER tool_results
+                # are in history. We collect them here and append to results later.
+                # Do NOT call inject_message_fn here — that would insert a user message
+                # between assistant(tool_use) and user(tool_result), breaking the API.
+                if not hasattr(self, '_pending_advisories'):
+                    self._pending_advisories = []
+                self._pending_advisories.append(verdict.message)
                 print(display.yellow(
-                    f"  ⚠ [{tc['name']}]: {verdict.message[:500]}"
+                    f"  🛡 [{tc['name']}]: {verdict.message[:500]}"
                 ))
 
         # Pre-confirm shell commands
@@ -506,6 +511,15 @@ class ToolExecutor:
 
         if not to_run:
             display.parallel_tools_finish()
+            # Append pending advisories even for skip-only batches
+            if hasattr(self, '_pending_advisories') and self._pending_advisories:
+                advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
+                advisory_text += "\n".join(self._pending_advisories)
+                for i in range(len(results) - 1, -1, -1):
+                    if results[i] is not None:
+                        results[i] += advisory_text
+                        break
+                self._pending_advisories = []
             return results
 
         with ThreadPoolExecutor(max_workers=min(len(to_run), 4)) as pool:
@@ -514,4 +528,17 @@ class ToolExecutor:
                 results[futures[future]] = future.result()
 
         display.parallel_tools_finish()
+
+        # Append any pending guard advisories to the LAST tool result
+        # so they appear inside tool_result messages (safe for API ordering)
+        if hasattr(self, '_pending_advisories') and self._pending_advisories:
+            advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
+            advisory_text += "\n".join(self._pending_advisories)
+            # Find last non-None result to append to
+            for i in range(len(results) - 1, -1, -1):
+                if results[i] is not None:
+                    results[i] += advisory_text
+                    break
+            self._pending_advisories = []
+
         return results

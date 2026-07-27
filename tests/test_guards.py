@@ -201,7 +201,12 @@ class TestContextPressureGuard:
 
     def test_block_at_hard_threshold(self):
         g = ContextPressureGuard()
-        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.96)
+        # Guard only blocks after INJECT_LIMIT (5) inject reminders at hard threshold
+        # Simulate having already issued enough inject reminders
+        g._hard_remind_count = g.INJECT_LIMIT
+        # Must provide evictable_indexes so guard doesn't short-circuit (no-evict path returns None)
+        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.96,
+                   evictable_indexes=[1, 2, 3, 4, 5])
         result = g.check_post(ctx)
         assert result is not None
         assert result.action == "block"

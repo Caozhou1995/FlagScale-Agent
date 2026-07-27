@@ -249,12 +249,17 @@ class AgentKernel:
                 self._plan_auto_continue_count = 0
 
                 # ── Execute tools ──
+                _pre_guard_verdicts = []
                 try:
                     tool_calls = response["tool_calls"]
 
                     # ── Per-tool pre-guard checks ──
-                    # Give guards a chance to block individual tool calls before execution
+                    # Give guards a chance to block individual tool calls before execution.
+                    # IMPORTANT: Do NOT inject messages here (before tool_results are appended)
+                    # because that would break tool_use/tool_result pairing required by the API.
+                    # Collect verdicts and apply them AFTER tool_results are in history.
                     blocked_indices = set()
+                    _pre_guard_verdicts = []  # (verdict, blocked) pairs to apply after tool_results
                     for i, tc in enumerate(tool_calls):
                         ctx = self._build_ctx(
                             tool_name=tc["name"],
@@ -263,15 +268,22 @@ class AgentKernel:
                         )
                         verdict = d.guard_registry.check_pre(ctx)
                         if verdict is not None:
-                            blocked = self._apply_verdict(verdict, pre=True)
-                            if blocked:
+                            if verdict.action in ("block", "escalate"):
                                 blocked_indices.add(i)
+                                _pre_guard_verdicts.append(verdict)
+                                if verdict.action == "block":
+                                    display.guard_block(verdict.message)
+                                else:
+                                    display.guard_escalate(verdict.message)
+                            elif verdict.action == "inject_msg":
+                                # Soft advisory — defer until after tool_results are appended
+                                _pre_guard_verdicts.append(verdict)
 
                     # Execute tools (skip blocked ones)
                     if blocked_indices:
                         blocked_msg = (
                             "[BLOCKED BY GUARD] This tool call was prevented. "
-                            "Read the guard message injected above carefully and retry with a corrected tool call. "
+                            "Read the guard message below carefully and retry with a corrected tool call. "
                             "Do NOT respond with plain text only — you MUST make a tool call in your next response."
                         )
                         if len(blocked_indices) == len(tool_calls):
@@ -318,6 +330,11 @@ class AgentKernel:
                     for tc, r in zip(tool_calls, results)
                 ]
                 d.append_tool_results_fn(tool_results)
+
+                # Apply deferred pre-guard verdicts AFTER tool_results are in history,
+                # so inject/block messages don't break tool_use → tool_result pairing.
+                for verdict in _pre_guard_verdicts:
+                    self._apply_verdict(verdict, pre=True)
 
                 # Apply post-guard verdicts AFTER tool results are appended,
                 # so inject messages don't break tool_call → tool_result pairing.
