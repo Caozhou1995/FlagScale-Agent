@@ -105,7 +105,9 @@ class ContextPressureGuard(Guard):
                 f"[Context pressure CRITICAL: {int(pressure * 100)}% "
                 f"({estimated_tokens}/{ww} tokens)] "
                 f"Call evict(indexes=[...]) to free at least 30% of context. "
-                f"Do NOT reduce work quality — evict old tool results you no longer need. "
+                f"You can evict ANY message (user, assistant, tool_result) except index 0 and the last 4. "
+                f"Evict aggressively — use wide ranges from the list below. "
+                f"Do NOT reduce work quality — recall(index=N) can retrieve evicted content if needed later. "
                 f"{idx_hint}"
             )
 
@@ -125,7 +127,8 @@ class ContextPressureGuard(Guard):
             return GuardVerdict.inject(
                 f"[Context pressure: {int(pressure * 100)}% "
                 f"({estimated_tokens}/{ww} tokens)] "
-                f"Consider calling evict(indexes=[...]) to free space."
+                f"Consider calling evict(indexes=[...]) to free space. "
+                f"You can evict ANY message except index 0 and the last 4."
                 f"{idx_hint}"
                 f" Reminder: if you need previously-seen content, use recall(index=N) instead of re-reading files.",
                 category="context_pressure",

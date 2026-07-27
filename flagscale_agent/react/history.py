@@ -287,16 +287,70 @@ class HistoryManager:
             )
 
         original_content = content
+
+        # If this assistant message contains tool_use blocks, we must also evict
+        # the next user message (which contains the paired tool_result blocks).
+        # Otherwise the API will see orphaned tool_result without matching tool_use.
+        paired_evict = None
+        if role == "assistant" and _has_tool_use(msg):
+            next_idx = index + 1
+            if next_idx < len(self._messages) - 4:
+                next_msg = self._messages[next_idx]
+                if next_msg.get("role") == "user" and not next_msg.get("_evicted"):
+                    next_content = next_msg.get("content", "")
+                    next_tokens = _message_tokens(next_msg)
+                    next_placeholder = (
+                        f"[evicted | index={next_idx} | role=user | tool_results | {next_tokens} tokens]"
+                    )
+                    paired_evict = {
+                        "index": next_idx,
+                        "content": next_content,
+                        "tokens": next_tokens,
+                        "placeholder": next_placeholder,
+                    }
+        # Reverse: if evicting a user message with tool_result, also evict preceding assistant
+        elif role == "user" and _is_tool_result(msg):
+            prev_idx = index - 1
+            if prev_idx > 0:
+                prev_msg = self._messages[prev_idx]
+                if prev_msg.get("role") == "assistant" and _has_tool_use(prev_msg) and not prev_msg.get("_evicted"):
+                    prev_content = prev_msg.get("content", "")
+                    prev_tokens = _message_tokens(prev_msg)
+                    prev_placeholder = (
+                        f"[evicted | index={prev_idx} | role=assistant | tool_use | {prev_tokens} tokens]"
+                    )
+                    paired_evict = {
+                        "index": prev_idx,
+                        "content": prev_content,
+                        "tokens": prev_tokens,
+                        "placeholder": prev_placeholder,
+                    }
+
         msg["content"] = placeholder
         msg["_evicted"] = True
         msg["_evicted_tokens"] = tokens
 
+        # Apply paired eviction
+        if paired_evict:
+            next_msg = self._messages[paired_evict["index"]]
+            next_msg["content"] = paired_evict["placeholder"]
+            next_msg["_evicted"] = True
+            next_msg["_evicted_tokens"] = paired_evict["tokens"]
+
+        metadata = {
+            "role": role,
+            "tokens": tokens,
+        }
+        # Include tool info in metadata for tool_result messages
+        if _is_tool_result(msg) or (role == "tool"):
+            tool_name_meta, tool_input_meta = self._extract_tool_info_for_index(index)
+            metadata["tool_name"] = tool_name_meta
+            metadata["tool_input"] = tool_input_meta
+
         return {
             "content": original_content,
-            "metadata": {
-                "role": role,
-                "tokens": tokens,
-            },
+            "metadata": metadata,
+            "paired_evict": paired_evict,
         }
 
     def recall_message(self, index: int, content: str) -> bool:

@@ -2291,6 +2291,19 @@ class WorkerAgent:
             evicted_count += 1
             freed_tokens += result.get("metadata", {}).get("tokens", 0)
 
+            # Handle paired eviction (tool_use + tool_result must stay paired)
+            paired = result.get("paired_evict")
+            if paired:
+                paired_idx = paired["index"]
+                paired_content = paired["content"]
+                if not isinstance(paired_content, str):
+                    paired_content = json.dumps(paired_content, ensure_ascii=False)
+                self._swap_store.save(paired_idx, paired_content, {"role": "user", "tokens": paired["tokens"]})
+                evicted_count += 1
+                freed_tokens += paired["tokens"]
+                # Add to summary list
+                messages_for_summary.append((paired_idx, "user", None, f"[paired tool_result for index {idx}]"))
+
         # Generate summaries via LLM for newly evicted messages
         if messages_for_summary:
             self._generate_evict_summaries(messages_for_summary)

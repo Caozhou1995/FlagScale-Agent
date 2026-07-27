@@ -52,6 +52,7 @@ When calling evict(indexes=[...]), you can evict ANY message EXCEPT:
 
 When context pressure reaches 90%+:
 - Check evictable_indexes in the guard message
+- **Evict aggressively**: use the FULL evictable_indexes list (or large subsets) in a single call. Do NOT evict just 10-30 at a time — that leads to repeated pressure warnings.
 - If evictable_indexes is empty: all old messages are already evicted, only last 4 remain
 - In this case: (1) Use recall() to retrieve specific evicted content if needed, (2) Summarize progress to memory, (3) Wrap up current step or continue with constrained context
 
