@@ -46,9 +46,10 @@ class WriteFileTool(Tool):
     effects = EFFECT_WRITE_FS
     description = (
         "Create or overwrite a file at the given path with the provided content. "
-        "For large files (>3000 chars), split into multiple calls using mode='append' "
-        "after the first write. Example: first call with mode='write', then subsequent "
-        "calls with mode='append' to add remaining content."
+        "IMPORTANT: Each call's content parameter MUST be under 3000 characters. "
+        "If content exceeds 3000 chars, you MUST split into multiple calls: "
+        "first call with mode='write', subsequent calls with mode='append'. "
+        "Failing to split will cause output truncation and incomplete file writes."
     )
     parameters = {
         "type": "object",

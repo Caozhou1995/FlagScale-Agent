@@ -24,7 +24,7 @@ import pytest
 from flagscale_agent.react.tools.monitor import MonitorTool
 
 
-_LIVE_PATTERN = "pytest"  # always matches the test runner process
+_LIVE_PATTERN = "pytest|python"  # matches the test runner AND any python process
 
 
 def _always_true_classify(category, text, context="", **kwargs):

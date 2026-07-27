@@ -136,6 +136,7 @@ class TestAnthropicProvider:
 class TestOpenAIProvider:
     @pytest.fixture
     def provider(self):
+        pytest.importorskip("openai")
         with patch("flagscale_agent.react.providers.openai_provider.OpenAI") as mock_cls:
             mock_client = MagicMock()
             mock_cls.return_value = mock_client

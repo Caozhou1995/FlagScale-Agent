@@ -42,6 +42,8 @@ EXPECTED_SKILLS = {
     "infer-env-setup",
     "infer-hw-adapt",
     "infer-model-adapt",
+    "infer-precision-check",
+    "infer-plugin-upgrade",
 }
 
 REQUIRED_FRONTMATTER_FIELDS = {"name", "description", "keywords"}

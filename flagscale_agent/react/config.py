@@ -55,8 +55,8 @@ MODEL_CONTEXT_WINDOWS = {
     "o3-mini": 200000,
     "o4-mini": 200000,
     # DeepSeek
-    "deepseek-chat": 64000,
-    "deepseek-reasoner": 64000,
+    "deepseek-chat": 200000,
+    "deepseek-reasoner": 200000,
 }
 
 

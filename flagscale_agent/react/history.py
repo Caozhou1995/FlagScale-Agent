@@ -12,222 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Conversation history management with context window protection."""
+"""Conversation history management — V3 (evict/recall based).
+
+Context management is handled by the model via evict/recall tools.
+No automatic aging, truncation, or compaction.
+"""
 
 import json
+from typing import Any, Dict, List, Optional
 
-from typing import Any, Callable, Dict, List, Optional
-
-from flagscale_agent.react import display
-
-SUMMARIZE_PROMPT = (
-    "Summarize this conversation segment for an AI agent that will continue working on the same task. "
-    "Think about RE-READ COST: if a piece of information is lost, will the agent need to re-execute "
-    "a command or re-read a file to recover it? If yes, that information MUST be in the summary.\n\n"
-    "PRESERVE with high fidelity:\n"
-    "- File paths read AND their key content (structure, config values, version numbers)\n"
-    "- Error messages, root causes, and what fixed them\n"
-    "- Environment state: what's installed, what versions, what paths\n"
-    "- Decisions made and their rationale (especially version choices, architecture choices)\n"
-    "- What was tried and failed (so the agent doesn't retry)\n"
-    "- Current approach/strategy and what phase we're in\n\n"
-    "DO NOT preserve:\n"
-    "- Verbose install/build logs (just the outcome)\n"
-    "- Repetitive monitoring output (just the conclusion)\n"
-    "- Directory listings (just the key paths found)\n\n"
-    "Be specific: include exact version numbers, exact paths, exact error messages. "
-    "Keep the summary under 1500 tokens."
-)
-
-COMPACTION_NOTICE = (
-    "<context-compacted>\n"
-    "Previous context was compacted. A summary of dropped content is available in "
-    "<context-summary> above.\n"
-    "If you need details that aren't in the summary, re-read the relevant files "
-    "rather than assuming you remember.\n"
-    "</context-compacted>"
-)
-
-MAX_SUMMARY_TOKENS = 4000  # default, overridden dynamically as max_context_tokens * 0.05
-TRUNCATE_THRESHOLD = 2000
-KEEP_RECENT = 16
-AGING_WINDOW = 10
-AGING_THRESHOLD = 800
+# Working window ratio: 60% of max_context_tokens
+WORKING_WINDOW_RATIO = 0.60
+# Fallback if not dynamically set
+WORKING_WINDOW_TOKENS = 120_000
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate: ~4 ASCII chars per token, ~1.5 CJK chars per token."""
-    cjk = sum(1 for c in text if '一' <= c <= '鿿' or '　' <= c <= '〿' or '가' <= c <= '힯' or '぀' <= c <= 'ヿ')
-    ascii_chars = len(text) - cjk
-    return ascii_chars // 4 + int(cjk * 1.5) + 1
-
-
-def _smart_truncate(content: str, max_chars: int = 600) -> str:
-    """Truncate preserving structure: first lines + error tail + summary."""
-    if len(content) <= max_chars:
-        return content
-    lines = content.splitlines()
-
-    error_tail = _extract_error_tail(content, max_chars=400)
-    if error_tail:
-        head = "\n".join(lines[:3])
-        return f"{head}\n[... {len(lines)} lines, {len(content)} chars ...]\n{error_tail}"
-
-    if len(lines) > 15:
-        head = "\n".join(lines[:5])
-        tail = "\n".join(lines[-5:])
-        return f"{head}\n[... {len(lines) - 10} lines omitted, {len(content)} chars total ...]\n{tail}"
-
-    return content[:max_chars] + f"\n[... truncated, {len(content)} chars total]"
-
-
-def _classify_content_value(content: str) -> str:
-    """Classify tool result content by its re-read cost / information density.
-
-    Returns: 'high', 'medium', or 'low'
-    - high: file contents, configs, errors — expensive to re-obtain, dense info
-    - medium: directory listings, grep results — moderate density
-    - low: install logs, build output, repetitive monitoring — low density
-    """
-    lower = content[:600].lower()
-
-    # Errors are always high value
-    if any(kw in content for kw in ("Error", "ERROR", "Traceback", "FAILED", "Exception")):
-        return "high"
-
-    # Install/build logs are low value
-    if any(kw in lower for kw in ("installing", "collecting", "downloading",
-                                   "successfully installed", "requirement already",
-                                   "building wheel", "running setup")):
-        return "low"
-
-    # File content (read_file results, cat output) — high value
-    # Heuristic: contains code-like patterns or structured data
-    if any(kw in lower for kw in ("import ", "def ", "class ", "from ", "---\n",
-                                   "\"type\":", "{", "}", "export ", "#include")):
-        return "high"
-
-    # Directory listings — medium value
-    lines = content.splitlines()
-    if len(lines) > 5 and sum(1 for l in lines[:10] if l.strip().startswith(("/", "./"))) > 5:
-        return "medium"
-
-    # Default: medium
-    return "medium"
-
-
-def _age_message(msg: Dict[str, Any]) -> Dict[str, Any]:
-    """Truncate a single message's tool results based on content value.
-
-    High-value content (file contents, errors) gets a generous limit.
-    Low-value content (install logs) gets aggressively truncated.
-    """
-    content = msg.get("content", "")
-
-    if isinstance(content, str) and len(content) > AGING_THRESHOLD:
-        if msg.get("role") == "tool":
-            return {**msg, "content": _value_aware_truncate(content)}
-
-    if isinstance(content, list):
-        new_blocks = []
-        changed = False
-        for block in content:
-            if (isinstance(block, dict) and block.get("type") == "tool_result"
-                    and isinstance(block.get("content", ""), str)
-                    and len(block["content"]) > AGING_THRESHOLD):
-                new_blocks.append({**block, "content": _value_aware_truncate(block["content"])})
-                changed = True
-            else:
-                new_blocks.append(block)
-        if changed:
-            return {**msg, "content": new_blocks}
-
-    return msg
-
-
-def _value_aware_truncate(content: str) -> str:
-    """Truncate based on content value classification."""
-    value = _classify_content_value(content)
-
-    if value == "high":
-        # Generous limit: keep structure visible
-        return _smart_truncate(content, max_chars=1500)
-    elif value == "low":
-        # Aggressive: just outcome
-        lines = content.splitlines()
-        if len(lines) > 6:
-            head = "\n".join(lines[:2])
-            tail = "\n".join(lines[-3:])
-            return f"{head}\n[... {len(lines) - 5} lines of output ...]\n{tail}"
-        return _smart_truncate(content, max_chars=300)
-    else:
-        # Medium: standard truncation
-        return _smart_truncate(content, max_chars=800)
-
-
-def _age_tool_results(messages: List[Dict[str, Any]], keep_recent: int = AGING_WINDOW) -> List[Dict[str, Any]]:
-    """Proactively truncate old tool results to save context budget.
-
-    Skill-injection messages (identified by tool_call_id starting with 'auto_' or 'skill_')
-    are always truncated aggressively regardless of recency, since the LLM has already
-    absorbed their content in earlier iterations.
-    """
-    if len(messages) <= keep_recent:
-        return messages
-    cutoff = len(messages) - keep_recent
-    result = []
-    for i, msg in enumerate(messages):
-        if i >= cutoff:
-            # Even in the recent window, aggressively truncate skill messages
-            if _is_skill_injection(msg):
-                result.append(_truncate_skill_message(msg))
-            else:
-                result.append(msg)
-            continue
-        if msg.get("role") == "system":
-            result.append(msg)
-            continue
-        result.append(_age_message(msg))
-    return result
-
-
-def _is_skill_injection(msg: Dict[str, Any]) -> bool:
-    """Check if a message is a skill-injection tool_result."""
-    if msg.get("role") != "user":
-        return False
-    content = msg.get("content")
-    if not isinstance(content, list):
-        return False
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "tool_result":
-            tid = block.get("tool_use_id", "")
-            if tid.startswith("auto_") or tid.startswith("skill_"):
-                return True
-    return False
-
-
-def _truncate_skill_message(msg: Dict[str, Any]) -> Dict[str, Any]:
-    """Replace skill content with a minimal reference."""
-    content = msg.get("content")
-    if not isinstance(content, list):
-        return msg
-    new_blocks = []
-    for block in content:
-        if (isinstance(block, dict) and block.get("type") == "tool_result"
-                and (block.get("tool_use_id", "").startswith("auto_")
-                     or block.get("tool_use_id", "").startswith("skill_"))):
-            text = block.get("content", "")
-            # Extract just the skill name from the content
-            skill_ref = "[skill content already loaded — use read_file on SKILL.md if needed]"
-            if '<skill name="' in text:
-                import re as _re
-                m = _re.search(r'<skill name="([^"]+)"', text)
-                if m:
-                    skill_ref = f"[skill '{m.group(1)}' already loaded]"
-            new_blocks.append({**block, "content": skill_ref})
-        else:
-            new_blocks.append(block)
-    return {**msg, "content": new_blocks}
+    """Rough token estimate: ~4 chars per token for English, ~1.5 tokens per CJK char."""
+    if not text:
+        return 1  # Every message has at least structural overhead
+    # Count CJK characters (they typically become 2-3 tokens each in BPE)
+    cjk_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff'
+                    or '\u3040' <= c <= '\u30ff'
+                    or '\uac00' <= c <= '\ud7af')
+    ascii_count = len(text) - cjk_count
+    # CJK: ~1.5 tokens per char; ASCII: ~0.25 tokens per char (4 chars/token)
+    tokens = int(cjk_count * 1.5) + (ascii_count // 4)
+    return max(1, tokens)
 
 
 def _message_tokens(msg: Dict[str, Any]) -> int:
@@ -266,80 +77,98 @@ def _has_tool_use(msg: Dict[str, Any]) -> bool:
     return False
 
 
-def _extract_text(msg: Dict[str, Any]) -> str:
-    """Extract readable text from a message for summarization."""
-    content = msg.get("content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict):
-                if block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-                elif block.get("type") == "tool_result":
-                    inner = block.get("content", "")
-                    if isinstance(inner, str):
-                        parts.append(inner[:500])
-                elif block.get("type") == "tool_use":
-                    name = block.get("name", "")
-                    inp = block.get("input", {})
-                    parts.append(f"[tool_use: {name}({json.dumps(inp, ensure_ascii=False)[:200]})]")
-            elif isinstance(block, str):
-                parts.append(block)
-        return "\n".join(parts)
-    return str(content)
+def _validate_tool_pairs(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ensure valid conversation structure:
+    1. Every tool_result has a preceding tool_use (remove orphaned ones)
+    2. Merge consecutive user messages (required by Anthropic API)
+    """
+    # Step 1: Remove orphaned tool results
+    result = []
+    for i, msg in enumerate(messages):
+        if _is_tool_result(msg):
+            # Check if there's a matching tool_call_id in history
+            tool_call_id = msg.get("tool_call_id", "")
+            tool_use_id = ""
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        tool_use_id = block.get("tool_use_id", "")
+                        break
+
+            has_match = False
+            search_id = tool_call_id or tool_use_id
+            if search_id:
+                for prev in result:
+                    if prev.get("role") == "assistant":
+                        # OpenAI format
+                        for tc in prev.get("tool_calls", []):
+                            if tc.get("id") == search_id:
+                                has_match = True
+                                break
+                        # Anthropic format
+                        prev_content = prev.get("content")
+                        if isinstance(prev_content, list):
+                            for block in prev_content:
+                                if isinstance(block, dict) and block.get("type") == "tool_use":
+                                    if block.get("id") == search_id:
+                                        has_match = True
+                                        break
+                    if has_match:
+                        break
+            else:
+                # No ID — check if previous message is assistant with tool_use
+                if result and result[-1].get("role") == "assistant" and _has_tool_use(result[-1]):
+                    has_match = True
+
+            if has_match:
+                result.append(msg)
+            # else: drop orphaned tool_result
+        else:
+            result.append(msg)
+
+    # Step 2: Merge consecutive user messages (Anthropic requires alternating roles)
+    merged = []
+    for msg in result:
+        if msg.get("role") == "user" and merged and merged[-1].get("role") == "user":
+            merged[-1] = _merge_user_messages(merged[-1], msg)
+        else:
+            merged.append(msg)
+
+    return merged
+
+
+def _merge_user_messages(msg1: Dict[str, Any], msg2: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge two consecutive user messages into one with list content."""
+    def _to_blocks(msg):
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        if isinstance(content, list):
+            return content
+        return [{"type": "text", "text": str(content)}]
+
+    blocks = _to_blocks(msg1) + _to_blocks(msg2)
+    return {"role": "user", "content": blocks}
 
 
 class HistoryManager:
-    """Manages conversation history to stay within context limits.
+    """Manages conversation message history.
 
-    Strategy: when total tokens exceed max_context_tokens:
-    1. Truncate tool results in older messages (threshold: 2000 chars)
-    2. If still over, collect messages to drop, generate LLM summary, then drop
-    3. Insert summary as <context-summary> that survives future compactions
-    4. Notify agent that compaction happened
+    V3 design: no automatic compaction/aging/truncation.
+    Context management is fully handled by the model via evict/recall tools.
+    Guard provides pressure awareness, model decides what to evict.
     """
 
-    _COMPACTION_RATIOS = [0.60, 0.50, 0.40, 0.35]
-
-    def __init__(self, max_context_tokens: int = 100000):
+    def __init__(self, max_context_tokens: int = 200000):
         self.max_context_tokens = max_context_tokens
+        self.working_window = int(max_context_tokens * WORKING_WINDOW_RATIO)
         self._messages: List[Dict[str, Any]] = []
         self._full_log: List[Dict[str, Any]] = []
-        self._last_compacted_from = None
-        self._last_compacted_to = None
-        self._actual_input_tokens = None
-        self._last_inflation_ratio = 1.0  # Preserve inflation ratio across compactions
-        self._summarizer: Optional[Callable[[str], str]] = None
-        self._scorer: Optional[Callable[[List[Dict[str, Any]]], List[int]]] = None
-        self._accumulated_summary: str = ""
-        self._compaction_anchors: List[str] = []
-        self._compaction_happened = False
-        self._compaction_count = 0
-        self._plan_summary_fn: Optional[Callable[[], str]] = None
-        self._pre_compaction_hook: Optional[Callable[[List[Dict[str, Any]]], None]] = None
-
-    def set_summarizer(self, callback: Callable[[str], str]):
-        """Inject LLM summarization callback. Signature: (text) -> summary_string."""
-        self._summarizer = callback
-
-    def set_scorer(self, callback: Callable[[List[Dict[str, Any]]], List[int]]):
-        """Inject LLM scoring callback for drop priority.
-
-        Signature: (messages) -> list of scores (0-10, higher = more valuable to keep).
-        Called during full compaction to decide which messages to drop first.
-        """
-        self._scorer = callback
-
-    def set_plan_summary_fn(self, callback: Callable[[], str]):
-        """Inject a callback that returns the current plan state as a string.
-
-        Called during compaction to include plan context in the summary so the
-        agent can recover its working state after context is dropped.
-        Signature: () -> str
-        """
-        self._plan_summary_fn = callback
+        self._actual_input_tokens: int = 0
+        # Legacy properties (kept for compatibility, no longer used for compaction)
+        self._compaction_count: int = 0
+        self._compaction_happened: bool = False
 
     @property
     def messages(self) -> List[Dict[str, Any]]:
@@ -347,122 +176,8 @@ class HistoryManager:
 
     @property
     def compaction_happened(self) -> bool:
-        """True if the last get_messages() call triggered compaction."""
-        return self._compaction_happened
-
-    @property
-    def compaction_count(self) -> int:
-        return self._compaction_count
-
-    def get_context_pressure(self) -> float:
-        """Return current context usage as a ratio (0.0 to 1.0+)."""
-        if self.max_context_tokens <= 0:
-            return 0.0
-        estimated = sum(_message_tokens(m) for m in self._messages)
-        actual = self._actual_input_tokens or 0
-        total = max(estimated, actual)
-        return total / self.max_context_tokens
-
-    def _get_inflation_ratio(self) -> float:
-        """Return EMA-smoothed ratio of actual API tokens to local estimate.
-
-        Uses exponential moving average to avoid single-point spikes (e.g. from
-        skill load/unload changing system prompt size). Outliers (ratio > 3.0)
-        are discarded to prevent corruption.
-        """
-        estimated = sum(_message_tokens(m) for m in self._messages)
-        actual = self._actual_input_tokens or 0
-        if actual > 0 and estimated > 0:
-            current_ratio = max(actual / estimated, 1.0)
-            if current_ratio > 3.0:
-                return self._last_inflation_ratio
-            self._last_inflation_ratio = 0.7 * self._last_inflation_ratio + 0.3 * current_ratio
-            return self._last_inflation_ratio
-        return self._last_inflation_ratio
-
-    def force_compact(self, target_ratio: float = 0.50, base_limit: int = None) -> bool:
-        """Force compaction to a target ratio. Returns True if compaction occurred.
-
-        Args:
-            target_ratio: Target ratio (0.0-1.0) of the base limit
-            base_limit: Base limit to calculate target from. If None, uses self.max_context_tokens.
-                        When recovering from overflow, pass the actual token count that triggered the error.
-        """
-        estimated = sum(_message_tokens(m) for m in self._messages)
-        actual = self._actual_input_tokens or 0
-        current = max(estimated, actual)
-        inflation = self._get_inflation_ratio()
-
-        # Use actual limit if provided (for overflow recovery), otherwise use configured limit
-        effective_limit = base_limit if base_limit is not None else self.max_context_tokens
-
-        # Target in *real* tokens, then deflate to local-estimate space
-        real_target = int(effective_limit * target_ratio)
-        local_target = int(real_target / inflation)
-
-        if current <= real_target:
-            return False
-
-
-        # Scale keep_recent with target_ratio — more aggressive ratio = fewer kept
-        if target_ratio <= 0.25:
-            keep_recent = min(4, max(len(self._messages) - 2, 1))
-        elif target_ratio <= 0.35:
-            keep_recent = min(8, max(len(self._messages) - 2, 1))
-        else:
-            keep_recent = min(KEEP_RECENT, max(len(self._messages) - 2, 1))
-
-        result = []
-        for i, msg in enumerate(self._messages):
-            is_recent = (i >= len(self._messages) - keep_recent)
-            if msg.get("role") == "system":
-                result.append(msg)
-            elif is_recent:
-                # For very aggressive compaction, truncate even recent messages
-                if target_ratio <= 0.25:
-                    result.append(_truncate_message(msg, max_chars=800))
-                else:
-                    result.append(msg)
-            else:
-                result.append(_truncate_message(msg))
-
-        new_estimated = sum(_message_tokens(m) for m in result)
-        if new_estimated > local_target:
-            to_drop, to_keep = _collect_droppable(result, local_target, scorer=self._scorer)
-            if to_drop and self._summarizer:
-                summary_text = self._build_summary_input(to_drop, self._compaction_anchors)
-                # Append plan state so the agent can recover after compaction
-                if self._plan_summary_fn:
-                    try:
-                        plan_ctx = self._plan_summary_fn()
-                        if plan_ctx:
-                            summary_text += (
-                                f"\n\n## PLAN STATE (MUST PRESERVE IN SUMMARY):\n{plan_ctx}"
-                            )
-                    except Exception:
-                        pass
-                self._compaction_anchors = []
-                try:
-                    new_summary = self._summarizer(summary_text)
-                    self._merge_summary(new_summary)
-                except Exception:
-                    pass  # Drop without summary if summarizer fails
-            result = to_keep
-
-        result = self._inject_summary(result)
-        self._messages = result
-        self._compaction_count += 1
-        final_estimated = sum(_message_tokens(m) for m in self._messages)
-        self._last_compacted_from = estimated
-        self._last_compacted_to = final_estimated
-        # Reset actual tokens — stale value would mislead next compaction attempt
-        self._actual_input_tokens = None
-        display.context_compacted(
-            estimated, final_estimated,
-            compaction_num=self.compaction_count,
-            ratio=target_ratio,
-        )
-        return True
+        """V3: always False — no automatic compaction."""
+        return False
 
     def append(self, message: Dict[str, Any]):
         self._messages.append(message)
@@ -470,7 +185,6 @@ class HistoryManager:
         # Cap _full_log to prevent unbounded memory growth in long sessions
         _FULL_LOG_MAX = 2000
         if len(self._full_log) > _FULL_LOG_MAX:
-            # Keep the most recent messages; drop oldest
             self._full_log = self._full_log[-_FULL_LOG_MAX:]
 
     def set_system_prompt(self, content: str):
@@ -484,494 +198,224 @@ class HistoryManager:
         """Feed back the actual input_tokens from the API response."""
         self._actual_input_tokens = input_tokens
 
-    def get_messages(self) -> List[Dict[str, Any]]:
-        """Return messages, compacting with LLM summary if over budget."""
-        # Only age old tool results when context pressure is meaningful.
-        # With a 200K budget, aggressively truncating at 10% usage causes
-        # the agent to re-read files it already read — a net token loss.
+    def get_context_pressure(self) -> float:
+        """Return current context usage as ratio against dynamic working window (60% of max_context_tokens)."""
         estimated = sum(_message_tokens(m) for m in self._messages)
         actual = self._actual_input_tokens or 0
-        inflation = self._get_inflation_ratio()
-        # Use inflation-adjusted estimate to predict real API cost
-        predicted = max(int(estimated * inflation), actual)
-        total = predicted
-        self._last_compacted_from = None
-        self._last_compacted_to = None
-        self._compaction_happened = False
+        total = max(estimated, actual)
+        return total / self.working_window
 
-        # Pressure-gated aging: truncate old tool results earlier to prevent token bloat
-        pressure = total / self.max_context_tokens if self.max_context_tokens > 0 else 0
-        if pressure > 0.35:
-            before_est = estimated
-            self._messages = _age_tool_results(self._messages, keep_recent=AGING_WINDOW)
-            estimated = sum(_message_tokens(m) for m in self._messages)
-            freed = before_est - estimated
-            if freed > 1000:
-                display._print(display.dim(
-                    f"📦 Aging: freed ~{freed // 1000}k tokens (pressure {int(pressure * 100)}%)"
-                ))
-            predicted = max(int(estimated * inflation), actual)
-            total = predicted
-
-        if total <= self.max_context_tokens:
-            return _validate_tool_pairs(list(self._messages))
-
-        original_total = total
-
-        # Dynamic target: compress harder each successive time
-        ratio_idx = min(self._compaction_count, len(self._COMPACTION_RATIOS) - 1)
-        ratio = self._COMPACTION_RATIOS[ratio_idx]
-        real_target = int(self.max_context_tokens * ratio)
-        local_target = int(real_target / inflation)
-
-        keep_recent = min(KEEP_RECENT, max(len(self._messages) - 2, 1))
-
-        # Step 1: truncate old tool results (threshold raised to 2000 chars)
-        result = []
-        for i, msg in enumerate(self._messages):
-            is_recent = (i >= len(self._messages) - keep_recent)
-            if msg.get("role") == "system":
-                result.append(msg)
-            elif is_recent:
-                result.append(msg)
-            else:
-                result.append(_truncate_message(msg))
-
-        new_estimated = sum(_message_tokens(m) for m in result)
-
-        # Step 2: if still over target, collect messages to drop and summarize them
-        if new_estimated > local_target:
-            to_drop, to_keep = _collect_droppable(result, local_target, scorer=self._scorer)
-
-            # Pre-compaction hook: extract key info from to_drop before losing them
-            if to_drop and self._pre_compaction_hook:
-                try:
-                    self._pre_compaction_hook(to_drop)
-                except Exception:
-                    pass
-
-            if to_drop and self._summarizer:
-                summary_text = self._build_summary_input(to_drop, self._compaction_anchors)
-                self._compaction_anchors = []
-                try:
-                    new_summary = self._summarizer(summary_text)
-                    self._merge_summary(new_summary)
-                except Exception:
-                    pass  # Drop without summary if summarizer fails
-
-            result = to_keep
-
-        # Step 3: inject accumulated summary after system message
-        result = self._inject_summary(result)
-
-        # Step 4: hard ceiling — if still over budget, aggressively truncate recent messages
-        new_estimated = sum(_message_tokens(m) for m in result)
-        if new_estimated > local_target:
-            result = self._hard_ceiling_truncate(result, local_target)
-
-        new_estimated = sum(_message_tokens(m) for m in result)
-        self._messages = result
-        # Keep _actual_input_tokens to preserve inflation ratio memory
-        self._last_compacted_from = original_total
-        self._last_compacted_to = new_estimated
-        self._compaction_happened = True
-        self._compaction_count += 1
-        display.context_compacted(
-            original_total, new_estimated,
-            compaction_num=self._compaction_count,
-            ratio=ratio,
-        )
+    def get_messages(self) -> List[Dict[str, Any]]:
+        """Return messages list. No aging or compaction — evict/recall handles context."""
         return _validate_tool_pairs(list(self._messages))
 
-    def _build_summary_input(self, messages: List[Dict[str, Any]], anchors: Optional[List[str]] = None) -> str:
-        """Build text input for the summarizer from messages about to be dropped."""
-        parts = []
-        for msg in messages:
-            role = msg.get("role", "unknown")
-            text = _extract_text(msg)
-            if text.strip():
-                parts.append(f"[{role}] {text}")
-        combined = "\n---\n".join(parts)
-        if len(combined) > 32000:
-            combined = combined[:32000] + "\n[... truncated for summarization ...]"
-        anchor_section = ""
-        if anchors:
-            anchor_section = (
-                "\n\nMANDATORY ANCHORS — these MUST appear verbatim in your summary:\n"
-                + "\n".join(f"- {a}" for a in anchors[:10])
-                + "\n"
-            )
-        return f"{SUMMARIZE_PROMPT}{anchor_section}\n\n---\nConversation segment:\n{combined}"
+    def get_message_at(self, index: int) -> Optional[Dict[str, Any]]:
+        """Return message at given index, or None if out of range or already evicted."""
+        if index < 0 or index >= len(self._messages):
+            return None
+        msg = self._messages[index]
+        if msg.get("_evicted"):
+            return None
+        return msg
 
-    def _merge_summary(self, new_summary: str):
-        """Merge new summary into accumulated summary, keeping total under limit.
+    # Legacy stubs (no-op, kept for backward compatibility with kernel/commands)
+    def force_compact(self, target_ratio: float = 0.50, base_limit: int = None) -> bool:
+        """No-op. Context managed by evict/recall."""
+        return False
 
-        Uses dynamic limit: 5% of max_context_tokens (default 10K for 200K window).
-        When over limit, fuses the two oldest sections via summarizer rather than
-        dropping outright, preserving key decisions from early context.
-        """
-        dynamic_limit = max(MAX_SUMMARY_TOKENS, int(self.max_context_tokens * 0.05))
-        if self._accumulated_summary:
-            merged = f"{self._accumulated_summary}\n\n---\n\n{new_summary}"
-        else:
-            merged = new_summary
-        _max_merge_iters = 20  # Safety cap to prevent infinite loop
-        _merge_iter = 0
-        while _estimate_tokens(merged) > dynamic_limit and "\n\n---\n\n" in merged:
-            _merge_iter += 1
-            if _merge_iter > _max_merge_iters:
-                # Keep only the most recent section
-                sections = merged.split("\n\n---\n\n")
-                merged = sections[-1]
-                break
-            # Fuse the two oldest sections instead of dropping
-            sections = merged.split("\n\n---\n\n")
-            if len(sections) <= 2:
-                # Only 2 sections left — drop the oldest as last resort
-                merged = sections[-1]
-                break
-            oldest_two = sections[0] + "\n" + sections[1]
-            if self._summarizer and _estimate_tokens(oldest_two) > 500:
-                try:
-                    fused = self._summarizer(
-                        f"Fuse these two summaries into one concise summary:\n\n{oldest_two}"
-                    )
-                    sections = [fused] + sections[2:]
-                except Exception:
-                    sections = sections[1:]
-            else:
-                sections = sections[1:]
-            merged = "\n\n---\n\n".join(sections)
-        self._accumulated_summary = merged
+    def set_summarizer(self, callback):
+        pass
 
-    def _inject_summary(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Insert or update the <context-summary> message after the system message."""
-        if not self._accumulated_summary:
-            return messages
+    def set_scorer(self, callback):
+        pass
 
-        summary_msg = {
-            "role": "user",
-            "content": f"<context-summary>\n{self._accumulated_summary}\n</context-summary>"
-        }
-
-        result = []
-        inserted = False
-        for msg in messages:
-            # Remove any existing context-summary message
-            if msg.get("role") == "user":
-                content = msg.get("content", "")
-                if isinstance(content, str) and content.startswith("<context-summary>"):
-                    continue
-            result.append(msg)
-            # Insert after system message
-            if not inserted and msg.get("role") == "system":
-                result.append(summary_msg)
-                inserted = True
-
-        if not inserted:
-            result.insert(0, summary_msg)
-
-        return result
-
-    def _hard_ceiling_truncate(self, messages: List[Dict[str, Any]], local_target: int) -> List[Dict[str, Any]]:
-        """Emergency truncation when normal compaction fails to reach target.
-
-        Keeps system/summary messages at the front, then fills from the most
-        recent messages backward. Truncation budget per message is based on
-        heuristic value score: high-value messages get more space.
-        """
-        head = []
-        body = []
-        for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            is_summary = isinstance(content, str) and content.startswith("<context-summary>")
-            if role == "system" or is_summary:
-                head.append(msg)
-            else:
-                body.append(msg)
-
-        head_tokens = sum(_message_tokens(m) for m in head)
-        budget = local_target - head_tokens
-
-        kept = []
-        used = 0
-        for msg in reversed(body):
-            score = _heuristic_score(msg)
-            if score >= 7:
-                char_limit = 1200
-            elif score >= 4:
-                char_limit = 600
-            else:
-                char_limit = 200
-            truncated = _truncate_message(msg, max_chars=char_limit)
-            t = _message_tokens(truncated)
-            if used + t > budget:
-                break
-            kept.append(truncated)
-            used += t
-
-        kept.reverse()
-        result = head + kept
-        return result
+    def set_plan_summary_fn(self, callback):
+        pass
 
     def clear(self):
+        """Clear all messages."""
         self._messages.clear()
         self._full_log.clear()
-        self._accumulated_summary = ""
+        self._actual_input_tokens = 0
 
+    # ── Evict/Recall (V3 Context Management) ──────────────────────────────────
 
-def _extract_error_tail(content: str, max_chars: int = 1500) -> str:
-    """Extract error/traceback portion from tool output for preservation during truncation."""
-    lines = content.splitlines()
-    error_start = -1
-    for i, line in enumerate(lines):
-        lower = line.lower()
-        if any(kw in lower for kw in ('traceback', 'error:', 'exception:', 'fatal:', 'failed')):
-            if error_start < 0:
-                error_start = i
-    if error_start >= 0:
-        error_text = "\n".join(lines[error_start:])
-        if len(error_text) > max_chars:
-            error_text = error_text[-max_chars:]
-        return error_text
-    return ""
+    def evict_message(self, index: int) -> Dict[str, Any] | None:
+        """Evict a message at the given index.
 
+        Can evict any message except:
+        - System prompt (index 0 if role=system)
+        - Already evicted messages
+        - The last 4 messages (to keep recent context intact)
 
-def _truncate_message(msg: Dict[str, Any], max_chars: int = TRUNCATE_THRESHOLD) -> Dict[str, Any]:
-    """Replace long content in tool results with a summary placeholder.
-    Preserves error/traceback content to avoid losing diagnostic information."""
-    content = msg.get("content", "")
+        Returns the original message data (for storage), or None if invalid.
+        """
+        if index < 0 or index >= len(self._messages):
+            return None
+        msg = self._messages[index]
+        # Never evict system prompt
+        if msg.get("role") == "system":
+            return None
+        if msg.get("_evicted"):
+            return None
+        # Protect the last 4 messages (recent context)
+        if index >= len(self._messages) - 4:
+            return None
 
-    if isinstance(content, str) and len(content) > max_chars:
-        role = msg.get("role", "")
-        if role == "tool":
-            error_tail = _extract_error_tail(content)
-            if error_tail:
-                return {**msg, "content": f"[truncated tool result, {len(content)} chars. Error preserved:]\n{error_tail}"}
-            return {**msg, "content": f"[truncated tool result, {len(content)} chars]"}
-
-    if isinstance(content, list):
-        new_blocks = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                inner = block.get("content", "")
-                if isinstance(inner, str) and len(inner) > max_chars:
-                    error_tail = _extract_error_tail(inner)
-                    if error_tail:
-                        new_blocks.append({**block, "content": f"[truncated tool result, {len(inner)} chars. Error preserved:]\n{error_tail}"})
-                    else:
-                        new_blocks.append({**block, "content": f"[truncated tool result, {len(inner)} chars]"})
-                else:
-                    new_blocks.append(block)
-            else:
-                new_blocks.append(block)
-        return {**msg, "content": new_blocks}
-
-    return msg
-
-
-def _merge_user_messages(msg1: Dict[str, Any], msg2: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge two user messages into one, handling both string and list content."""
-    c1 = msg1.get("content", "")
-    c2 = msg2.get("content", "")
-    blocks1 = c1 if isinstance(c1, list) else [{"type": "text", "text": c1}]
-    blocks2 = c2 if isinstance(c2, list) else [{"type": "text", "text": c2}]
-    return {"role": "user", "content": blocks1 + blocks2}
-
-
-def _validate_tool_pairs(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove orphaned tool_use or tool_result blocks to prevent API 400 errors.
-
-    Steps:
-    1. Merge consecutive tool_result user messages (Anthropic format splits them
-       into separate messages, but they belong to the same assistant turn).
-    2. Validate that each assistant+tool_use has a following tool_result,
-       and each tool_result has a preceding assistant+tool_use.
-    3. Merge remaining consecutive user messages for role alternation.
-    """
-    result = list(messages)
-
-    # Step 1: Merge consecutive tool_result user messages only.
-    # This handles the case where multiple tool_results from one assistant turn
-    # are stored as separate user messages (Anthropic format).
-    i = 0
-    while i < len(result) - 1:
-        if (_is_tool_result(result[i]) and _is_tool_result(result[i + 1])
-                and result[i].get("role") == "user" and result[i + 1].get("role") == "user"):
-            result[i] = _merge_user_messages(result[i], result[i + 1])
-            result.pop(i + 1)
-        else:
-            i += 1
-
-    # Step 2: Remove orphaned tool_use or tool_result
-    i = 0
-    while i < len(result):
-        msg = result[i]
-        if msg.get("role") == "assistant" and _has_tool_use(msg):
-            if i + 1 >= len(result) or not _is_tool_result(result[i + 1]):
-                result.pop(i)
-                continue
-        elif _is_tool_result(msg):
-            if i == 0 or not (result[i - 1].get("role") == "assistant" and _has_tool_use(result[i - 1])):
-                result.pop(i)
-                continue
-        i += 1
-
-    # Step 3: Merge remaining consecutive user messages (role alternation)
-    i = 0
-    while i < len(result) - 1:
-        if result[i].get("role") == "user" and result[i + 1].get("role") == "user":
-            result[i] = _merge_user_messages(result[i], result[i + 1])
-            result.pop(i + 1)
-        else:
-            i += 1
-
-    return result
-
-
-def _collect_droppable(messages: List[Dict[str, Any]], budget: int,
-                       scorer: Optional[Callable] = None):
-    """Separate messages into (to_drop, to_keep) lists to fit within budget.
-
-    If a scorer callback is available, uses LLM-based value scoring to drop
-    low-value messages first (regardless of age). Falls back to FIFO if no scorer.
-
-    Keeps system messages and context-summary messages unconditionally.
-    """
-    total = sum(_message_tokens(m) for m in messages)
-    if total <= budget:
-        return [], messages
-
-    # Identify droppable candidates (not system, not context-summary)
-    candidates = []  # (index, msg, tokens)
-    protected = []   # (index, msg) — always kept
-    for i, msg in enumerate(messages):
         content = msg.get("content", "")
-        is_system = msg.get("role") == "system"
-        is_summary = isinstance(content, str) and content.startswith("<context-summary>")
-        if is_system or is_summary:
-            protected.append((i, msg))
+        tokens = _message_tokens(msg)
+
+        # Build placeholder based on message type
+        role = msg.get("role", "unknown")
+        if _is_tool_result(msg):
+            tool_name, tool_input = self._extract_tool_info_for_index(index)
+            placeholder = (
+                f"[evicted | index={index} | {tool_name}({tool_input}) | {tokens} tokens]"
+            )
         else:
-            candidates.append((i, msg, _message_tokens(msg)))
+            # For assistant/user messages, show a brief summary
+            text_preview = ""
+            if isinstance(content, str):
+                text_preview = content[:50].replace("\n", " ")
+            elif isinstance(content, list):
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        text_preview = b.get("text", "")[:50].replace("\n", " ")
+                        break
+            placeholder = (
+                f"[evicted | index={index} | role={role} | {text_preview}... | {tokens} tokens]"
+            )
 
-    if not candidates:
-        return [], messages
+        original_content = content
+        msg["content"] = placeholder
+        msg["_evicted"] = True
+        msg["_evicted_tokens"] = tokens
 
-    # Score candidates: LLM if available, else heuristic
-    if scorer and len(candidates) > 4:
-        try:
-            candidate_msgs = [c[1] for c in candidates]
-            scores = scorer(candidate_msgs)
-            if len(scores) == len(candidates):
-                # Attach scores
-                scored = [(candidates[j][0], candidates[j][1], candidates[j][2], scores[j])
-                          for j in range(len(candidates))]
-            else:
-                scored = [(c[0], c[1], c[2], _heuristic_score(c[1])) for c in candidates]
-        except Exception:
-                scored = [(c[0], c[1], c[2], _heuristic_score(c[1])) for c in candidates]
-    else:
-        scored = [(c[0], c[1], c[2], _heuristic_score(c[1])) for c in candidates]
+        return {
+            "content": original_content,
+            "metadata": {
+                "role": role,
+                "tokens": tokens,
+            },
+        }
 
-    # Sort by score ascending (drop lowest-value first)
-    scored.sort(key=lambda x: (x[3], x[0]))
+    def recall_message(self, index: int, content: str) -> bool:
+        """Restore evicted content at a given index (in-place).
+        
+        Clears the _evicted flag to allow re-eviction if needed.
+        This enables evict → recall → re-evict cycles for dynamic context management.
 
-    # Drop until we're under budget, respecting tool_use/tool_result pairs
-    to_drop_indices = set()
-    tokens_freed = 0
-    tokens_to_free = total - budget
+        Returns True if restored, False if index invalid or not evicted.
+        """
+        if index < 0 or index >= len(self._messages):
+            return False
+        msg = self._messages[index]
+        if not msg.get("_evicted"):
+            return False
+        msg["content"] = content
+        # Clear _evicted flag to allow this message to be evicted again
+        del msg["_evicted"]
+        if "_evicted_tokens" in msg:
+            del msg["_evicted_tokens"]
+        return True
 
-    for idx, msg, tokens, score in scored:
-        if tokens_freed >= tokens_to_free:
-            break
-        # If this is an assistant with tool_use, also drop the paired tool_result
-        if msg.get("role") == "assistant" and _has_tool_use(msg):
-            pair_idx = idx + 1
-            pair_tokens = 0
-            if pair_idx < len(messages) and _is_tool_result(messages[pair_idx]):
-                pair_tokens = _message_tokens(messages[pair_idx])
-                to_drop_indices.add(pair_idx)
-            to_drop_indices.add(idx)
-            tokens_freed += tokens + pair_tokens
-        elif _is_tool_result(msg):
-            # Check if the preceding assistant is already being dropped
-            if idx - 1 >= 0 and messages[idx - 1].get("role") == "assistant":
-                to_drop_indices.add(idx - 1)
-                tokens_freed += _message_tokens(messages[idx - 1])
-            to_drop_indices.add(idx)
-            tokens_freed += tokens
-        else:
-            to_drop_indices.add(idx)
-            tokens_freed += tokens
+    def update_evict_placeholder(self, index: int, summary: str) -> bool:
+        """Update an evicted message's placeholder with a better summary.
 
-    to_drop = [messages[i] for i in sorted(to_drop_indices)]
-    to_keep = [messages[i] for i in range(len(messages)) if i not in to_drop_indices]
+        Called after LLM generates a summary, to replace the raw content
+        truncation with a meaningful one-liner.
 
-    return to_drop, to_keep
+        Returns True if updated, False if not evicted at that index.
+        """
+        if index < 0 or index >= len(self._messages):
+            return False
+        msg = self._messages[index]
+        if not msg.get("_evicted"):
+            return False
+        tokens = msg.get("_evicted_tokens", 0)
+        role = msg.get("role", "unknown")
+        # Rebuild placeholder with summary
+        msg["content"] = (
+            f"[evicted | index={index} | role={role} | {summary} | {tokens} tokens]"
+        )
+        return True
 
+    def get_evictable_indexes(self) -> List[int]:
+        """Return indexes of messages that can be evicted, in index order.
 
-def _heuristic_score(msg: Dict[str, Any]) -> int:
-    """Score a message's value heuristically (0-10, higher = more valuable).
+        All messages except system prompt, already-evicted, and last 4 are evictable.
+        Returns in natural index order — no priority implied.
+        LLM should decide what to evict based on its own judgment.
+        """
+        protected_tail = max(0, len(self._messages) - 4)
+        result = []
+        for i, msg in enumerate(self._messages):
+            if msg.get("_evicted"):
+                continue
+            if msg.get("role") == "system":
+                continue
+            if i >= protected_tail:
+                continue
+            result.append(i)
+        return result
 
-    Used as fallback when LLM scorer is unavailable.
-    Higher score = more likely to be kept during compaction.
-    """
-    content = _extract_text(msg)
-    if not content:
-        return 1
+    def _extract_tool_info_for_index(self, index: int) -> tuple:
+        """Extract tool_name and key input for a tool_result at index."""
+        tool_name = "unknown"
+        tool_input = ""
 
-    # Errors are high value (agent needs to remember what failed)
-    if any(kw in content for kw in ("Error", "ERROR", "Traceback", "FAILED", "Exception")):
-        return 9
+        for i in range(index - 1, -1, -1):
+            msg = self._messages[i]
+            if msg.get("role") == "assistant":
+                # Anthropic format
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            tool_result_id = self._messages[index].get("tool_use_id", "")
+                            if block.get("id", "") == tool_result_id or not tool_result_id:
+                                tool_name = block.get("name", "unknown")
+                                tool_input = self._summarize_tool_input(
+                                    tool_name, block.get("input", {})
+                                )
+                                return (tool_name, tool_input)
+                # OpenAI format
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls:
+                    tool_result_id = self._messages[index].get("tool_call_id", "")
+                    for tc in tool_calls:
+                        tc_id = tc.get("id", "")
+                        if tc_id == tool_result_id or not tool_result_id:
+                            fn = tc.get("function", {})
+                            tool_name = fn.get("name", "unknown")
+                            try:
+                                args = json.loads(fn.get("arguments", "{}"))
+                            except (json.JSONDecodeError, TypeError):
+                                args = {}
+                            tool_input = self._summarize_tool_input(tool_name, args)
+                            return (tool_name, tool_input)
+                break
+        return (tool_name, tool_input)
 
-    # Decisions and reasoning from assistant are high value
-    if msg.get("role") == "assistant":
-        if any(kw in content for kw in ("because", "decision", "approach", "strategy",
-                                         "found that", "discovered", "the issue is")):
-            return 8
-        # Successful write/edit operations — keep (shows what was changed)
-        if any(kw in content for kw in ("Successfully edited", "Wrote ", "write_file", "edit_file")):
-            return 8
-        return 5
-
-    # User messages — always high value
-    if msg.get("role") == "user":
-        return 9
-
-    # Tool results — score by content type
-    lower = content[:500].lower()
-
-    # Empty or near-empty shell output — very low value
-    if len(content.strip()) < 10:
-        return 1
-
-    # Install/build logs — low value
-    if any(kw in lower for kw in ("installing", "collecting", "downloading",
-                                   "successfully installed", "building wheel")):
-        return 2
-
-    # plan_status, memory_list verbose output — low value (easily re-fetched)
-    if any(kw in lower for kw in ("plan:", "progress:", "showing", "entries")):
-        if "plan:" in lower and "step" in lower:
-            return 3
-
-    # Successful edit/write results — high value (shows what changed)
-    if any(kw in lower for kw in ("successfully edited", "wrote ", "created ")):
-        return 8
-
-    # File content — medium-high (expensive to re-read but can be re-read)
-    if any(kw in lower for kw in ("import ", "def ", "class ", "from ", "---\n",
-                                   "export ", "#include", "\"type\":")):
-        return 6
-
-    # Directory listings — low-medium
-    lines = content.splitlines()
-    if len(lines) > 5 and sum(1 for l in lines[:10] if l.strip().startswith(("/", "./"))) > 5:
-        return 3
-
-    # Short results (likely conclusions) — medium-high
-    if len(content) < 200:
-        return 6
-
-    return 4
+    @staticmethod
+    def _summarize_tool_input(tool_name: str, args: dict) -> str:
+        """Create a short summary of tool input for the placeholder."""
+        if tool_name == "read_file":
+            return args.get("path", "")[:80]
+        if tool_name == "shell":
+            cmd = args.get("command", "")
+            return cmd[:60] + ("..." if len(cmd) > 60 else "")
+        if tool_name == "write_file":
+            return args.get("path", "")[:80]
+        if tool_name == "edit_file":
+            return args.get("path", "")[:80]
+        if tool_name == "web_fetch":
+            return args.get("url", "")[:80]
+        if tool_name in ("find_latest_log", "parse_training_metrics"):
+            return args.get("experiment", args.get("log_path", ""))[:60]
+        if tool_name == "monitor":
+            return args.get("file", args.get("output_dir", ""))[:60]
+        for v in args.values():
+            if isinstance(v, str) and v:
+                return v[:60]
+        return ""

@@ -293,6 +293,107 @@ class TestLLMFallback:
         assert result is None
         assert guard._calls_since_memory == 0
 
+    def test_memory_discipline_staleness_check_on_read(self):
+        """After memory_read returns content, inject staleness verification reminder."""
+        guard = MemoryDisciplineGuard()
+
+        # memory_read returns substantive content → staleness check fires
+        ctx = make_ctx("memory_read", {"key": "some_finding"}, 
+                       tool_result="[finding] [global] Some old bug info that might be stale... " * 5)
+        result = guard.check_post(ctx)
+        assert result is not None
+        assert result.action == "inject_msg"
+        assert "stale" in result.message.lower() or "supersede" in result.message.lower()
+
+    def test_memory_discipline_staleness_check_on_list(self):
+        """After memory_list returns entries, inject staleness verification reminder."""
+        guard = MemoryDisciplineGuard()
+
+        ctx = make_ctx("memory_list", {},
+                       tool_result="Showing 5/5 entries\n[finding] key1: some old content\n[finding] key2: more old content")
+        result = guard.check_post(ctx)
+        assert result is not None
+        assert result.action == "inject_msg"
+
+    def test_memory_discipline_no_staleness_on_empty_result(self):
+        """No staleness reminder if memory_read returns nothing/error."""
+        guard = MemoryDisciplineGuard()
+
+        # Short result (likely "not found")
+        ctx = make_ctx("memory_read", {"key": "missing"}, tool_result="Key not found")
+        result = guard.check_post(ctx)
+        assert result is None
+
+    def test_memory_discipline_no_staleness_on_no_entries(self):
+        """No staleness reminder if memory_list has no entries."""
+        guard = MemoryDisciplineGuard()
+
+        ctx = make_ctx("memory_list", {}, tool_result="No entries found.")
+        result = guard.check_post(ctx)
+        assert result is None
+
+    def test_memory_discipline_staleness_fires_once_per_batch(self):
+        """Staleness reminder fires only once even if multiple reads happen."""
+        guard = MemoryDisciplineGuard()
+
+        # First read → fires
+        ctx = make_ctx("memory_read", {"key": "key1"}, 
+                       tool_result="[finding] big content here... " * 10)
+        result = guard.check_post(ctx)
+        assert result is not None
+
+        # Second read → suppressed
+        ctx = make_ctx("memory_read", {"key": "key2"},
+                       tool_result="[finding] more content... " * 10)
+        result = guard.check_post(ctx)
+        assert result is None
+
+    def test_memory_discipline_staleness_resets_after_write(self):
+        """After memory_write, staleness flag resets so next read gets reminder again."""
+        guard = MemoryDisciplineGuard()
+
+        # Read → fires
+        ctx = make_ctx("memory_read", {"key": "key1"},
+                       tool_result="[finding] big content... " * 10)
+        result = guard.check_post(ctx)
+        assert result is not None
+
+        # Write (supersede) → resets flag
+        ctx = make_ctx("memory_write", {"key": "new_key", "supersedes": ["key1"]})
+        guard.check_pre(ctx)
+
+        # New read → fires again
+        ctx = make_ctx("memory_read", {"key": "key2"},
+                       tool_result="[finding] another old entry... " * 10)
+        result = guard.check_post(ctx)
+        assert result is not None
+
+    def test_memory_discipline_staleness_resets_on_new_turn(self):
+        """New user message resets staleness flag."""
+        guard = MemoryDisciplineGuard()
+
+        # Read → fires
+        ctx = make_ctx("memory_read", {"key": "key1"},
+                       tool_result="[finding] big content... " * 10)
+        guard.check_post(ctx)
+
+        # New turn
+        guard.reset_new_turn()
+
+        # Read again → fires (fresh turn)
+        ctx = make_ctx("memory_read", {"key": "key2"},
+                       tool_result="[finding] other content... " * 10)
+        result = guard.check_post(ctx)
+        assert result is not None
+
+    def test_memory_discipline_no_staleness_for_shell(self):
+        """Non-memory tools don't trigger staleness check."""
+        guard = MemoryDisciplineGuard()
+
+        ctx = make_ctx("shell", {"command": "ls"}, tool_result="lots of output " * 100)
+        result = guard.check_post(ctx)
+        assert result is None
+
     def test_debug_residue_llm_detection(self):
         """LLM can detect non-obvious debug prints."""
         guard = DebugDisciplineGuard()
