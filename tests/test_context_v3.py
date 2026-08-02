@@ -832,3 +832,64 @@ class TestFullLog:
         for i in range(100):
             self.hm.append({"role": "user", "content": f"msg {i}"})
         assert len(self.hm._full_log) == 100
+
+
+class TestPromptIntegrity:
+    """Test that prompt modules load correctly after refactoring."""
+
+    def test_static_prompt_is_english(self):
+        import re
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        # No Chinese characters in static prompt
+        assert not re.search(r'[\u4e00-\u9fff]', SYSTEM_PROMPT_STATIC)
+
+    def test_optional_sections_have_required_keys(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
+        assert "planning" in SYSTEM_PROMPT_OPTIONAL
+        assert "memory_rules" in SYSTEM_PROMPT_OPTIONAL
+
+    def test_planning_always_injected(self):
+        """prompt_builder should inject planning even without active plan."""
+        from flagscale_agent.react.prompt_builder import PromptBuilder
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
+        # planning section exists and has content about plan_create
+        planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
+        assert "plan_create" in planning
+        assert "Step Notes" in planning
+
+
+class TestNoUnnecessaryTruncation:
+    """Regression test: ensure no truncation patterns sneak back in key display paths."""
+
+    def test_memory_list_no_content_truncation(self):
+        """memory_list tool should not truncate content."""
+        import inspect
+        from flagscale_agent.react.tools.memory_list import MemoryListTool
+        source = inspect.getsource(MemoryListTool.execute)
+        assert "[:97]" not in source
+        assert "[:100]" not in source
+
+    def test_plan_context_no_title_truncation(self):
+        """Plan context rendering should not truncate titles."""
+        import inspect
+        from flagscale_agent.react.plan import TaskPlan
+        source = inspect.getsource(TaskPlan.context_for_prompt)
+        assert "[:120]" not in source
+        assert "[:80]" not in source
+        assert "[:40]" not in source
+
+    def test_prompt_builder_no_desc_truncation(self):
+        """Prompt builder should not truncate skill descriptions."""
+        import inspect
+        from flagscale_agent.react.prompt_builder import PromptBuilder
+        source = inspect.getsource(PromptBuilder)
+        assert "[:80]" not in source
+
+    def test_tool_executor_no_summary_truncation(self):
+        """Tool executor display summaries should not truncate."""
+        import inspect
+        from flagscale_agent.react.tool_executor import tool_display_summary
+        source = inspect.getsource(tool_display_summary)
+        assert "[:50]" not in source
+        assert "[:60]" not in source
+        assert "[:120]" not in source

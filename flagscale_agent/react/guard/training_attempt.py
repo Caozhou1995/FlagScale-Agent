@@ -316,7 +316,7 @@ class TrainingAttemptGuard(Guard):
                 result, source = get_judge_result(
                     ctx.classify_fn,
                     "training_error_category",
-                    {"error_text": text[:2000]},
+                    {"error_text": text},
                     default={"category": "general", "confidence": 0.0},
                 )
                 if is_trusted(source) and isinstance(result, dict):

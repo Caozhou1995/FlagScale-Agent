@@ -74,7 +74,7 @@
 │ nv-host  │ │ nv-host  │ │ nv-host  │ │ nv-host  │
 │ engine   │ │ engine   │ │ engine   │ │ engine   │
 │    ↕     │ │    ↕     │ │    ↕     │ │    ↕     │
-│ 8×H100   │ │ 8×H100   │ │ 8×H100   │ │ 8×H100   │
+│ 8×<GPU>  │ │ 8×<GPU>  │ │ 8×<GPU>  │ │ 8×<GPU>  │
 └──────────┘ └──────────┘ └──────────┘ └──────────┘
 ```
 
@@ -329,12 +329,12 @@ node-01 (管理节点):
   ├── Prometheus (:9090)
   ├── Grafana (:3000)
   ├── nv-hostengine + dcgm_exporter (:9400)
-  └── 8× H100 GPU
+  └── 8× <GPU>
 
 node-02 / node-03 / node-04 (计算节点):
   ├── slurmd
   ├── nv-hostengine + dcgm_exporter (:9400)
-  └── 8× H100 GPU
+  └── 8× <GPU>
 
 共享存储 /workspace:
   ├── scripts/dcgm_exporter.py (所有节点共用)
@@ -346,7 +346,7 @@ node-02 / node-03 / node-04 (计算节点):
 
 | 配置项 | 值 | 原因 |
 |--------|-----|------|
-| SSH端口 | 2222 | 容器`--network=host`，22被宿主机占 |
+| SSH端口 | <SSH_PORT> | 容器`--network=host`，22被宿主机占 |
 | 免密方式 | 共享存储中转密钥 | 一处生成，cp到各容器 |
 | Conda | 共享存储安装 | 4台共享同一环境，无需重复安装 |
 | DCGM | 各容器apt安装 | 需要本地nv-hostengine守护进程 |
@@ -374,13 +374,13 @@ docker run -d --gpus all --network=host \
 
 ```bash
 # 每个容器内：
-/usr/sbin/sshd -p 2222                    # SSH
+/usr/sbin/sshd -p <SSH_PORT>                    # SSH
 nv-hostengine -b ALL                       # DCGM
 munged --force                             # Slurm认证
 slurmd -N $(hostname -s)                   # Slurm计算守护
 python3 <shared_storage>/scripts/dcgm_exporter.py 9400 &  # Metrics
 
-# 仅管理节点(118)：
+# 仅管理节点(<MGMT_NODE>)：
 slurmctld                                  # Slurm调度器
 prometheus --config.file=/etc/prometheus/prometheus.yml \
   --storage.tsdb.path=<shared_storage>/tools/prometheus_data &

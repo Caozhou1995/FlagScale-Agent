@@ -100,8 +100,6 @@ class MemoryListTool(Tool):
                 key = e.get("key", "?")
                 content = e.get("content", "")
                 task = e.get("task", "")
-                if len(content) > 100:
-                    content = content[:97] + "..."
                 # Show content on single line, replacing newlines
                 content_oneline = content.replace("\n", " | ")
                 task_tag = f" @{task}" if task else ""

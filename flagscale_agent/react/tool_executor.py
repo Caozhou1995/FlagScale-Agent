@@ -100,7 +100,7 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         return _short_path(path)
     if tool_name == "web_fetch":
         url = arguments.get("url", "")
-        return url[:60] + ("..." if len(url) > 60 else "")
+        return url
     if tool_name == "load_skill":
         return arguments.get("name", "")
     if tool_name == "workspace_experiment":
@@ -129,7 +129,7 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         elif file:
             summary = _short_path(file, 40)
         elif command:
-            summary = command[:50] + ("..." if len(command) > 50 else "")
+            summary = command
         else:
             summary = "poll"
         if target:
@@ -141,7 +141,7 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
     if tool_name == "grep":
         pattern = arguments.get("pattern", "")
         path = arguments.get("path", "")
-        summary = pattern[:50] + ("..." if len(pattern) > 50 else "")
+        summary = pattern
         if path:
             summary += f" in {_short_path(path, 40)}"
         return summary
@@ -158,7 +158,7 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
     if tool_name == "evict":
         indexes = arguments.get("indexes", [])
         if isinstance(indexes, list) and len(indexes) > 5:
-            return f"[{', '.join(str(i) for i in indexes[:5])}, ...] ({len(indexes)} total)"
+            return f"[{', '.join(str(i) for i in indexes)}] ({len(indexes)} total)"
         return str(indexes)
     if tool_name == "recall":
         return f"index={arguments.get('index', '?')}"
@@ -194,11 +194,11 @@ def _compress_shell_result(result: str) -> str:
     num_lines = len(lines)
 
     # Never compress if output has errors
-    if any(kw in result[:500] for kw in ("Error", "ERROR", "Traceback", "FAILED", "Exception")):
+    if any(kw in result for kw in ("Error", "ERROR", "Traceback", "FAILED", "Exception")):
         return result
 
     # Compress install/build/clone logs: keep command + outcome
-    lower_head = result[:600].lower()
+    lower_head = result.lower()
     if any(kw in lower_head for kw in _LOW_VALUE_KEYWORDS):
         head = "\n".join(lines[:3])
         tail = "\n".join(lines[-5:])
@@ -278,11 +278,11 @@ class ToolExecutor:
         error = False
         err_detail = ""
         if result:
-            first_line = result.split('\n')[0] if '\n' in result else result[:120]
+            first_line = result.split('\n')[0] if '\n' in result else result
             if (first_line.startswith(("ERROR:", "FATAL:", "STALLED:", "TERMINATED:", "DENIED:"))
-                    or "Traceback (most recent call last)" in result[:200]):
+                    or "Traceback (most recent call last)" in result):
                 error = True
-                err_detail = first_line.split(":", 1)[-1].strip()[:80] if ":" in first_line else first_line[:80]
+                err_detail = first_line.split(":", 1)[-1].strip() if ":" in first_line else first_line
         display.tool_done(tool_name, elapsed, detail=err_detail, error=error)
 
         # Post-execution tracking
@@ -297,8 +297,8 @@ class ToolExecutor:
         agent = self._agent
 
         # Record to recent tool history (for constraint judge context)
-        args_summary = tool_display_summary(tool_name, arguments) or str(arguments)[:120]
-        result_summary = result[:200] if result else ""
+        args_summary = tool_display_summary(tool_name, arguments) or str(arguments)
+        result_summary = result if result else ""
         agent._recent_tool_history.append({
             "tool": tool_name,
             "args_summary": args_summary,
@@ -404,12 +404,12 @@ class ToolExecutor:
                 skip_indices.add(i)
                 results[i] = f"⛔ TOOL NOT EXECUTED — blocked: {verdict.message}"
                 # Display: show what was blocked
-                cmd_preview = str(tc.get("arguments", {}).get("command", ""))[:120] or str(tc.get("arguments", {}))[:120]
+                cmd_preview = str(tc.get("arguments", {}).get("command", "")) or str(tc.get("arguments", {}))
                 print(display.red(
                     f"  ⛔ Blocked [{tc['name']}]: {cmd_preview}"
                 ))
                 print(display.yellow(
-                    f"     Correction: {verdict.message[:500]}"
+                    f"     Correction: {verdict.message}"
                 ))
                 # Do NOT break — continue checking remaining tools in the batch
             elif verdict and verdict.action == "escalate":
@@ -418,12 +418,12 @@ class ToolExecutor:
                     skip_indices.add(j)
                     if results[j] is None:
                         results[j] = f"⛔ BATCH ABORTED — escalation: {verdict.message}"
-                cmd_preview = str(tc.get("arguments", {}).get("command", ""))[:120] or str(tc.get("arguments", {}))[:120]
+                cmd_preview = str(tc.get("arguments", {}).get("command", "")) or str(tc.get("arguments", {}))
                 print(display.red(
                     f"  ⛔ ESCALATION [{tc['name']}]: {cmd_preview}"
                 ))
                 print(display.yellow(
-                    f"     {verdict.message[:500]}"
+                    f"     {verdict.message}"
                 ))
                 # Do NOT call inject_message_fn here — that would break
                 # tool_use/tool_result pairing. The escalation message is already
@@ -438,7 +438,7 @@ class ToolExecutor:
                     self._pending_advisories = []
                 self._pending_advisories.append(verdict.message)
                 print(display.yellow(
-                    f"  🛡 [{tc['name']}]: {verdict.message[:500]}"
+                    f"  🛡 [{tc['name']}]: {verdict.message}"
                 ))
 
         # Pre-confirm shell commands
@@ -509,11 +509,11 @@ class ToolExecutor:
             except Exception as e:
                 result = f"ERROR: {e}"
             elapsed = time.time() - t0
-            error = "ERROR" in result[:20] if result else False
+            error = "ERROR" in result if result else False
             detail = ""
             if error and result:
                 raw = result.split('\n')[0].replace("ERROR:", "").strip()
-                detail = (raw[:57] + "...") if len(raw) > 60 else raw
+                detail = raw
             display.parallel_tool_update(idx_to_line[idx], elapsed, error, detail)
             return result
 

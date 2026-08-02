@@ -199,7 +199,7 @@ class CircuitBreakerGuard(Guard):
         if classify_fn:
             is_error, source = get_judge_result(
                 classify_fn, "is_error",
-                {"result": result[:2000]}, default=False
+                {"result": result}, default=False
             )
             if is_trusted(source) and not is_error:
                 return None  # LLM says not an error

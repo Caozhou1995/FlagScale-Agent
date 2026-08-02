@@ -698,11 +698,11 @@ class WorkerAgent:
             for m in recent:
                 content = m.get("content", "")
                 if isinstance(content, str):
-                    context_snippets.append(content[:200])
+                    context_snippets.append(content)
                 elif isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "text":
-                            context_snippets.append(block.get("text", "")[:200])
+                            context_snippets.append(block.get("text", ""))
                             break
             context_text = "\n".join(context_snippets)
 
@@ -713,7 +713,7 @@ class WorkerAgent:
                 pm = PlanManager()
                 status = pm.get_status()
                 if status:
-                    plan_info = f"\n当前计划:\n{status[:500]}"
+                    plan_info = f"\n当前计划:\n{status}"
             except Exception:
                 pass
 
@@ -738,7 +738,7 @@ class WorkerAgent:
                             result_text += delta.text
                 elif isinstance(event, dict):
                     result_text += event.get("text", "")
-            return result_text.strip()[:500]
+            return result_text.strip()
         except Exception:
             return ""
 
@@ -928,7 +928,7 @@ class WorkerAgent:
             if completed:
                 # All stages already done — downgrade to single mode with context
                 stage_summary = "\n".join(
-                    f"  - {sid}: {summary[:200]}" for sid, summary in completed.items()
+                    f"  - {sid}: {summary}" for sid, summary in completed.items()
                 )
                 print(display.dim(
                     f"[Orchestrator] All stages already completed in history. "
@@ -990,10 +990,10 @@ class WorkerAgent:
                             return
                         if result.status == "failed":
                             print(display.red(
-                                f"  ✗ {sub.id} failed: {result.summary[:200]}"
+                                f"  ✗ {sub.id} failed: {result.summary}"
                             ))
                             self._inject_subtask_result_to_history(
-                                f"[Stage {stage_idx}/{total}] {sub.id}: FAILED — {result.summary[:300]}"
+                                f"[Stage {stage_idx}/{total}] {sub.id}: FAILED — {result.summary}"
                             )
                             upstream.update(result.artifacts)
                             upstream[sub.id] = result.summary
@@ -1003,13 +1003,13 @@ class WorkerAgent:
                         upstream.update(result.artifacts)
                         upstream[sub.id] = result.summary
                         art_str = ", ".join(
-                            f"{k}={str(v)[:60]}" for k, v in result.artifacts.items()
+                            f"{k}={str(v)}" for k, v in result.artifacts.items()
                         ) if result.artifacts else "none"
                         print(f"  ✓ {sub.id} complete. Artifacts: {art_str}")
 
                         # Inject stage summary into main agent's history
                         self._inject_subtask_result_to_history(
-                            f"[Stage {stage_idx}/{total}] {sub.id}: OK — {result.summary[:300]}"
+                            f"[Stage {stage_idx}/{total}] {sub.id}: OK — {result.summary}"
                         )
 
             except KeyboardInterrupt:
@@ -1024,7 +1024,7 @@ class WorkerAgent:
             # Final summary
             final_summary = f"All {total} stages completed."
             self._inject_subtask_result_to_history(
-                f"[Orchestrator] {final_summary} Artifacts: {json.dumps({k: str(v)[:100] for k, v in upstream.items()}, ensure_ascii=False)}"
+                f"[Orchestrator] {final_summary} Artifacts: {json.dumps({k: str(v) for k, v in upstream.items()}, ensure_ascii=False)}"
             )
             self._current_stage_id = None
             return
@@ -1041,20 +1041,20 @@ class WorkerAgent:
 
             print(f"\n[Orchestrator] Running {len(batch_tasks)} experiments in parallel:")
             for i, t in enumerate(batch_tasks, 1):
-                print(f"  Run {i}: {t[:80]}")
+                print(f"  Run {i}: {t}")
 
             results = o.run_batch_interactive(route, user_input)
 
             print()
             for i, r in enumerate(results, 1):
                 icon = "✓" if r.status == "success" else "✗"
-                print(f"[Run {i}] {icon} {r.status}: {r.summary[:150]}")
+                print(f"[Run {i}] {icon} {r.status}: {r.summary}")
 
             # Inject summary into main agent's history
             summary_lines = ["[Batch comparison results]"]
             for i, r in enumerate(results, 1):
                 summary_lines.append(
-                    f"  Run {i}: {r.status} — {r.summary[:200]}"
+                    f"  Run {i}: {r.status} — {r.summary}"
                 )
             self._inject_subtask_result_to_history("\n".join(summary_lines))
             return
@@ -1138,14 +1138,14 @@ class WorkerAgent:
             if msg.get("role") == "assistant":
                 content = msg.get("content", "")
                 if isinstance(content, str):
-                    return content[:300]
+                    return content
                 if isinstance(content, list):
                     # Extract text blocks
                     texts = []
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "text":
                             texts.append(block.get("text", ""))
-                    return " ".join(texts)[:300]
+                    return " ".join(texts)
         return ""
 
     def _build_stage_history_context(self) -> str:
@@ -1399,11 +1399,11 @@ class WorkerAgent:
                 for m in recent:
                     content = m.get("content", "")
                     if isinstance(content, str):
-                        snippets.append(content[:200])
+                        snippets.append(content)
                     elif isinstance(content, list):
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "text":
-                                snippets.append(block.get("text", "")[:200])
+                                snippets.append(block.get("text", ""))
                                 break
                 context_text = "\n".join(snippets)
                 if not context_text.strip():
@@ -1429,7 +1429,7 @@ class WorkerAgent:
                                 summary += block.get("text", "")
                     elif isinstance(resp_content, str):
                         summary = resp_content
-                summary = summary.strip()[:500]
+                summary = summary.strip()
                 if summary:
                     # Save back to conversation.json
                     conv_data["session_summary"] = summary
@@ -1563,7 +1563,7 @@ class WorkerAgent:
             icon = icons.get(s.get("status", "pending"), "?")
             title = s.get("title", "") or s.get("description", "")
             notes = s.get("notes", "")
-            line = f"  [{icon}] Step {s.get('id', '?')}: {title[:120]}"
+            line = f"  [{icon}] Step {s.get('id', '?')}: {title}"
             if notes:
                 line += f"\n      notes: {notes}"
             lines.append(line)
@@ -1622,7 +1622,7 @@ class WorkerAgent:
                 # Extremely short response with no tool calls — auto continue
                 return True
         active_plan = self.task_plan.get_active()
-        result = self.judge.complexity(last_text[:500], has_plan=active_plan is not None)
+        result = self.judge.complexity(last_text, has_plan=active_plan is not None)
         if result.get("needs_plan"):
             return False
         return True
@@ -1802,13 +1802,13 @@ class WorkerAgent:
             args = tc.get("arguments", {})
             summary = ""
             if tc["name"] == "shell":
-                summary = args.get("command", "")[:120]
+                summary = args.get("command", "")
             elif tc["name"] in ("read_file", "write_file", "edit_file"):
                 summary = args.get("path", "") or args.get("file_path", "")
             elif tc["name"] == "load_skill":
                 summary = args.get("name", "")
             else:
-                summary = str(args)[:80]
+                summary = str(args)
             recent_activity.append({"tool": tc["name"], "args_summary": summary})
 
         # Also include recent history from deque
@@ -2375,7 +2375,7 @@ class WorkerAgent:
                                 parts.append(block.get("text", ""))
                             elif block.get("type") == "tool_use":
                                 tool_name = block.get("name", "")
-                                parts.append(f"[tool_use: {tool_name}({json.dumps(block.get('input', {}), ensure_ascii=False)[:200]})]")
+                                parts.append(f"[tool_use: {tool_name}({json.dumps(block.get('input', {}), ensure_ascii=False)})]")
                     content_for_summary = "\n".join(parts)
             elif role == "user":
                 content_for_summary = msg.get("content", "")
@@ -2386,7 +2386,7 @@ class WorkerAgent:
                             if block.get("type") == "text":
                                 parts.append(block.get("text", ""))
                             elif block.get("type") == "tool_result":
-                                parts.append(f"[tool_result: {block.get('content', '')[:200]}]")
+                                parts.append(f"[tool_result: {block.get('content', '')}]")
                     content_for_summary = "\n".join(parts)
 
             messages_for_summary.append((idx, role, tool_name, content_for_summary))
@@ -2427,7 +2427,7 @@ class WorkerAgent:
                 primary_meta["paired_with"] = paired_idx
                 self._swap_store.save(idx, content, primary_meta)
                 # Add paired to summary with actual content
-                paired_summary_content = paired_content_str[:500] if paired_content_str else f"[tool_result paired with index {idx}]"
+                paired_summary_content = paired_content_str if paired_content_str else f"[tool_result paired with index {idx}]"
                 messages_for_summary.append((paired_idx, "user", None, paired_summary_content))
 
         # Generate summaries via LLM for newly evicted messages
@@ -2470,7 +2470,7 @@ class WorkerAgent:
             content_clean = (content or "").strip()
             if len(content_clean) <= SHORT_THRESHOLD:
                 # Short enough to be its own summary — no LLM needed
-                summary = content_clean.replace("\n", " ")[:200] if content_clean else f"[{role}] {tool_name or 'empty message'}"
+                summary = content_clean.replace("\n", " ") if content_clean else f"[{role}] {tool_name or 'empty message'}"
                 results[idx] = summary
             else:
                 needs_llm.append((idx, role, tool_name, content))
@@ -2505,7 +2505,7 @@ class WorkerAgent:
                         summary = msg.get("content", "") if isinstance(msg, dict) else ""
                 return (idx, summary.strip().split("\n")[0][:200])  # First line, max 200 chars
             except Exception as e:
-                fallback = content[:100].replace("\n", " ") if content else f"[{role}]"
+                fallback = content.replace("\n", " ") if content else f"[{role}]"
                 return (idx, f"[no-llm] {fallback}")
 
         # Concurrent LLM calls only for long messages
@@ -2570,7 +2570,7 @@ class WorkerAgent:
         summary_hint = summary_entry.get("summary", "") if summary_entry else ""
         restore_status = "restored" if restored else "returned"
         elapsed = time.time() - t0
-        display.tool_done("recall", elapsed, detail=f"index={index} {restore_status} | {summary_hint[:60]}")
+        display.tool_done("recall", elapsed, detail=f"index={index} {restore_status} | {summary_hint}")
 
         return content
 
@@ -2684,8 +2684,8 @@ class WorkerAgent:
             all_text, re.IGNORECASE
         )
         if errors_found and fixes_found:
-            error_summary = errors_found[0][:150]
-            fix_summary = fixes_found[0][:150]
+            error_summary = errors_found[0]
+            fix_summary = fixes_found[0]
             key = "auto_fix_" + hashlib.md5(error_summary.encode()).hexdigest()[:8]
             extracted.append({
                 "key": key,
@@ -2736,7 +2736,7 @@ class WorkerAgent:
             r'HYPOTHESIS:\s*(.{20,300})', all_text, re.IGNORECASE
         )
         if hypothesis_matches:
-            latest = hypothesis_matches[-1][:250]
+            latest = hypothesis_matches[-1]
             key = "auto_hypothesis_" + hashlib.md5(latest.encode()).hexdigest()[:6]
             extracted.append({
                 "key": key,
@@ -2754,7 +2754,7 @@ class WorkerAgent:
             result_matches = re.findall(
                 r"result['\"]?\s*[:=]\s*['\"]([^'\"]{10,200})", all_text
             )
-            result_info = f", last result: {result_matches[-1][:100]}" if result_matches else ""
+            result_info = f", last result: {result_matches[-1]}" if result_matches else ""
             key = f"auto_experiment_state_{exp_name}"
             extracted.append({
                 "key": key,

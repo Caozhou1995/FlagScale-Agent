@@ -605,7 +605,7 @@ class TaskPlan:
             failures = step.get("_failure_count", 0)
             if failures >= 3:
                 issues.append(
-                    f"Step {step['id']} ('{step['title'][:40]}') has {failures} failures. "
+                    f"Step {step['id']} ('{step['title']}') has {failures} failures. "
                     f"Consider skipping it or replanning."
                 )
 

@@ -288,7 +288,7 @@ class ExperimentManager:
 
         p_result = prev.get("result", "(pending)")
         c_result = curr.get("result", "(pending)")
-        summary += f"\n\nPrevious result: {p_result[:200]}"
-        summary += f"\nCurrent result: {c_result[:200]}"
+        summary += f"\n\nPrevious result: {p_result}"
+        summary += f"\nCurrent result: {c_result}"
 
         return {"diffs": diffs, "summary": summary}

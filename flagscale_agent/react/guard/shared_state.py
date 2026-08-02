@@ -113,7 +113,7 @@ class ReadStats:
                     if start_line and start_line > 1:
                         self.continuation_reads += 1
         elif tool_name == "shell":
-            cmd = args.get("command", "")[:80]
+            cmd = args.get("command", "")
             self.recent_read_targets.append(f"shell:{cmd}")
         else:
             self.recent_read_targets.append(f"{tool_name}")

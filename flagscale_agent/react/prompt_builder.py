@@ -235,7 +235,7 @@ class PromptBuilder:
             lines = []
             for s in available:
                 name = s.get("name", "")
-                desc = s.get("description", "")[:80]
+                desc = s.get("description", "")
                 lines.append(f"- {name}: {desc}")
             return "\n".join(lines)
         except Exception:

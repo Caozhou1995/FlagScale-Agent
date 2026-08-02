@@ -258,7 +258,7 @@ class CodeContextGuard(Guard):
             new = ctx.tool_args.get("new_string", "")[:50]
             desc = f"edited: '{old}...' → '{new}...'"
         else:
-            content_preview = (ctx.tool_args.get("content", "") or "")[:60]
+            content_preview = (ctx.tool_args.get("content", "") or "")
             mode = ctx.tool_args.get("mode", "write")
             desc = f"{mode}: {content_preview}..."
 

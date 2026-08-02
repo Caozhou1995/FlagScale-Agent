@@ -305,8 +305,8 @@ def pasted_input(text: str):
     for _ in range(erase_count):
         sys.stdout.write("\033[A\033[2K")
     sys.stdout.flush()
-    first = lines[0][:100]
-    last = lines[-1][:100]
+    first = lines[0]
+    last = lines[-1]
     _print(f"  {first}")
     _print(dim(f"  ... ({len(lines)} lines)"))
     _print(f"  {last}")
@@ -689,10 +689,8 @@ def parallel_tools_finish():
 # ── Guard display ──────────────────────────────────────────────────────────────
 
 def _guard_truncate_line(line: str, max_chars: int = 120) -> str:
-    """Truncate a single guard message line to max_chars."""
-    if len(line) <= max_chars:
-        return line
-    return line[:max_chars] + "..."
+    """Return guard message line as-is (no truncation)."""
+    return line
 
 
 # ── Turn / session summary ──────────────────────────────────────────────

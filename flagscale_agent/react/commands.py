@@ -61,11 +61,11 @@ class CommandHandler:
             first_msg = ""
             content = user_msgs[0].get("content", "")
             if isinstance(content, str):
-                first_msg = content[:200]
+                first_msg = content
             elif isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "text":
-                        first_msg = block.get("text", "")[:200]
+                        first_msg = block.get("text", "")
                         break
 
             recent = user_msgs[-5:]
@@ -73,11 +73,11 @@ class CommandHandler:
             for m in recent:
                 c = m.get("content", "")
                 if isinstance(c, str):
-                    recent_texts.append(c[:150])
+                    recent_texts.append(c)
                 elif isinstance(c, list):
                     for block in c:
                         if isinstance(block, dict) and block.get("type") == "text":
-                            recent_texts.append(block.get("text", "")[:150])
+                            recent_texts.append(block.get("text", ""))
                             break
 
             context_text = f"首条消息: {first_msg}\n最近消息:\n" + "\n".join(recent_texts)
@@ -104,7 +104,7 @@ class CommandHandler:
                 elif isinstance(resp_content, str):
                     result_text = resp_content
 
-            summary = result_text.strip()[:500]
+            summary = result_text.strip()
             if summary:
                 # Save back to conversation.json for future use
                 import json
@@ -117,7 +117,7 @@ class CommandHandler:
                         json.dump(conv_data, f, ensure_ascii=False, indent=2)
             return summary or "(生成摘要失败)"
         except Exception as e:
-            return f"(生成摘要失败: {str(e)[:50]})"
+            return f"(生成摘要失败: {str(e)})"
 
     def handle_slash_command(self, user_input: str) -> bool:
         """Dispatch slash command to appropriate handler.
@@ -189,7 +189,7 @@ class CommandHandler:
             skills = self.agent.skill_manager.list_skills()
             print("Available skills:")
             for s in skills:
-                print(f"  {s['name']}: {s['description'][:60]}")
+                print(f"  {s['name']}: {s['description']}")
             return
         name = parts[1]
         try:
@@ -214,7 +214,7 @@ class CommandHandler:
                 key = e.get("key", "?")
                 mem_type = e.get("type", "?")
                 content = e.get("content", "")
-                print(f"  [{mem_type}] {key}: {content[:80]}")
+                print(f"  [{mem_type}] {key}: {content}")
         else:
             print(f"Unknown /memory subcommand: {sub}")
 
@@ -256,7 +256,7 @@ class CommandHandler:
                 for step in active.get("steps", []):
                     icon = {"pending": " ", "doing": "→", "done": "✓", "skipped": "-", "blocked": "!"}.get(step.get("status", "pending"), " ")
                     title = step.get("title", "") or step.get("description", "")
-                    print(f"  [{icon}] {title[:80]}")
+                    print(f"  [{icon}] {title}")
             else:
                 print("No active plan.")
             return
