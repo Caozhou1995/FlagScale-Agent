@@ -426,5 +426,96 @@ def forward(self, x):
         os.unlink(test_file)
 
 
+class TestMemoryEvolution:
+    """Tests for memory self-evolution mechanism in MemoryDisciplineGuard."""
+
+    def test_evolution_reminder_on_task_complete_without_review(self):
+        """If agent emits TASK_COMPLETE without any memory_list, remind to review."""
+        guard = MemoryDisciplineGuard()
+
+        # Simulate assistant text with TASK_COMPLETE, no tool call
+        ctx = MagicMock(spec=GuardContext)
+        ctx.tool_name = ""
+        ctx.tool_args = {}
+        ctx.tool_result = ""
+        ctx.assistant_text = "Done. [TASK_COMPLETE]"
+        ctx.classify_fn = None
+
+        result = guard.check_pre(ctx)
+        assert result is not None
+        assert "TASK_COMPLETE" in result.message
+        assert "memory_list" in result.message
+        assert guard._evolution_reminded is True
+
+    def test_no_evolution_reminder_if_memory_reviewed(self):
+        """If agent already did memory_list, no evolution reminder on TASK_COMPLETE."""
+        guard = MemoryDisciplineGuard()
+
+        # Simulate a memory_list call
+        ctx = MagicMock(spec=GuardContext)
+        ctx.tool_name = "memory_list"
+        ctx.tool_args = {}
+        ctx.tool_result = "entries..."
+        ctx.assistant_text = ""
+        ctx.classify_fn = None
+        guard.check_pre(ctx)
+
+        assert guard._has_memory_review is True
+
+        # Now TASK_COMPLETE — no reminder needed
+        ctx2 = MagicMock(spec=GuardContext)
+        ctx2.tool_name = ""
+        ctx2.tool_args = {}
+        ctx2.tool_result = ""
+        ctx2.assistant_text = "All done [TASK_COMPLETE]"
+        ctx2.classify_fn = None
+
+        result = guard.check_pre(ctx2)
+        assert result is None
+
+    def test_evolution_reminder_fires_only_once(self):
+        """Evolution reminder should fire at most once per session."""
+        guard = MemoryDisciplineGuard()
+
+        ctx = MagicMock(spec=GuardContext)
+        ctx.tool_name = ""
+        ctx.tool_args = {}
+        ctx.tool_result = ""
+        ctx.assistant_text = "[TASK_COMPLETE]"
+        ctx.classify_fn = None
+
+        result1 = guard.check_pre(ctx)
+        assert result1 is not None
+
+        # Second time — no reminder
+        result2 = guard.check_pre(ctx)
+        assert result2 is None
+
+    def test_evolution_state_resets_with_reset_state(self):
+        """reset_state clears evolution tracking."""
+        guard = MemoryDisciplineGuard()
+        guard._evolution_reminded = True
+        guard._has_memory_review = True
+
+        guard.reset_state()
+
+        assert guard._evolution_reminded is False
+        assert guard._has_memory_review is False
+
+    def test_memory_read_also_counts_as_review(self):
+        """memory_read should also mark _has_memory_review."""
+        guard = MemoryDisciplineGuard()
+
+        ctx = MagicMock(spec=GuardContext)
+        ctx.tool_name = "memory_read"
+        ctx.tool_args = {"key": "fact/cluster/ssh_port"}
+        ctx.tool_result = "content..."
+        ctx.assistant_text = ""
+        ctx.classify_fn = None
+        guard.check_pre(ctx)
+
+        assert guard._has_memory_review is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

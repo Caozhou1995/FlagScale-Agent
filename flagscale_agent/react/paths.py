@@ -51,14 +51,6 @@ def get_memory_dir() -> str:
     return os.path.join(get_dot_flagscale_root(), "agent_memory")
 
 
-def get_session_memory_dir(session_id: str) -> str:
-    """Get per-session memory directory (~/.flagscale/sessions/{session_id}/memory).
-
-    Session memory is isolated per session and never mixed with global memory.
-    """
-    return os.path.join(get_sessions_root(), session_id, "memory")
-
-
 def get_input_history_file() -> str:
     """Get readline input history file (~/.flagscale/input_history)."""
     return os.path.join(get_dot_flagscale_root(), "input_history")

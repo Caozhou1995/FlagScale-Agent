@@ -206,7 +206,7 @@ class CommandHandler:
             return
         sub = parts[1]
         if sub == "list":
-            entries = self.agent.session_memory.list_entries()
+            entries = self.agent.memory.list_entries()
             if not entries:
                 print("No memory entries.")
                 return

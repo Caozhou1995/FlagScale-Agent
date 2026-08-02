@@ -80,7 +80,7 @@ def main(
         provider=agent_instance.provider,
         tool_registry=agent_instance.tool_registry,
         skill_manager=agent_instance.skill_manager,
-        session_memory=agent_instance.session_memory,
+        session_memory=agent_instance.memory,
         task_plan=agent_instance.task_plan,
         experiment_manager=agent_instance._experiment_manager,
         config=cfg,

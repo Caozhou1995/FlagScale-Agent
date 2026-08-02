@@ -147,11 +147,10 @@ class PromptBuilder:
             if exp_section and exp_section not in optional_parts:
                 optional_parts.append(exp_section)
 
-        # Planning section only when a plan exists
-        if plan_context:
-            planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
-            if planning:
-                optional_parts.append(planning)
+        # Planning section — always inject (includes "when to create" guidance)
+        planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
+        if planning:
+            optional_parts.append(planning)
 
         # Always include these
         optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("memory_rules", ""))

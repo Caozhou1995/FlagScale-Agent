@@ -794,3 +794,41 @@ class TestEdgeCases:
         for _ in range(guard.INJECT_LIMIT - 1):
             result = guard.check_post(ctx)
         assert result.action == "block"
+
+
+class TestFullLog:
+    """Test that _full_log preserves original content after eviction."""
+
+    def setup_method(self):
+        from flagscale_agent.react.history import HistoryManager
+        self.hm = HistoryManager(max_context_tokens=64000)
+
+    def test_full_log_preserves_content_after_evict(self):
+        """After evicting a message, _full_log still has original content."""
+        self.hm.append({"role": "system", "content": "system prompt"})
+        self.hm.append({"role": "user", "content": "hello world"})
+        self.hm.append({"role": "assistant", "content": "hi there"})
+        self.hm.append({"role": "user", "content": "more"})
+        self.hm.append({"role": "assistant", "content": "response"})
+        self.hm.append({"role": "user", "content": "latest 1"})
+        self.hm.append({"role": "assistant", "content": "latest 2"})
+        self.hm.append({"role": "user", "content": "latest 3"})
+        self.hm.append({"role": "assistant", "content": "latest 4"})
+
+        # Evict message at index 1
+        result = self.hm.evict_message(1)
+        assert result is not None
+
+        # _messages[1] should now be placeholder
+        assert self.hm._messages[1].get("_evicted") is True
+        assert "evicted" in self.hm._messages[1]["content"]
+
+        # _full_log[1] should still have original content
+        assert self.hm._full_log[1]["content"] == "hello world"
+        assert self.hm._full_log[1].get("_evicted") is None
+
+    def test_full_log_grows_unbounded(self):
+        """_full_log no longer has a cap (saves to disk instead)."""
+        for i in range(100):
+            self.hm.append({"role": "user", "content": f"msg {i}"})
+        assert len(self.hm._full_log) == 100

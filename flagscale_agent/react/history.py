@@ -180,12 +180,10 @@ class HistoryManager:
         return False
 
     def append(self, message: Dict[str, Any]):
+        import copy
         self._messages.append(message)
-        self._full_log.append(message)
-        # Cap _full_log to prevent unbounded memory growth in long sessions
-        _FULL_LOG_MAX = 2000
-        if len(self._full_log) > _FULL_LOG_MAX:
-            self._full_log = self._full_log[-_FULL_LOG_MAX:]
+        # Store a deep copy so eviction (which modifies in-place) doesn't affect the full log
+        self._full_log.append(copy.deepcopy(message))
 
     def set_system_prompt(self, content: str):
         """Replace or prepend the system message."""

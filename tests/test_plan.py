@@ -375,3 +375,71 @@ class TestPlanUpdateToolStepIdParsing:
     def test_garbage_returns_none(self, tp):
         from flagscale_agent.react.tools.plan_update import _parse_step_id
         assert _parse_step_id("hello") is None
+
+
+class TestNotesAppendMode:
+    """Notes are now append-only: each update adds a line, doesn't overwrite."""
+
+    def test_single_note(self, tp):
+        tp.create("Test", ["A"])
+        plan = tp.update_step(1, "doing", "started working")
+        assert plan["steps"][0]["notes"] == "started working"
+
+    def test_append_multiple(self, tp):
+        tp.create("Test", ["A"])
+        tp.update_step(1, "doing", "attempt 1: failed OOM")
+        plan = tp.update_step(1, "doing", "attempt 2: reduced batch size")
+        notes = plan["steps"][0]["notes"]
+        assert "attempt 1: failed OOM" in notes
+        assert "attempt 2: reduced batch size" in notes
+        assert notes == "attempt 1: failed OOM\nattempt 2: reduced batch size"
+
+    def test_append_on_done(self, tp):
+        tp.create("Test", ["A", "B"])
+        tp.update_step(1, "doing", "trying approach A")
+        plan = tp.update_step(1, "done", "approach A worked")
+        notes = plan["steps"][0]["notes"]
+        assert "trying approach A" in notes
+        assert "approach A worked" in notes
+
+    def test_empty_notes_dont_append(self, tp):
+        tp.create("Test", ["A"])
+        tp.update_step(1, "doing", "first note")
+        plan = tp.update_step(1, "doing", "")
+        # Empty notes should not add blank line
+        assert plan["steps"][0]["notes"] == "first note"
+
+    def test_notes_visible_in_summary(self, tp):
+        tp.create("Test", ["A"])
+        tp.update_step(1, "doing", "key finding: port 2222")
+        summary = tp.summary()
+        assert "key finding: port 2222" in summary
+
+    def test_notes_visible_in_context_for_prompt(self, tp):
+        tp.create("Test", ["A"])
+        tp.update_step(1, "doing", "remember: use snake_case")
+        ctx = tp.context_for_prompt()
+        assert "remember: use snake_case" in ctx
+
+
+class TestPhaseGate:
+    """Phase Gate only checks the NEW note being written, not historical notes."""
+
+    def test_deferred_marker_in_new_note_blocks_done(self, tp):
+        tp.create("Test", ["A", "B"])
+        tp.update_step(1, "doing")
+        with pytest.raises(ValueError, match="unfinished markers"):
+            tp.update_step(1, "done", "TODO: handle edge case")
+
+    def test_historical_deferred_marker_does_not_block(self, tp):
+        tp.create("Test", ["A", "B"])
+        tp.update_step(1, "doing", "todo: check later")
+        # Now marking done WITHOUT deferred marker in new notes should succeed
+        plan = tp.update_step(1, "done", "all resolved")
+        assert plan["steps"][0]["status"] == "done"
+
+    def test_done_without_notes_allowed(self, tp):
+        tp.create("Test", ["A", "B"])
+        tp.update_step(1, "doing")
+        plan = tp.update_step(1, "done")
+        assert plan["steps"][0]["status"] == "done"

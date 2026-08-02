@@ -90,7 +90,6 @@ class AgentConfig:
     plugin_tool_dirs: List[str] = field(default_factory=list)
     skill_dirs: List[str] = field(default_factory=list)
     shell_env: Dict[str, str] = field(default_factory=dict)
-    memory_ttl_days: int = 30
     poll_detect_window: int = 2
     poll_interval: int = 15
     poll_max_duration: int = 300

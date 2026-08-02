@@ -28,14 +28,19 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 _STALENESS_MSG = (
     "[MemoryDiscipline] You just read memories. Verify each entry against "
-    "current code/state. If any memory is outdated (bug fixed, file deleted, "
-    "architecture changed), supersede or delete it NOW via memory_write(supersedes=[old_key]). "
+    "current code/state. If any memory is outdated (environment changed, "
+    "bug fixed, path moved), supersede or delete it NOW via "
+    "memory_write(supersedes=['old/key/here']). "
     "Do NOT leave stale memories uncorrected."
 )
 
 
 class MemoryDisciplineGuard(Guard):
-    """Remind agent to read/write memory if it hasn't done so recently."""
+    """Remind agent to read/write memory if it hasn't done so recently.
+
+    Also enforces self-evolution: before TASK_COMPLETE, remind agent to
+    review memory for new findings, digestible insights, or stale facts.
+    """
 
     name = "memory_discipline"
     priority = 90  # Low priority — advisory only
@@ -47,7 +52,9 @@ class MemoryDisciplineGuard(Guard):
     def __init__(self):
         super().__init__()
         self._calls_since_memory = 0
-        self._staleness_reminded = False  # Only remind once per read batch
+        self._staleness_reminded = False
+        self._evolution_reminded = False
+        self._has_memory_review = False  # whether agent did memory_list this session
 
     _MEMORY_TOOLS = frozenset((
         "memory_write", "memory_read", "memory_list",
@@ -58,23 +65,36 @@ class MemoryDisciplineGuard(Guard):
     _MEMORY_READ_TOOLS = frozenset(("memory_read", "memory_list"))
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
-        # Skip pre-iteration check (no specific tool being attempted)
         if not ctx.tool_name:
+            # Check if assistant is about to emit TASK_COMPLETE without memory review
+            if (ctx.assistant_text
+                    and "[TASK_COMPLETE]" in ctx.assistant_text
+                    and not self._evolution_reminded
+                    and not self._has_memory_review):
+                self._evolution_reminded = True
+                return GuardVerdict.inject(
+                    "[MemoryDiscipline] About to TASK_COMPLETE but no memory review this session. "
+                    "Before completing, check: (1) any new fact/pitfall/insight to save? "
+                    "(2) any existing insight ready to digest? "
+                    "(3) any existing fact invalidated by this session's work? "
+                    "Run memory_list() to review, then report suggestions to user.",
+                    reason="evolution_check_before_complete",
+                    category="memory_evolution_reminder",
+                )
             return None
 
-        # Memory tool call — reset counter
         if ctx.tool_name in self._MEMORY_TOOLS:
             self._calls_since_memory = 0
-            # memory_write after a read resets staleness reminder
+            if ctx.tool_name in self._MEMORY_READ_TOOLS:
+                self._has_memory_review = True
             if ctx.tool_name == "memory_write":
                 self._staleness_reminded = False
             return None
 
         self._calls_since_memory += 1
 
-        # Remind every N calls — then reset counter so next reminder is N calls later
         if self._calls_since_memory >= self.reminder_threshold:
-            self._calls_since_memory = 0  # Reset — next reminder in another N calls
+            self._calls_since_memory = 0
             return GuardVerdict.inject(
                 f"[MemoryDiscipline] {self.reminder_threshold} tool calls without "
                 "reading or writing memory. Consider saving key findings or "
@@ -90,15 +110,12 @@ class MemoryDisciplineGuard(Guard):
         if ctx.tool_name not in self._MEMORY_READ_TOOLS:
             return None
 
-        # Don't remind if already reminded this batch (multiple reads in one turn)
         if self._staleness_reminded:
             return None
 
-        # Only trigger if there's actual content returned (not empty/error)
         result = ctx.tool_result or ""
         if not result or len(result) < 20:
             return None
-        # Skip if result is just "No entries found" or similar
         if "no entries" in result.lower() or "not found" in result.lower():
             return None
 
@@ -110,27 +127,24 @@ class MemoryDisciplineGuard(Guard):
         )
 
     def was_inject_effective(self, ctx: GuardContext) -> bool | None:
-        """If agent used a memory tool after our inject, it was effective.
-        Any non-memory tool means the agent ignored the reminder."""
         if ctx.tool_name in self._MEMORY_TOOLS:
             return True
         return False
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
-        """Accept any non-trivial reason — reset counter."""
         if reason and len(reason.strip()) > 5:
             self._calls_since_memory = 0
             return True
         return False
 
     def reset_state(self):
-        """Full reset (decay/override)."""
         super().reset_state()
         self._calls_since_memory = 0
         self._staleness_reminded = False
+        self._evolution_reminded = False
+        self._has_memory_review = False
 
     def reset_turn(self):
-        """Per-iteration — nothing to do."""
         pass
 
     def reset_new_turn(self):

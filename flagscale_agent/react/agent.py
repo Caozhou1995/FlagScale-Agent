@@ -62,7 +62,7 @@ from flagscale_agent.react.tools.web_fetch import WebFetchTool
 from flagscale_agent.react.tools.find_log import FindLatestLogTool
 from flagscale_agent.react.tools.parse_metrics import ParseTrainingMetricsTool
 from flagscale_agent.react.tools.workspace_experiment import WorkspaceExperimentTool
-from flagscale_agent.react.memory import SessionMemory
+from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
 from flagscale_agent.react.tools.memory_list import MemoryListTool
@@ -178,7 +178,7 @@ class WorkerAgent:
     def __init__(self, config: AgentConfig, scene: ScenePreset | None = None,
                  # ── Shared infrastructure (for Orchestrator injection) ──
                  _provider=None, _tool_registry=None, _skill_manager=None,
-                 _session_memory=None, _task_plan=None, _experiment_manager=None,
+                 _memory=None, _task_plan=None, _experiment_manager=None,
                  _constraint_cache=None):
         self.config = config
         self.scene = scene
@@ -210,12 +210,7 @@ class WorkerAgent:
         self._evict_summary = EvictSummaryStore(session_dir)
 
         memory_dir = get_memory_dir()
-        self.session_memory = _session_memory or SessionMemory(memory_dir, config.memory_ttl_days)
-
-        # Per-session memory — isolated to this session directory
-        from flagscale_agent.react.paths import get_session_memory_dir
-        session_memory_dir = get_session_memory_dir(self._session_id)
-        self.local_memory = SessionMemory(session_memory_dir, ttl_days=365)
+        self.memory = _memory or Memory(memory_dir)
 
         plan_dir = os.path.join(session_dir, "plans")
         self.task_plan = _task_plan or TaskPlan(plan_dir)
@@ -229,20 +224,15 @@ class WorkerAgent:
             config.base_url, config.max_output_tokens,
         )
 
-        self.session_memory._llm_fn = lambda prompt: self.provider.chat(
-            [{"role": "user", "content": prompt}], tools=[]
-        ).get("content", "")
-        self.local_memory._llm_fn = self.session_memory._llm_fn
-
         self.history = HistoryManager(max_context_tokens=config.max_context_tokens)
 
         if not _tool_registry:
             self._register_tools()
         if not _experiment_manager:
             self._load_plugin_tools()
-        self.tool_registry.register(MemoryWriteTool(self.session_memory, self.local_memory, self._session_id, task_plan=self.task_plan))
-        self.tool_registry.register(MemoryReadTool(self.session_memory, self.local_memory))
-        self.tool_registry.register(MemoryListTool(self.session_memory, self.local_memory))
+        self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
+        self.tool_registry.register(MemoryReadTool(self.memory))
+        self.tool_registry.register(MemoryListTool(self.memory))
         self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
@@ -652,6 +642,37 @@ class WorkerAgent:
             session_input_tokens=self._session_input_tokens,
             session_output_tokens=self._session_output_tokens,
         )
+        # Save full (pre-eviction) conversation alongside
+        self._save_conversation_full()
+
+    def _save_conversation_full(self):
+        """Save the full pre-eviction conversation to conversation_full.json.
+
+        Uses _full_log from HistoryManager which captures all messages
+        at append-time before any eviction modifies them.
+        """
+        import tempfile
+        full_log = self.history._full_log
+        if not full_log:
+            return
+        path = os.path.join(self._session_dir, "conversation_full.json")
+        data = {
+            "session_id": self._session_id,
+            "messages": full_log,
+        }
+        # Atomic write
+        try:
+            fd, tmp = tempfile.mkstemp(
+                dir=self._session_dir, prefix=".tmp_conv_full_", suffix=".json"
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     def _auto_save(self):
         """Auto-save conversation after each completed turn.
@@ -1459,56 +1480,29 @@ class WorkerAgent:
     # ── Context injection ───────────────────────────────────────────────────
 
     def _build_memory_context(self) -> str:
-        # Collect session-local entries (higher priority — workspace-specific context)
-        local_entries = self.local_memory.list_entries()
-        for e in local_entries:
-            e["_scope_label"] = "session"
+        """Build a lightweight memory summary — content is on-demand via tools.
 
-        # Collect global entries
-        global_entries = self.session_memory.list_entries()
-        for e in global_entries:
-            e["_scope_label"] = "global"
-
-        all_entries = local_entries + global_entries
+        Only tells the LLM how many entries exist per type, so it knows
+        to call memory_list/memory_read when needed. No content injection.
+        """
+        all_entries = self.memory.list_entries()
         if not all_entries:
             return ""
 
-        # Get current task context
-        active_plan = self.task_plan.get_active()
-        current_task = active_plan.get("title", "") if active_plan else ""
-
-        # Prioritize: 1) task-related + high-prio, 2) task-related, 3) high-prio, 4) recent
-        # Within each bucket, session entries come before global (already ordered above)
-        task_related_high = []
-        task_related = []
-        high_prio = []
-        normal = []
-
+        # Count by type
+        counts = {"fact": 0, "pitfall": 0, "insight": 0}
         for e in all_entries:
-            is_high = e.get("priority") == "high"
-            is_task_related = current_task and e.get("task") == current_task
+            t = e.get("type", "")
+            if t in counts:
+                counts[t] += 1
 
-            if is_task_related and is_high:
-                task_related_high.append(e)
-            elif is_task_related:
-                task_related.append(e)
-            elif is_high:
-                high_prio.append(e)
-            else:
-                normal.append(e)
-
-        ordered = task_related_high + task_related + high_prio + normal
-        selected = ordered[:15]  # Show up to 15 entries, 500 chars each
-
-        lines = ["<context-memory>"]
-        for e in selected:
-            key = e.get("key", "")
-            mem_type = e.get("type", "")
-            content = e.get("content", "")
-            scope_label = e.get("_scope_label", "global")
-            lines.append(f'<entry key="{key}" type="{mem_type}" scope="{scope_label}">{content[:500]}</entry>')
-        lines.append("</context-memory>")
-        return "\n".join(lines)
+        parts = [f"{v} {k}" for k, v in counts.items() if v > 0]
+        total = sum(counts.values())
+        summary = ", ".join(parts)
+        return (
+            f"<context-memory>{total} entries ({summary}). "
+            f"Use memory_list/memory_read to access.</context-memory>"
+        )
 
     def _reset_guard_escalation(self):
         """Reset guard escalation state on new user input — prevents stale escalations."""
@@ -1571,7 +1565,7 @@ class WorkerAgent:
             notes = s.get("notes", "")
             line = f"  [{icon}] Step {s.get('id', '?')}: {title[:120]}"
             if notes:
-                line += f" — {notes[:80]}"
+                line += f"\n      notes: {notes}"
             lines.append(line)
             if s.get("status") in ("pending", "doing") and current_step is None:
                 current_step = s
@@ -1964,69 +1958,13 @@ class WorkerAgent:
         print()
 
     def _auto_memorize_training_state(self, tool_calls: list, results: list):
-        """Auto-write critical training state to memory after monitor/find_latest_log.
+        """Auto-memorize training state is disabled in the new memory system.
         
-        This prevents the most common re-discovery pattern: agent finds log paths,
-        metrics rank, output_dir structure — then loses it all on context compaction.
-        
-        Only writes if the info is NEW (not already in memory).
+        The redesigned memory only stores entries that pass the three-category
+        test (fact/pitfall/insight). Temporary session state like log paths
+        should be tracked via plan or conversation context, not memory.
         """
-        import hashlib
-
-        for tc, result in zip(tool_calls, results):
-            if not isinstance(result, str) or not result:
-                continue
-            tool_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-            tool_args = tc.get("input", {}) if isinstance(tc, dict) else getattr(tc, "input", {})
-
-            # Auto-memorize monitor output_dir + log discovery
-            if tool_name == "monitor" and "output_dir" in str(tool_args):
-                output_dir = tool_args.get("output_dir", "") if isinstance(tool_args, dict) else ""
-                if output_dir and "stdout.log" in result:
-                    # Extract the log path
-                    log_match = re.search(r"(/\S+/stdout\.log)", result)
-                    if log_match:
-                        log_path = log_match.group(1)
-                        # Derive a key from output_dir
-                        dir_hash = hashlib.md5(output_dir.encode()).hexdigest()[:6]
-                        key = f"auto_training_logpath_{dir_hash}"
-                        # Only write if not already stored
-                        existing = self.local_memory.get(key)
-                        if not existing:
-                            try:
-                                self.local_memory.put(
-                                    key=key,
-                                    mem_type="context",
-                                    content=(
-                                        f"Training log path for {output_dir}: {log_path}\n"
-                                        f"Use monitor(output_dir='{output_dir}') to check status."
-                                    ),
-                                    session_id=self._session_id,
-                                )
-                            except Exception:
-                                pass
-
-            # Auto-memorize training launch output_dir from shell commands
-            elif tool_name == "shell" and isinstance(tool_args, dict):
-                cmd = tool_args.get("command", "")
-                if re.search(r"run\.py.*action\s*=\s*run|torchrun", cmd):
-                    # Extract exp_dir from command
-                    exp_match = re.search(r"experiment\.exp_dir\s*=\s*(\S+)", cmd)
-                    if exp_match:
-                        exp_dir = exp_match.group(1).strip("'\"")
-                        key = f"auto_last_training_launch"
-                        try:
-                            self.local_memory.put(
-                                key=key,
-                                mem_type="context",
-                                content=(
-                                    f"Last training launch: output_dir={exp_dir}\n"
-                                    f"Command: {cmd[:200]}"
-                                ),
-                                session_id=self._session_id,
-                            )
-                        except Exception:
-                            pass
+        pass
 
     def _inject_message(self, msg: str):
         """Inject a guard block/escalate message into conversation history.
@@ -2825,45 +2763,10 @@ class WorkerAgent:
             })
 
         # Write extracted memories (max 5 per compaction to avoid noise)
-        for entry in extracted[:5]:
-            try:
-                # Check if similar key already exists (check both stores)
-                existing = self.local_memory.get(entry["key"]) or self.session_memory.get(entry["key"])
-                if existing:
-                    continue  # Don't overwrite existing entries
-
-                # Check if similar content already exists (avoid near-duplicates)
-                all_entries = self.local_memory.list_entries() + self.session_memory.list_entries()
-                new_words = set(re.findall(r'\w+', entry["content"].lower()))
-                new_words = {w for w in new_words if len(w) > 2}
-
-                is_duplicate = False
-                for e in all_entries:
-                    if e.get("type") != entry["type"]:
-                        continue
-                    old_words = set(re.findall(r'\w+', e.get("content", "").lower()))
-                    old_words = {w for w in old_words if len(w) > 2}
-                    if not old_words or not new_words:
-                        continue
-                    overlap = len(new_words & old_words)
-                    smaller = min(len(new_words), len(old_words))
-                    if smaller > 0 and overlap / smaller >= 0.70:
-                        is_duplicate = True
-                        break
-
-                if is_duplicate:
-                    continue
-
-                # Auto-extracted memories are session-scoped (compaction context)
-                self.local_memory.put(
-                    key=entry["key"],
-                    mem_type=entry["type"],
-                    content=entry["content"],
-                    priority="normal",
-                    scope="persistent",
-                )
-            except Exception:
-                pass
+        # NOTE: Auto-extraction is disabled in the redesigned memory system.
+        # The new memory only accepts fact/pitfall/insight with proper key format.
+        # Auto-extracted compaction state doesn't fit these categories.
+        pass
 
     def _summarize_for_compaction(self, text: str) -> str:
         response = self.provider.chat(

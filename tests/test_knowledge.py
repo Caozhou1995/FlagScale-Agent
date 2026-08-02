@@ -58,7 +58,7 @@ class TestKnowledgeManager:
         from flagscale_agent.knowledge import KnowledgeManager
         km = KnowledgeManager()
         assert km.root.exists()
-        assert len(km.available_groups) == 14
+        assert len(km.available_groups) == 16
 
     def test_init_custom_dir(self, knowledge_dir):
         """Test initialization with custom directory."""

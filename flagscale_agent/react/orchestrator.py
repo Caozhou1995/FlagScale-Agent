@@ -492,7 +492,7 @@ class Orchestrator:
         provider=None,
         tool_registry=None,
         skill_manager=None,
-        session_memory=None,
+        session_memory=None,  # TODO: rename to 'memory' in next orchestrator refactor
         task_plan=None,
         experiment_manager=None,
         judge=None,
@@ -993,7 +993,7 @@ class Orchestrator:
             _provider=self.provider,
             _tool_registry=self.tool_registry,
             _skill_manager=self.skill_manager,
-            _session_memory=self.session_memory,
+            _memory=self.session_memory,
             _task_plan=self.task_plan,
             _experiment_manager=self.experiment_manager,
             _constraint_cache=self._constraint_cache,
