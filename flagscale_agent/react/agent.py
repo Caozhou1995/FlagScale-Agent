@@ -53,6 +53,7 @@ from flagscale_agent.react.experiment_manager import ExperimentManager
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.tools import ToolRegistry
 from flagscale_agent.react.tools.edit_file import EditFileTool
+from flagscale_agent.react.tools.load_knowledge import LoadKnowledgeTool
 from flagscale_agent.react.tools.load_skill import LoadSkillTool
 from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.shell import ShellTool
@@ -96,6 +97,7 @@ from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
+from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
 from flagscale_agent.react.constraint.cache import ConstraintCache
@@ -184,6 +186,10 @@ class WorkerAgent:
         # ── Infrastructure ──
         self.skill_manager = _skill_manager or SkillManager(config.skill_dirs)
         self.tool_registry = _tool_registry or ToolRegistry()
+
+        # Knowledge system
+        from flagscale_agent.knowledge import KnowledgeManager
+        self._knowledge_manager = KnowledgeManager()
 
         self._session_id = uuid.uuid4().hex[:8]
         from flagscale_agent.react.paths import get_sessions_root, get_memory_dir
@@ -363,6 +369,7 @@ class WorkerAgent:
 
         # File tool guard (always active)
         guard_registry.register(FileToolGuard())
+        guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
         # Code context guard (always active — tracks reads/writes across compaction)
@@ -407,6 +414,7 @@ class WorkerAgent:
             )
         )
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
+        self.tool_registry.register(LoadKnowledgeTool(self._knowledge_manager))
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
         self.tool_registry.register(FindLatestLogTool())
         self.tool_registry.register(ParseTrainingMetricsTool())
@@ -632,7 +640,7 @@ class WorkerAgent:
         except Exception:
             pass
 
-    def _save_conversation(self, completed: bool = False):
+    def _save_conversation(self, completed: bool = False, session_summary: str = None):
         if not self.history.messages:
             return
         save_conversation(
@@ -640,6 +648,9 @@ class WorkerAgent:
             self.history.messages,
             loaded_skills=list(self._loaded_skills),
             completed=completed,
+            session_summary=session_summary,
+            session_input_tokens=self._session_input_tokens,
+            session_output_tokens=self._session_output_tokens,
         )
 
     def _auto_save(self):
@@ -653,9 +664,68 @@ class WorkerAgent:
         except Exception:
             pass
 
+    def _generate_session_summary(self) -> str:
+        """Call LLM to generate a 3-line session summary for resume display.
+
+        Format: 主要内容 / 当前进展 / 下一步待做
+        """
+        try:
+            # Collect last N user messages as context
+            user_msgs = [m for m in self.history.messages if m.get("role") == "user"]
+            recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
+            context_snippets = []
+            for m in recent:
+                content = m.get("content", "")
+                if isinstance(content, str):
+                    context_snippets.append(content[:200])
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            context_snippets.append(block.get("text", "")[:200])
+                            break
+            context_text = "\n".join(context_snippets)
+
+            # Also include plan status if available
+            plan_info = ""
+            try:
+                from flagscale_agent.react.tools.plan import PlanManager
+                pm = PlanManager()
+                status = pm.get_status()
+                if status:
+                    plan_info = f"\n当前计划:\n{status[:500]}"
+            except Exception:
+                pass
+
+            prompt_msgs = [
+                {"role": "user", "content": (
+                    "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
+                    "第1行：这个会话主要在做什么（一句话）\n"
+                    "第2行：当前进展到哪里了（一句话）\n"
+                    "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
+                    f"最近的用户消息:\n{context_text}\n{plan_info}\n\n"
+                    "直接输出3行摘要，不要任何前缀或解释。"
+                )}
+            ]
+            # Use provider directly for a quick non-streaming call
+            stream, _ = self.provider.chat_stream(prompt_msgs, [])
+            result_text = ""
+            for event in stream:
+                if hasattr(event, "type"):
+                    if event.type == "content_block_delta":
+                        delta = getattr(event, "delta", None)
+                        if delta and hasattr(delta, "text"):
+                            result_text += delta.text
+                elif isinstance(event, dict):
+                    result_text += event.get("text", "")
+            return result_text.strip()[:500]
+        except Exception:
+            return ""
+
     def _exit(self):
         display.goodbye()
-        self._save_conversation(completed=True)
+        # Generate session summary before saving
+        summary = self._generate_session_summary()
+        self._save_conversation(completed=True, session_summary=summary)
         mark_completed(self._session_dir)
         sys.exit(0)
 
@@ -1242,6 +1312,9 @@ class WorkerAgent:
             and not m.get("content", "").startswith("[") and not m.get("content", "").startswith("<")
         )
         loaded = data.get("loaded_skills", [])
+        # Restore session token counts for cumulative tracking across resume/reload
+        self._session_input_tokens = data.get("session_input_tokens", 0)
+        self._session_output_tokens = data.get("session_output_tokens", 0)
         skill_map = {}
         for skill_name in loaded:
             try:
@@ -1264,14 +1337,90 @@ class WorkerAgent:
         resumable = [s for s in sessions if s.get("user_turns", 0) >= 1]
         if not resumable:
             return
+
+        # Check how many need summary generation
+        missing_summary = [s for s in resumable if not s.get("session_summary")]
+        if missing_summary:
+            print(display.dim(f"\n[resume] Generating summaries for {len(missing_summary)} session(s)..."))
+            self._generate_missing_summaries(missing_summary)
+
         print(display.yellow(f"\n[resume] {len(resumable)} resumable session(s):"))
-        for i, s in enumerate(resumable[:5], 1):
-            sid = s.get("session_id", "?")[:12]
+        for i, s in enumerate(resumable, 1):
+            sid = s.get("session_id", "?")[:8]
             ts = time.strftime("%m-%d %H:%M", time.localtime(s.get("timestamp", 0)))
-            skills = s.get("loaded_skills", [])
-            skill_str = f" [{','.join(skills[:2])}]" if skills else ""
-            print(display.dim(f"  {i}. {sid}  {ts}{skill_str}  ({s.get('user_turns', 0)} turns)"))
+            turns = s.get("user_turns", 0)
+            summary = s.get("session_summary", "")
+            if not summary:
+                summary = "(摘要生成失败)"
+            print(display.dim(f"  {i}. {sid}  {ts} ({turns} turns):"))
+            for line in summary.strip().split("\n"):
+                print(display.dim(f"     {line}"))
         print(display.dim("Type: resume <number> or resume <session_id>"))
+
+    def _generate_missing_summaries(self, sessions: list):
+        """Generate summaries for sessions that don't have one, using LLM batch."""
+        import json as _json
+        for s in sessions:
+            session_dir = s.get("session_dir", "")
+            if not session_dir:
+                continue
+            conv_path = os.path.join(session_dir, "conversation.json")
+            if not os.path.isfile(conv_path):
+                continue
+            try:
+                with open(conv_path, "r", encoding="utf-8") as f:
+                    conv_data = _json.load(f)
+                messages = conv_data.get("messages", [])
+                # Extract user messages for context
+                user_msgs = [m for m in messages if m.get("role") == "user"]
+                recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
+                snippets = []
+                for m in recent:
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        snippets.append(content[:200])
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                snippets.append(block.get("text", "")[:200])
+                                break
+                context_text = "\n".join(snippets)
+                if not context_text.strip():
+                    continue
+
+                prompt_msgs = [
+                    {"role": "user", "content": (
+                        "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
+                        "第1行：这个会话主要在做什么（一句话）\n"
+                        "第2行：当前进展到哪里了（一句话）\n"
+                        "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
+                        f"最近的用户消息:\n{context_text}\n\n"
+                        "直接输出3行摘要，不要任何前缀或解释。"
+                    )}
+                ]
+                response = self.provider.chat(prompt_msgs, [])
+                summary = ""
+                if isinstance(response, dict):
+                    resp_content = response.get("content", "")
+                    if isinstance(resp_content, list):
+                        for block in resp_content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                summary += block.get("text", "")
+                    elif isinstance(resp_content, str):
+                        summary = resp_content
+                summary = summary.strip()[:500]
+                if summary:
+                    # Save back to conversation.json
+                    conv_data["session_summary"] = summary
+                    import tempfile
+                    fd, tmp = tempfile.mkstemp(dir=session_dir, prefix=".tmp_conv_", suffix=".json")
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        _json.dump(conv_data, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp, conv_path)
+                    # Update the in-memory session dict
+                    s["session_summary"] = summary
+            except Exception:
+                continue
 
     def _auto_resume(self, session_id: str):
         """Auto-resume a session after /reload (process restart).
@@ -1758,7 +1907,9 @@ class WorkerAgent:
         self._session_output_tokens += result.output_tokens
         self._budget_guard.report_tokens(result.input_tokens, result.output_tokens)
         self._turn_iteration_count = result.iterations
-        display.turn_summary(self.turn_count, result.elapsed, result.input_tokens, result.output_tokens)
+        display.turn_summary(self.turn_count, result.elapsed, result.input_tokens, result.output_tokens,
+                             session_input_tokens=self._session_input_tokens,
+                             session_output_tokens=self._session_output_tokens)
 
     def _on_kernel_response(self, response: dict):
         """Called by Kernel after LLM response is appended to history."""
@@ -1999,9 +2150,35 @@ class WorkerAgent:
         usage = {}
         self._streaming_in_code_block = False
 
+        def _handle_context_overflow() -> bool:
+            """Evict old messages on context overflow. Returns True if retry is safe."""
+            try:
+                hm = self.history
+                evictable = hm.get_evictable_indexes()
+                if not evictable:
+                    return False
+                # Evict at least 30% of evictable messages (oldest first)
+                count = max(1, len(evictable) * 30 // 100)
+                to_evict = evictable[:count]
+                evicted_any = False
+                for idx in to_evict:
+                    result = hm.evict_message(idx)
+                    if result is not None:
+                        # Store to swap if available
+                        if hasattr(self, '_swap_store') and self._swap_store:
+                            self._swap_store.save(idx, result)
+                        evicted_any = True
+                if evicted_any:
+                    nonlocal messages
+                    messages = hm.get_messages()
+                return evicted_any
+            except Exception:
+                return False
+
         stream = retry_with_backoff(
             lambda: self.provider.chat_stream(messages, schemas),
             max_retries=3,
+            on_context_overflow=_handle_context_overflow,
         )
 
         thinking_cleared = False
@@ -2333,6 +2510,8 @@ class WorkerAgent:
 
         Each message gets its own LLM call for precise summary.
         Uses ThreadPoolExecutor for concurrent API calls.
+        Short messages (≤150 chars) are used directly as their own summary
+        without wasting an LLM call.
 
         Args:
             messages: List of (index, role, tool_name, content_str) tuples.
@@ -2342,11 +2521,27 @@ class WorkerAgent:
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        # Threshold: messages shorter than this don't need LLM summarization
+        SHORT_THRESHOLD = 150
+
+        # Separate short vs long messages
+        needs_llm = []
+        results = {}
+
+        for idx, role, tool_name, content in messages:
+            content_clean = (content or "").strip()
+            if len(content_clean) <= SHORT_THRESHOLD:
+                # Short enough to be its own summary — no LLM needed
+                summary = content_clean.replace("\n", " ")[:200] if content_clean else f"[{role}] {tool_name or 'empty message'}"
+                results[idx] = summary
+            else:
+                needs_llm.append((idx, role, tool_name, content))
+
         def _summarize_one(idx: int, role: str, tool_name: str, content: str) -> tuple:
             """Call LLM to generate one-line summary. Returns (index, summary)."""
             prompt = (
                 "Summarize this evicted conversation message in ONE concise line (max 120 chars). "
-                "Focus on WHAT was done/discussed, not formatting.\n\n"
+                "State the concrete action or content factually. Do NOT infer intent or add interpretation.\n\n"
                 f"[role={role}"
             )
             if tool_name:
@@ -2375,22 +2570,21 @@ class WorkerAgent:
                 fallback = content[:100].replace("\n", " ") if content else f"[{role}]"
                 return (idx, f"[no-llm] {fallback}")
 
-        # Concurrent LLM calls
-        max_workers = min(len(messages), 10)  # Cap at 10 concurrent
-        results = {}
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(_summarize_one, idx, role, tool_name, content): idx
-                for idx, role, tool_name, content in messages
-            }
-            for future in as_completed(futures):
-                try:
-                    idx, summary = future.result(timeout=30)
-                    results[idx] = summary
-                except Exception:
-                    idx = futures[future]
-                    results[idx] = "[timeout] summary generation failed"
+        # Concurrent LLM calls only for long messages
+        if needs_llm:
+            max_workers = min(len(needs_llm), 10)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(_summarize_one, idx, role, tool_name, content): idx
+                    for idx, role, tool_name, content in needs_llm
+                }
+                for future in as_completed(futures):
+                    try:
+                        idx, summary = future.result(timeout=30)
+                        results[idx] = summary
+                    except Exception:
+                        idx = futures[future]
+                        results[idx] = "[timeout] summary generation failed"
 
         # Store all summaries and update placeholders in history
         for idx, role, tool_name, _ in messages:

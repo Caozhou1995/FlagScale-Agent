@@ -61,6 +61,9 @@ class EnvCompatGuard(Guard):
         cmd = ctx.tool_args.get("command", "")
         if not cmd:
             return None
+        # Defense: LLM sometimes generates {"command": {"type": "string", ...}}
+        if not isinstance(cmd, str):
+            cmd = cmd.get("value", str(cmd)) if isinstance(cmd, dict) else str(cmd)
 
         cmd_lower = cmd.lower()
 

@@ -119,22 +119,15 @@ class TestHistoryManager:
         hm.get_messages()
         assert not hm.compaction_happened
 
-    def test_summarizer_not_called_in_v3(self):
-        """V3: summarizer is not used — evict/recall handles context management."""
-        called = []
-        def fake_summarizer(text):
-            called.append(text)
-            return "Summary: stuff happened"
-
+    def test_no_automatic_compaction_in_v3(self):
+        """V3: no automatic compaction — messages are never modified on append."""
         hm = HistoryManager(max_context_tokens=100)
-        hm.set_summarizer(fake_summarizer)
         hm.append({"role": "system", "content": "sys"})
         hm.append({"role": "assistant", "tool_calls": [{"id": "1", "name": "shell"}], "content": ""})
         hm.append({"role": "tool", "tool_call_id": "1", "content": "x" * 5000})
         hm.append({"role": "user", "content": "recent"})
         msgs = hm.get_messages()
-        # V3: no summarizer called, content unchanged
-        assert len(called) == 0
+        # V3: content unchanged, no summarization or truncation
         assert any("x" * 100 in m.get("content", "") for m in msgs)
 
     def test_orphaned_tool_result_removed(self):
@@ -253,24 +246,6 @@ class TestContextPressureV3:
         hm.report_actual_tokens(90000)
         pressure = hm.get_context_pressure()
         assert pressure >= 0.7
-
-
-class TestForceCompactV3:
-    """V3: force_compact is a no-op."""
-
-    def test_force_compact_returns_false(self):
-        hm = HistoryManager(max_context_tokens=100000)
-        hm.append({"role": "system", "content": "sys"})
-        hm.append({"role": "user", "content": "x" * 50000})
-        assert hm.force_compact(target_ratio=0.50) is False
-
-    def test_force_compact_does_not_modify_messages(self):
-        hm = HistoryManager(max_context_tokens=100)
-        hm.append({"role": "system", "content": "sys"})
-        hm.append({"role": "user", "content": "x" * 5000})
-        before = len(hm._messages)
-        hm.force_compact()
-        assert len(hm._messages) == before
 
 
 class TestGetMessagesV3:

@@ -1,0 +1,326 @@
+# know-profiling
+# 性能分析全链路：Nsys时间线、NCU kernel分析、PyTorch Profiler、Megatron内置profiler集成
+# Source: Profiling-Analysis @ docs-only
+
+## profiling/01_profiling_tools_overview.md (276 lines)
+L1: Chapter 01: Profiling工具体系总览
+  L3: 1. 设计动机
+  L14: 2. 工具矩阵
+  L35: 3. 工具选择决策树
+  L57: 4. 各工具Quick Start
+    L59: 4.1 NSight Systems (nsys)
+L62: 基本用法 — profile整个训练:
+L72: 多进程 (torchrun):
+L79: 输出格式:
+L80: .nsys-rep → NSight Systems GUI打开
+L81: .sqlite → 可用SQL查询
+    L84: 4.2 PyTorch Profiler
+L87: 独立使用:
+L108: 输出查看:
+L109: 1. TensorBoard: tensorboard --logdir=./log/profiler
+L110: 2. Chrome trace: prof.export_chrome_trace("trace.json")
+L111: 3. Table: print(prof.key_averages().table(sort_by="cuda_time_total"))
+    L114: 4.3 Megatron-LM-FL内置Profiler
+L117: FlagScale config中启用:
+    L127: 4.4 NSight Compute (ncu)
+L130: 在CUDA Operator Analysis Ch13已详细覆盖
+L131: Quick reference:
+L136: 不适合profile整个训练(开销太大)!
+L137: 只用于分析单个kernel
+  L140: 5. 关键指标与解读
+    L142: 5.1 nsys Timeline关键观察
+    L162: 5.2 PyTorch Profiler Table解读
+    L181: 5.3 Megatron Timer输出
+  L201: 6. 实战场景
+    L203: 6.1 场景: 训练MFU低于预期
+    L222: 6.2 场景: 通信瓶颈定位
+    L240: 6.3 场景: Memory Profiling
+L243: OOM诊断:
+L246: 训练几步后:
+L249: 分析:
+L250: 用 https://pytorch.org/memory_viz 可视化
+L251: 或:
+  L258: 7. 最佳实践
+
+## profiling/02_nsys_deep_dive.md (286 lines)
+L1: Chapter 02: NSight Systems深度使用 深度分析
+  L3: 1. 设计动机
+  L12: 2. 采集策略
+    L14: 2.1 分布式训练场景
+L17: 方法1: Megatron内置profile flag
+L18: 启动训练时添加:
+L19: --profile --profile-step-start 10 --profile-step-end 12
+L20: 这会在step 10调用cudaProfilerStart(), step 12调用cudaProfilerStop()
+L22: 用nsys包裹训练进程:
+L31: 方法2: 多进程profile (MPI模式)
+    L39: 2.2 关键Trace类型
+    L58: 2.3 减小Profile文件
+L61: 问题: 完整训练profile可能>10GB
+L62: 解决方案:
+L64: 1. 只采集指定step范围 (配合cudaProfilerApi)
+L67: 2. 不采样CPU stack (减50%+文件大小)
+L70: 3. 限制CUDA event buffer
+L73: 4. 过滤kernel (只看特定名字)
+L76: 5. 用stats导出而非完整trace
+  L80: 3. Timeline分析方法
+    L82: 3.1 识别Pipeline Bubble
+    L101: 3.2 识别通信与计算Overlap
+    L125: 3.3 识别Data Loading瓶颈
+  L141: 4. NVTX标记利用
+    L143: 4.1 Megatron内置NVTX标记
+L146: Megatron在关键阶段自动添加NVTX标记:
+L147: (当 --profile 启用时, emit_nvtx=True)
+L148: 源码: training.py L3022
+L149: nsys_nvtx_context = torch.autograd.profiler.emit_nvtx(record_shapes=True)
+L151: 在nsys timeline中可见的标记:
+L152: "forward-compute"
+L153: "backward-compute"
+L154: "optimizer-step"
+L155: "batch-generator"
+L156: "send-forward" / "recv-forward"
+L157: "send-backward" / "recv-backward"
+L159: 对应training.py中的timers:
+L160: timers('forward-compute', log_level=1).start()
+L161: output_tensor = forward_step(...)
+L162: timers('forward-compute').stop()
+    L165: 4.2 自定义NVTX标记
+L168: 在自己的代码中添加标记:
+L171: 简单标记:
+L176: Context manager方式:
+L180: 在nsys timeline中会显示为带颜色的区间
+L181: 方便快速识别不同阶段
+  L184: 5. nsys命令行分析(无GUI)
+    L186: 5.1 Stats报告
+L189: GPU kernel统计:
+L193: 查看Top-10耗时kernel:
+L197: NVTX区间统计:
+L200: CUDA API统计:
+L203: 生成summary报告:
+    L207: 5.2 自动化分析脚本
+L210: 用sqlite分析nsys输出:
+L216: 查询所有NCCL kernel耗时:
+L230: 查询compute/comm overlap ratio:
+  L241: 6. 多GPU Profile对比
+L244: Profile所有8个GPU (每个单独文件):
+L245: 训练脚本自动为每个rank生成不同文件名
+L247: 对比不同rank的kernel分布:
+L254: 找straggler rank:
+L255: 如果某个rank的step time远高于其他 → 该rank有问题
+L256: 常见原因:
+L257: - NUMA affinity错误 (GPU和NIC跨NUMA node)
+L258: - NIC绑定错误 (IB流量走了错误的port)
+L259: - 数据不均匀 (某rank的micro-batch更长)
+L260: - 热节流 (某GPU温度过高降频)
+  L263: 7. WHY nsys优于其他Timeline工具
+  L275: 8. 总结
+
+## profiling/03_pytorch_profiler.md (313 lines)
+L1: Chapter 03: PyTorch Profiler深度使用 深度分析
+  L3: 1. 设计动机
+  L12: 2. API详解
+    L14: 2.1 核心API
+L20: 完整配置:
+    L53: 2.2 Schedule工作原理
+    L69: 2.3 输出方式
+L72: 方式1: TensorBoard (最常用)
+L74: → tensorboard --logdir=./tb_logs 查看
+L76: 方式2: Chrome Trace (轻量)
+L78: → chrome://tracing 打开
+L80: 方式3: 表格统计
+L86: 方式4: 按Module聚合
+L91: 方式5: Stacks (火焰图)
+L93: → 用 FlameGraph工具可视化
+  L96: 3. Megatron中的集成
+    L98: 3.1 源码分析
+L101: training.py L2957-2981 (源码已验证):
+L102: Megatron的PyTorch Profiler集成:
+L118: 每步调用 prof.step() (L3019)
+L119: profile_step_end时调用 prof.stop() (L2597)
+    L122: 3.2 配置参数
+L126: 源码: config/common_config.py L28-67
+  L138: 4. Table输出解读
+    L140: 4.1 关键列
+    L161: 4.2 常见分析模式
+L164: 模式1: 找最耗时的CUDA操作
+L167: 模式2: 找CPU开销大的操作 (可能是调度瓶颈)
+L170: 模式3: 按input shape聚合 (找shape导致的性能差异)
+L174: 模式4: 按Module名聚合
+  L181: 5. Memory Profiling
+    L183: 5.1 内存快照
+L186: 方式1: 在profiler中 (profile_memory=True)
+L187: Table会多出 Self Memory 列
+L189: 方式2: 独立内存snapshot (更详细)
+L192: 运行几步训练...
+L196: 导出:
+L200: 可视化: https://pytorch.org/memory_viz
+L201: 上传pickle文件即可看到:
+L202: - 内存分配timeline
+L203: - 每个tensor的大小和生命周期
+L204: - 碎片化情况
+    L207: 5.2 OOM诊断
+L210: 快速查看当前内存状态:
+L213: 输出示例:
+L214: |         CUDA OOMs: 0            |
+L215: |  Allocated memory : 45.2 GB     |  ← 实际使用
+L216: |  Reserved memory  : 52.8 GB     |  ← 预留(含碎片)
+L217: |  Active memory    : 42.1 GB     |  ← 活跃tensor
+L218: |  Inactive memory  : 3.1 GB      |  ← 已释放但未归还
+L219: |  # Segments       : 1247        |
+L220: |  # Allocations    : 8923        |
+L222: 如果 Reserved >> Allocated → 碎片严重
+L223: 解决: torch.cuda.memory.set_per_process_memory_fraction(0.95)
+L224: 或使用 expandable_segments=True
+  L227: 6. FLOPS估算
+L230: with_flops=True 时, profiler估算每个Op的FLOPS:
+L239: 注意:
+L240: - 只对标准Op有效(mm, conv, etc)
+L241: - 自定义kernel无法自动估算
+L242: - 用于快速判断kernel是否接近峰值
+  L245: 7. Execution Trace (Chakra)
+L248: Chakra trace用于分布式训练模拟和重放:
+L249: 源码: training.py L2959-2962
+L257: Chakra trace记录:
+L258: - 每个Op的依赖关系 (DAG)
+L259: - tensor大小和device
+L260: - 通信collective的参与者
+L262: 用途:
+L263: 1. 训练模拟器 (预测不同并行策略性能)
+L264: 2. 通信pattern分析
+L265: 3. 调度优化
+  L268: 8. 实战技巧
+    L270: 8.1 减少Profiler开销
+L273: 开销来源和控制:
+L274: record_shapes: +5-10% → 不需要时关闭
+L275: with_stack: +10-15% → 只在debug时开
+L276: profile_memory: +5% → 内存问题时开
+L277: with_flops: +2% → 性能分析时开
+L279: 最低开销配置:
+    L288: 8.2 与nsys互补使用
+  L299: 9. 总结
+
+## profiling/04_ncu_kernel_profiling.md (269 lines)
+L1: Chapter 04: Nsight Compute (NCU) Kernel级Profiling 深度分析
+  L3: 1. 设计定位
+  L16: 2. 命令行使用
+    L18: 2.1 基本用法
+L21: 采集单个kernel的全部metrics:
+L27: 只采集特定kernel:
+L34: 只采集特定范围 (配合NVTX):
+    L40: 2.2 常用选项
+L43: Section选择 (减少采集时间):
+L51: 采样控制:
+L57: 多GPU:
+  L61: 3. 核心Metrics解读
+    L63: 3.1 Speed of Light (SOL)
+    L85: 3.2 Roofline分析
+    L108: 3.3 Warp State Statistics
+  L131: 4. 典型Kernel分析流程
+    L133: 4.1 GEMM Kernel分析
+L136: Step 1: 找到GEMM kernel名
+L139: Step 2: 采集GEMM详细metrics
+    L163: 4.2 Softmax Kernel分析
+  L183: 5. 分布式训练Profiling技巧
+    L185: 5.1 单卡分析 (最常用)
+L188: 只profile rank 0, 跳过前20步(让模型warm up):
+    L196: 5.2 通信Kernel分析
+L199: NCCL kernel也能被ncu采集:
+L205: 看NCCL kernel的带宽利用率:
+L206: 理论: NVLink 900 GB/s (all-to-all)
+L207: 实际显示Memory SOL可判断NVLink是否打满
+  L210: 6. 实战案例: 定位性能问题
+    L212: 6.1 案例: Linear层TFLOPS只有300 (期望>700)
+L215: Step 1: ncu确认kernel名
+L217: → sm90_xmma_gemm_f16f16_f16f32_f32...
+L219: Step 2: 详细profile
+L223: Step 3: 检查输出
+L224: 发现: Occupancy只有25% (期望>50%)
+L225: Launch配置: blocks=32, threads=128
+L226: 正常应该: blocks=132, threads=256
+L228: Step 4: 根因
+L229: shape是 [1, 4096] × [4096, 11008] → M=1!
+L230: batch_size=1导致GEMM退化为GEMV
+L231: GEMV的SOL天然很低
+L233: Step 5: 解决
+L234: 增大micro_batch_size, 或使用专用GEMV kernel
+  L237: 7. 与FlagScale集成
+L240: 方法1: 环境变量控制nsys/ncu
+L241: 在FlagScale config中:
+L247: 方法2: 配合Megatron的profile机制
+L248: --profile --profile-step-start 10 --profile-step-end 12
+L249: 在这些步骤中手动添加NVTX标记:
+L250: ncu --nvtx --nvtx-include "train_step/" 精准采集
+L252: 方法3: 独立运行 (推荐)
+L253: 用单卡跑forward-only脚本, ncu包裹
+  L256: 8. 总结: NCU分析检查清单
+
+## profiling/05_megatron_profiler_integration.md (242 lines)
+L1: Chapter 05: Megatron-LM-FL Profiler集成与分析 深度分析
+  L3: 1. 设计架构
+  L9: 2. 双模式机制
+    L11: 2.1 nsys模式 (use_nsys_profiler=True)
+L14: 源码: training.py L2554-2590
+L15: Megatron通过NVTX Range标记让nsys精确采集:
+L25: NVTX标记层次 (从nsys timeline可见):
+L26: train_step/
+L27: ├── forward_pass/
+L28: │   ├── layer_0/
+L29: │   │   ├── attention/
+L30: │   │   └── mlp/
+L31: │   └── layer_N/
+L32: ├── backward_pass/
+L33: └── optimizer_step/
+    L36: 2.2 PyTorch Profiler模式
+L39: 源码: training.py L2957-3020
+L40: 使用torch.profiler.profile + schedule:
+L49: 输出到 tensorboard_dir/../torch_profile/
+L50: 每个rank生成独立trace文件
+    L53: 2.3 两种模式对比
+  L69: 3. Profile参数详解
+    L71: 3.1 配置参数
+L74: 源码: config/common_config.py L28-67 (已验证)
+L76: 基础控制:
+L82: PyTorch Profiler专用:
+L88: nsys专用:
+L91: WHY按rank采集:
+L92: TP内各rank工作负载相同, 只需profile一个
+L93: PP各stage不同, 需要选择不同stage的rank
+L94: 例如 8GPU TP4PP2: rank 0是PP stage0, rank 7是PP stage1
+    L97: 3.2 FlagScale Config映射
+L100: FlagScale YAML config中对应:
+  L111: 4. Timing与Metrics
+    L113: 4.1 内置Timer系统
+L116: Megatron自带细粒度timer, 不需要外部profiler:
+L117: 源码: training.py training_log()
+L119: 输出示例 (每N步打印):
+L120: elapsed time per iteration (ms): 245.3
+L121: forward: 85.2 / backward: 142.1 / optimizer: 18.0
+L122: forward-compute: 72.1 / forward-recv: 13.1
+L123: backward-compute: 115.0 / backward-send-forward-recv: 27.1
+L124: layernorm-grads-all-reduce: 0.3
+L125: embedding-grads-all-reduce: 0.1
+L126: all-grads-reduce-scatter: 12.5
+L127: optimizer-inner: 15.0 / optimizer-allgather: 3.0
+L129: 关键timer含义:
+L130: forward-compute: 纯前向计算(不含PP通信)
+L131: forward-recv: PP接收activation的等待
+L132: backward-send-forward-recv: 1F1B调度中的send+recv
+L133: all-grads-reduce-scatter: DP梯度通信
+    L136: 4.2 通信Overlap分析
+  L155: 5. 实战profiling工作流
+    L157: 5.1 完整流程
+L160: Step 1: 快速定位 — Megatron内置timer
+L161: 看training log里的时间分解:
+L162: forward 85ms, backward 142ms → backward占比高, 正常
+L164: Step 2: nsys全局timeline
+L172: Step 3: 打开nsys GUI分析
+L173: 看: forward/backward/optimizer时间分布
+L174: 看: GPU idle gap (黄色区域)
+L175: 看: NCCL kernel与compute的overlap
+L177: Step 4: 发现可疑kernel后, 用ncu深入
+L182: Step 5: 根据ncu结果优化
+L183: → 调整tile/block配置
+L184: → 使用融合kernel
+L185: → 优化内存访问pattern
+    L188: 5.2 PP气泡分析
+  L208: 6. 常见性能模式识别
+  L231: 7. 总结

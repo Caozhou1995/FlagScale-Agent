@@ -1,0 +1,149 @@
+# know-te-attention
+# TransformerEngine注意力：DotProductAttention、Context Parallel、融合实现
+# Source: TransformerEngine-FL @ 2cb485f
+
+## transformerengine_fl/03_dot_product_attention.md (480 lines)
+L1: 第三章：DotProductAttention & Flash Attention 系统
+  L3: 1. 概述与设计动机
+  L14: 2. 源文件定位
+  L27: 3. DotProductAttention 类架构
+    L29: 3.1 类定义与初始化 (L167-495)
+    L57: 3.2 GQA 支持 (L395-400)
+    L67: 3.3 Softmax 变体 (L446-459)
+  L77: 4. Forward 完整流程 (L821-1628)
+    L79: 4.1 输入验证阶段 (L1050-1180)
+L82: FP8 检查 (L1052-1071):
+L87: QKV shape 检查 (L1073-1098):
+L88: - Q/K 必须同 head_dim, V 可以不同 (head_dim_qk vs head_dim_v)
+L89: - KV head 数 = num_gqa_groups_per_partition
+L91: qkv_format 处理 (L1129-1180):
+L92: sbhd: [seq, batch, heads, dim]
+L93: bshd: [batch, seq, heads, dim]
+L94: thd:  [total_tokens, heads, dim] — 需要 cu_seqlens
+    L97: 4.2 KV Cache 推理路径 (L1182-1220)
+    L108: 4.3 Context Parallel 序列长度调整 (L1254-1295)
+    L119: 4.4 后端选择决策 (L1360-1443)
+L122: 收集所有注意力参数到 AttentionParams 结构体
+L130: 调用 get_attention_backend() 决定使用哪个后端
+    L135: 4.5 后端选择优先级
+    L148: 4.6 后端 Dispatch (L1450-1628)
+  L167: 5. FlashAttention 后端详解 (backends.py L684-1148)
+    L169: 5.1 类结构
+    L184: 5.2 QKV 格式转换 (L773-810)
+L187: sbhd → bshd 转换 (FlashAttention 要求 bshd)
+L196: FP8 tensor 特殊处理: 只转换内部 _data，保持 Float8Tensor 包装
+    L202: 5.3 核心调用链
+    L215: 5.4 FP8 Attention (cuDNN FusedAttention, L1149-2029)
+  L239: 6. Context Parallel 注意力实现 (context_parallel.py, 4365行)
+    L241: 6.1 三种 CP 通信模式
+    L249: 6.2 P2P Ring Attention 核心循环 (L1262-2054)
+    L279: 6.3 P2P 通信的奇偶交错 (L62-101)
+    L294: 6.4 Online Softmax 合并 (L105-175)
+    L314: 6.5 Causal Mask 在 CP 中的 Section 处理 (L913-975)
+    L344: 6.6 A2A 通信模式 (L3307-3933)
+  L356: 7. 后端选择决策引擎 (utils.py)
+    L358: 7.1 get_attention_backend 逻辑
+    L374: 7.2 AttentionParams 结构体 (L1360-1394)
+  L385: 8. 性能分析
+    L387: 8.1 后端性能对比 (seq=4096, heads=32, dim=128)
+    L395: 8.2 CP 通信量分析
+    L405: 8.3 CP 模式选择指南
+  L416: 9. FP8 Attention 详解
+    L418: 9.1 数据流
+    L430: 9.2 精度分析
+  L446: 10. 设计决策总结
+  L460: 11. 调优指南
+    L462: 11.1 环境变量
+    L471: 11.2 配置建议
+
+## transformerengine_fl/04_context_parallel.md (392 lines)
+L1: 第四章：Context Parallelism (CP) 通信系统深度源码分析
+  L3: 1. 概述与源文件定位
+    L14: 1.1 设计动机
+    L18: 1.2 CP vs SP 本质区别
+  L29: 2. DualChunkSwap 序列重排策略
+    L31: 2.1 核心思想
+    L37: 2.2 重排示例（源码L3981-4020）
+    L58: 2.3 THD格式（变长序列Pack）
+L63: 源码注释(L3998-4020)示意：
+L64: batch_size=2, seq_lens=[8,4], cp_size=2
+L65: 序列0: 8tokens → 4chunks(各2tokens) → GPU0得chunk0+chunk3, GPU1得chunk1+chunk2
+L66: 序列1: 4tokens → 4chunks(各1token) → GPU0得chunk0+chunk3, GPU1得chunk1+chunk2
+  L69: 3. 通信模式详解
+    L71: 3.1 P2P Ring模式 (`cp_comm_type="p2p"`)
+      L73: 3.1.1 核心通信函数 `flash_attn_p2p_communicate` (L62-105)
+      L94: 3.1.2 前向Ring Attention `cp_p2p_fwd_flash_attn` (L913-1020)
+      L112: 3.1.3 Online Softmax合并算法
+L117: 伪代码 - 合并第i步的局部attention结果
+    L137: 3.2 AlltoAll模式 (`cp_comm_type="a2a"`)
+      L139: 3.2.1 设计思想
+      L148: 3.2.2 A2A执行流程
+      L163: 3.2.3 A2A vs P2P 适用场景
+    L173: 3.3 分层模式 (`cp_comm_type="a2a+p2p"`)
+      L175: 3.3.1 架构设计（L4030-4049）
+L180: 源码逻辑(L4030-4045):
+      L190: 3.3.2 分层通信时序
+  L210: 4. AttnFuncWithCP Autograd封装 (L1262+)
+    L212: 4.1 Forward流程
+    L234: 4.2 Backward流程（P2P模式）
+    L249: 4.3 FP8 Attention支持 (L1380+)
+L254: FP8 quantization在CP通信前执行
+  L262: 5. 通信量分析
+    L264: 5.1 P2P Ring模式
+    L276: 5.2 AlltoAll模式
+    L286: 5.3 FP8通信优化
+  L294: 6. 与FlashAttention内核的集成
+    L296: 6.1 Backend选择逻辑
+L301: 简化逻辑 (context_parallel.py内部)
+    L314: 6.2 Causal Mask处理
+  L332: 7. 与Megatron-LM集成
+    L334: 7.1 配置接口
+L337: Megatron训练配置
+    L346: 7.2 数据加载器Token重排
+L351: megatron/core/utils.py#L1725
+  L368: 8. 设计决策总结
+  L381: 9. 性能调优建议
+
+## transformerengine_fl/06_ops_abstraction_layer.md (624 lines)
+L1: 第六章：Ops 抽象层与自动融合系统深度源码分析
+  L3: 1. 概述与源文件定位
+    L25: 1.1 设计动机
+    L33: 1.2 核心设计模式
+  L45: 2. 类继承体系
+  L72: 3. OperationContext：算子状态容器 (op.py L26-55)
+  L98: 4. FusibleOperation：可融合算子接口 (op.py L57-170)
+    L100: 4.1 核心接口定义
+    L132: 4.2 量化器传递机制
+  L148: 5. BasicOperation：参数化算子基类 (op.py L172-675)
+    L150: 5.1 Template Method: fuser_forward 包裹 op_forward
+    L171: 5.2 FP8 Recipe State管理 (L222-345)
+    L196: 5.3 State Dict: FP8 Meta保存/恢复 (L528-660)
+  L215: 6. OperationFuser：自动融合引擎 (fuser.py L302-512)
+    L217: 6.1 初始化：展平op列表 (L316-347)
+    L241: 6.2 条件融合触发 (maybe_fuse_ops, L393-460)
+    L273: 6.3 融合执行过程 (_fuse_ops, L349-391)
+    L300: 6.4 融合规则注册API (L515-568)
+  L322: 7. Autograd集成：_OperationFuserAutogradFunction (fuser.py L53-298)
+    L324: 7.1 Forward (L63-198)
+    L362: 7.2 Backward (L200-298)
+    L393: 7.3 数据流示意
+  L406: 8. FusedOperation基类 (op.py L677-739)
+  L431: 9. 融合规则实例：UserbuffersForwardLinear.fuse_forward_ops
+L434: userbuffers_forward_linear.py L373-448
+  L468: 10. 端到端执行流程
+  L498: 11. 关键设计细节
+    L500: 11.1 前向/反向独立融合
+L505: fuser.py L442-451
+    L517: 11.2 Quantizer跨op传递
+    L531: 11.3 once_differentiable装饰器
+    L541: 11.4 tensor保存优化 (prepare_for_saving)
+L544: forward中 (L171):
+L549: backward中 (L215):
+  L555: 12. 性能影响量化
+  L565: 13. 扩展机制：添加新的融合规则
+L568: 示例: 注册一个自定义融合规则
+  L596: 14. 设计决策总结
+  L609: 15. 调试与排查
+L612: 查看当前融合结果:
+L617: 禁用所有融合 (debug):
+L621: 查看已注册的融合规则:

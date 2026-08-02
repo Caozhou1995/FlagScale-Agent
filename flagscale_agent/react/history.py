@@ -219,19 +219,6 @@ class HistoryManager:
         return msg
 
     # Legacy stubs (no-op, kept for backward compatibility with kernel/commands)
-    def force_compact(self, target_ratio: float = 0.50, base_limit: int = None) -> bool:
-        """No-op. Context managed by evict/recall."""
-        return False
-
-    def set_summarizer(self, callback):
-        pass
-
-    def set_scorer(self, callback):
-        pass
-
-    def set_plan_summary_fn(self, callback):
-        pass
-
     def clear(self):
         """Clear all messages."""
         self._messages.clear()

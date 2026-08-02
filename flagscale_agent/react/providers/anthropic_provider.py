@@ -147,11 +147,19 @@ class AnthropicProvider(LLMProvider):
             try:
                 final = stream.get_final_message()
                 if final and final.usage:
-                    yield {
+                    usage_data = {
                         "type": "usage",
                         "input_tokens": final.usage.input_tokens,
                         "output_tokens": final.usage.output_tokens,
                     }
+                    # Include cache info when prompt caching is active
+                    cache_read = getattr(final.usage, "cache_read_input_tokens", None)
+                    cache_create = getattr(final.usage, "cache_creation_input_tokens", None)
+                    if cache_read:
+                        usage_data["cache_read_input_tokens"] = cache_read
+                    if cache_create:
+                        usage_data["cache_creation_input_tokens"] = cache_create
+                    yield usage_data
             except Exception:
                 pass
 

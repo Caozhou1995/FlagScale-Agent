@@ -86,6 +86,9 @@ class PromptBuilder:
         # ── Skills summary for header ──
         skills_summary = self._build_skills_summary()
 
+        # ── Knowledge summary for header ──
+        knowledge_summary = self._build_knowledge_summary()
+
         # ── Optional sections based on scene constraints ──
         optional_sections = self._build_optional_sections(plan_context)
 
@@ -105,6 +108,7 @@ class PromptBuilder:
             cwd=os.getcwd(),
             tools=tools_str,
             skills=skills_summary,
+            knowledge=knowledge_summary,
             critical_rules=critical_rules,
             optional_sections=optional_sections + shared_storage_note,
             skill_context=skill_context,
@@ -237,6 +241,21 @@ class PromptBuilder:
             return "\n".join(lines)
         except Exception:
             return "(skills not available)"
+
+    def _build_knowledge_summary(self) -> str:
+        """Build compact summary of available knowledge groups."""
+        try:
+            from flagscale_agent.knowledge import KnowledgeManager
+            km = KnowledgeManager()
+            groups = km.list_groups()
+            if not groups:
+                return "(no knowledge loaded)"
+            lines = []
+            for g in groups:
+                lines.append(f"- {g['name']}: {g['description']}")
+            return "\n".join(lines)
+        except Exception:
+            return "(knowledge not available)"
 
     def _build_dashboard(self, plan_context: str) -> str:
         """Build the dashboard line for the end of the prompt.

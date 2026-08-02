@@ -1,0 +1,177 @@
+# know-flash-attn
+# FlashAttention：Online Softmax tiling、SM90 TMA/WGMMA kernel、backward pass、KV cache推理
+# Source: FlashAttention @ docs-only
+
+## flash_attention/01_architecture_overview.md (375 lines)
+L1: FlashAttention 源码深度分析 — 第1章：架构总览与核心设计
+  L3: 1. 设计动机与核心问题
+    L5: 1.1 为什么需要 FlashAttention？
+    L24: 1.2 IO 复杂度对比
+  L34: 2. 代码仓库结构 (commit: main branch)
+  L59: 3. 分层架构设计
+  L84: 4. 核心参数结构体 (hopper/flash.h)
+    L86: 4.1 Qkv_params 基类 (L12-33)
+    L106: 4.2 Flash_fwd_params 前向参数 (L37-168)
+    L123: 4.3 Flash_bwd_params 反向参数 (L172-214)
+  L143: 5. Python API 层设计 (flash_attn_interface.py)
+    L145: 5.1 torch.autograd.Function 封装模式
+L148: flash_attn/flash_attn_interface.py L461-540
+    L167: 5.2 6个 Function 类对应不同输入模式
+    L178: 5.3 用户级 API 函数
+L181: flash_attn/flash_attn_interface.py L1156
+    L196: 5.4 KV Cache API (L1485-1627)
+L199: flash_attn/flash_attn_interface.py L1485
+  L215: 6. SM90 Hopper 架构 Kernel 设计
+    L217: 6.1 核心模板参数 (mainloop_fwd_sm90_tma_gmma_ws.hpp L31-36)
+    L233: 6.2 硬件特性利用
+    L243: 6.3 Tile 大小选择策略
+    L262: 6.4 GQA Pack 优化 (pack_gqa.h)
+  L278: 7. Online Softmax 算法 (核心数学)
+    L280: 7.1 三趟变两趟
+    L296: 7.2 Kernel 中的 LSE (Log-Sum-Exp) 保存
+L299: 保存 softmax_lse = log(l) + m，用于:
+L300: 1. 反向传播重计算 softmax
+L301: 2. Split-KV 多 split 结果合并
+L302: 形状: (batch, nheads, seqlen_q) — 仅 O(N) 空间
+  L305: 8. 反向传播策略
+    L307: 8.1 重计算 vs 存储
+    L319: 8.2 dQ 累加问题 (Flash_bwd_params L177-183)
+  L333: 9. 与 Megatron/TE-FL 集成方式
+    L335: 9.1 调用路径
+    L352: 9.2 Context Parallel 与 FlashAttention
+  L359: 10. 性能特征总结
+  L369: 11. 总结：FlashAttention 设计哲学
+
+## flash_attention/02_online_softmax_tiling.md (353 lines)
+L1: FlashAttention 源码深度分析 — 第2章：Online Softmax 与 Tiling 算法
+  L3: 1. 设计动机
+    L5: 1.1 核心矛盾
+    L13: 1.2 数学等价性保证
+  L25: 2. Softmax 结构体实现 (hopper/softmax.h L92-168)
+    L27: 2.1 数据结构
+    L46: 2.2 三步流程
+  L58: 3. max_get_scale 实现 (L101-124)
+    L60: 3.1 首块 vs 后续块
+    L93: 3.2 reduce_max 实现 (L50-54)
+  L114: 4. scale_apply_exp2 实现 (L64-88)
+    L116: 4.1 Fused Scale + Exp2
+    L142: 4.2 编译器优化提示 (L82-85 注释)
+  L151: 5. online_softmax 主函数 (L127-135)
+  L169: 6. rescale_o 输出修正 (L157-166)
+  L193: 7. finalize 最终归一化 (L137-154)
+    L226: 7.1 LSE 公式推导
+  L239: 8. Tiling 策略与主循环交互
+    L241: 8.1 前向 Tiling 模式
+    L266: 8.2 Causal Mask 对 Tiling 的影响
+    L280: 8.3 Split-KV 策略 (长 KV 并行化)
+  L298: 9. 数值精度分析
+    L300: 9.1 exp2f 精度
+    L308: 9.2 累加顺序的确定性问题
+  L321: 10. 与标准实现的 IO 复杂度对比
+  L343: 11. 总结
+
+## flash_attention/03_sm90_kernel_tma_wgmma.md (402 lines)
+L1: FlashAttention 源码深度分析 — 第3章：SM90 Kernel 与 TMA/WGMMA
+  L3: 1. 设计动机
+    L5: 1.1 为什么 Hopper 架构需要专门的 Kernel？
+    L17: 1.2 SM90 FlashAttention Kernel 的核心思想
+  L32: 2. FlashAttnFwdSm90 Kernel 类 (flash_fwd_kernel_sm90.h)
+    L34: 2.1 类结构 (L27-78)
+    L58: 2.2 SharedStorage 布局 (L88-115)
+    L82: 2.3 Thread 角色分配 (L166-200)
+  L102: 3. TMA (Tensor Memory Accelerator) 使用
+    L104: 3.1 TMA Descriptor 创建 (flash_api.cpp)
+    L115: 3.2 TMA 异步加载模式
+    L131: 3.3 Multicast TMA (Cluster 模式)
+  L147: 4. WGMMA (Warpgroup Matrix Multiply-Accumulate)
+    L149: 4.1 QK^T 计算 (TiledMmaQK)
+    L161: 4.2 PV 计算 (TiledMmaPV)
+    L179: 4.3 IntraWG Overlap 优化
+  L189: 5. Persistent Kernel 与 Tile Scheduling
+    L191: 5.1 Persistent Thread 模式 (tile_scheduler.hpp)
+    L212: 5.2 Tile 调度策略
+  L224: 6. 完整前向 Kernel 执行流
+  L258: 7. 性能关键路径分析
+    L260: 7.1 Roofline 分析
+  L281: 8. 总结
+  L293: 9. FP8 支持 (Is_FP8 路径)
+    L295: 9.1 FP8 在 FlashAttention 中的挑战
+    L308: 9.2 FP8 Per-Head Descale (flash.h L53-62)
+    L322: 9.3 V Transpose 优化 (V_colmajor/Transpose_V)
+  L339: 10. Varlen (变长序列) 处理
+    L341: 10.1 SeqlenInfo 结构
+    L355: 10.2 Varlen 对 Tile 调度的影响
+  L367: 11. 与 SM80 Kernel 的关键差异
+  L380: 12. 编译特化与 Instantiation
+    L382: 12.1 模板实例化策略 (hopper/instantiations/)
+
+## flash_attention/04_backward_pass.md (358 lines)
+L1: FlashAttention 源码深度分析 — 第4章：反向传播与梯度计算
+  L3: 1. 设计动机
+    L5: 1.1 Attention 反向传播的核心挑战
+    L25: 1.2 反向 IO 复杂度
+  L34: 2. 反向参数结构 (flash.h L172-214)
+  L69: 3. 反向 Kernel 架构 (flash_bwd_kernel_sm90.h)
+    L71: 3.1 类结构 (L25-62)
+    L90: 3.2 反向 Mainloop 模板参数 (mainloop_bwd L28-34)
+  L113: 4. 反向算法流程
+    L115: 4.1 预处理: D = rowsum(dO ⊙ O) (flash_bwd_preprocess_kernel.h)
+    L126: 4.2 主循环结构 (外层遍历 K-block)
+    L143: 4.3 单步计算 (对每个 Q-block i × K-block j)
+  L158: 5. swapAB 优化策略 (mainloop_bwd L:SdP_swapAB, dKV_swapAB, dQ_swapAB)
+    L160: 5.1 为什么需要 swap？
+    L178: 5.2 RS vs SS 模式选择
+  L192: 6. dQ 原子累加机制
+    L194: 6.1 问题分析
+    L211: 6.2 Semaphore 同步流程
+  L228: 7. Softmax 反向的 Fused 实现
+    L230: 7.1 数学公式
+    L250: 7.2 Softcap 对反向的影响
+  L261: 8. 反向 Pipeline 时序
+  L278: 9. 确定性模式实现
+    L280: 9.1 非确定性来源
+    L295: 9.2 确定性保证机制
+  L306: 10. 内存占用分析
+  L325: 11. Python 层反向集成 (flash_attn_interface.py)
+L328: flash_attn/flash_attn_interface.py L510-540
+  L348: 12. 总结
+
+## flash_attention/05_kvcache_inference.md (321 lines)
+L1: FlashAttention 源码深度分析 — 第5章：KV Cache 与推理优化
+  L3: 1. 设计动机
+    L5: 1.1 推理场景的特殊性
+    L20: 1.2 flash_attn_with_kvcache 解决的问题
+  L37: 2. API 设计 (flash_attn_interface.py L1485-1627)
+    L39: 2.1 函数签名
+L42: flash_attn/flash_attn_interface.py L1485-1505
+    L66: 2.2 GQA/MQA 支持
+  L81: 3. Paged KV Cache (flash.h L121-125)
+    L83: 3.1 动机
+    L88: 3.2 数据结构
+    L99: 3.3 地址映射
+    L122: 3.4 PagedKVNonTMA vs pagedkv_tma
+  L136: 4. Split-KV 推理优化
+    L138: 4.1 动机
+    L154: 4.2 Combine Kernel (flash_fwd_combine.cu)
+    L168: 4.3 num_splits 自动选择 (heuristics.h)
+  L180: 5. Fused RoPE (hopper/rotary.h)
+    L182: 5.1 Rotary 融合方式
+  L197: 6. Batch 索引重映射 (cache_batch_idx)
+  L213: 7. 性能对比
+  L222: 8. 总结
+  L233: 9. Left Padding 支持 (cache_leftpad)
+    L235: 9.1 使用场景
+    L251: 9.2 与 cu_seqlens 的区别
+  L263: 10. Attention Chunk 模式
+  L281: 11. Sliding Window Attention (window_size)
+    L283: 11.1 参数含义
+L287: left: 当前 token 可以看到左边多少个 token
+L288: right: 可以看到右边多少个 token
+L289: (-1, -1): 无限窗口 (full attention)
+L290: (4096, 0): 左侧 4096 窗口 + causal (Mistral 风格)
+    L293: 11.2 对 Tiling 的优化
+  L307: 12. ALiBi (Attention with Linear Biases)
+L310: flash_attn_interface.py L1503
+L313: ALiBi: S_ij += slope * (j - i)  (线性位置偏置)
+L314: 实现: kernel 内计算 bias = slope * (k_pos - q_pos)
+L315: 加到 S_ij 上, 在 softmax 之前

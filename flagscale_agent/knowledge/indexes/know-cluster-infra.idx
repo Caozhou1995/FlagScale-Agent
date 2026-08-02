@@ -1,0 +1,101 @@
+# know-cluster-infra
+# 集群基础设施：IB拓扑检测方法、网络fabric结构、GPU监控方案、Slurm调度
+# Source: NCCL @ docs-only
+
+## nccl/00_topology_detection_guide.md (557 lines)
+L1: 第0章：集群通信拓扑检测方法论
+  L3: 1. 为什么需要拓扑检测？
+  L16: 2. 检测层次与工具总览
+  L32: 3. 逐层检测详解
+    L34: 3.1 GPU 层 - nvidia-smi
+    L57: 3.2 GPU 互联层 - nvidia-smi topo
+L80: 进一步确认 NVLink 带宽
+L82: 输出每条 link 的速率 (26.562 GB/s per link)
+L83: 总计: 18 links x 26.562 = 478 GB/s 单向
+    L91: 3.3 PCIe/NUMA 拓扑 - GPU 与网卡的亲和性
+L108: 看 GPU 行与 NIC 列的交叉值:
+L109: PIX = 最优 (同 PCIe switch)
+L110: NODE = 次优 (同 NUMA, 不同 PCIe 树)
+L111: SYS = 最差 (跨 NUMA)
+L116: 列出所有 IB 网卡的 PCI 地址和 NUMA 节点
+    L142: 3.4 网卡层 - IB/RoCE 设备信息
+L162: 查看每张网卡的固件、端口状态、速率
+    L212: 3.5 链路层 - 端口性能计数器
+L217: 安装 infiniband-diags (如果没有)
+L220: 查看本地端口计数器
+    L238: 3.6 交换机层 - ibnetdiscover (核心！)
+    L279: 3.7 Fat-Tree 拓扑分析
+  L311: 4. 端到端性能验证
+    L313: 4.1 IB 原始带宽测试
+L316: 安装 perftest (IB 性能测试工具)
+L319: 节点间点对点带宽 (需要两个节点配合)
+L320: 节点 A (server):
+L323: 节点 B (client):
+L326: 预期结果: ~390 Gb/s (接近 400Gb/s 线速)
+    L331: 4.2 NCCL 集合通信测试 (nccl-tests)
+L334: 编译 nccl-tests
+L339: 单机 8 卡 AllReduce
+L342: 多机 AllReduce (通过 mpirun)
+L351: size    time   algbw   busbw
+L365: 跨节点部分受限于 IB 带宽
+L366: 8 口 x 400Gb/s = 3.2Tb/s = 400GB/s 每节点
+L367: AllReduce busbw 预期: ~350-380 GB/s (接近 IB 线速)
+    L370: 4.3 GPUDirect RDMA 验证
+L373: 检查 GDR (GPU Direct RDMA) 是否可用
+L375: 应该看到 NVreg_RegistryDwords ... PeerMappingOverride=0x1
+L377: 或者通过 NCCL debug log
+L379: 应该看到: NET/IB : Using [0]mlx5_101:1/IB/... ; GDR: enabled
+  L391: 5. NCCL Debug 日志分析
+    L393: 5.1 获取 NCCL 拓扑信息
+L402: 拓扑检测
+L406: 算法选择
+L410: 传输方式
+    L415: 5.2 关键环境变量（调试用）
+L418: 打印详细拓扑
+L422: 导出拓扑文件 (NCCL 检测到的完整拓扑)
+L425: 指定拓扑文件 (调试时用预制拓扑)
+  L429: 6. 你的集群完整拓扑图
+  L471: 7. 基于拓扑的训练配置建议
+    L473: 7.1 并行策略与硬件映射
+    L483: 7.2 WHY TP 必须放节点内？
+  L496: 8. 检测命令速查表
+L499: === 一键检测脚本 ===
+  L534: 9. 常见问题诊断
+  L544: 10. 本章总结
+
+## cluster_management/01_gpu_cluster_monitoring.md (424 lines)
+L1: 万卡级GPU集群监控与管理方案
+  L3: 1. 背景与挑战
+    L5: 1.1 万卡集群的规模特征
+    L15: 1.2 核心挑战
+  L51: 2. 解决方案架构
+    L53: 2.1 整体架构
+    L81: 2.2 设计原则
+    L90: 2.3 数据流
+  L97: 3. 各组件详解
+    L99: 3.1 DCGM (Data Center GPU Manager)
+    L124: 3.2 DCGM Exporter (轻量Python实现)
+L138: <shared_storage>/scripts/dcgm_exporter.py
+    L159: 3.3 Prometheus
+L171: /etc/prometheus/prometheus.yml
+    L198: 3.4 Grafana
+    L220: 3.5 Slurm (作业调度器)
+L233: /etc/slurm/slurm.conf
+  L255: 4. 万卡扩展：从4机到1280机
+    L257: 4.1 采集层扩展
+    L266: 4.2 服务发现（替代静态配置）
+L271: 基于文件的服务发现
+    L286: 4.3 告警层
+L291: /etc/prometheus/alert_rules.yml
+    L313: 4.4 存储层
+  L321: 5. 我们的4机实践总结
+    L323: 5.1 部署拓扑
+    L345: 5.2 环境关键配置
+    L356: 5.3 容器启动标准命令
+    L373: 5.4 服务启动清单（容器重启后执行）
+L376: 每个容器内：
+L383: 仅管理节点(118)：
+  L390: 6. 与训练框架的协同
+    L392: 6.1 FlagScale训练监控集成
+    L403: 6.2 训练失败自动处理（万卡必备）
+  L414: 7. 总结

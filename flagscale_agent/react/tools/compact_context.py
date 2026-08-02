@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CompactContext tool — allows the agent to proactively trigger context compaction."""
+"""CompactContext tool — triggers eviction of old messages to free context space.
+
+In V3 context management, compaction = eviction. This tool evicts the oldest
+evictable messages to free up working space. The LLM should prefer calling
+evict() directly with specific indexes, but this tool provides a quick
+"free up space" action when precise selection isn't needed.
+"""
 
 from flagscale_agent.react.tools.base import Tool
 
@@ -20,17 +26,17 @@ from flagscale_agent.react.tools.base import Tool
 class CompactContextTool(Tool):
     name = "compact_context"
     description = (
-        "Proactively compact the conversation context to free up space. "
-        "Use when context is getting long and you need room for more work. "
-        "Specify target_ratio (0.3-0.7) to control how aggressively to compact. "
-        "Lower ratio = more aggressive compaction. Default: 0.5 (keep ~50%)."
+        "Free context space by evicting old messages. "
+        "Equivalent to calling evict() on the oldest evictable messages. "
+        "Prefer using evict() directly for precise control. "
+        "This is a convenience shortcut when you just need space quickly."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "target_ratio": {
-                "type": "number",
-                "description": "Target ratio of context to keep (0.3-0.7). Default: 0.5",
+            "percent": {
+                "type": "integer",
+                "description": "Percentage of evictable messages to evict (10-80). Default: 30",
             },
             "reason": {
                 "type": "string",
@@ -44,30 +50,33 @@ class CompactContextTool(Tool):
         self._history = history_manager
 
     def execute(self, **kwargs) -> str:
-        target_ratio = kwargs.get("target_ratio", 0.5)
+        percent = kwargs.get("percent", 30)
         reason = kwargs.get("reason", "proactive compaction")
 
-        # Clamp ratio to safe range
-        target_ratio = max(0.3, min(0.7, target_ratio))
+        percent = max(10, min(80, percent))
 
-        # Check if compaction is actually needed
-        from flagscale_agent.react.history import _message_tokens
-        estimated = sum(_message_tokens(m) for m in self._history._messages)
-        if estimated < 5000:
-            return "Context is already small (< 5000 tokens). No compaction needed."
+        evictable = self._history.get_evictable_indexes()
+        if not evictable:
+            return "Nothing to evict — all messages are either protected or already evicted."
 
-        # Execute compaction
-        compacted = self._history.force_compact(target_ratio=target_ratio)
+        count = max(1, len(evictable) * percent // 100)
+        to_evict = evictable[:count]
 
-        if compacted:
-            new_estimated = sum(_message_tokens(m) for m in self._history._messages)
-            return (
-                f"Context compacted successfully. Reason: {reason}\n"
-                f"Before: ~{estimated} tokens → After: ~{new_estimated} tokens "
-                f"(ratio: {target_ratio}, saved ~{estimated - new_estimated} tokens)"
-            )
-        else:
-            return (
-                f"Compaction skipped — context ({estimated} tokens) is already "
-                f"below target ({int(self._history.max_context_tokens * target_ratio)} tokens)."
-            )
+        evicted_count = 0
+        freed_tokens = 0
+        for idx in to_evict:
+            from flagscale_agent.react.history import _message_tokens
+            msg = self._history._messages[idx]
+            tokens = _message_tokens(msg)
+            result = self._history.evict_message(idx)
+            if result is not None:
+                evicted_count += 1
+                freed_tokens += tokens
+
+        if evicted_count == 0:
+            return "Eviction failed — no messages could be evicted."
+
+        return (
+            f"Evicted {evicted_count} messages, freed ~{freed_tokens} tokens. "
+            f"Reason: {reason}"
+        )

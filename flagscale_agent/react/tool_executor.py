@@ -380,9 +380,17 @@ class ToolExecutor:
                 tool_effects = tool.effects
             except (KeyError, AttributeError):
                 pass
+            # Sanitize tool_args: if shell command is a dict (malformed LLM output),
+            # extract the string value or convert to string to prevent .lower() crash
+            raw_args = tc.get("arguments", {})
+            if tc["name"] == "shell" and isinstance(raw_args.get("command"), dict):
+                cmd_dict = raw_args["command"]
+                # Try to extract actual command string from malformed dict
+                extracted = cmd_dict.get("value") or cmd_dict.get("command") or str(cmd_dict)
+                raw_args = {**raw_args, "command": extracted}
             guard_ctx = GuardContext(
                 tool_name=tc["name"],
-                tool_args=tc.get("arguments", {}),
+                tool_args=raw_args,
                 tool_effects=tool_effects,
                 turn_count=agent.turn_count,
                 recent_tool_history=agent._recent_tool_history[-8:],

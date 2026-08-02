@@ -41,6 +41,84 @@ class CommandHandler:
         """
         self.agent = agent
 
+    def _generate_resume_summary(self, session_info: dict) -> str:
+        """Generate session summary via LLM for sessions missing it.
+
+        Loads conversation, calls LLM to produce 3-line summary,
+        saves it back to conversation.json for future use.
+        """
+        session_dir = session_info.get("session_dir", "")
+        try:
+            data = load_conversation(session_dir)
+            if not data:
+                return "(无法加载会话)"
+            messages = data.get("messages", [])
+            user_msgs = [m for m in messages if m.get("role") == "user"]
+            if not user_msgs:
+                return "(空会话)"
+
+            # Extract first + last few user messages as context
+            first_msg = ""
+            content = user_msgs[0].get("content", "")
+            if isinstance(content, str):
+                first_msg = content[:200]
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        first_msg = block.get("text", "")[:200]
+                        break
+
+            recent = user_msgs[-5:]
+            recent_texts = []
+            for m in recent:
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    recent_texts.append(c[:150])
+                elif isinstance(c, list):
+                    for block in c:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            recent_texts.append(block.get("text", "")[:150])
+                            break
+
+            context_text = f"首条消息: {first_msg}\n最近消息:\n" + "\n".join(recent_texts)
+
+            prompt_msgs = [
+                {"role": "user", "content": (
+                    "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
+                    "第1行：这个会话主要在做什么（一句话）\n"
+                    "第2行：当前进展到哪里了（一句话）\n"
+                    "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
+                    f"{context_text}\n\n"
+                    "直接输出3行摘要，不要任何前缀或解释。"
+                )}
+            ]
+
+            response = self.agent.provider.chat(prompt_msgs, [])
+            result_text = ""
+            if isinstance(response, dict):
+                resp_content = response.get("content", "")
+                if isinstance(resp_content, list):
+                    for block in resp_content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            result_text += block.get("text", "")
+                elif isinstance(resp_content, str):
+                    result_text = resp_content
+
+            summary = result_text.strip()[:500]
+            if summary:
+                # Save back to conversation.json for future use
+                import json
+                conv_path = os.path.join(session_dir, "conversation.json")
+                if os.path.isfile(conv_path):
+                    with open(conv_path, "r", encoding="utf-8") as f:
+                        conv_data = json.load(f)
+                    conv_data["session_summary"] = summary
+                    with open(conv_path, "w", encoding="utf-8") as f:
+                        json.dump(conv_data, f, ensure_ascii=False, indent=2)
+            return summary or "(生成摘要失败)"
+        except Exception as e:
+            return f"(生成摘要失败: {str(e)[:50]})"
+
     def handle_slash_command(self, user_input: str) -> bool:
         """Dispatch slash command to appropriate handler.
 
@@ -88,8 +166,16 @@ class CommandHandler:
             self._handle_resume(user_input)
             return True
         elif cmd == "/compact":
-            self.agent.history.force_compact(target_ratio=0.50)
-            print("History compacted.")
+            evictable = self.agent.history.get_evictable_indexes()
+            if not evictable:
+                print("Nothing to evict.")
+            else:
+                count = max(1, len(evictable) * 30 // 100)
+                evicted = 0
+                for idx in evictable[:count]:
+                    if self.agent.history.evict_message(idx) is not None:
+                        evicted += 1
+                print(f"Evicted {evicted} messages.")
             return True
         elif cmd == "/session":
             self._handle_session()
@@ -228,13 +314,19 @@ class CommandHandler:
                     print(f"Failed to load conversation from {target['session_dir']}")
                     return
             print(f"No session matching '{arg}' found.")
-        for i, s in enumerate(sessions[:10], 1):
-            sid = s.get("session_id", "?")[:12]
+        for i, s in enumerate(sessions, 1):
+            sid = s.get("session_id", "?")[:8]
             ts = time.strftime("%m-%d %H:%M", time.localtime(s['timestamp']))
-            skills = s.get("loaded_skills", [])
-            skill_str = f" [{','.join(skills[:2])}]" if skills else ""
-            print(f"  {i}. {sid}  {ts}{skill_str}  ({s.get('user_turns', 0)} turns)")
-        print("Usage: /resume <number|session_id>")
+            turns = s.get("user_turns", 0)
+            summary = s.get("session_summary", "")
+            if not summary:
+                # No summary (forced exit) — generate from conversation on the fly
+                summary = self._generate_resume_summary(s)
+            print(f"  {i}. {sid}  {ts} ({turns} turns):")
+            # Print summary indented
+            for line in summary.strip().split("\n"):
+                print(f"     {line}")
+        print("\nUsage: /resume <number|session_id>")
 
     def _handle_reload(self, user_input: str):
         """Hot reload: save state, exec new process, auto-resume.

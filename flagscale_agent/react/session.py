@@ -42,7 +42,8 @@ def get_session_dir(session_id: str) -> str:
 
 def save_conversation(session_dir: str, session_id: str, messages: List[Dict[str, Any]],
                       loaded_skills: List[str] = None, metadata: Dict = None,
-                      completed: bool = False) -> str:
+                      completed: bool = False, session_summary: str = None,
+                      session_input_tokens: int = 0, session_output_tokens: int = 0) -> str:
     """Save conversation to session_dir/conversation.json. Overwrites on each call.
 
     Uses atomic write (tmp file + rename) to prevent corruption on crash.
@@ -56,7 +57,20 @@ def save_conversation(session_dir: str, session_id: str, messages: List[Dict[str
         "messages": messages,
         "loaded_skills": loaded_skills or [],
         "metadata": metadata or {},
+        "session_input_tokens": session_input_tokens,
+        "session_output_tokens": session_output_tokens,
     }
+    if session_summary:
+        data["session_summary"] = session_summary
+    # Preserve existing summary if not overwritten
+    elif os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if existing.get("session_summary"):
+                data["session_summary"] = existing["session_summary"]
+        except Exception:
+            pass
     # Atomic write: write to tmp then rename
     fd, tmp = tempfile.mkstemp(dir=session_dir, prefix=".tmp_conversation_", suffix=".json")
     try:
@@ -140,6 +154,7 @@ def find_resumable_sessions(sessions_root: str = None) -> List[Dict[str, Any]]:
                 "loaded_skills": data.get("loaded_skills", []),
                 "user_turns": len(user_msgs),
                 "last_user_msg": last_user,
+                "session_summary": data.get("session_summary", ""),
             })
         except Exception:
             continue

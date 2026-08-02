@@ -1,0 +1,442 @@
+# know-megatron-model
+# Megatron模型层：Transformer抽象、MLA/MTP、RoPE、混合精度、MoE、内存优化
+# Source: Megatron-LM-FL @ c024887
+
+## megatron_lm_fl/06_mixed_precision_fp8.md (674 lines)
+L1: 第六章：混合精度与 FP8 训练
+  L3: 1. 概述
+  L21: 2. BF16 混合精度架构
+    L23: 2.1 数据流
+    L41: 2.2 BF16 vs FP16 设计选择
+    L54: 2.3 Master Weights 机制
+  L72: 3. FP8 训练架构
+    L74: 3.1 FP8 数据格式
+    L96: 3.2 Recipe 体系 (TE2.x)
+    L109: 3.3 Recipe 选择与构造
+    L137: 3.4 FP8 Context 管理
+L167: DelayedScaling: 外层 wrap 整个 forward pass (一次 context 多层共享 amax)
+L168: CurrentScaling/MXFP8: 每层独立 wrap (fine-grained scaling)
+  L178: 4. DelayedScaling 详解
+    L180: 4.1 算法原理
+    L192: 4.2 参数配置
+L195: recipe/__init__.py L128
+    L206: 4.3 Scaling Factor 计算
+    L226: 4.4 Amax Reduction 通信
+  L248: 5. MXFP8 (Microscaling FP8) 详解
+    L250: 5.1 原理
+    L268: 5.2 配置
+L271: recipe/__init__.py L272
+    L276: 5.3 与 DelayedScaling 对比
+  L293: 6. FP8 Parameter Gather
+    L295: 6.1 原理
+    L313: 6.2 实现流程
+    L339: 6.3 约束条件
+  L357: 7. First/Last Layer BF16 策略
+    L359: 7.1 设计动机
+  L380: 8. FP8 Tensor 类层次 (TE2.x)
+    L382: 8.1 类层次
+    L408: 8.2 版本兼容处理
+L418: is_float8tensor() 使用 isinstance(tensor, FP8_TENSOR_CLASS)
+L419: → TE2.x: 检查是否是 QuantizedTensor (包含所有FP8变体)
+L420: → TE1.x: 只检查 Float8Tensor
+  L425: 9. TransformerConfig FP8 参数全景
+L430: ─── 基础开关 ───
+L438: ─── 高级选项 ───
+L445: ─── Recipe 类型 (Fp8Recipe enum) ───
+L446: delayed    → TEDelayedScaling     (TE≥1.0)
+L447: tensorwise → Float8CurrentScaling (TE≥2.2)
+L448: mxfp8      → MXFP8BlockScaling   (TE≥2.1)
+L449: blockwise  → Float8BlockScaling   (TE≥2.3)
+L450: custom     → 用户自定义 quantizer
+  L455: 10. FP8 训练数据流时序图
+  L506: 11. 性能模型与加速分析
+    L508: 11.1 理论峰值
+    L519: 11.2 实际加速估算
+    L542: 11.3 Scaling Overhead 量化
+  L554: 12. 与其他并行策略的交互
+    L556: 12.1 兼容性矩阵
+    L568: 12.2 TP + FP8 交互
+    L584: 12.3 Distributed Optimizer + FP8 Param Gather
+  L599: 13. FlagScale 扩展点
+    L601: 13.1 平台适配
+L609: FP8 相关的设备操作通过 platform 抽象:
+L610: cur_platform.device_name() → "cuda" / "npu" / ...
+L611: 使 FP8 逻辑可适配非 NVIDIA 硬件 (如华为 Ascend)
+    L614: 13.2 Overridable Recipe
+L623: FlagScale 的 @overridable 装饰器允许下游项目替换 recipe 逻辑
+L624: 无需修改源码即可自定义 FP8 策略
+  L629: 14. 关键设计决策总结
+  L644: 15. 实践建议
+    L646: 15.1 推荐配置路径
+    L666: 15.2 调试技巧
+
+## megatron_lm_fl/07_memory_optimization.md (545 lines)
+L1: 第七章：内存优化
+  L3: 1. 概述
+  L22: 2. 内存组成分析
+    L24: 2.1 各组件占比
+    L49: 2.2 Activation 内存详细计算
+  L79: 3. Activation Recompute (梯度检查点)
+    L81: 3.1 核心思想
+    L94: 3.2 配置参数
+L97: transformer_config.py L574-597
+L100: 'full': 整层 recompute (整个 transformer layer 前向重算)
+L101: 'selective': 仅 recompute 指定子模块 (推荐)
+L104: 'uniform': 每 N 层为一个 chunk，只保存 chunk 入口的 activation
+L105: 'block': 前 N 层 recompute，后面层正常保存
+L108: uniform: chunk 大小 (每 chunk 包含几层)
+L109: block: 需要 recompute 的层数
+    L112: 3.3 Full Recompute 实现
+    L140: 3.4 Uniform 方法 (L602-622)
+    L165: 3.5 Block 方法 (L624-650)
+    L189: 3.6 Selective Recompute
+    L212: 3.7 内存节省与计算开销对比
+  L236: 4. Fine-Grained Activation Offloading
+    L238: 4.1 架构
+    L267: 4.2 Offload/Reload 流程
+    L299: 4.3 Offload 模块选择
+L302: transformer_config.py L1155
+L306: 可选模块 (粒度从小到大):
+L307: "attn_norm"    → Attention 前的 LayerNorm 输入
+L308: "qkv_linear"   → QKV 线性层输入
+L309: "core_attn"    → Attention Score/Softmax 输出
+L310: "attn_proj"    → Attention O 投影输入
+L311: "mlp_norm"     → MLP 前的 LayerNorm 输入
+L312: "expert_fc1"   → Expert 第一层输入 (MoE)
+L313: "moe_act"      → MoE 激活函数输入
+    L316: 4.4 性能模型
+    L338: 4.5 与 Recompute 的互补
+  L357: 5. Distribute Saved Activations
+    L359: 5.1 原理
+  L388: 6. FP8 Activation Storage
+    L390: 6.1 原理
+  L411: 7. Distributed Optimizer (ZeRO) 内存节省
+    L413: 7.1 分片效果
+    L431: 7.2 Param/Grad Buffer 连续内存
+  L447: 8. Gradient Accumulation 内存效应
+    L449: 8.1 机制
+    L467: 8.2 与 Recompute 的关系
+  L481: 9. 内存优化策略交互矩阵
+  L500: 10. 关键设计决策
+  L513: 11. 实践建议
+    L515: 11.1 配置推荐路径
+    L531: 11.2 内存估算公式
+
+## megatron_lm_fl/08_communication_optimization.md (578 lines)
+L1: 第八章：通信优化与 Overlap
+  L3: 1. 概述
+  L40: 2. Gradient Reduce Overlap
+    L42: 2.1 配置
+L45: distributed_data_parallel_config.py L16
+L47: True: backward 计算与 grad reduce 异步重叠
+L48: False: backward 完成后同步 reduce
+L51: 默认: max(40_000_000, 1_000_000 × dp_size)
+L52: 每个 bucket 包含的参数数量
+    L55: 2.2 Bucket 机制
+    L78: 2.3 Grad Ready 注册与异步触发
+    L99: 2.4 start_grad_sync 实现
+    L129: 2.5 时序图
+    L150: 2.6 Bucket Size 调优
+  L177: 3. Parameter Gather Overlap
+    L179: 3.1 配置
+L182: distributed_data_parallel_config.py L19-22
+L184: True: forward 计算与 param all-gather 异步重叠
+L187: True: 所有 PP stage 同时启动 param gather
+L188: False: 各 stage 按需独立启动
+    L191: 3.2 前提条件
+    L206: 3.3 实现: start_param_sync
+    L232: 3.4 Forward 中的调度
+    L252: 3.5 align_param_gather 设计
+  L268: 4. PP P2P 通信优化
+    L270: 4.1 P2P 通信类
+    L283: 4.2 batch_p2p_comm
+L286: 配置: config.batch_p2p_comm = True (推荐)
+L288: 机制: 将多个 send/recv 合并为一次 batch 调用
+L289: 例如 1F1B 中同时有 send(activation to next) + recv(grad from next)
+L290: → 合并为单次 batch op → 减少 NCCL kernel launch overhead
+L292: batch_p2p_sync: 是否在 batch P2P 后立即同步
+L293: True: 保证通信完成 (安全但可能阻塞)
+L294: False: 延迟同步到需要数据时 (更好的 overlap)
+    L297: 4.3 overlap_p2p_comm (FlagScale)
+    L317: 4.4 P2P 时序 (1F1B, PP=4)
+  L337: 5. TP 通信 Overlap
+    L339: 5.1 Sequence Parallel 通信模式
+    L356: 5.2 Async All-Reduce (gradient_accumulation_fusion)
+    L374: 5.3 TE Fused Communication (TransformerEngine-FL)
+  L396: 6. MoE Expert Parallel 通信优化
+    L398: 6.1 配置
+L401: transformer_config.py L2430+
+L403: Overlap expert parallel all-to-all with expert compute
+    L406: 6.2 All-to-All 与 Expert 计算 Overlap
+    L425: 6.3 设计动机
+  L443: 7. FP32 Reduce-Scatter 累积
+    L445: 7.1 问题
+    L455: 7.2 解决方案
+L458: distributed_data_parallel_config.py
+  L476: 8. 通信-计算 Overlap 全景时序
+    L478: 8.1 单步训练 (TP=2, PP=2, DP=4, Dist-Opt)
+  L514: 9. 关键设计决策
+  L528: 10. 实践建议
+    L530: 10.1 配置推荐
+    L551: 10.2 诊断通信瓶颈
+    L561: 10.3 通信量估算
+
+## megatron_lm_fl/10_flagscale_extensions.md (662 lines)
+L1: 第10章：FlagScale 训练扩展系统 源码深度解析
+  L3: 1. 概述与架构定位
+    L11: 1.1 核心源码文件
+    L25: 1.2 整体架构
+  L62: 2. Runner 层：多节点任务编排 (runner_train.py)
+    L64: 2.1 SSHTrainRunner 类 (L396-855)
+    L86: 2.2 启动流程详解
+    L116: 2.3 配置转换：Hydra YAML → Megatron CLI Args
+    L133: 2.4 路径管理 (_update_config_train, L93-164)
+    L153: 2.5 监控与状态查询
+  L172: 3. Plugin 系统：零侵入式扩展 (megatron/plugin/)
+    L174: 3.1 设计动机
+    L178: 3.2 @overridable 装饰器 (decorators.py:211)
+    L227: 3.3 @override 装饰器 (decorators.py:420)
+    L238: 3.4 Vendor 选择机制
+    L247: 3.5 Platform 抽象层
+L257: 统一接口:
+    L262: 3.6 已注册的 Override 示例
+  L272: 4. 性能监控系统 (perf_monitor/)
+    L274: 4.1 类层次结构
+L277: perf_metrics.py
+    L297: 4.2 ModelFLOPSCalculator 详解 (L50-151)
+    L352: 4.3 PerformanceMonitor 运行时追踪 (L154-277)
+    L384: 4.4 训练循环集成 (hooks.py)
+L387: 全局单例模式
+    L405: 4.5 log_metrics 输出 (perf_metrics.py:224-277)
+  L424: 5. 优化器与调度器构建 (utils/optim_setup.py)
+    L426: 5.1 参数冻结机制 (L90-209)
+    L460: 5.2 LR 调度器 (L346-446)
+    L483: 5.3 优化器构建工厂 (L297-340)
+  L502: 6. Chunked Cross Entropy (utils/chunked_cross_entropy.py)
+    L504: 6.1 问题背景
+    L510: 6.2 实现
+  L533: 7. 异构并行 (megatron/plugin/hetero/)
+    L535: 7.1 设计目标
+    L542: 7.2 核心模块
+    L551: 7.3 ParallelContext 扩展
+L554: parallel_context.py: 扩展标准 parallel_state
+L555: 为不同设备组分配不同的 TP/PP/DP 配置
+L556: 允许 node 0 (8×H100) 使用 TP=8
+L557: 而 node 1 (4×A100) 使用 TP=4
+  L562: 8. 与 Megatron 核心的集成点
+    L564: 8.1 训练入口
+    L572: 8.2 关键集成钩子
+  L585: 9. 设计决策与权衡分析
+  L600: 10. 配置示例与最佳实践
+    L602: 10.1 完整训练配置结构
+L605: config.yaml (顶层)
+L622: conf/train/model.yaml
+    L639: 10.2 调试技巧
+L642: Dryrun 模式：生成脚本但不执行
+L645: 查看生成的 torchrun 命令
+L648: 单节点调试（绕过 SSH）
+  L654: 11. 总结
+
+## megatron_lm_fl/11_transformer_engine_fl.md (644 lines)
+L1: 第11章：TransformerEngine-FL 深度源码解析
+  L5: 1. 架构概览
+    L9: 1.1 目录结构与行数
+    L32: 1.2 核心设计理念
+  L43: 2. FP8GlobalStateManager (quantization.py:237-600+)
+    L45: 2.1 设计定位
+    L49: 2.2 全局状态字段 (L242-264)
+    L70: 2.3 Delayed Scaling 全局 Amax 管理
+    L98: 2.4 add_fp8_tensors_to_global_buffer (L364-416)
+    L118: 2.5 autocast_enter/exit (L567-620+)
+    L138: 2.6 支持的量化格式
+  L150: 3. _Linear 自定义 Autograd (module/linear.py:82-985)
+    L152: 3.1 Forward 签名 (L88-131)
+    L182: 3.2 Forward 数据流
+    L216: 3.3 Backward 中的 Userbuffers Overlap (L496-985)
+  L239: 4. Attention 模块
+    L241: 4.1 DotProductAttention 概览
+    L251: 4.2 FP8 Attention
+    L266: 4.3 Context Parallelism (context_parallel.py, 4365行)
+  L299: 5. Userbuffers 通信-计算重叠系统
+    L301: 5.1 核心思想
+    L331: 5.2 UB 类型定义 (tex.CommOverlapType)
+    L339: 5.3 Linear 中的 UB 集成 (linear.py L149-163)
+L342: Forward 中选择 UB 通道
+L352: 传给 tex.gemm → CUDA kernel 内部流水线化 GEMM + 通信
+    L356: 5.4 典型 TP 配置下的 UB 分配
+  L370: 6. 激活 Recompute 与 CPU Offload (distributed.py)
+    L372: 6.1 activation_recompute_forward 上下文 (L243-290)
+    L386: 6.2 _CheckpointFunction (L332-478)
+    L412: 6.3 CPU Offload (cpu_offload.py, 943行)
+L417: 工作流:
+L418: Forward: activation → pin_memory → D2H copy (async) → CPU storage
+L419: Backward: CPU storage → H2D copy (async) → GPU → grad computation
+L421: 优化: 使用 CUDA stream 异步 copy，与计算重叠
+  L426: 7. CUDA Graph 支持 (graph.py, 1400行)
+    L428: 7.1 挑战
+    L432: 7.2 解决方案
+L435: graph.py 关键设计:
+L436: 1. Scale/amax 使用固定地址的 tensor（graph capture 时分配）
+L437: 2. Scale 更新作为 graph 的一部分被 capture
+L438: 3. FP8GlobalStateManager.FP8_GRAPH_CAPTURING = True
+L439: → 通知所有 module 使用 graph-safe 路径
+    L442: 7.3 FP8 + CUDA Graph 兼容
+  L458: 8. 与 Megatron-LM-FL 的集成
+    L460: 8.1 模块替换链
+    L471: 8.2 FP8 训练启用流程
+L474: Megatron training loop:
+L489: 每步结束后:
+    L494: 8.3 Userbuffers 初始化
+L497: Megatron 启动时调用 te.module.base.initialize_ub()
+L498: 预注册所有 UB 通道:
+L499: "qkv_fprop", "qkv_dgrad", "proj_fprop", "proj_dgrad"
+L500: "fc1_fprop", "fc1_dgrad", "fc2_fprop", "fc2_dgrad"
+L501: 每个通道分配固定 GPU 内存作为通信 buffer
+  L506: 9. Recipe 详解
+    L508: 9.1 DelayedScaling（默认推荐）
+    L523: 9.2 Float8CurrentScaling（低延迟）
+    L535: 9.3 MXFP8BlockScaling（Blackwell 专用）
+  L548: 10. 性能特征
+    L550: 10.1 H100 实测加速比
+    L560: 10.2 显存影响
+  L571: 11. 设计决策与权衡
+  L584: 12. 调优建议
+    L586: 12.1 FP8 训练配置
+L589: Megatron args:
+L595: 环境变量:
+    L601: 12.2 Userbuffers 配置
+L607: UB config YAML 示例:
+    L616: 12.3 精度问题排查
+L619: 1. 开启 calibration 模式（只收集 amax，不实际量化）
+L622: 检查 amax 分布是否合理
+L624: 2. 增大 margin 应对 overflow
+L627: 3. 缩短 history 应对分布突变
+L630: 4. 切换到 CurrentScaling 排除 delayed 问题
+  L636: 13. 总结
+
+## megatron_lm_fl/16_mla_mtp.md (460 lines)
+L1: 第16章：MLA & MTP (Multi-Latent Attention / Multi-Token Prediction) 深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 解决什么问题
+    L11: 1.2 核心设计思想
+    L21: 1.3 与其他技术的关系
+  L30: 2. 源码定位
+  L38: 3. MLA 架构总览
+    L40: 3.1 类继承关系
+    L50: 3.2 核心数据流
+  L84: 4. MLASelfAttention 详解
+    L86: 4.1 投影矩阵构建 (L420-524)
+L89: Q path: h → q_lora → n*(qk_head_dim + qk_pos_emb_head_dim)
+L90: DeepSeek-V3 参数: h=7168, q_lora=1536, qk_head_dim=128, qk_pos_emb_head_dim=64, n=128
+L94: KV path: h → kv_lora + pos_dim → n*(qk_head_dim + v_head_dim)
+L95: DeepSeek-V3: kv_lora=512, v_head_dim=128
+    L105: 4.2 TP 并行策略 (L435-524)
+L108: Q down proj: duplicated (非 TP 切分)，因为 q_lora_rank 远小于 h
+L111: Q up proj: ColumnParallelLinear，输出按 head 切分
+L114: KV down proj: duplicated（kv_lora_rank 很小，不值得切分）
+L117: KV up proj: ColumnParallelLinear，输出按 head 切分
+    L126: 4.3 get_query_key_value_tensors 核心流程 (L567-891)
+    L158: 4.4 Selective Recomputation (L872-877)
+  L173: 5. FusedMLASelfAttention 优化 (L1130-1343)
+    L175: 5.1 设计动机
+    L194: 5.2 性能收益
+  L203: 6. MTP (Multi-Token Prediction) 详解
+    L205: 6.1 架构设计 (multi_token_prediction.py:L741-860)
+    L223: 6.2 核心组件 (L811-870)
+L226: 归一化层
+L230: 投影（标准模式）: cat([h, h]) → [h]
+L234: mHC 模式（Hyper-Connections）: 独立 e_proj 和 h_proj
+    L239: 6.3 MTP Loss 计算 (L641-738)
+    L263: 6.4 MTPLossAutoScaler (梯度注入)
+    L279: 6.5 roll_tensor 与 CP 协调 (L701-706)
+L282: MTP 需要将标签右移 1 位
+L283: 在 Context Parallel 下，序列分布在多个 rank
+L284: roll_tensor 跨 CP 组进行 P2P 通信完成 shift
+  L289: 7. MTP 与 PP/VP 的交互
+    L291: 7.1 MTP 层放置策略
+    L303: 7.2 get_mtp_layer_offset (L776)
+L307: 确保 MTP 层的 layer_number 与主干层不冲突
+L308: 用于正确的 activation checkpointing 和 FP8 state 管理
+  L311: 8. 性能量化分析
+    L313: 8.1 MLA 计算量 (DeepSeek-V3 配置)
+    L333: 8.2 MTP 额外开销
+  L346: 9. 设计决策对比表
+  L363: 10. 边界条件与约束
+    L365: 10.1 MLA 约束
+    L372: 10.2 MTP 约束
+    L379: 10.3 配置参数
+L382: MLATransformerConfig 关键参数:
+L393: MTP 配置:
+  L400: 11. 配置建议
+    L402: 11.1 MLA 调优
+    L408: 11.2 MTP 调优
+  L414: 12. 推理优化：KV Absorption
+    L416: 12.1 Absorption 原理 (L722-736)
+L421: 标准路径 (训练/prefill):
+L425: Absorption 路径 (decode):
+L426: 预计算 W_absorbed = W_q_no_pe @ W_kv_up[:qk_head_dim]
+L427: score = q_no_pe @ W_absorbed @ kv_compressed
+L428: 等价于: q_content = einsum("sbhd,hdk->sbhk", q_no_pe, up_k_weight)  (L731)
+L429: 然后 score = einsum("sbhk,sbk->sbh", q_content, kv_compressed)
+    L432: 12.2 为什么只在 decode 用 absorption？
+  L442: 13. FlagScale 定制扩展
+    L444: 13.1 Platform 适配
+L448: rotary_pos_embedding.py:L83
+    L452: 13.2 Hetero Parallel 支持
+L456: 异构并行场景下，不同层可以有不同的 TP/CP 组
+
+## megatron_lm_fl/17_rope.md (369 lines)
+L1: 第17章：RoPE 旋转位置编码系统 深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 核心问题
+    L13: 1.2 WHY: 为什么 Megatron 需要独立的 RoPE 模块？
+    L21: 1.3 数学基础
+  L35: 2. 源码定位
+  L43: 3. RotaryEmbedding 类详解 (L41-310)
+    L45: 3.1 构造函数 (L63-95)
+L48: rotary_pos_embedding.py L63-95
+    L76: 3.2 LLaMA 3.x Rope Scaling (L97-130)
+L79: L97-130: 三段式频率调整
+    L103: 3.3 频率矩阵生成 (L132-180)
+L106: L132: 非重复频率矩阵
+L114: L155: 完整 embedding
+    L125: 3.4 forward 与 Context Parallel 切分 (L182-211)
+L128: L182-211
+    L146: 3.5 Cos/Sin 缓存机制 (L213-252)
+L149: L213-252: 推理优化 — 预计算并缓存 cos/sin
+  L167: 4. 序列长度计算 (L258-309)
+    L169: 4.1 get_rotary_seq_len
+L172: L258-309: 确定 RoPE 需要覆盖的最大长度
+  L201: 5. MultimodalRotaryEmbedding (L312-451)
+    L203: 5.1 设计动机
+    L210: 5.2 两种 MRoPE 布局
+L213: L343: interleaved_mrope 参数控制布局
+L215: Qwen2-VL 风格 (section-based):
+L216: dim 分为 3 段: [T_dims | H_dims | W_dims]
+L217: pos_ids shape: [3, seq_len]
+L219: Qwen3.5-VL 风格 (interleaved):
+L220: dim 交错: [T_0, H_0, W_0, T_1, H_1, W_1, ...]
+L221: pos_ids shape: [3, seq_len]
+    L224: 5.3 forward (L380-451)
+  L245: 6. RoPE 应用函数 (rope_utils.py)
+    L247: 6.1 两种 layout
+L250: _apply_rotary_pos_emb_bshd: 标准 layout [batch, seq, head, dim]
+L260: _apply_rotary_pos_emb_thd: packed sequence layout [total_tokens, head, dim]
+    L265: 6.2 WHY 两种 layout？
+    L272: 6.3 CP rank 切分 (rope_utils.py)
+  L294: 7. TransformerEngine 融合 RoPE Kernel
+    L296: 7.1 fused_rope (TE common/fused_rope/)
+    L303: 7.2 性能对比
+  L315: 8. FlagScale 特有扩展
+    L317: 8.1 平台抽象 (L29-33)
+L320: FlagScale Begin
+L323: FlagScale End
+L325: 使用场景:
+L327: 支持非 NVIDIA 硬件（如华为 NPU、天数智芯 GPU）
+    L330: 8.2 Sequence Parallel 修正 (L305)
+L333: 原始 Megatron 无此行:
+L336: FlagScale Add: SP 切分后输入长度是 seq_len / tp_size
+L337: 需要恢复到全局长度才能生成正确的频率矩阵
+  L340: 9. 设计决策对比
+  L356: 10. 与其他章节的关联
+  L364: 11. 源码版本信息

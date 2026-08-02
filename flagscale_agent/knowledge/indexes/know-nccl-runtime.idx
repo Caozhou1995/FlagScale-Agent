@@ -1,0 +1,173 @@
+# know-nccl-runtime
+# NCCL运行时：集合通信算法实现、Transport层(P2P/SHM/NET)、任务调度、性能调优
+# Source: NCCL @ docs-only
+
+## nccl/03_collective_algorithms.md (477 lines)
+L1: N03: 集合通信算法实现 — 深度源码分析
+  L6: 1. 本章解决什么问题？
+  L19: 2. 算法与协议的组合 (RunWorkColl 模板)
+    L21: 2.1 模板调度结构 (all_reduce.h L228-245)
+    L45: 2.2 三种协议 (Proto)
+  L65: 3. Ring AllReduce 算法 (all_reduce.h L14-70)
+    L67: 3.1 算法原理
+    L81: 3.2 源码实现 (all_reduce.h runRing L14-70)
+    L115: 3.3 Multi-Channel Ring
+  L130: 4. Tree AllReduce 算法 (all_reduce.h L79-225)
+    L132: 4.1 算法原理
+    L149: 4.2 TreeSplit 优化 (all_reduce.h L145-225)
+    L187: 4.3 线程分配的不对称性 (L156-163)
+  L199: 5. NVLS (NVLink SHARP) 算法
+    L201: 5.1 硬件原理
+    L217: 5.2 NVLS AllReduce 实现
+    L235: 5.3 NVLS 内存映射 (CUDA Multicast)
+  L248: 6. CollNet (SHARP) 算法 (all_reduce.h L248-500)
+    L250: 6.1 SHARP 硬件 Reduce
+    L266: 6.2 CollNet Direct 实现 (all_reduce.h L248-380)
+  L296: 7. 算法选择逻辑 (graph/tuning.cc)
+    L298: 7.1 Tuning Model
+    L311: 7.2 选择策略
+    L329: 7.3 Channel 数量与数据分片
+  L343: 8. Primitives 通信原语 (prims_simple.h)
+    L345: 8.1 核心接口
+    L361: 8.2 Direct 操作 (零拷贝)
+    L375: 8.3 同步机制 (Flag + Counter)
+  L393: 9. ReduceScatter / AllGather 分解
+    L395: 9.1 ReduceScatter (Ring)
+    L406: 9.2 AllGather (Ring)
+    L416: 9.3 组合优化
+  L428: 10. 性能模型
+    L430: 10.1 带宽公式
+    L448: 10.2 你的集群预期性能
+  L466: 11. 设计洞察总结
+
+## nccl/04_transport_layer.md (447 lines)
+L1: N04: Transport 传输层 — 深度源码分析
+  L6: 1. 本章解决什么问题？
+  L15: 2. Transport 抽象接口 (transport.h)
+    L17: 2.1 四种 Transport 类型
+    L33: 2.2 统一接口 (ncclTransport 结构体)
+  L58: 3. P2P Transport — NVLink/PCIe 直连 (p2p.cc)
+    L60: 3.1 连接判定 (p2p.cc L130-150)
+    L82: 3.2 四种 P2P 模式 (p2p.cc L20-25)
+    L93: 3.3 Direct P2P (NVLink)
+    L108: 3.4 IPC P2P (跨进程)
+    L124: 3.5 PXN 中间节点转发 (P2P_INTERMEDIATE)
+  L139: 4. SHM Transport — 共享内存 (shm.cc)
+    L141: 4.1 使用场景
+    L152: 4.2 实现 (shm.cc 核心逻辑)
+  L170: 5. NET Transport — IB/RoCE 网络 (net.cc)
+    L172: 5.1 架构
+    L184: 5.2 GDR vs Bounce Buffer 选择
+    L204: 5.3 Proxy Thread 架构 (proxy.cc)
+    L226: 5.4 多 NIC 并行 (Rail-Optimized)
+  L241: 6. NVLS Transport — NVSwitch Multicast (nvls.cc)
+    L243: 6.1 CUDA Multicast API
+    L256: 6.2 NVLS 数据流
+  L274: 7. Transport 选择决策树
+  L298: 8. Proxy 线程模型 (proxy.cc)
+    L300: 8.1 生命周期
+    L321: 8.2 请求流水线
+  L342: 9. 性能分析与调优
+    L344: 9.1 关键参数
+    L358: 9.2 你的集群性能预期
+  L375: 10. 设计洞察总结
+  L388: 11. IB Transport 深入 (net_ib/)
+    L390: 11.1 IB Verbs 调用链
+    L412: 11.2 多 QP 与多 Rail
+    L431: 11.3 IB 带宽调优建议
+
+## nccl/05_enqueue_scheduling.md (455 lines)
+L1: N05: 任务排队与 Kernel 调度 — 深度源码分析
+  L6: 1. 本章解决什么问题？
+  L16: 2. 用户 API 入口 (collectives.cc → enqueue.cc)
+    L18: 2.1 ncclAllReduce 的调用链
+    L33: 2.2 ncclGroupStart / ncclGroupEnd 机制 (group.cc)
+    L49: 2.3 Group 内的排序 (enqueue.cc L392-400)
+  L65: 3. 算法与协议选择 (enqueue.cc L2123)
+    L67: 3.1 ncclGetAlgoInfo — 核心选择逻辑
+    L100: 3.2 时间模型参数
+  L119: 4. Channel 分配与工作分片
+    L121: 4.1 Channel 概念
+    L135: 4.2 数据分片 (enqueue.cc)
+    L149: 4.3 Channel 与 threadblock 的映射
+  L167: 5. Kernel Launch 路径 (enqueue.cc L1568-1876)
+    L169: 5.1 ncclLaunchPrepare
+    L189: 5.2 ncclLaunchKernel (enqueue.cc L1753)
+    L209: 5.3 Kernel 内部调度 (device/common.cu)
+  L226: 6. Kernel Fusion (操作合并)
+    L228: 6.1 多操作合并
+    L244: 6.2 numPipeOps 参数
+  L255: 7. CUDA Graph 支持 (enqueue.cc)
+    L257: 7.1 为什么需要 Graph?
+    L271: 7.2 实现要点
+  L286: 8. 延迟分解与优化
+    L288: 8.1 单次 AllReduce 启动延迟
+    L318: 8.2 优化技术
+  L333: 9. 设计洞察总结
+  L346: 10. 初始化连接建立 (group.cc + init.cc)
+    L348: 10.1 ncclCommInitRank 全流程
+    L379: 10.2 连接建立的延迟
+  L394: 11. ncclGroupEnd 的执行流程
+    L422: 11.2 Lazy Connection 机制
+  L440: 12. 环境变量汇总
+
+## nccl/06_performance_tuning.md (430 lines)
+L1: N06: 性能调优与环境变量 — 深度源码分析
+  L6: 1. 本章解决什么问题？
+  L14: 2. NCCL 性能模型 (tuning.cc)
+    L16: 2.1 Tuning 模型结构
+    L35: 2.2 Tuner Plugin 接口 (nccl_tuner.h)
+  L53: 3. 环境变量分类详解
+    L55: 3.1 算法与协议控制
+    L72: 3.2 网络与 Transport 控制
+    L98: 3.3 Buffer 与 Channel 控制
+    L123: 3.4 P2P 与拓扑控制
+    L141: 3.5 调试与 Profiling
+  L160: 4. 性能诊断方法论
+    L162: 4.1 诊断工具: nccl-tests
+L165: 安装 nccl-tests:
+L169: 基础性能测试 (8 GPU 节点内):
+L172: 跨节点测试 (32 GPU):
+L175: 解读输出:
+L176: size(B)  count  type  redop  time(us)  algbw(GB/s)  busbw(GB/s)
+L177: 8        2      float sum    28.5      0.00         0.00
+L178: ...
+L179: 1G       250M   float sum    2400      416.67       729.17
+L181: busbw = 实际bus带宽 = algbw × 2×(N-1)/N  (Ring AllReduce)
+L182: algbw = 算法带宽 = dataSize / time
+    L185: 4.2 性能基准 (你的集群)
+    L204: 4.3 常见性能问题诊断
+  L231: 5. Proxy 线程绑核优化
+    L233: 5.1 CPU Affinity 设置
+    L250: 5.2 你的集群绑核方案
+  L266: 6. GDR (GPUDirect RDMA) 深入
+    L268: 6.1 GDR 生效条件
+    L289: 6.2 GDR 性能诊断
+L292: 确认 GDR 生效:
+L294: 看输出中:
+L295: "NET/IB : GPU Direct RDMA Enabled for ..."  → GDR 生效
+L296: "NET/IB : Using bounce buffers"             → GDR 未生效
+L298: 强制关闭 GDR 对比:
+L300: 对比带宽差异 → 量化 GDR 收益
+  L303: 7. SHARP (CollNet) 配置
+    L305: 7.1 SHARP 启用条件
+    L321: 7.2 SHARP 性能特点
+  L340: 8. NCCL + Megatron-LM 集成调优
+    L342: 8.1 典型训练场景参数
+L345: 你的集群: 4 节点 × 8 GPU = 32 GPU
+L346: 典型配置: TP=8 (节点内), PP=1, DP=4 (跨节点)
+L348: TP 通信 (节点内 AllReduce):
+L349: 频率高, 大消息 → NVLS 最优 → 无需干预
+L351: DP 通信 (跨节点 AllReduce):
+L352: 梯度同步, 极大消息 → Ring 最优
+L353: 推荐环境变量:
+    L363: 8.2 通信-计算重叠配置
+  L384: 9. 完整推荐配置
+L387: /workspace/nccl_env.sh — 你的 4×8 H100 集群 NCCL 环境变量
+L389: === 基础 ===
+L393: === 算法 ===
+L397: === 网络 ===
+L405: === Buffer/Channel ===
+L411: === 高级优化 ===
+L415: === SHARP (如果可用) ===
+  L420: 10. 设计洞察总结

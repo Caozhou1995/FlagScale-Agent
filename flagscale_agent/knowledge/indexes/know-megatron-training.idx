@@ -1,0 +1,227 @@
+# know-megatron-training
+# Megatron训练循环：初始化、forward/backward、optimizer step、checkpoint保存恢复
+# Source: Megatron-LM-FL @ c024887
+
+## megatron_lm_fl/09_optimizer.md (598 lines)
+L1: 第9章：优化器系统 (Optimizer System) 源码深度解析
+  L3: 1. 概述与源码定位
+    L7: 1.1 核心源码文件
+    L19: 1.2 类继承体系
+  L31: 2. MegatronOptimizer 基类 (optimizer.py:115-478)
+    L33: 2.1 核心职责
+    L45: 2.2 关键方法
+    L58: 2.3 sharded_state_dict 接口
+  L70: 3. MixedPrecisionOptimizer (optimizer.py:480-691)
+    L72: 3.1 设计动机
+    L76: 3.2 初始化
+    L85: 3.3 prepare_grads 流程 (L591-655)
+    L106: 3.4 step_with_ready_grads 流程 (L657-690)
+    L122: 3.5 _unscale_main_grads_and_check_for_nan (L509-588)
+  L137: 4. 梯度裁剪系统 (clip_grads.py)
+    L139: 4.1 get_grad_norm_fp32 (L74-163)
+    L170: 4.2 clip_grad_by_total_norm_fp32 (L166-216)
+    L189: 4.3 count_zeros_fp32 (L218-309)
+  L195: 5. Loss Scaling (grad_scaler.py)
+    L197: 5.1 类层次
+    L208: 5.2 DynamicGradScaler 策略
+  L237: 6. Float16OptimizerWithFloat16Params (optimizer.py:693-1100+)
+    L239: 6.1 核心设计
+    L251: 6.2 数据流
+    L267: 6.3 显存开销
+  L282: 7. DistributedOptimizer (distrib_optimizer.py:103-2741)
+    L284: 7.1 设计原理
+    L294: 7.2 核心数据结构
+    L311: 7.3 分片映射构建 (_build_model_gbuf_param_range_map, L124-200)
+    L331: 7.4 优化器 Step 流程
+    L362: 7.5 与 Overlap 机制的集成
+L368: param_and_grad_buffer.py: register_grad_ready()
+L369: 当一个 bucket 内所有 grad 就绪 → 立即发起 reduce-scatter
+L370: → backward 计算与 reduce-scatter 通信重叠
+L375: 在 forward 的第 i 层计算时，预取第 i+1 层的 all-gather
+L376: → forward 计算与 all-gather 通信重叠
+L377: 需要额外 1 个 bucket 大小的显存作为预取 buffer
+    L380: 7.6 底层 Adam 实现选择
+L383: distrib_optimizer.py L20-35：三级 fallback
+    L398: 7.7 CPU Offload (cpu_offloading.py)
+  L411: 8. 完整训练 Step 中的优化器交互时序
+  L439: 9. OptimizerConfig 关键配置项
+    L441: 9.1 精度与缩放
+    L452: 9.2 梯度处理
+    L460: 9.3 分布式优化
+    L469: 9.4 学习率
+  L481: 10. µP (Maximal Update Parameterization) 支持
+    L483: 10.1 源码位置
+L486: __init__.py L214, L221
+    L491: 10.2 原理
+  L502: 11. Checkpoint 与 Resharding
+    L504: 11.1 Sharded State Dict
+    L516: 11.2 跨并行度加载
+  L527: 12. 设计决策与权衡分析
+  L542: 13. 调优建议
+    L544: 13.1 显存优化
+L547: 开启 distributed optimizer (ZeRO)
+L551: 配合 overlap 隐藏通信
+    L557: 13.2 训练稳定性
+L560: 梯度裁剪（防止 loss spike）
+L564: Loss scale 配置
+    L571: 13.3 大规模训练
+L574: 7B+ 模型推荐配置
+  L590: 14. 总结
+
+## megatron_lm_fl/12_dist_checkpointing.md (565 lines)
+L1: 第12章：分布式 Checkpoint 系统深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 解决什么问题
+    L13: 1.2 核心设计思想
+    L17: 1.3 与其他系统的关系
+  L32: 2. 源码定位
+  L48: 3. 架构总览
+    L50: 3.1 类继承与协作关系
+    L68: 3.2 Save 数据流
+    L92: 3.3 Load 数据流
+  L109: 4. 核心模块分析
+    L111: 4.1 ShardedTensor — 分片映射核心
+      L113: 4.1.1 设计动机（WHY）
+      L124: 4.1.2 实现分析
+L129: 使用示例：TP=4, 当前 rank 持有第 2 个切片
+L136: → global_shape = [hidden_size, hidden_size]
+L137: → global_offset = [tp_rank * hidden_size/4, 0]
+L138: → axis_fragmentations = [4, 1]
+      L141: 4.1.3 Resharding 机制
+      L151: 4.1.4 边界条件
+    L157: 4.2 ShardedTensorFactory — Optimizer State 映射
+      L159: 4.2.1 设计动机（WHY）
+      L163: 4.2.2 实现分析 (mapping.py:437-499)
+      L185: 4.2.3 完整流程
+    L198: 4.3 TorchDistSaveShardedStrategy — 保存策略
+      L200: 4.3.1 设计动机（WHY）
+      L204: 4.3.2 核心流程 (torch.py:593-792)
+      L225: 4.3.3 关键优化
+    L231: 4.4 异步 Checkpoint 机制
+      L233: 4.4.1 设计动机（WHY）
+      L251: 4.4.2 AsyncRequest 结构 (async_utils.py:104-128)
+      L263: 4.4.3 FileSystemWriterAsync 流程 (filesystem_async.py:76-120)
+      L284: 4.4.4 QoS 控制 (async_utils.py:35-88)
+      L290: 4.4.5 两种异步实现对比
+    L300: 4.5 FullyParallelSaveStrategyWrapper — 分布式写入优化
+      L302: 4.5.1 设计动机（WHY）
+      L306: 4.5.2 核心算法 (fully_parallel.py:53-146, exchange_utils.py:123-150)
+      L328: 4.5.3 Load 并行化 (fully_parallel.py:149-305)
+      L339: 4.5.4 性能分析
+    L347: 4.6 MCore ↔ PyTorch DCP 转换层
+      L349: 4.6.1 设计动机（WHY）
+      L353: 4.6.2 转换流程 (torch.py:141-337)
+      L372: 4.6.3 FP8 支持
+    L379: 4.7 训练层集成 (training/checkpointing.py)
+      L381: 4.7.1 save_checkpoint 关键路径
+      L410: 4.7.2 load_checkpoint 关键路径
+  L436: 5. 性能与通信量化分析
+    L438: 5.1 Checkpoint 大小估算
+    L451: 5.2 I/O 时间估算
+    L459: 5.3 异步 Checkpoint 的训练停顿
+    L471: 5.4 FullyParallel 通信开销
+  L478: 6. 设计决策对比表
+    L480: 6.1 存储策略对比
+    L491: 6.2 异步方案对比
+  L501: 7. FlagScale 扩展
+  L524: 8. 配置建议与调优指南
+    L526: 8.1 关键配置参数
+    L536: 8.2 大模型训练推荐配置
+L539: 70B+ 模型推荐
+L544: FullyParallel 的 parallelization_group 自动使用 DP group
+    L547: 8.3 注意事项
+  L555: 9. 总结
+
+## megatron_lm_fl/13_training_loop.md (410 lines)
+L1: 第13章：训练主循环与初始化 深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 解决什么问题
+    L15: 1.2 核心设计思想
+    L23: 1.3 为什么需要定制训练循环？
+  L31: 2. 源码定位
+  L40: 3. pretrain() 入口 (L932-1390)
+    L42: 3.1 函数签名与参数
+    L58: 3.2 执行流程
+    L81: 3.3 WHY: 为什么将 model_provider 作为回调？
+  L91: 4. train_step() 详解 (L1897-2064)
+    L93: 4.1 完整流程
+    L136: 4.2 Rerun State Machine (L1902, 1907)
+    L151: 4.3 梯度同步与 allreduce (L2009-2014)
+L154: 跨 Model Parallel 组同步 update_successful
+L156: 取所有 MP rank 的 grad_norm 最大值（用于日志）
+  L164: 5. train() 主循环 (L2726-3390)
+    L166: 5.1 循环结构
+    L201: 5.2 RL/GRPO 扩展 (L2743-2807)
+  L218: 6. setup_model_and_optimizer (L1713-1885)
+    L220: 6.1 模型创建流程
+    L234: 6.2 优化器创建
+L237: setup_model_and_optimizer (L1713+):
+L239: → MixedPrecisionOptimizer
+L240: → 内部包装 Adam/Muon
+L241: → 如果 use_distributed_optimizer: DistributedOptimizer (ZeRO-1)
+L244: → OptimizerParamScheduler
+L245: → LR warmup + decay (linear/cosine/WSD)
+  L248: 7. training_log 日志系统 (L2067-2408)
+    L250: 7.1 记录的指标
+    L267: 7.2 Throughput 计算 (L2409-2440)
+  L278: 8. 性能量化分析
+    L280: 8.1 训练步耗时分解（典型 DeepSeek-V3 配置）
+    L290: 8.2 micro-batch 数量对 PP bubble 的影响
+  L301: 9. 设计决策对比表
+  L317: 10. 边界条件与约束
+    L319: 10.1 关键约束
+    L326: 10.2 train_step 返回值约定
+L329: 只有 PP last stage 有 loss_reduced（其他 stage 返回 {}）
+    L335: 10.3 FlagScale 扩展点
+  L342: 11. 配置建议
+    L344: 11.1 性能调优
+L347: 推荐配置（大模型训练）:
+    L357: 11.2 常见陷阱
+  L364: 12. initialize_megatron() 详解
+    L366: 12.1 初始化序列 (initialize.py)
+    L398: 12.2 WHY: 为什么需要独立随机种子管理？
+  L406: 13. 源码版本信息
+
+## megatron_lm_fl/14_transformer_layer_spec.md (379 lines)
+L1: 第14章：Transformer 层抽象与 ModuleSpec 系统 深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 核心问题
+    L15: 1.2 WHY: 为什么不用简单的 if-else？
+L18: 反面示例 — 不可维护:
+L23: ... 2^N 个分支
+  L28: 2. 源码定位
+  L37: 3. ModuleSpec 数据结构 (spec_utils.py L1-142)
+    L39: 3.1 定义
+L42: spec_utils.py L23-30
+    L51: 3.2 build_module 工厂 (spec_utils.py L55-90)
+    L76: 3.3 递归构建模式
+  L91: 4. TransformerLayerSubmodules 声明 (L279-325)
+    L93: 4.1 完整字段
+L96: transformer_layer.py L279-325
+    L117: 4.2 GPT Spec 实例 (gpt_layer_specs.py L356-420)
+L120: gpt_layer_specs.py L356+
+  L155: 5. TransformerLayer 前向传播 (L610-850)
+    L157: 5.1 _forward_attention (L610-780)
+    L180: 5.2 _forward_mlp (L780-850)
+    L203: 5.3 WHY: 为什么 BiasDropoutAdd 是独立组件？
+L211: 本地 PyTorch 版本:
+L215: TE 融合版本:
+L216: 单个 CUDA kernel 完成 bias + dropout + residual add
+  L219: 6. TransformerBlock 层堆叠 (transformer_block.py L1-500)
+    L221: 6.1 层分配给 PP stages
+L224: transformer_block.py L200-280
+    L242: 6.2 前向循环
+L245: transformer_block.py forward():
+  L257: 7. 层变体继承体系 (L1419-2160)
+    L259: 7.1 类层次
+    L274: 7.2 MoETransformerLayer 扩展 (L1914+)
+  L295: 8. Selective Recomputation (L486-555)
+    L297: 8.1 粒度控制
+L300: 通过 config.recompute_modules 精确选择重计算的子模块:
+    L308: 8.2 WHY: 为什么 selective 比 full 更好？
+  L318: 9. Fine-Grained Activation Offloading (L556-565)
+L321: 按模块粒度卸载激活到 CPU:
+  L337: 10. CUDA Graph 集成 (L575-594)
+  L354: 11. 设计决策对比
+  L364: 12. 与其他章节的关联
+  L373: 13. 源码版本信息
