@@ -78,8 +78,8 @@ class MemoryDisciplineGuard(Guard):
                     "(1) Any new fact/pitfall/insight to save? "
                     "(2) Can any existing pitfall be elevated to an insight (recurring pattern recognized)? "
                     "(3) Can any existing insight be digested into a concrete artifact — "
-                    "e.g. strengthen a guard inject message, improve system prompt wording, "
-                    "add a skill step, write a knowledge doc section, or add defensive code to agent? "
+                    "i.e. create/improve a skill, create/improve a knowledge doc, "
+                    "or create/improve agent code? "
                     "(4) Any existing fact invalidated by this session's work? "
                     "Report suggestions to user; do NOT self-execute digest/delete.",
                     reason="evolution_check_before_complete",
@@ -104,7 +104,7 @@ class MemoryDisciplineGuard(Guard):
                 "reading or writing memory. Consider: saving key findings as fact/pitfall/insight, "
                 "or checking existing memories to avoid repeating past work. "
                 "If a pitfall pattern is recurring, elevate it to an insight. "
-                "If an insight has enough evidence, digest it into a guard message / skill / knowledge / agent code.",
+                "If an insight has enough evidence, digest it into a skill, knowledge doc, or agent code.",
                 reason="no_memory_ops_recently",
                 category="memory_idle_reminder",
             )
