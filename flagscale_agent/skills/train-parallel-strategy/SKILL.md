@@ -42,7 +42,7 @@ suggests:
 - topo-detect
 constraints:
 - id: tp_pp_divisibility
-  description: TP x PP x EP x CP must divide world_size evenly
+  description: TP x PP x CP must divide world_size evenly (EP is separate, within DP group)
   trigger:
     tools:
     - edit_file
@@ -52,8 +52,8 @@ constraints:
     - pipeline_model_parallel
     - expert_model_parallel
     - context_parallel
-  prompt: Check if the parallelism config satisfies TP*PP*EP*CP divides world_size evenly
-  correction: Adjust parallelism dimensions so TP*PP*EP*CP divides total GPU count evenly.
+  prompt: Check if the parallelism config satisfies TP*PP*CP divides world_size evenly, and expert_TP*EP*PP divides world_size evenly
+  correction: Adjust parallelism dimensions so TP*PP*CP divides total GPU count evenly. EP operates within the DP group, not as a top-level world_size divisor.
 - id: sp_requires_tp
   description: sequence_parallel requires tensor_model_parallel_size > 1
   trigger:
@@ -151,12 +151,12 @@ FlagScale's value is parallelism-powered speedup. When porting a model, the goal
 |-----------|-----------|--------|-------------|
 | **TP** (Tensor Parallel) | `tensor_model_parallel_size` | Weight matrices column/row-wise across GPUs | Model too large for one GPU. Always try first. |
 | **PP** (Pipeline Parallel) | `pipeline_model_parallel_size` | Layers across GPU groups | Model still OOM after max TP, or very deep models (>60 layers). |
-| **DP** (Data Parallel) | Implicit: `world_size / (TP * PP * EP)` | Batch across GPU groups | Always present. More DP = higher throughput. |
+| **DP** (Data Parallel) | Implicit: `world_size / (TP * PP * CP)` | Batch across GPU groups | Always present. More DP = higher throughput. |
 | **EP** (Expert Parallel) | `expert_model_parallel_size` | MoE experts across GPUs | MoE models only. EP ≤ num_experts. |
 | **CP** (Context Parallel) | `context_parallel_size` | Sequence length across GPUs | Very long sequences (>8K). Rarely needed for standard training. |
 | **SP** (Sequence Parallel) | `sequence_parallel: true` | Activations along sequence dim during LayerNorm/Dropout | Always enable with TP. Reduces activation memory. No extra GPUs needed. |
 
-**Constraint**: `TP × PP × EP × CP` must divide `world_size` evenly. Remaining GPUs become DP replicas.
+**Constraint**: `TP × PP × CP` must divide `world_size` evenly. `DP = world_size / (TP × PP × CP)`. EP operates **within** the DP group: `Expert_DP = world_size / (expert_TP × EP × PP)`. EP does NOT reduce DP — both Dense DP and Expert DP are derived independently from world_size.
 
 ## 2. Strategy Selection — Decision Tree
 
@@ -339,7 +339,10 @@ model:
 
 - `local_experts = num_experts / EP` — must be integer
 - EP GPUs form a separate communication group for all-to-all
-- EP is orthogonal to TP: you can have TP=2, EP=4 on 8 GPUs (DP=1)
+- EP operates **within** the DP group, not as a top-level parallelism dimension like TP/PP/CP
+- Dense DP = `world_size / (TP × PP × CP)` — EP does NOT reduce Dense DP
+- Expert DP = `world_size / (expert_TP × EP × PP)` — this is the replication factor for expert weights
+- Example: 32 GPUs, TP=1, PP=2, CP=1, EP=16 → Dense DP=16, Expert DP=2
 - Memory per GPU: only `local_experts` expert weights, but all-to-all communication increases
 
 ## 7. Verification Checklist
