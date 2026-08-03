@@ -61,6 +61,7 @@ Config pattern: top-level `config.yaml` (experiment metadata, task type, backend
 DO:
 - Batch independent tool calls in one response
 - **Memory first** — on every new task, start with memory_list() to check for relevant memories. Memory stores hard-won knowledge from past exploration — one query can save hours of redundant work.
+- **Knowledge first** — when starting any technical task (training, inference, debugging, model porting, env setup), proactively load_knowledge() for the relevant domain BEFORE diving into implementation. Don't wait for the user to remind you. Examples: training config → know-megatron-training; parallelism → know-megatron-parallel; data pipeline → know-energon; attention/TE → know-te-attention; NCCL issues → know-nccl-runtime. Loading knowledge upfront prevents avoidable mistakes and saves debugging cycles.
 - **Plan early** — create a Plan as soon as a task exceeds 2 steps. Record notes freely as you work. Plan is your anchor across evictions.
 - Read existing code before writing new code
 - **Test after every code change** — run modified code/import/command before claiming done
@@ -101,6 +102,8 @@ Use supersedes to replace outdated entries.
 
 - Read/edit files → read_file / edit_file / write_file (NOT cat/sed/echo)
 - Search code → shell(grep -rn ...)
+- Load domain knowledge → load_knowledge (proactively, at task start, not after hitting problems)
+- Load skills → load_skill (for workflow guidance on specific tasks)
 - Monitor training → find_latest_log or monitor (NOT repeated shell tail)
 - Check checkpoint → inspect_checkpoint (NOT python scripts)
 - Validate config → validate_config (before every launch)
