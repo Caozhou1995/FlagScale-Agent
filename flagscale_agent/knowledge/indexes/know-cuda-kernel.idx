@@ -1,0 +1,206 @@
+# know-cuda-kernel
+# CUDA算子开发：ATen dispatch机制、CUTLASS 3.x GEMM、CuTe Layout、TMA异步流水线、WGMMA
+# Source: CUDA-Operator-Analysis @ docs-only
+
+## cuda_operator/00_overview.md (64 lines)
+L1: CUDA算子深度分析 — 总纲
+  L3: 1. 目标定位
+  L11: 2. 分级体系
+  L29: 3. 章节索引
+    L31: Level 4: 算子调度与选择
+    L38: Level 3: CUDA编程模型与优化
+    L47: Level 2: Library内部行为
+    L53: Level 1: 硬件微架构
+  L61: 4. 前置知识
+
+## cuda_operator/01_aten_dispatch.md (290 lines)
+L1: Chapter 01: ATen CUDA算子调度机制 深度源码分析
+  L3: 1. 设计动机
+  L13: 2. 调度全链路
+  L43: 3. Dispatcher机制
+    L45: 3.1 注册与分发
+    L68: 3.2 Shape检查与内存布局
+  L87: 4. cublasLt优先策略
+    L89: 4.1 选择逻辑
+    L105: 4.2 cublasLt启用条件
+    L115: 4.3 Fallback机制
+  L127: 5. Bias + Activation Fusion (Epilogue)
+    L129: 5.1 融合设计
+    L147: 5.2 Activation类型
+  L165: 6. _scaled_mm: FP8 GEMM入口
+    L167: 6.1 调度路径
+    L184: 6.2 Scale处理
+  L197: 7. Tunable GEMM (自动调参)
+    L199: 7.1 机制
+    L217: 7.2 使用方式
+L220: 环境变量启用
+  L226: 8. Batch GEMM (bmm/baddbmm)
+    L228: 8.1 路径
+  L245: 9. 自定义算子替换策略
+    L247: 9.1 替换点选择
+    L257: 9.2 Dispatcher注册示例
+  L275: 10. 总结
+
+## cuda_operator/02_cublaslt_selection.md (236 lines)
+L1: Chapter 02: cublasLt选择策略与Epilogue Fusion 深度分析
+  L3: 1. 设计动机
+  L9: 2. cublasLt完整调用链
+  L36: 3. Epilogue Fusion类型
+    L38: 3.1 支持的Epilogue
+    L72: 3.2 AUX输出 (训练必需)
+    L84: 3.3 TransformerEngine中的使用
+L87: transformer_engine/pytorch/module/linear.py
+L88: TE通过cublasLt epilogue实现:
+L89: Forward:  Linear = GEMM + Bias + GELU (一个kernel)
+L90: Backward: dLinear = dGELU(AUX) + GEMM(dW) + dbias (fusion)
+L92: 在FP8模式下更关键:
+L93: GEMM输出FP32 → scale+cast to FP8在epilogue中完成
+L94: 避免额外的scale kernel
+  L97: 4. FP8 GEMM配置
+    L99: 4.1 Matrix Descriptor设置
+    L115: 4.2 Scale模式
+    L130: 4.3 AMAX输出 (延迟scaling)
+  L144: 5. Layout约束与性能
+    L146: 5.1 支持的Layout组合
+    L164: 5.2 Alignment要求
+  L175: 6. Batched GEMM与Grouped GEMM
+    L177: 6.1 Strided Batch
+    L189: 6.2 Grouped GEMM (CUDA 12.5+)
+  L202: 7. 算法选择策略总结
+  L226: 8. 总结
+
+## cuda_operator/03_te_fused_ops.md (244 lines)
+L1: Chapter 03: TransformerEngine Fused Ops调度 深度分析
+  L3: 1. 设计动机
+  L14: 2. TE Module层次
+  L46: 3. FP8训练中的Op Fusion
+    L48: 3.1 Forward Fusion链路
+    L62: 3.2 Cast+Transpose Fusion
+    L82: 3.3 LayerNorm + FP8 Cast Fusion
+L85: layernorm_linear.py 中的fusion:
+L86: 当 FP8 enabled 时:
+L87: 1. LayerNorm输出直接cast到FP8 (不需额外BF16中间结果)
+L88: 2. 减少一次完整tensor的GMEM读写
+L90: 数据流:
+L91: X(BF16) → LayerNorm_Fwd(输出FP8, 同时计算mean/var用于BWD)
+L92: → FP8 GEMM
+  L95: 4. 调度决策逻辑
+    L97: 4.1 FP8 Recipe选择
+L100: transformer_engine/common/recipe.py
+L107: 选择逻辑:
+L108: if fp8_recipe.fp8_format == "HYBRID":
+L109: forward: E4M3 (更高精度, 适合activation)
+L110: backward: E5M2 (更大范围, 适合gradient)
+    L113: 4.2 是否使用FP8的判断
+L116: linear.py forward中:
+    L132: 4.3 GEMM Backend选择
+  L156: 5. Autograd Integration
+    L158: 5.1 Custom Autograd Function
+L161: TE使用自定义autograd function实现BWD fusion:
+    L186: 5.2 为什么不用torch.compile替代
+  L193: 6. Attention Fusion (FlashAttention集成)
+  L215: 7. 性能对比
+  L232: 8. 总结
+
+## cuda_operator/04_cutlass_gemm.md (369 lines)
+L1: Chapter 04: CUTLASS 3.x GEMM架构 深度源码分析
+  L3: 1. 设计动机
+  L13: 2. CUTLASS 3.x vs 2.x架构对比
+  L32: 3. 整体架构分层
+  L57: 4. Warp Specialization模型
+    L59: 4.1 设计原理
+    L78: 4.2 源码中的角色分配
+    L90: 4.3 Pipeline阶段
+  L103: 5. CollectiveMma模板剖析
+    L105: 5.1 模板参数
+    L132: 5.2 TileShape语义
+  L145: 6. 数据加载：TMA + Pipeline
+    L147: 6.1 TMA (Tensor Memory Accelerator)
+    L163: 6.2 Pipeline Barrier机制
+    L179: 6.3 SMEM布局优化
+  L193: 7. 计算：WGMMA指令
+    L195: 7.1 WGMMA vs HMMA
+    L208: 7.2 TiledMma配置
+    L221: 7.3 K-loop主循环
+  L235: 8. Epilogue: Accumulator → Output
+    L237: 8.1 CollectiveEpilogue职责
+    L253: 8.2 为什么Epilogue需要独立模块
+  L260: 9. Cluster与多CTA协作
+    L262: 9.1 CTA Cluster (SM90新特性)
+    L280: 9.2 Multicast TMA
+  L289: 10. 性能模型
+    L291: 10.1 Roofline分析
+    L307: 10.2 Tile Size选择指南
+  L316: 11. 实战：构建自定义GEMM
+  L353: 12. 总结
+
+## cuda_operator/05_cute_layout.md (237 lines)
+L1: Chapter 05: CuTe Layout代数系统 深度分析
+  L3: 1. 设计动机
+  L12: 2. Layout基础
+    L14: 2.1 定义
+    L26: 2.2 索引计算
+    L42: 2.3 Row-major vs Col-major
+  L51: 3. 层次化Layout (Hierarchical)
+    L53: 3.1 嵌套Shape
+    L73: 3.2 Composition (组合)
+  L82: 4. Swizzle: Bank Conflict消除
+    L84: 4.1 问题
+    L101: 4.2 Swizzle解决方案
+  L122: 5. TiledCopy: 数据搬运抽象
+    L124: 5.1 Copy Atom
+    L143: 5.2 TMA Copy
+  L155: 6. TiledMma: 计算抽象
+    L157: 6.1 MMA Atom
+    L169: 6.2 MMA指令映射
+    L182: 6.3 Tiling多个Atom
+  L193: 7. 完整GEMM数据流
+  L220: 8. 性能关键参数
+  L230: 9. 总结
+
+## cuda_operator/06_tma_async_pipeline.md (267 lines)
+L1: Chapter 06: TMA与异步流水线 深度源码分析
+  L3: 1. 设计动机
+  L12: 2. TMA硬件原理
+    L14: 2.1 Tensor Memory Accelerator
+    L32: 2.2 TMA Descriptor
+    L53: 2.3 支持的操作
+    L62: 2.4 CuTe中的TMA
+  L82: 3. 异步Pipeline机制
+    L84: 3.1 Pipeline抽象
+    L103: 3.2 时序图
+    L123: 3.3 mbarrier硬件
+  L144: 4. Stages数量选择
+    L146: 4.1 延迟隐藏分析
+    L167: 4.2 SMEM Budget公式
+  L181: 5. Cluster Multicast TMA
+    L183: 5.1 原理
+    L194: 5.2 Distributed Shared Memory
+  L203: 6. 完整Pipeline代码流
+  L244: 7. 性能优化要点
+  L254: 8. 总结
+
+## cuda_operator/07_wgmma_tensor_core.md (303 lines)
+L1: Chapter 07: WGMMA与Tensor Core指令 深度分析
+  L3: 1. 设计动机
+  L12: 2. Tensor Core演进
+    L22: 2.1 关键跃迁: SM80→SM90
+  L38: 3. WGMMA指令格式
+    L40: 3.1 PTX指令语法
+    L61: 3.2 支持的Shape
+    L81: 3.3 Source模式: SS vs RS
+  L95: 4. SMEM Descriptor
+    L97: 4.1 Descriptor格式
+    L113: 4.2 对SMEM Layout的要求
+  L132: 5. 异步执行模型
+    L134: 5.1 Commit-Wait分离
+    L155: 5.2 Commit Group
+  L172: 6. Accumulator寄存器映射
+    L174: 6.1 分布规则
+    L192: 6.2 寄存器压力计算
+  L211: 7. CuTe中的MMA Atom
+    L213: 7.1 定义
+    L239: 7.2 TiledMma构建
+  L259: 8. FlashAttention中的WGMMA使用
+  L278: 9. 性能调优要点
+  L288: 10. 总结

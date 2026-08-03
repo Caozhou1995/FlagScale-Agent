@@ -224,11 +224,11 @@ class TaskPlan:
 
             step = self._find_step(plan, step_id)
 
-            # Plan Phase Gate: block completion if notes contain deferred work markers
-            if status == "done":
-                check_notes = notes or step.get("notes", "")
+            # Plan Phase Gate: block completion if the NEW notes contain deferred work markers
+            # (only check the incoming note, not historical appended notes)
+            if status == "done" and notes:
                 _DEFERRED_MARKERS = ("todo", "deferred", "skipped", "pending", "later", "not yet", "tbd")
-                found = [m for m in _DEFERRED_MARKERS if m in check_notes.lower()]
+                found = [m for m in _DEFERRED_MARKERS if m in notes.lower()]
                 if found:
                     raise ValueError(
                         f"Step {step_id} has unfinished markers ({', '.join(found)}) in notes. "
@@ -237,7 +237,12 @@ class TaskPlan:
 
             step["status"] = status
             if notes:
-                step["notes"] = notes
+                # Append mode: notes accumulate as a log, one line per update
+                existing = step.get("notes", "")
+                if existing:
+                    step["notes"] = existing + "\n" + notes
+                else:
+                    step["notes"] = notes
 
             if status in ("done", "skipped"):
                 for s in plan["steps"]:
@@ -444,8 +449,6 @@ class TaskPlan:
         for s in plan["steps"]:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"{s['id']}. [{icon}] {s['title']}"
-            if s.get("notes"):
-                line += f" — {s['notes']}"
             exps = s.get("experiments", [])
             if exps:
                 line += f" [exp: {', '.join(exps)}]"
@@ -453,6 +456,9 @@ class TaskPlan:
             if shared_note:
                 line += f" ⚠️ {shared_note}"
             lines.append(line)
+            if s.get("notes"):
+                for note_line in s["notes"].split("\n"):
+                    lines.append(f"   📝 {note_line}")
         return (
             f'<active-plan title="{plan["title"]}">\n'
             + "\n".join(lines)
@@ -464,12 +470,13 @@ class TaskPlan:
         for s in plan["steps"]:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"  {s['id']}. [{icon}] {s['title']}"
-            if s.get("notes"):
-                line += f" — {s['notes']}"
             exps = s.get("experiments", [])
             if exps:
                 line += f" [exp: {', '.join(exps)}]"
             lines.append(line)
+            if s.get("notes"):
+                for note_line in s["notes"].split("\n"):
+                    lines.append(f"      📝 {note_line}")
         done = sum(1 for s in plan["steps"] if s["status"] in ("done", "skipped"))
         lines.append(f"Progress: {done}/{len(plan['steps'])}")
         return "\n".join(lines)
@@ -598,7 +605,7 @@ class TaskPlan:
             failures = step.get("_failure_count", 0)
             if failures >= 3:
                 issues.append(
-                    f"Step {step['id']} ('{step['title'][:40]}') has {failures} failures. "
+                    f"Step {step['id']} ('{step['title']}') has {failures} failures. "
                     f"Consider skipping it or replanning."
                 )
 

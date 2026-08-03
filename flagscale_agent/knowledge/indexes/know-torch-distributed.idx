@@ -1,0 +1,291 @@
+# know-torch-distributed
+# PyTorch分布式：ProcessGroup/NCCL backend、DDP reducer、FSDP sharding、DeviceMesh、torchrun
+# Source: PyTorch @ docs-only
+
+## pytorch/01_process_group_collective.md (378 lines)
+L1: PyTorch Distributed 源码深度分析 — 第1章：ProcessGroup 与集合通信
+  L3: 1. 设计动机
+    L5: 1.1 为什么需要 torch.distributed？
+    L27: 1.2 核心设计约束
+  L37: 2. init_process_group 初始化 (L2228-2340)
+    L39: 2.1 函数签名
+L42: torch/distributed/distributed_c10d.py L2228-2240
+    L58: 2.2 初始化流程
+  L88: 3. Backend 注册机制 (L436-620)
+    L90: 3.1 Backend 类
+L93: distributed_c10d.py L436
+    L111: 3.2 NCCL ProcessGroup 创建 (L648-685)
+L114: distributed_c10d.py L648
+  L129: 4. 集合通信 API
+    L131: 4.1 all_reduce (L3717-3848)
+L134: distributed_c10d.py L3736 (overloaded)
+L139: 执行流:
+L140: 1. 获取 ProcessGroup (默认 or 指定)
+L141: 2. 调用 pg.allreduce([tensor], AllreduceOptions(op))
+L142: 3. 返回 Work 对象 (async_op=True) 或等待完成
+    L145: 4.2 集合通信操作总览
+    L158: 4.3 Functional Collectives (_functional_collectives.py)
+L161: torch/distributed/_functional_collectives.py
+L162: 支持 torch.compile 的函数式集合通信
+  L173: 5. _World 全局状态管理 (L1156-1290)
+L176: distributed_c10d.py L1156
+  L187: 6. new_group 子组创建 (L1693+)
+L190: 创建子组 (如 TP/PP/DP 组):
+L194: 当 device_id 已设置时, 使用 ncclCommSplit:
+L195: WHY ncclCommSplit? 比 ncclCommInitRank 快 10-100×
+L196: 因为 Split 复用已有连接, 不需要重新建立 IB 连接
+  L199: 7. P2POp 批量操作 (L1046-1155)
+L202: distributed_c10d.py L1046
+L212: 批量 P2P (Pipeline Parallel 核心):
+L216: 内部: ncclGroupStart() → 多个 ncclSend/ncclRecv → ncclGroupEnd()
+  L219: 8. 超时与错误处理
+  L240: 9. 总结
+  L251: 10. ProcessGroupNCCL 内部机制
+    L253: 10.1 Stream 管理
+    L273: 10.2 Watchdog 线程
+L276: torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp
+L277: Watchdog 独立线程检测 hang:
+L278: - 每隔 timeout/2 检查一次
+L279: - 如果某 Work 超时 → desyncReport
+L280: - 收集 flight recorder 信息 → dump debug info
+L281: - 调用 ncclCommAbort
+L283: 环境变量:
+    L289: 10.3 Flight Recorder (通信记录器)
+  L305: 11. Store 实现
+    L307: 11.1 TCPStore (最常用)
+L321: WHY TCPStore 而非 Redis/etcd?
+L322: - 零外部依赖
+L323: - 轻量级 (单进程内嵌)
+L324: - 足够满足 barrier/rendezvous 需求
+L325: - 仅用于初始化阶段, 不在数据路径上
+    L328: 11.2 Store-based Barrier
+L331: distributed_c10d.py _store_based_barrier:
+  L341: 12. 与 Megatron 的集成
+  L367: 13. 与 NCCL 源码的对应关系
+
+## pytorch/02_ddp.md (403 lines)
+L1: PyTorch Distributed 源码深度分析 — 第2章：DistributedDataParallel (DDP)
+  L3: 1. 设计动机
+    L5: 1.1 WHY DDP 而非 DataParallel？
+    L16: 1.2 DDP 核心设计目标
+  L28: 2. DDP __init__ 核心参数 (L816-838)
+L31: torch/nn/parallel/distributed.py L816-838
+    L47: 2.1 关键参数设计动机
+  L79: 3. Reducer 机制 — 梯度桶与 Hook (C++ 实现)
+    L81: 3.1 架构
+    L107: 3.2 Autograd Hook 注册
+L110: 简化逻辑 (实际在 C++ Reducer 中):
+L117: WHY post_accumulate_grad_hook 而非 register_hook?
+L118: register_hook: 在 grad_fn 输出时触发, grad 可能还没累积完
+L119: post_accumulate_grad: 在 .grad 赋值/累积完成后触发
+L120: 对于 gradient_accumulation (多 micro-batch) 更正确
+    L123: 3.3 Bucket 就绪与 AllReduce 触发
+  L140: 4. Comm Hook 自定义通信 (L1600+)
+    L142: 4.1 默认 Hook: AllReduce + Average
+L145: 默认行为等价于:
+    L153: 4.2 常用自定义 Hook
+L163: 使用 FP16 压缩:
+L167: WHY Comm Hook?
+L168: 默认 AllReduce(FP32) 通信量大, 尤其跨节点 (IB 带宽有限)
+L169: 通过 hook 可以:
+L170: 1. 压缩通信 (FP16/INT8)
+L171: 2. 使用稀疏通信 (TopK)
+L172: 3. 实现自定义 aggregation (如联邦学习)
+  L175: 5. Static Graph 优化 (L743-771)
+  L191: 6. find_unused_parameters 机制 (L719-729)
+  L208: 7. DeviceMesh 集成 (DP + TP 混合)
+L211: torch/nn/parallel/distributed.py L854-883
+L212: DDP + TP 混合并行 (2D 并行):
+L214: 8 GPUs, TP=4, DP=2:
+L215: DeviceMesh([[0,1,2,3], [4,5,6,7]])
+L216: dim=0: DP 维度 (跨行 AllReduce)
+L217: dim=1: TP 维度 (tensor 切分)
+L219: DDP 接收 1D device_mesh (DP 维度):
+L224: 如果 mesh 是从 root_mesh 切出的子 mesh:
+L225: 需要 _pre_dp_module_transform → 处理 DTensor 参数
+  L228: 8. 与 Megatron DistributedOptimizer 对比
+  L238: 9. 性能优化配置建议
+L241: 最佳实践配置:
+L252: 环境变量:
+L253: TORCH_NCCL_ASYNC_ERROR_HANDLING=1  # 异步错误处理
+L254: NCCL_IB_HCA=mlx5                   # 指定 IB 网卡
+L255: NCCL_SOCKET_IFNAME=eth0            # 指定 TCP 网卡
+  L258: 10. 总结
+  L274: 11. Reducer C++ 内部实现
+    L276: 11.1 Bucket 数据结构
+    L290: 11.2 mark_variable_ready 流程
+    L309: 11.3 参数分桶算法 (L1001-1050 参考)
+L312: 分桶策略 (简化 Python 伪代码):
+  L335: 12. Mixed Precision 通信 (L193-233)
+L338: torch/nn/parallel/distributed.py L193
+L345: 使用示例:
+L350: WHY reduce_dtype 单独控制?
+L351: 参数和梯度计算可以保持 FP32 精度
+L352: 仅在跨节点通信时降精度 → 平衡精度 vs 带宽
+  L355: 13. Join 机制 (不均匀输入处理)
+L358: torch/nn/parallel/distributed.py L412-464
+L359: _DDPJoinHook: 处理不同 rank 数据量不一致的情况
+L361: 问题: 如果 rank 0 有 100 batch, rank 1 有 98 batch
+L362: rank 1 先结束 → rank 0 的 AllReduce 永远等待
+L364: 解决: Join context manager
+L370: 先结束的 rank 会发送 "shadow" AllReduce 参与通信
+L371: 确保其他 rank 不会 hang
+  L374: 14. _DDPSink (Autograd Function) (L378-410)
+L377: torch/nn/parallel/distributed.py L378
+  L395: 15. 关键源码文件索引
+
+## pytorch/03_fsdp.md (377 lines)
+L1: PyTorch Distributed 源码深度分析 — 第3章：FSDP (Fully Sharded Data Parallel)
+  L3: 1. 设计动机
+    L5: 1.1 WHY FSDP？DDP 的内存瓶颈
+    L28: 1.2 ZeRO 论文映射
+  L36: 2. ShardingStrategy 分片策略 (api.py L1-100)
+L39: torch/distributed/fsdp/api.py
+    L48: 2.1 HYBRID_SHARD 设计 (L184-235)
+  L72: 3. FSDP 生命周期
+    L74: 3.1 Forward 阶段
+    L103: 3.2 Backward 阶段
+  L126: 4. 通信模式
+    L128: 4.1 通信量对比
+    L145: 4.2 AllGather vs ReduceScatter
+  L161: 5. auto_wrap_policy (wrap.py)
+    L163: 5.1 WHY 需要 auto_wrap?
+    L177: 5.2 常用策略
+L180: 按模块类型包装 (推荐):
+L183: 每个 TransformerBlock 独立 FSDP 单元
+L185: 按参数量包装:
+  L190: 6. CPU Offload
+L193: torch/distributed/fsdp/api.py
+L198: 效果:
+L199: GPU 内存: 几乎只需一层的参数 + 激活
+L200: 代价: PCIe 带宽成为瓶颈 (PCIe 5.0: ~64 GB/s vs NVLink 900GB/s)
+  L203: 7. Mixed Precision (L283-287)
+L212: 常用配置:
+  L219: 8. FSDP2 (torch.distributed._composable.fsdp)
+L222: 新版 composable API (fully_shard.py):
+L225: 不再需要包装模型 (composable style):
+L230: WHY FSDP2?
+L231: 1. 非侵入式: 不改变 module 结构
+L232: 2. 与其他 composable API 组合 (如 checkpoint, TP)
+L233: 3. 更好的 DeviceMesh 集成
+L234: 4. 支持 per-parameter sharding
+  L237: 9. 与 Megatron 对比
+  L248: 10. 总结
+  L261: 11. 限流机制 limit_all_gathers
+  L278: 12. summon_full_params 上下文管理器
+L281: fully_sharded_data_parallel.py L1500+
+L290: 用途:
+L291: - checkpoint 保存 (state_dict)
+L292: - 参数检查/打印
+L293: - 评估 (eval)
+  L299: 13. state_dict 策略
+L302: torch/distributed/fsdp/api.py
+L308: FULL_STATE_DICT:
+L309: - 内部调用 summon_full_params
+L310: - 只在 rank 0 汇聚 → 写入单文件
+L311: - 优势: 兼容性好, 非 FSDP 可直接 load
+L312: - 劣势: rank 0 需要足够内存放完整模型
+L314: SHARDED_STATE_DICT:
+L315: - 每个 rank 保存自己的 shard
+L316: - 使用 DTensor + dist_checkpointing
+L317: - 优势: 无内存峰值, 可变 world_size 加载
+L318: - 适用: 大模型生产训练
+  L321: 14. no_sync 梯度累积
+L324: 梯度累积模式:
+L325: WHY no_sync?
+L326: 每个 micro step 都 ReduceScatter 太浪费
+L327: 累积 N 步后再同步 → 通信量减少 N 倍
+  L341: 15. 关键源码文件索引
+  L353: 16. 性能调优建议
+L356: 最佳配置 (8×H100 单节点, 70B 模型):
+L371: 多节点 (4×8 H100, IB 带宽有限):
+
+## pytorch/04_device_mesh_dtensor.md (363 lines)
+L1: PyTorch Distributed 源码深度分析 — 第4章：DeviceMesh 与 DTensor
+  L3: 1. 设计动机
+    L5: 1.1 WHY DeviceMesh？
+    L25: 1.2 在分布式训练栈中的位置
+  L43: 2. DeviceMesh API
+    L45: 2.1 创建网格
+L48: torch/distributed/device_mesh.py
+L51: 方式1: 直接创建 (需要明确的 rank 布局)
+L55: 方式2: init_device_mesh (自动推断布局)
+L57: world_size=8, dp=2, tp=4
+L58: 自动构造: [[0,1,2,3],[4,5,6,7]]
+L60: 方式3: 3D 网格
+    L65: 2.2 获取子网格/进程组
+L68: 获取进程组:
+L72: 获取当前 rank 在某维度的坐标:
+L76: 多维切片:
+L78: 用于 FSDP: FSDP(model, device_mesh=mesh["dp"])
+L79: 用于 TP: parallelize_module(model, mesh["tp"], plan)
+  L82: 3. DTensor — 分布式 Tensor
+    L84: 3.1 核心概念
+    L104: 3.2 DTensor 运算规则
+    L122: 3.3 WHY DTensor?
+  L137: 4. Tensor Parallel via DTensor
+L140: torch/distributed/tensor/parallel/
+L147: TP 并行化:
+L158: 底层: 将 nn.Linear.weight 替换为 DTensor
+L159: ColwiseParallel: weight → DTensor([Shard(0)]) 按输出维切
+L160: RowwiseParallel: weight → DTensor([Shard(1)]) 按输入维切
+  L163: 5. 2D 并行 (FSDP + TP)
+L166: 标准 2D 并行配置:
+L170: Step 1: TP
+L173: Step 2: FSDP (在 TP 基础上再加 DP)
+L178: 通信模式:
+L179: Forward:  AllGather(DP mesh, NVLink) → TP compute (AllReduce)
+L180: Backward: TP AllReduce → ReduceScatter(DP mesh)
+  L183: 6. 关键源码文件
+  L193: 7. 总结
+  L208: 8. DeviceMesh 内部实现
+    L210: 8.1 数据结构
+L213: torch/distributed/device_mesh.py
+    L226: 8.2 进程组创建策略
+    L249: 8.3 子网格切片机制
+L252: mesh["tp"] 实现:
+L260: 3D mesh 切 2D:
+  L265: 9. DTensor 算子注册
+    L267: 9.1 Sharding Propagation
+    L295: 9.2 核心算子 Sharding Rules
+    L306: 9.3 Redistribute 通信映射
+  L322: 10. 与 Megatron parallel_state 对比
+  L339: 11. 实际应用示例
+L342: 完整的 3D 并行 (DP + TP + PP) 使用 DeviceMesh:
+L343: 64 GPU: dp=4, pp=4, tp=4
+L348: PP: 手动按 stage 切分模型
+L351: TP: 在每个 stage 内做 tensor parallel
+L355: DP (FSDP): 在 TP 之上加数据并行
+L359: 通信拓扑:
+L360: TP: mesh["tp"] 组内 AllReduce (节点内 NVLink)
+L361: DP: mesh["dp"] 组内 ReduceScatter (可能跨节点 IB)
+L362: PP: mesh["pp"] 组内 Send/Recv (跨节点 IB)
+
+## pytorch/05_elastic_launch.md (385 lines)
+L1: PyTorch Distributed 源码深度分析 — 第5章：Elastic Launch 与 torchrun
+  L3: 1. 设计动机
+    L5: 1.1 WHY torchrun 替代 torch.distributed.launch？
+    L27: 1.2 架构
+  L50: 2. Rendezvous (会合) 机制
+    L52: 2.1 WHY Rendezvous？
+    L72: 2.2 C10d Rendezvous 流程
+    L97: 2.3 Rendezvous Backend 选项
+  L106: 3. LaunchAgent (torch.distributed.elastic.agent)
+    L108: 3.1 LocalElasticAgent
+L111: torch/distributed/elastic/agent/server/local_elastic_agent.py
+    L130: 3.2 Worker 生命周期
+  L154: 4. 环境变量传递
+  L172: 5. 容错机制
+    L174: 5.1 自动重启
+    L197: 5.2 与训练代码的配合
+L200: 用户代码需要支持容错:
+  L219: 6. torchrun CLI 参数
+  L237: 7. 与 FlagScale 的集成
+  L256: 8. 总结
+  L277: 9. Multiprocessing 启动方式
+    L279: 9.1 start_method 选择
+    L306: 9.2 多节点启动流程
+  L334: 10. 错误处理与日志
+    L336: 10.1 错误分类
+    L352: 10.2 日志结构
+  L370: 11. 性能影响

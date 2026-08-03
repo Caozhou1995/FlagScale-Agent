@@ -1,0 +1,207 @@
+# know-energon
+# Megatron-Energon数据加载：架构总览、WebDataset存储索引、TaskEncoder编码、Metadataset混合、Wrappers组合、分布式断点恢复
+# Source: Megatron-Energon @ bef8be2
+
+## megatron_energon/01_architecture_overview.md (370 lines)
+L1: 第1章：Megatron-Energon 架构总览与数据管道设计
+  L3: 1. 概述与设计动机
+  L13: 2. 源码定位
+  L26: 3. 架构总览
+    L28: 3.1 整体分层架构
+    L57: 3.2 核心数据流（含并行策略集成）
+  L92: 4. WorkerConfig — 分布式 Worker 配置
+    L94: 4.1 设计动机（WHY）
+    L101: 4.2 核心字段与语义（worker.py:L23-84）
+    L119: 4.3 Worker ID 计算逻辑（worker.py:L175-196）
+    L138: 4.4 Worker 生命周期管理（worker.py:L86-121）
+  L155: 5. SavableDataLoader — 可保存的 DataLoader
+    L157: 5.1 设计动机（WHY）
+    L165: 5.2 类层次结构
+    L173: 5.3 初始化流程（savable_loader.py:L660-798）
+    L199: 5.4 Checkpoint 机制时序图
+    L224: 5.5 Save/Restore 状态结构（savable_loader.py:L156-195）
+  L241: 6. 与 Megatron 并行策略的集成接口
+    L245: 6.1 DP — 数据并行（Energon 直接处理）
+    L249: 6.2 TP — 张量并行（Megatron 侧 broadcast_data）
+    L253: 6.3 PP — 流水线并行（Megatron 侧 pre/post_process）
+  L258: 7. RNG 确定性系统
+    L260: 7.1 两级 RNG 设计（rng.py）
+    L269: 7.2 Seed 计算（worker.py:L220-258）
+    L283: 7.3 WorkerRng 自定义 multinomial（rng.py:L54-66）
+  L294: 8. Sample 基类与 Restore Key
+    L296: 8.1 Sample 数据类（base_dataset.py:L114-155）
+    L309: 8.2 PinMemoryMixin（base_dataset.py:L41-69）
+  L313: 9. 完整 get_batch 流程（Energon + Megatron 并行集成）
+L318: 伪代码：Megatron get_batch() 的并行感知逻辑
+    L335: 9.1 DP 数据切分（Energon 直接处理）
+    L339: 9.2 TP broadcast_data（Megatron megatron/training/utils.py）
+    L343: 9.3 PP pre_process/post_process 守卫（Megatron pipeline schedule）
+  L347: 10. 设计决策对比
+  L363: 11. 配置建议与调优指南
+
+## megatron_energon/02_webdataset_storage_indexing.md (546 lines)
+L1: 第2章：WebDataset 存储格式与索引系统 深度源码分析
+  L3: 1. 概述与设计动机
+  L12: 2. 源码定位
+  L25: 3. 架构总览
+    L27: 3.1 存储目录结构
+    L42: 3.2 索引层次关系
+  L64: 4. 二进制偏移索引（.tar.idx）
+    L66: 4.1 设计动机（WHY）
+    L72: 4.2 实现分析（HOW）
+    L108: 4.3 CachedItarOffsetReader — 缓存优化
+    L119: 4.4 SubFileReader — tar 内子文件读取
+    L138: 4.5 数据流：从 sample_index 到 bytes
+  L153: 5. SQLite 结构化索引
+    L155: 5.1 设计动机（WHY）
+    L165: 5.2 表结构（indexing.py:L99-145）
+    L200: 5.3 写入流程（indexing.py:L147-183）
+    L222: 5.4 读取接口（indexing.py:L300+）
+    L228: 5.5 ThreadLocalSqlite — 多线程安全
+  L247: 6. Sharder — 分布式 Sample 分配
+    L249: 6.1 设计动机（WHY）
+    L257: 6.2 广义位反转排列（sharder.py:L138-188）
+    L283: 6.3 split_samples_to_workers 核心流程（sharder.py:L190-267）
+    L308: 6.4 shard_workers — 完整分片流程（sharder.py:L313-362）
+    L326: 6.5 max_samples_per_sequence 的作用
+  L342: 7. 数据准备流水线（prepare.py）
+    L344: 7.1 设计动机（WHY）
+    L352: 7.2 核心数据结构（prepare.py:L62-100）
+    L377: 7.3 并行预处理架构
+    L408: 7.4 _preprocess_tar 单 shard 处理
+    L418: 7.5 错误处理
+  L424: 8. 元数据系统（.nv-meta/）
+    L426: 8.1 WebdatasetInfo — shard 统计信息
+L431: .nv-meta/.info.yaml
+    L441: 8.2 WebdatasetSplits — 数据集划分
+L446: .nv-meta/split.yaml
+    L458: 8.3 DatasetSubset — 子集选择
+  L480: 9. 设计决策对比表
+  L494: 10. 性能量化分析
+    L496: 10.1 索引大小开销
+    L506: 10.2 随机访问延迟
+    L515: 10.3 Sharder 分配均衡度
+  L523: 11. 配置建议与调优指南
+    L525: 11.1 数据准备最佳实践
+    L533: 11.2 max_samples_per_sequence 选择
+    L541: 11.3 常见问题
+
+## megatron_energon/03_task_encoder.md (488 lines)
+L1: 第3章：TaskEncoder 与数据编码 深度源码分析
+  L3: 1. 概述与设计动机
+  L14: 2. 源码定位
+  L23: 3. 架构总览
+    L25: 3.1 数据处理流水线
+    L41: 3.2 类型泛型体系
+    L51: 3.3 方法调用关系
+  L69: 4. Cooker — 原始数据解码
+    L71: 4.1 设计动机（WHY）
+    L77: 4.2 @cooker 装饰器（cooking.py:L31-55）
+    L95: 4.3 Cooker dataclass — 匹配逻辑（cooking.py:L68-104）
+    L116: 4.4 basic_sample_keys 辅助函数（cooking.py:L107-121）
+    L134: 4.5 cook_crude_sample 执行流程（base.py:L403-435）
+  L151: 5. @stateless 装饰器 — RNG 隔离
+    L153: 5.1 设计动机（WHY）
+    L161: 5.2 实现机制（base.py:L124-218）
+    L181: 5.3 时序图：RNG 状态切换
+  L192: 6. Batch 构建系统
+    L194: 6.1 generic_batch — 自动 batching（base.py:L72-98）
+    L216: 6.2 batch_pad_stack — 变长 tensor padding（base.py:L106-113）
+    L230: 6.3 Batch dataclass（base.py:L256-305）
+    L253: 6.4 build_batch 管道构建（base.py:L565-673）
+  L272: 7. Packing 子系统
+    L274: 7.1 设计动机（WHY）
+    L278: 7.2 用户接口
+    L295: 7.3 PackingDataset 内部流程
+  L311: 8. get_train_dataset — 完整管道组装（loader.py:L107-179）
+    L313: 8.1 函数签名与关键参数
+    L329: 8.2 完整执行流程
+    L352: 8.3 train vs val 的区别
+  L362: 9. _is_overridden — 动态管道检测（base.py:L385-401）
+    L364: 9.1 设计动机（WHY）
+    L368: 9.2 实现
+  L384: 10. 与 Megatron 训练循环的并行集成
+    L386: 10.1 TaskEncoder 与并行策略的关系
+    L410: 10.2 get_batch 标准模式
+    L435: 10.3 WorkerConfig 中的 DP 维度映射
+  L448: 11. 设计决策对比表
+  L461: 12. 配置建议与调优指南
+    L463: 12.1 自定义 TaskEncoder 最佳实践
+    L473: 12.2 常见陷阱
+    L481: 12.3 性能考量
+
+## megatron_energon/04_metadataset.md (330 lines)
+L1: 第4章：Metadataset 多数据集混合 深度源码分析
+  L3: 1. 概述与设计动机
+  L14: 2. 源码定位
+  L25: 3. 架构总览
+    L27: 3.1 类继承关系
+    L39: 3.2 配置解析流程
+    L58: 3.3 Blend 模式
+  L67: 4. load_dataset — 入口分发（loader.py）
+    L69: 4.1 设计动机（WHY）
+    L73: 4.2 实现
+  L97: 5. DatasetLoaderInterface — 统一接口（loader_interface.py）
+    L99: 5.1 设计动机（WHY）
+    L103: 5.2 核心抽象
+    L119: 5.3 LoadedDataset 数据结构
+  L136: 6. 与 Megatron 并行训练的集成
+    L138: 6.1 设计动机（WHY）
+    L145: 6.2 get_batch 中的并行处理实现
+L148: Megatron get_batch 集成 Energon 的标准实现
+    L171: 6.3 WorkerConfig 与 DP 分片
+L181: Sharder 根据 rank/world_size 自动分配不重叠的 shard 子集
+L182: 确保每个 DP rank 只读取自己负责的数据分片
+    L185: 6.4 并行模式下的数据流
+  L209: 7. Metadataset V1 — 基础混合（metadataset.py）
+    L211: 7.1 配置格式示例
+L214: metadataset.yaml
+    L231: 7.2 DatasetReference — 数据集引用
+    L252: 7.3 shuffle_over_epochs_multiplier 乘法语义
+  L264: 8. MetadatasetV2 — 完整特性（metadataset_v2.py）
+    L266: 8.1 设计动机（WHY）
+    L274: 8.2 配置格式
+    L295: 8.3 核心差异对比
+  L306: 9. JoinDatasetLoader — 多数据集关联
+    L308: 9.1 设计动机（WHY）
+    L314: 9.2 Join 策略
+  L320: 10. 设计决策对比
+
+## megatron_energon/05_wrappers.md (207 lines)
+L1: 第5章：Wrappers 数据管道组合 深度源码分析
+  L3: 1. 概述与设计动机
+  L9: 2. 源码定位
+  L35: 3. BaseWrapperDataset — 基础框架（base.py）
+    L37: 3.1 设计动机（WHY）
+    L45: 3.2 核心实现
+    L71: 3.3 restore_sample 路由
+  L85: 4. BlendDataset — 加权混合（blend_dataset.py）
+    L87: 4.1 设计动机（WHY）
+    L91: 4.2 核心算法
+    L119: 4.3 关键设计决策
+  L127: 5. PackingDataset — 序列拼接（packing_dataset.py）
+    L129: 5.1 设计动机（WHY）
+    L133: 5.2 三阶段流水线
+    L145: 5.3 状态保存的复杂性
+  L159: 6. ShuffleBufferDataset — 流式 Shuffle
+  L163: 7. 与 Megatron 并行训练的集成
+    L165: 7.1 Wrapper 链在并行模式下的位置
+    L169: 7.2 并行感知的 get_batch 实现
+    L194: 7.3 DP 分片保证
+  L198: 8. 设计决策对比
+
+## megatron_energon/06_distributed_loading.md (130 lines)
+L1: 第6章：分布式加载与断点恢复 深度源码分析
+  L3: 1. 概述与设计动机
+  L13: 2. 源码定位
+  L23: 3. 与 Megatron 并行训练的集成
+    L25: 3.1 并行模式下的数据加载与恢复
+    L52: 3.2 DP ranks 间的状态一致性
+    L59: 3.3 PP stages 间的数据恢复
+  L65: 4. 状态保存架构
+    L67: 4.1 三层状态模型
+    L91: 4.2 SavableCheckpoint — 滑动窗口快照
+  L103: 5. 断点触发与异步快照
+    L105: 5.1 Command Thread + 双队列
+    L117: 5.2 恢复流程：Skip 语义
+  L121: 6. 设计决策对比

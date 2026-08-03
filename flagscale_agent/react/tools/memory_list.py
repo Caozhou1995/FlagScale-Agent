@@ -12,140 +12,105 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Memory list tool — browse and search memory entries."""
+"""Memory list tool — browse and search memory entries, grouped by type."""
 
 from flagscale_agent.react.tools.base import Tool, EFFECT_READ_MEMORY
-
-_TYPE_PRIORITY = {"finding": 0, "decision": 1, "todo": 2, "context": 3}
 
 
 class MemoryListTool(Tool):
     name = "memory_list"
     effects = EFFECT_READ_MEMORY
     description = (
-        "List and search memory entries. Use to browse what you've memorized, "
-        "find entries by type or keyword, or check what's stored for a specific task. "
-        "Returns entries sorted by relevance (type priority, then recency). "
-        "Default scope='all' shows both session and global memory, with session entries first. "
-        "Use scope='session' for current session only, or scope='global' for shared cross-session memory."
+        "List and search memory entries. Returns entries grouped by type "
+        "(fact → pitfall → insight). Supports domain-level filtering and "
+        "keyword search.\n\n"
+        "Usage patterns:\n"
+        "- memory_list() → browse all entries, see domains\n"
+        "- memory_list(keyword='nccl') → find nccl-related entries\n"
+        "- memory_list(type_filter='pitfall') → all pitfalls\n"
+        "- memory_list(domain_filter='cluster') → all cluster-domain entries"
     )
     parameters = {
         "type": "object",
         "properties": {
             "type_filter": {
                 "type": "string",
-                "enum": ["finding", "decision", "todo", "context", ""],
-                "description": "Filter by memory type. Empty string for all types.",
+                "enum": ["fact", "pitfall", "insight", ""],
+                "description": "Filter by memory type. Empty for all.",
+            },
+            "domain_filter": {
+                "type": "string",
+                "description": "Filter by domain segment (e.g. 'cluster', 'nccl', 'env').",
             },
             "keyword": {
                 "type": "string",
                 "description": "Search keyword (case-insensitive substring match on key and content).",
             },
-            "task_filter": {
-                "type": "string",
-                "description": "Filter by task name.",
-            },
             "limit": {
                 "type": "integer",
-                "description": "Max entries to return (default 20).",
-            },
-            "scope": {
-                "type": "string",
-                "enum": ["session", "global", "all"],
-                "description": (
-                    "'all' (default): list both session and global memory, session entries shown first. "
-                    "'session': list only current session memory. "
-                    "'global': list only global shared memory."
-                ),
+                "description": "Max entries to return (default 30).",
             },
         },
         "required": [],
     }
 
-    def __init__(self, global_memory, session_memory):
-        self._global_memory = global_memory
-        self._session_memory = session_memory
-
-    def _filter_entries(self, entries, type_filter, keyword, task_filter):
-        if type_filter:
-            entries = [e for e in entries if e.get("type") == type_filter]
-        if task_filter:
-            entries = [e for e in entries if task_filter.lower() in (e.get("task") or "").lower()]
-        if keyword:
-            kw = keyword.lower()
-            entries = [
-                e for e in entries
-                if kw in (e.get("key") or "").lower()
-                or kw in (e.get("content") or "").lower()
-            ]
-        return entries
+    def __init__(self, memory):
+        self._memory = memory
 
     def execute(self, **kwargs) -> str:
         type_filter = kwargs.get("type_filter", "")
-        keyword = (kwargs.get("keyword") or "").lower()
-        task_filter = kwargs.get("task_filter", "")
-        limit = kwargs.get("limit", 20)
-        scope = kwargs.get("scope", "all")
+        domain_filter = kwargs.get("domain_filter", "")
+        keyword = kwargs.get("keyword", "")
+        limit = kwargs.get("limit", 30)
 
-        session_entries = []
-        global_entries = []
-
-        if scope in ("session", "all"):
-            raw = self._session_memory.list_entries()
-            session_entries = self._filter_entries(raw, type_filter, keyword, task_filter)
-            for e in session_entries:
-                e["_scope_label"] = "session"
-
-        if scope in ("global", "all"):
-            raw = self._global_memory.list_entries()
-            global_entries = self._filter_entries(raw, type_filter, keyword, task_filter)
-            for e in global_entries:
-                e["_scope_label"] = "global"
-
-        # Session entries first, then global; each group sorted by type priority then recency
-        def sort_key(e):
-            return (_TYPE_PRIORITY.get(e.get("type", "context"), 9), -e.get("created", 0))
-
-        session_entries.sort(key=sort_key)
-        global_entries.sort(key=sort_key)
-        entries = (session_entries + global_entries)[:limit]
+        entries = self._memory.list_entries(
+            type_filter=type_filter,
+            domain_filter=domain_filter,
+            keyword=keyword,
+        )
 
         if not entries:
             parts = []
-            if scope != "all":
-                parts.append(f"scope={scope}")
             if type_filter:
                 parts.append(f"type={type_filter}")
+            if domain_filter:
+                parts.append(f"domain={domain_filter}")
             if keyword:
                 parts.append(f"keyword='{keyword}'")
-            if task_filter:
-                parts.append(f"task='{task_filter}'")
             filter_desc = ", ".join(parts) if parts else "no filters"
             return f"(no memory entries found matching {filter_desc})"
 
-        lines = []
+        # Group by type for display
+        grouped = {"fact": [], "pitfall": [], "insight": []}
         for e in entries:
-            key = e.get("key", "?")
-            mem_type = e.get("type", "?")
-            content = e.get("content", "")
-            task = e.get("task", "")
-            scope_label = e.get("_scope_label", "?")
-            if len(content) > 120:
-                content = content[:117] + "..."
-            task_tag = f" @{task}" if task else ""
-            lines.append(f"[{mem_type}] [{scope_label}] {key}{task_tag}: {content}")
+            t = e.get("type", "fact")
+            if t in grouped:
+                grouped[t].append(e)
 
-        total_session = len(self._session_memory.list_entries())
-        total_global = len(self._global_memory.list_entries())
-        shown = len(lines)
+        lines = []
+        shown = 0
+        for type_name in ("fact", "pitfall", "insight"):
+            group = grouped[type_name]
+            if not group:
+                continue
+            lines.append(f"\n── {type_name} ({len(group)}) ──")
+            for e in group:
+                if shown >= limit:
+                    break
+                key = e.get("key", "?")
+                content = e.get("content", "")
+                task = e.get("task", "")
+                # Show content on single line, replacing newlines
+                content_oneline = content.replace("\n", " | ")
+                task_tag = f" @{task}" if task else ""
+                lines.append(f"  {key}{task_tag}: {content_oneline}")
+                shown += 1
+            if shown >= limit:
+                break
 
-        if scope == "session":
-            header = f"Showing {shown}/{total_session} entries [session]"
-        elif scope == "global":
-            header = f"Showing {shown}/{total_global} entries [global]"
-        else:
-            header = f"Showing {shown}/{total_session + total_global} entries [session + global]"
-
-        if type_filter or keyword or task_filter:
+        total = len(entries)
+        header = f"Showing {min(shown, total)}/{total} entries"
+        if type_filter or domain_filter or keyword:
             header += " (filtered)"
+
         return header + "\n" + "\n".join(lines)

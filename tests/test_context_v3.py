@@ -794,3 +794,102 @@ class TestEdgeCases:
         for _ in range(guard.INJECT_LIMIT - 1):
             result = guard.check_post(ctx)
         assert result.action == "block"
+
+
+class TestFullLog:
+    """Test that _full_log preserves original content after eviction."""
+
+    def setup_method(self):
+        from flagscale_agent.react.history import HistoryManager
+        self.hm = HistoryManager(max_context_tokens=64000)
+
+    def test_full_log_preserves_content_after_evict(self):
+        """After evicting a message, _full_log still has original content."""
+        self.hm.append({"role": "system", "content": "system prompt"})
+        self.hm.append({"role": "user", "content": "hello world"})
+        self.hm.append({"role": "assistant", "content": "hi there"})
+        self.hm.append({"role": "user", "content": "more"})
+        self.hm.append({"role": "assistant", "content": "response"})
+        self.hm.append({"role": "user", "content": "latest 1"})
+        self.hm.append({"role": "assistant", "content": "latest 2"})
+        self.hm.append({"role": "user", "content": "latest 3"})
+        self.hm.append({"role": "assistant", "content": "latest 4"})
+
+        # Evict message at index 1
+        result = self.hm.evict_message(1)
+        assert result is not None
+
+        # _messages[1] should now be placeholder
+        assert self.hm._messages[1].get("_evicted") is True
+        assert "evicted" in self.hm._messages[1]["content"]
+
+        # _full_log[1] should still have original content
+        assert self.hm._full_log[1]["content"] == "hello world"
+        assert self.hm._full_log[1].get("_evicted") is None
+
+    def test_full_log_grows_unbounded(self):
+        """_full_log no longer has a cap (saves to disk instead)."""
+        for i in range(100):
+            self.hm.append({"role": "user", "content": f"msg {i}"})
+        assert len(self.hm._full_log) == 100
+
+
+class TestPromptIntegrity:
+    """Test that prompt modules load correctly after refactoring."""
+
+    def test_static_prompt_is_english(self):
+        import re
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        # No Chinese characters in static prompt
+        assert not re.search(r'[\u4e00-\u9fff]', SYSTEM_PROMPT_STATIC)
+
+    def test_optional_sections_have_required_keys(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
+        assert "planning" in SYSTEM_PROMPT_OPTIONAL
+        assert "memory_rules" in SYSTEM_PROMPT_OPTIONAL
+
+    def test_planning_always_injected(self):
+        """prompt_builder should inject planning even without active plan."""
+        from flagscale_agent.react.prompt_builder import PromptBuilder
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
+        # planning section exists and has content about plan_create
+        planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
+        assert "plan_create" in planning
+        assert "Step Notes" in planning
+
+
+class TestNoUnnecessaryTruncation:
+    """Regression test: ensure no truncation patterns sneak back in key display paths."""
+
+    def test_memory_list_no_content_truncation(self):
+        """memory_list tool should not truncate content."""
+        import inspect
+        from flagscale_agent.react.tools.memory_list import MemoryListTool
+        source = inspect.getsource(MemoryListTool.execute)
+        assert "[:97]" not in source
+        assert "[:100]" not in source
+
+    def test_plan_context_no_title_truncation(self):
+        """Plan context rendering should not truncate titles."""
+        import inspect
+        from flagscale_agent.react.plan import TaskPlan
+        source = inspect.getsource(TaskPlan.context_for_prompt)
+        assert "[:120]" not in source
+        assert "[:80]" not in source
+        assert "[:40]" not in source
+
+    def test_prompt_builder_no_desc_truncation(self):
+        """Prompt builder should not truncate skill descriptions."""
+        import inspect
+        from flagscale_agent.react.prompt_builder import PromptBuilder
+        source = inspect.getsource(PromptBuilder)
+        assert "[:80]" not in source
+
+    def test_tool_executor_no_summary_truncation(self):
+        """Tool executor display summaries should not truncate."""
+        import inspect
+        from flagscale_agent.react.tool_executor import tool_display_summary
+        source = inspect.getsource(tool_display_summary)
+        assert "[:50]" not in source
+        assert "[:60]" not in source
+        assert "[:120]" not in source

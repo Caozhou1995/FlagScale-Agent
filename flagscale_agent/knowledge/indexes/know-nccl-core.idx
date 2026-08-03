@@ -1,0 +1,133 @@
+# know-nccl-core
+# NCCL核心：整体架构、拓扑检测算法、channel/ring/tree路径选择
+# Source: NCCL @ docs-only
+
+## nccl/00_topology_detection_guide.md (557 lines)
+L1: 第0章：集群通信拓扑检测方法论
+  L3: 1. 为什么需要拓扑检测？
+  L16: 2. 检测层次与工具总览
+  L32: 3. 逐层检测详解
+    L34: 3.1 GPU 层 - nvidia-smi
+    L57: 3.2 GPU 互联层 - nvidia-smi topo
+L80: 进一步确认 NVLink 带宽
+L82: 输出每条 link 的速率 (26.562 GB/s per link)
+L83: 总计: 18 links x 26.562 = 478 GB/s 单向
+    L91: 3.3 PCIe/NUMA 拓扑 - GPU 与网卡的亲和性
+L108: 看 GPU 行与 NIC 列的交叉值:
+L109: PIX = 最优 (同 PCIe switch)
+L110: NODE = 次优 (同 NUMA, 不同 PCIe 树)
+L111: SYS = 最差 (跨 NUMA)
+L116: 列出所有 IB 网卡的 PCI 地址和 NUMA 节点
+    L142: 3.4 网卡层 - IB/RoCE 设备信息
+L162: 查看每张网卡的固件、端口状态、速率
+    L212: 3.5 链路层 - 端口性能计数器
+L217: 安装 infiniband-diags (如果没有)
+L220: 查看本地端口计数器
+    L238: 3.6 交换机层 - ibnetdiscover (核心！)
+    L279: 3.7 Fat-Tree 拓扑分析
+  L311: 4. 端到端性能验证
+    L313: 4.1 IB 原始带宽测试
+L316: 安装 perftest (IB 性能测试工具)
+L319: 节点间点对点带宽 (需要两个节点配合)
+L320: 节点 A (server):
+L323: 节点 B (client):
+L326: 预期结果: ~390 Gb/s (接近 400Gb/s 线速)
+    L331: 4.2 NCCL 集合通信测试 (nccl-tests)
+L334: 编译 nccl-tests
+L339: 单机 8 卡 AllReduce
+L342: 多机 AllReduce (通过 mpirun)
+L351: size    time   algbw   busbw
+L365: 跨节点部分受限于 IB 带宽
+L366: 8 口 x 400Gb/s = 3.2Tb/s = 400GB/s 每节点
+L367: AllReduce busbw 预期: ~350-380 GB/s (接近 IB 线速)
+    L370: 4.3 GPUDirect RDMA 验证
+L373: 检查 GDR (GPU Direct RDMA) 是否可用
+L375: 应该看到 NVreg_RegistryDwords ... PeerMappingOverride=0x1
+L377: 或者通过 NCCL debug log
+L379: 应该看到: NET/IB : Using [0]mlx5_101:1/IB/... ; GDR: enabled
+  L391: 5. NCCL Debug 日志分析
+    L393: 5.1 获取 NCCL 拓扑信息
+L402: 拓扑检测
+L406: 算法选择
+L410: 传输方式
+    L415: 5.2 关键环境变量（调试用）
+L418: 打印详细拓扑
+L422: 导出拓扑文件 (NCCL 检测到的完整拓扑)
+L425: 指定拓扑文件 (调试时用预制拓扑)
+  L429: 6. 你的集群完整拓扑图
+  L471: 7. 基于拓扑的训练配置建议
+    L473: 7.1 并行策略与硬件映射
+    L483: 7.2 WHY TP 必须放节点内？
+  L496: 8. 检测命令速查表
+L499: === 一键检测脚本 ===
+  L534: 9. 常见问题诊断
+  L544: 10. 本章总结
+
+## nccl/01_architecture_overview.md (543 lines)
+L1: N01: NCCL 架构总览 — 深度源码分析
+  L6: 1. NCCL 是什么？解决什么问题？
+  L18: 2. 全局架构
+  L64: 3. 核心数据结构
+    L66: 3.1 ncclComm — 通信器 (src/include/comm.h L523-797)
+    L127: 3.2 ncclChannel — 通信通道 (comm.h L150-172)
+    L158: 3.3 ncclTransport — 传输层抽象 (transport.h L136-142)
+    L194: 3.4 ncclPeerInfo — 对等体信息 (transport.h L43-65)
+  L217: 4. 初始化流程 — ncclCommInitRank
+    L219: 4.1 调用链总览
+    L252: 4.2 AllGather1: 交换 PeerInfo (init.cc L1034-1068)
+    L267: 4.3 拓扑检测与图搜索 (init.cc L1131-1210)
+  L289: 5. 算法与协议
+    L291: 5.1 七种算法 (init.cc L53-54)
+    L323: 5.2 三种协议 (init.cc L55)
+    L348: 5.3 算法选择机制 (comm.h L639-643)
+  L365: 6. 通信执行流程
+    L367: 6.1 一次 AllReduce 的完整路径
+    L407: 6.2 CPU Proxy 在跨节点通信中的作用
+  L426: 7. 关键环境变量与 PARAM 机制
+    L428: 7.1 NCCL_PARAM 宏 (init.cc L57-68)
+    L444: 7.2 关键调优环境变量
+  L462: 8. 与训练框架的集成
+    L464: 8.1 PyTorch / Megatron 如何调用 NCCL
+L467: PyTorch 内部:
+L469: -> 调用 ncclCommInitRank() 创建 comm
+L471: AllReduce:
+L473: -> ncclAllReduce(tensor.data_ptr(), ..., comm, stream)
+L475: Megatron-LM 的 parallel_state.py 创建多个 comm:
+L476: - TP group: 8 ranks (节点内)
+L477: - DP group: 4 ranks (跨节点)
+L478: - PP group: 4 ranks (跨节点)
+L479: 每个 group 独立的 ncclComm，不同拓扑路径
+    L482: 8.2 NCCL 与 Megatron 并行策略的映射
+  L503: 9. 源码目录结构
+  L527: 10. 本章总结与后续章节预告
+
+## nccl/02_topology_detection.md (495 lines)
+L1: N02: 拓扑检测与路径选择 — 深度源码分析
+  L6: 1. 本章解决什么问题？
+  L15: 2. 拓扑模型：系统图
+    L17: 2.1 节点类型 (topo.h L42-51)
+    L37: 2.2 链路类型 (topo.h L55-65)
+    L48: 2.3 路径类型 (graph.h L117-154) — 从好到差排序
+    L80: 2.4 核心数据结构
+    L115: 2.5 带宽常量 (topo.h L17-35)
+  L141: 3. 拓扑发现流程 (topo.cc)
+    L143: 3.1 入口: ncclTopoGetSystem (init.cc L965 调用)
+    L160: 3.2 PCI 拓扑树的构建 (topo.cc L680-800)
+    L183: 3.3 NVLink/NVSwitch 探测 (topo.cc L400-500)
+  L209: 4. BFS 最短路径计算 (paths.cc)
+    L211: 4.1 核心: ncclTopoSetPaths (paths.cc L38-130)
+    L262: 4.2 路径类型推导 (paths.cc, ncclTopoSetPaths 内部)
+    L276: 4.3 ncclTopoComputePaths — 顶层调用 (paths.cc L721)
+  L290: 5. 图搜索：找最优通信模式 (search.cc)
+    L292: 5.1 核心: ncclTopoCompute (graph.h L190)
+    L313: 5.2 Ring 搜索策略
+    L328: 5.3 Tree 搜索策略
+    L344: 5.4 NVLS (NVLink SHARP) 搜索
+  L356: 6. P2P 路径判定 (paths.cc L298-435)
+    L358: 6.1 ncclTopoCheckP2p
+    L382: 6.2 PXN (PCIe x NVLink) 代理机制
+  L397: 7. GDR (GPUDirect RDMA) 判定 (paths.cc L468-550)
+  L423: 8. 与 initTransportsRank 的集成 (init.cc L965-1200)
+  L440: 9. 关键环境变量控制
+  L455: 10. 你的集群拓扑分析
+  L485: 11. 设计洞察总结

@@ -86,6 +86,9 @@ class PromptBuilder:
         # ── Skills summary for header ──
         skills_summary = self._build_skills_summary()
 
+        # ── Knowledge summary for header ──
+        knowledge_summary = self._build_knowledge_summary()
+
         # ── Optional sections based on scene constraints ──
         optional_sections = self._build_optional_sections(plan_context)
 
@@ -105,6 +108,7 @@ class PromptBuilder:
             cwd=os.getcwd(),
             tools=tools_str,
             skills=skills_summary,
+            knowledge=knowledge_summary,
             critical_rules=critical_rules,
             optional_sections=optional_sections + shared_storage_note,
             skill_context=skill_context,
@@ -143,11 +147,10 @@ class PromptBuilder:
             if exp_section and exp_section not in optional_parts:
                 optional_parts.append(exp_section)
 
-        # Planning section only when a plan exists
-        if plan_context:
-            planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
-            if planning:
-                optional_parts.append(planning)
+        # Planning section — always inject (includes "when to create" guidance)
+        planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
+        if planning:
+            optional_parts.append(planning)
 
         # Always include these
         optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("memory_rules", ""))
@@ -232,11 +235,26 @@ class PromptBuilder:
             lines = []
             for s in available:
                 name = s.get("name", "")
-                desc = s.get("description", "")[:80]
+                desc = s.get("description", "")
                 lines.append(f"- {name}: {desc}")
             return "\n".join(lines)
         except Exception:
             return "(skills not available)"
+
+    def _build_knowledge_summary(self) -> str:
+        """Build compact summary of available knowledge groups."""
+        try:
+            from flagscale_agent.knowledge import KnowledgeManager
+            km = KnowledgeManager()
+            groups = km.list_groups()
+            if not groups:
+                return "(no knowledge loaded)"
+            lines = []
+            for g in groups:
+                lines.append(f"- {g['name']}: {g['description']}")
+            return "\n".join(lines)
+        except Exception:
+            return "(knowledge not available)"
 
     def _build_dashboard(self, plan_context: str) -> str:
         """Build the dashboard line for the end of the prompt.

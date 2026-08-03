@@ -53,6 +53,7 @@ from flagscale_agent.react.experiment_manager import ExperimentManager
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.tools import ToolRegistry
 from flagscale_agent.react.tools.edit_file import EditFileTool
+from flagscale_agent.react.tools.load_knowledge import LoadKnowledgeTool
 from flagscale_agent.react.tools.load_skill import LoadSkillTool
 from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.shell import ShellTool
@@ -61,7 +62,7 @@ from flagscale_agent.react.tools.web_fetch import WebFetchTool
 from flagscale_agent.react.tools.find_log import FindLatestLogTool
 from flagscale_agent.react.tools.parse_metrics import ParseTrainingMetricsTool
 from flagscale_agent.react.tools.workspace_experiment import WorkspaceExperimentTool
-from flagscale_agent.react.memory import SessionMemory
+from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
 from flagscale_agent.react.tools.memory_list import MemoryListTool
@@ -96,6 +97,7 @@ from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
+from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
 from flagscale_agent.react.constraint.cache import ConstraintCache
@@ -176,7 +178,7 @@ class WorkerAgent:
     def __init__(self, config: AgentConfig, scene: ScenePreset | None = None,
                  # ── Shared infrastructure (for Orchestrator injection) ──
                  _provider=None, _tool_registry=None, _skill_manager=None,
-                 _session_memory=None, _task_plan=None, _experiment_manager=None,
+                 _memory=None, _task_plan=None, _experiment_manager=None,
                  _constraint_cache=None):
         self.config = config
         self.scene = scene
@@ -184,6 +186,10 @@ class WorkerAgent:
         # ── Infrastructure ──
         self.skill_manager = _skill_manager or SkillManager(config.skill_dirs)
         self.tool_registry = _tool_registry or ToolRegistry()
+
+        # Knowledge system
+        from flagscale_agent.knowledge import KnowledgeManager
+        self._knowledge_manager = KnowledgeManager()
 
         self._session_id = uuid.uuid4().hex[:8]
         from flagscale_agent.react.paths import get_sessions_root, get_memory_dir
@@ -204,12 +210,7 @@ class WorkerAgent:
         self._evict_summary = EvictSummaryStore(session_dir)
 
         memory_dir = get_memory_dir()
-        self.session_memory = _session_memory or SessionMemory(memory_dir, config.memory_ttl_days)
-
-        # Per-session memory — isolated to this session directory
-        from flagscale_agent.react.paths import get_session_memory_dir
-        session_memory_dir = get_session_memory_dir(self._session_id)
-        self.local_memory = SessionMemory(session_memory_dir, ttl_days=365)
+        self.memory = _memory or Memory(memory_dir)
 
         plan_dir = os.path.join(session_dir, "plans")
         self.task_plan = _task_plan or TaskPlan(plan_dir)
@@ -223,20 +224,15 @@ class WorkerAgent:
             config.base_url, config.max_output_tokens,
         )
 
-        self.session_memory._llm_fn = lambda prompt: self.provider.chat(
-            [{"role": "user", "content": prompt}], tools=[]
-        ).get("content", "")
-        self.local_memory._llm_fn = self.session_memory._llm_fn
-
         self.history = HistoryManager(max_context_tokens=config.max_context_tokens)
 
         if not _tool_registry:
             self._register_tools()
         if not _experiment_manager:
             self._load_plugin_tools()
-        self.tool_registry.register(MemoryWriteTool(self.session_memory, self.local_memory, self._session_id, task_plan=self.task_plan))
-        self.tool_registry.register(MemoryReadTool(self.session_memory, self.local_memory))
-        self.tool_registry.register(MemoryListTool(self.session_memory, self.local_memory))
+        self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
+        self.tool_registry.register(MemoryReadTool(self.memory))
+        self.tool_registry.register(MemoryListTool(self.memory))
         self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
@@ -363,6 +359,7 @@ class WorkerAgent:
 
         # File tool guard (always active)
         guard_registry.register(FileToolGuard())
+        guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
         # Code context guard (always active — tracks reads/writes across compaction)
@@ -407,6 +404,7 @@ class WorkerAgent:
             )
         )
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
+        self.tool_registry.register(LoadKnowledgeTool(self._knowledge_manager))
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
         self.tool_registry.register(FindLatestLogTool())
         self.tool_registry.register(ParseTrainingMetricsTool())
@@ -632,7 +630,7 @@ class WorkerAgent:
         except Exception:
             pass
 
-    def _save_conversation(self, completed: bool = False):
+    def _save_conversation(self, completed: bool = False, session_summary: str = None):
         if not self.history.messages:
             return
         save_conversation(
@@ -640,7 +638,41 @@ class WorkerAgent:
             self.history.messages,
             loaded_skills=list(self._loaded_skills),
             completed=completed,
+            session_summary=session_summary,
+            session_input_tokens=self._session_input_tokens,
+            session_output_tokens=self._session_output_tokens,
         )
+        # Save full (pre-eviction) conversation alongside
+        self._save_conversation_full()
+
+    def _save_conversation_full(self):
+        """Save the full pre-eviction conversation to conversation_full.json.
+
+        Uses _full_log from HistoryManager which captures all messages
+        at append-time before any eviction modifies them.
+        """
+        import tempfile
+        full_log = self.history._full_log
+        if not full_log:
+            return
+        path = os.path.join(self._session_dir, "conversation_full.json")
+        data = {
+            "session_id": self._session_id,
+            "messages": full_log,
+        }
+        # Atomic write
+        try:
+            fd, tmp = tempfile.mkstemp(
+                dir=self._session_dir, prefix=".tmp_conv_full_", suffix=".json"
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     def _auto_save(self):
         """Auto-save conversation after each completed turn.
@@ -653,9 +685,68 @@ class WorkerAgent:
         except Exception:
             pass
 
+    def _generate_session_summary(self) -> str:
+        """Call LLM to generate a 3-line session summary for resume display.
+
+        Format: 主要内容 / 当前进展 / 下一步待做
+        """
+        try:
+            # Collect last N user messages as context
+            user_msgs = [m for m in self.history.messages if m.get("role") == "user"]
+            recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
+            context_snippets = []
+            for m in recent:
+                content = m.get("content", "")
+                if isinstance(content, str):
+                    context_snippets.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            context_snippets.append(block.get("text", ""))
+                            break
+            context_text = "\n".join(context_snippets)
+
+            # Also include plan status if available
+            plan_info = ""
+            try:
+                from flagscale_agent.react.tools.plan import PlanManager
+                pm = PlanManager()
+                status = pm.get_status()
+                if status:
+                    plan_info = f"\n当前计划:\n{status}"
+            except Exception:
+                pass
+
+            prompt_msgs = [
+                {"role": "user", "content": (
+                    "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
+                    "第1行：这个会话主要在做什么（一句话）\n"
+                    "第2行：当前进展到哪里了（一句话）\n"
+                    "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
+                    f"最近的用户消息:\n{context_text}\n{plan_info}\n\n"
+                    "直接输出3行摘要，不要任何前缀或解释。"
+                )}
+            ]
+            # Use provider directly for a quick non-streaming call
+            stream, _ = self.provider.chat_stream(prompt_msgs, [])
+            result_text = ""
+            for event in stream:
+                if hasattr(event, "type"):
+                    if event.type == "content_block_delta":
+                        delta = getattr(event, "delta", None)
+                        if delta and hasattr(delta, "text"):
+                            result_text += delta.text
+                elif isinstance(event, dict):
+                    result_text += event.get("text", "")
+            return result_text.strip()
+        except Exception:
+            return ""
+
     def _exit(self):
         display.goodbye()
-        self._save_conversation(completed=True)
+        # Generate session summary before saving
+        summary = self._generate_session_summary()
+        self._save_conversation(completed=True, session_summary=summary)
         mark_completed(self._session_dir)
         sys.exit(0)
 
@@ -837,7 +928,7 @@ class WorkerAgent:
             if completed:
                 # All stages already done — downgrade to single mode with context
                 stage_summary = "\n".join(
-                    f"  - {sid}: {summary[:200]}" for sid, summary in completed.items()
+                    f"  - {sid}: {summary}" for sid, summary in completed.items()
                 )
                 print(display.dim(
                     f"[Orchestrator] All stages already completed in history. "
@@ -899,10 +990,10 @@ class WorkerAgent:
                             return
                         if result.status == "failed":
                             print(display.red(
-                                f"  ✗ {sub.id} failed: {result.summary[:200]}"
+                                f"  ✗ {sub.id} failed: {result.summary}"
                             ))
                             self._inject_subtask_result_to_history(
-                                f"[Stage {stage_idx}/{total}] {sub.id}: FAILED — {result.summary[:300]}"
+                                f"[Stage {stage_idx}/{total}] {sub.id}: FAILED — {result.summary}"
                             )
                             upstream.update(result.artifacts)
                             upstream[sub.id] = result.summary
@@ -912,13 +1003,13 @@ class WorkerAgent:
                         upstream.update(result.artifacts)
                         upstream[sub.id] = result.summary
                         art_str = ", ".join(
-                            f"{k}={str(v)[:60]}" for k, v in result.artifacts.items()
+                            f"{k}={str(v)}" for k, v in result.artifacts.items()
                         ) if result.artifacts else "none"
                         print(f"  ✓ {sub.id} complete. Artifacts: {art_str}")
 
                         # Inject stage summary into main agent's history
                         self._inject_subtask_result_to_history(
-                            f"[Stage {stage_idx}/{total}] {sub.id}: OK — {result.summary[:300]}"
+                            f"[Stage {stage_idx}/{total}] {sub.id}: OK — {result.summary}"
                         )
 
             except KeyboardInterrupt:
@@ -933,7 +1024,7 @@ class WorkerAgent:
             # Final summary
             final_summary = f"All {total} stages completed."
             self._inject_subtask_result_to_history(
-                f"[Orchestrator] {final_summary} Artifacts: {json.dumps({k: str(v)[:100] for k, v in upstream.items()}, ensure_ascii=False)}"
+                f"[Orchestrator] {final_summary} Artifacts: {json.dumps({k: str(v) for k, v in upstream.items()}, ensure_ascii=False)}"
             )
             self._current_stage_id = None
             return
@@ -950,20 +1041,20 @@ class WorkerAgent:
 
             print(f"\n[Orchestrator] Running {len(batch_tasks)} experiments in parallel:")
             for i, t in enumerate(batch_tasks, 1):
-                print(f"  Run {i}: {t[:80]}")
+                print(f"  Run {i}: {t}")
 
             results = o.run_batch_interactive(route, user_input)
 
             print()
             for i, r in enumerate(results, 1):
                 icon = "✓" if r.status == "success" else "✗"
-                print(f"[Run {i}] {icon} {r.status}: {r.summary[:150]}")
+                print(f"[Run {i}] {icon} {r.status}: {r.summary}")
 
             # Inject summary into main agent's history
             summary_lines = ["[Batch comparison results]"]
             for i, r in enumerate(results, 1):
                 summary_lines.append(
-                    f"  Run {i}: {r.status} — {r.summary[:200]}"
+                    f"  Run {i}: {r.status} — {r.summary}"
                 )
             self._inject_subtask_result_to_history("\n".join(summary_lines))
             return
@@ -1047,14 +1138,14 @@ class WorkerAgent:
             if msg.get("role") == "assistant":
                 content = msg.get("content", "")
                 if isinstance(content, str):
-                    return content[:300]
+                    return content
                 if isinstance(content, list):
                     # Extract text blocks
                     texts = []
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "text":
                             texts.append(block.get("text", ""))
-                    return " ".join(texts)[:300]
+                    return " ".join(texts)
         return ""
 
     def _build_stage_history_context(self) -> str:
@@ -1242,6 +1333,9 @@ class WorkerAgent:
             and not m.get("content", "").startswith("[") and not m.get("content", "").startswith("<")
         )
         loaded = data.get("loaded_skills", [])
+        # Restore session token counts for cumulative tracking across resume/reload
+        self._session_input_tokens = data.get("session_input_tokens", 0)
+        self._session_output_tokens = data.get("session_output_tokens", 0)
         skill_map = {}
         for skill_name in loaded:
             try:
@@ -1264,14 +1358,90 @@ class WorkerAgent:
         resumable = [s for s in sessions if s.get("user_turns", 0) >= 1]
         if not resumable:
             return
+
+        # Check how many need summary generation
+        missing_summary = [s for s in resumable if not s.get("session_summary")]
+        if missing_summary:
+            print(display.dim(f"\n[resume] Generating summaries for {len(missing_summary)} session(s)..."))
+            self._generate_missing_summaries(missing_summary)
+
         print(display.yellow(f"\n[resume] {len(resumable)} resumable session(s):"))
-        for i, s in enumerate(resumable[:5], 1):
-            sid = s.get("session_id", "?")[:12]
+        for i, s in enumerate(resumable, 1):
+            sid = s.get("session_id", "?")[:8]
             ts = time.strftime("%m-%d %H:%M", time.localtime(s.get("timestamp", 0)))
-            skills = s.get("loaded_skills", [])
-            skill_str = f" [{','.join(skills[:2])}]" if skills else ""
-            print(display.dim(f"  {i}. {sid}  {ts}{skill_str}  ({s.get('user_turns', 0)} turns)"))
+            turns = s.get("user_turns", 0)
+            summary = s.get("session_summary", "")
+            if not summary:
+                summary = "(摘要生成失败)"
+            print(display.dim(f"  {i}. {sid}  {ts} ({turns} turns):"))
+            for line in summary.strip().split("\n"):
+                print(display.dim(f"     {line}"))
         print(display.dim("Type: resume <number> or resume <session_id>"))
+
+    def _generate_missing_summaries(self, sessions: list):
+        """Generate summaries for sessions that don't have one, using LLM batch."""
+        import json as _json
+        for s in sessions:
+            session_dir = s.get("session_dir", "")
+            if not session_dir:
+                continue
+            conv_path = os.path.join(session_dir, "conversation.json")
+            if not os.path.isfile(conv_path):
+                continue
+            try:
+                with open(conv_path, "r", encoding="utf-8") as f:
+                    conv_data = _json.load(f)
+                messages = conv_data.get("messages", [])
+                # Extract user messages for context
+                user_msgs = [m for m in messages if m.get("role") == "user"]
+                recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
+                snippets = []
+                for m in recent:
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        snippets.append(content)
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                snippets.append(block.get("text", ""))
+                                break
+                context_text = "\n".join(snippets)
+                if not context_text.strip():
+                    continue
+
+                prompt_msgs = [
+                    {"role": "user", "content": (
+                        "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
+                        "第1行：这个会话主要在做什么（一句话）\n"
+                        "第2行：当前进展到哪里了（一句话）\n"
+                        "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
+                        f"最近的用户消息:\n{context_text}\n\n"
+                        "直接输出3行摘要，不要任何前缀或解释。"
+                    )}
+                ]
+                response = self.provider.chat(prompt_msgs, [])
+                summary = ""
+                if isinstance(response, dict):
+                    resp_content = response.get("content", "")
+                    if isinstance(resp_content, list):
+                        for block in resp_content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                summary += block.get("text", "")
+                    elif isinstance(resp_content, str):
+                        summary = resp_content
+                summary = summary.strip()
+                if summary:
+                    # Save back to conversation.json
+                    conv_data["session_summary"] = summary
+                    import tempfile
+                    fd, tmp = tempfile.mkstemp(dir=session_dir, prefix=".tmp_conv_", suffix=".json")
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        _json.dump(conv_data, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp, conv_path)
+                    # Update the in-memory session dict
+                    s["session_summary"] = summary
+            except Exception:
+                continue
 
     def _auto_resume(self, session_id: str):
         """Auto-resume a session after /reload (process restart).
@@ -1310,56 +1480,29 @@ class WorkerAgent:
     # ── Context injection ───────────────────────────────────────────────────
 
     def _build_memory_context(self) -> str:
-        # Collect session-local entries (higher priority — workspace-specific context)
-        local_entries = self.local_memory.list_entries()
-        for e in local_entries:
-            e["_scope_label"] = "session"
+        """Build a lightweight memory summary — content is on-demand via tools.
 
-        # Collect global entries
-        global_entries = self.session_memory.list_entries()
-        for e in global_entries:
-            e["_scope_label"] = "global"
-
-        all_entries = local_entries + global_entries
+        Only tells the LLM how many entries exist per type, so it knows
+        to call memory_list/memory_read when needed. No content injection.
+        """
+        all_entries = self.memory.list_entries()
         if not all_entries:
             return ""
 
-        # Get current task context
-        active_plan = self.task_plan.get_active()
-        current_task = active_plan.get("title", "") if active_plan else ""
-
-        # Prioritize: 1) task-related + high-prio, 2) task-related, 3) high-prio, 4) recent
-        # Within each bucket, session entries come before global (already ordered above)
-        task_related_high = []
-        task_related = []
-        high_prio = []
-        normal = []
-
+        # Count by type
+        counts = {"fact": 0, "pitfall": 0, "insight": 0}
         for e in all_entries:
-            is_high = e.get("priority") == "high"
-            is_task_related = current_task and e.get("task") == current_task
+            t = e.get("type", "")
+            if t in counts:
+                counts[t] += 1
 
-            if is_task_related and is_high:
-                task_related_high.append(e)
-            elif is_task_related:
-                task_related.append(e)
-            elif is_high:
-                high_prio.append(e)
-            else:
-                normal.append(e)
-
-        ordered = task_related_high + task_related + high_prio + normal
-        selected = ordered[:15]  # Show up to 15 entries, 500 chars each
-
-        lines = ["<context-memory>"]
-        for e in selected:
-            key = e.get("key", "")
-            mem_type = e.get("type", "")
-            content = e.get("content", "")
-            scope_label = e.get("_scope_label", "global")
-            lines.append(f'<entry key="{key}" type="{mem_type}" scope="{scope_label}">{content[:500]}</entry>')
-        lines.append("</context-memory>")
-        return "\n".join(lines)
+        parts = [f"{v} {k}" for k, v in counts.items() if v > 0]
+        total = sum(counts.values())
+        summary = ", ".join(parts)
+        return (
+            f"<context-memory>{total} entries ({summary}). "
+            f"Use memory_list/memory_read to access.</context-memory>"
+        )
 
     def _reset_guard_escalation(self):
         """Reset guard escalation state on new user input — prevents stale escalations."""
@@ -1420,9 +1563,9 @@ class WorkerAgent:
             icon = icons.get(s.get("status", "pending"), "?")
             title = s.get("title", "") or s.get("description", "")
             notes = s.get("notes", "")
-            line = f"  [{icon}] Step {s.get('id', '?')}: {title[:120]}"
+            line = f"  [{icon}] Step {s.get('id', '?')}: {title}"
             if notes:
-                line += f" — {notes[:80]}"
+                line += f"\n      notes: {notes}"
             lines.append(line)
             if s.get("status") in ("pending", "doing") and current_step is None:
                 current_step = s
@@ -1479,7 +1622,7 @@ class WorkerAgent:
                 # Extremely short response with no tool calls — auto continue
                 return True
         active_plan = self.task_plan.get_active()
-        result = self.judge.complexity(last_text[:500], has_plan=active_plan is not None)
+        result = self.judge.complexity(last_text, has_plan=active_plan is not None)
         if result.get("needs_plan"):
             return False
         return True
@@ -1659,13 +1802,13 @@ class WorkerAgent:
             args = tc.get("arguments", {})
             summary = ""
             if tc["name"] == "shell":
-                summary = args.get("command", "")[:120]
+                summary = args.get("command", "")
             elif tc["name"] in ("read_file", "write_file", "edit_file"):
                 summary = args.get("path", "") or args.get("file_path", "")
             elif tc["name"] == "load_skill":
                 summary = args.get("name", "")
             else:
-                summary = str(args)[:80]
+                summary = str(args)
             recent_activity.append({"tool": tc["name"], "args_summary": summary})
 
         # Also include recent history from deque
@@ -1758,7 +1901,9 @@ class WorkerAgent:
         self._session_output_tokens += result.output_tokens
         self._budget_guard.report_tokens(result.input_tokens, result.output_tokens)
         self._turn_iteration_count = result.iterations
-        display.turn_summary(self.turn_count, result.elapsed, result.input_tokens, result.output_tokens)
+        display.turn_summary(self.turn_count, result.elapsed, result.input_tokens, result.output_tokens,
+                             session_input_tokens=self._session_input_tokens,
+                             session_output_tokens=self._session_output_tokens)
 
     def _on_kernel_response(self, response: dict):
         """Called by Kernel after LLM response is appended to history."""
@@ -1813,69 +1958,13 @@ class WorkerAgent:
         print()
 
     def _auto_memorize_training_state(self, tool_calls: list, results: list):
-        """Auto-write critical training state to memory after monitor/find_latest_log.
+        """Auto-memorize training state is disabled in the new memory system.
         
-        This prevents the most common re-discovery pattern: agent finds log paths,
-        metrics rank, output_dir structure — then loses it all on context compaction.
-        
-        Only writes if the info is NEW (not already in memory).
+        The redesigned memory only stores entries that pass the three-category
+        test (fact/pitfall/insight). Temporary session state like log paths
+        should be tracked via plan or conversation context, not memory.
         """
-        import hashlib
-
-        for tc, result in zip(tool_calls, results):
-            if not isinstance(result, str) or not result:
-                continue
-            tool_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-            tool_args = tc.get("input", {}) if isinstance(tc, dict) else getattr(tc, "input", {})
-
-            # Auto-memorize monitor output_dir + log discovery
-            if tool_name == "monitor" and "output_dir" in str(tool_args):
-                output_dir = tool_args.get("output_dir", "") if isinstance(tool_args, dict) else ""
-                if output_dir and "stdout.log" in result:
-                    # Extract the log path
-                    log_match = re.search(r"(/\S+/stdout\.log)", result)
-                    if log_match:
-                        log_path = log_match.group(1)
-                        # Derive a key from output_dir
-                        dir_hash = hashlib.md5(output_dir.encode()).hexdigest()[:6]
-                        key = f"auto_training_logpath_{dir_hash}"
-                        # Only write if not already stored
-                        existing = self.local_memory.get(key)
-                        if not existing:
-                            try:
-                                self.local_memory.put(
-                                    key=key,
-                                    mem_type="context",
-                                    content=(
-                                        f"Training log path for {output_dir}: {log_path}\n"
-                                        f"Use monitor(output_dir='{output_dir}') to check status."
-                                    ),
-                                    session_id=self._session_id,
-                                )
-                            except Exception:
-                                pass
-
-            # Auto-memorize training launch output_dir from shell commands
-            elif tool_name == "shell" and isinstance(tool_args, dict):
-                cmd = tool_args.get("command", "")
-                if re.search(r"run\.py.*action\s*=\s*run|torchrun", cmd):
-                    # Extract exp_dir from command
-                    exp_match = re.search(r"experiment\.exp_dir\s*=\s*(\S+)", cmd)
-                    if exp_match:
-                        exp_dir = exp_match.group(1).strip("'\"")
-                        key = f"auto_last_training_launch"
-                        try:
-                            self.local_memory.put(
-                                key=key,
-                                mem_type="context",
-                                content=(
-                                    f"Last training launch: output_dir={exp_dir}\n"
-                                    f"Command: {cmd[:200]}"
-                                ),
-                                session_id=self._session_id,
-                            )
-                        except Exception:
-                            pass
+        pass
 
     def _inject_message(self, msg: str):
         """Inject a guard block/escalate message into conversation history.
@@ -1899,6 +1988,9 @@ class WorkerAgent:
         Anthropic format (role=user, content=[{type: tool_result, ...}]).
         Falls back to a lightweight user message if no tool_result exists.
         """
+        # Display advisory to user terminal (same dim gray style as inject verdict)
+        display.guard_inject(msg)
+        
         advisory_suffix = (
             f"\n\n---\n"
             f"[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
@@ -1999,9 +2091,35 @@ class WorkerAgent:
         usage = {}
         self._streaming_in_code_block = False
 
+        def _handle_context_overflow() -> bool:
+            """Evict old messages on context overflow. Returns True if retry is safe."""
+            try:
+                hm = self.history
+                evictable = hm.get_evictable_indexes()
+                if not evictable:
+                    return False
+                # Evict at least 30% of evictable messages (oldest first)
+                count = max(1, len(evictable) * 30 // 100)
+                to_evict = evictable[:count]
+                evicted_any = False
+                for idx in to_evict:
+                    result = hm.evict_message(idx)
+                    if result is not None:
+                        # Store to swap if available
+                        if hasattr(self, '_swap_store') and self._swap_store:
+                            self._swap_store.save(idx, result)
+                        evicted_any = True
+                if evicted_any:
+                    nonlocal messages
+                    messages = hm.get_messages()
+                return evicted_any
+            except Exception:
+                return False
+
         stream = retry_with_backoff(
             lambda: self.provider.chat_stream(messages, schemas),
             max_retries=3,
+            on_context_overflow=_handle_context_overflow,
         )
 
         thinking_cleared = False
@@ -2083,6 +2201,8 @@ class WorkerAgent:
                         usage = {
                             "input_tokens": event.get("input_tokens"),
                             "output_tokens": event.get("output_tokens"),
+                            "cache_read_input_tokens": event.get("cache_read_input_tokens"),
+                            "cache_creation_input_tokens": event.get("cache_creation_input_tokens"),
                         }
                     elif event["type"] == "done":
                         break
@@ -2260,7 +2380,7 @@ class WorkerAgent:
                                 parts.append(block.get("text", ""))
                             elif block.get("type") == "tool_use":
                                 tool_name = block.get("name", "")
-                                parts.append(f"[tool_use: {tool_name}({json.dumps(block.get('input', {}), ensure_ascii=False)[:200]})]")
+                                parts.append(f"[tool_use: {tool_name}({json.dumps(block.get('input', {}), ensure_ascii=False)})]")
                     content_for_summary = "\n".join(parts)
             elif role == "user":
                 content_for_summary = msg.get("content", "")
@@ -2271,7 +2391,7 @@ class WorkerAgent:
                             if block.get("type") == "text":
                                 parts.append(block.get("text", ""))
                             elif block.get("type") == "tool_result":
-                                parts.append(f"[tool_result: {block.get('content', '')[:200]}]")
+                                parts.append(f"[tool_result: {block.get('content', '')}]")
                     content_for_summary = "\n".join(parts)
 
             messages_for_summary.append((idx, role, tool_name, content_for_summary))
@@ -2312,7 +2432,7 @@ class WorkerAgent:
                 primary_meta["paired_with"] = paired_idx
                 self._swap_store.save(idx, content, primary_meta)
                 # Add paired to summary with actual content
-                paired_summary_content = paired_content_str[:500] if paired_content_str else f"[tool_result paired with index {idx}]"
+                paired_summary_content = paired_content_str if paired_content_str else f"[tool_result paired with index {idx}]"
                 messages_for_summary.append((paired_idx, "user", None, paired_summary_content))
 
         # Generate summaries via LLM for newly evicted messages
@@ -2333,6 +2453,8 @@ class WorkerAgent:
 
         Each message gets its own LLM call for precise summary.
         Uses ThreadPoolExecutor for concurrent API calls.
+        Short messages (≤150 chars) are used directly as their own summary
+        without wasting an LLM call.
 
         Args:
             messages: List of (index, role, tool_name, content_str) tuples.
@@ -2342,11 +2464,27 @@ class WorkerAgent:
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        # Threshold: messages shorter than this don't need LLM summarization
+        SHORT_THRESHOLD = 150
+
+        # Separate short vs long messages
+        needs_llm = []
+        results = {}
+
+        for idx, role, tool_name, content in messages:
+            content_clean = (content or "").strip()
+            if len(content_clean) <= SHORT_THRESHOLD:
+                # Short enough to be its own summary — no LLM needed
+                summary = content_clean.replace("\n", " ") if content_clean else f"[{role}] {tool_name or 'empty message'}"
+                results[idx] = summary
+            else:
+                needs_llm.append((idx, role, tool_name, content))
+
         def _summarize_one(idx: int, role: str, tool_name: str, content: str) -> tuple:
             """Call LLM to generate one-line summary. Returns (index, summary)."""
             prompt = (
                 "Summarize this evicted conversation message in ONE concise line (max 120 chars). "
-                "Focus on WHAT was done/discussed, not formatting.\n\n"
+                "State the concrete action or content factually. Do NOT infer intent or add interpretation.\n\n"
                 f"[role={role}"
             )
             if tool_name:
@@ -2372,25 +2510,24 @@ class WorkerAgent:
                         summary = msg.get("content", "") if isinstance(msg, dict) else ""
                 return (idx, summary.strip().split("\n")[0][:200])  # First line, max 200 chars
             except Exception as e:
-                fallback = content[:100].replace("\n", " ") if content else f"[{role}]"
+                fallback = content.replace("\n", " ") if content else f"[{role}]"
                 return (idx, f"[no-llm] {fallback}")
 
-        # Concurrent LLM calls
-        max_workers = min(len(messages), 10)  # Cap at 10 concurrent
-        results = {}
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(_summarize_one, idx, role, tool_name, content): idx
-                for idx, role, tool_name, content in messages
-            }
-            for future in as_completed(futures):
-                try:
-                    idx, summary = future.result(timeout=30)
-                    results[idx] = summary
-                except Exception:
-                    idx = futures[future]
-                    results[idx] = "[timeout] summary generation failed"
+        # Concurrent LLM calls only for long messages
+        if needs_llm:
+            max_workers = min(len(needs_llm), 10)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(_summarize_one, idx, role, tool_name, content): idx
+                    for idx, role, tool_name, content in needs_llm
+                }
+                for future in as_completed(futures):
+                    try:
+                        idx, summary = future.result(timeout=30)
+                        results[idx] = summary
+                    except Exception:
+                        idx = futures[future]
+                        results[idx] = "[timeout] summary generation failed"
 
         # Store all summaries and update placeholders in history
         for idx, role, tool_name, _ in messages:
@@ -2438,7 +2575,7 @@ class WorkerAgent:
         summary_hint = summary_entry.get("summary", "") if summary_entry else ""
         restore_status = "restored" if restored else "returned"
         elapsed = time.time() - t0
-        display.tool_done("recall", elapsed, detail=f"index={index} {restore_status} | {summary_hint[:60]}")
+        display.tool_done("recall", elapsed, detail=f"index={index} {restore_status} | {summary_hint}")
 
         return content
 
@@ -2552,8 +2689,8 @@ class WorkerAgent:
             all_text, re.IGNORECASE
         )
         if errors_found and fixes_found:
-            error_summary = errors_found[0][:150]
-            fix_summary = fixes_found[0][:150]
+            error_summary = errors_found[0]
+            fix_summary = fixes_found[0]
             key = "auto_fix_" + hashlib.md5(error_summary.encode()).hexdigest()[:8]
             extracted.append({
                 "key": key,
@@ -2604,7 +2741,7 @@ class WorkerAgent:
             r'HYPOTHESIS:\s*(.{20,300})', all_text, re.IGNORECASE
         )
         if hypothesis_matches:
-            latest = hypothesis_matches[-1][:250]
+            latest = hypothesis_matches[-1]
             key = "auto_hypothesis_" + hashlib.md5(latest.encode()).hexdigest()[:6]
             extracted.append({
                 "key": key,
@@ -2622,7 +2759,7 @@ class WorkerAgent:
             result_matches = re.findall(
                 r"result['\"]?\s*[:=]\s*['\"]([^'\"]{10,200})", all_text
             )
-            result_info = f", last result: {result_matches[-1][:100]}" if result_matches else ""
+            result_info = f", last result: {result_matches[-1]}" if result_matches else ""
             key = f"auto_experiment_state_{exp_name}"
             extracted.append({
                 "key": key,
@@ -2631,45 +2768,10 @@ class WorkerAgent:
             })
 
         # Write extracted memories (max 5 per compaction to avoid noise)
-        for entry in extracted[:5]:
-            try:
-                # Check if similar key already exists (check both stores)
-                existing = self.local_memory.get(entry["key"]) or self.session_memory.get(entry["key"])
-                if existing:
-                    continue  # Don't overwrite existing entries
-
-                # Check if similar content already exists (avoid near-duplicates)
-                all_entries = self.local_memory.list_entries() + self.session_memory.list_entries()
-                new_words = set(re.findall(r'\w+', entry["content"].lower()))
-                new_words = {w for w in new_words if len(w) > 2}
-
-                is_duplicate = False
-                for e in all_entries:
-                    if e.get("type") != entry["type"]:
-                        continue
-                    old_words = set(re.findall(r'\w+', e.get("content", "").lower()))
-                    old_words = {w for w in old_words if len(w) > 2}
-                    if not old_words or not new_words:
-                        continue
-                    overlap = len(new_words & old_words)
-                    smaller = min(len(new_words), len(old_words))
-                    if smaller > 0 and overlap / smaller >= 0.70:
-                        is_duplicate = True
-                        break
-
-                if is_duplicate:
-                    continue
-
-                # Auto-extracted memories are session-scoped (compaction context)
-                self.local_memory.put(
-                    key=entry["key"],
-                    mem_type=entry["type"],
-                    content=entry["content"],
-                    priority="normal",
-                    scope="persistent",
-                )
-            except Exception:
-                pass
+        # NOTE: Auto-extraction is disabled in the redesigned memory system.
+        # The new memory only accepts fact/pitfall/insight with proper key format.
+        # Auto-extracted compaction state doesn't fit these categories.
+        pass
 
     def _summarize_for_compaction(self, text: str) -> str:
         response = self.provider.chat(

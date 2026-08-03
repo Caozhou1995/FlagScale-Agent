@@ -1,0 +1,226 @@
+# know-cuda-optimization
+# CUDA性能优化：shared memory/bank conflict、cuBLAS算法选择、occupancy、NCU分析、自定义kernel模式
+# Source: CUDA-Operator-Analysis @ docs-only
+
+## cuda_operator/08_shared_memory_bank_conflict.md (301 lines)
+L1: Chapter 08: Shared Memory与Bank Conflict 深度分析
+  L3: 1. 设计动机
+  L9: 2. SMEM硬件结构
+    L11: 2.1 Bank组织
+    L32: 2.2 带宽模型
+  L46: 3. Bank Conflict分析
+    L48: 3.1 常见场景
+    L65: 3.2 GEMM中的典型conflict
+    L84: 3.3 Conflict类型
+  L92: 4. Swizzle详解
+    L94: 4.1 原理
+    L116: 4.2 可视化
+    L135: 4.3 为什么Swizzle优于Padding
+  L146: 5. SMEM大小与配置
+    L148: 5.1 动态SMEM分配
+    L165: 5.2 SMEM vs L1 Trade-off
+  L179: 6. Async Copy: GMEM→SMEM
+    L181: 6.1 cp.async vs 传统LDG+STS
+    L199: 6.2 TMA vs cp.async
+  L210: 7. SMEM Atomic操作
+  L226: 8. 实战: 最优SMEM Layout设计
+    L228: 8.1 GEMM SMEM设计原则
+    L250: 8.2 Double Buffer vs Multi-stage
+  L271: 9. Bank Conflict检测工具
+L274: NSight Compute检测bank conflict:
+L278: 关键metric:
+L279: l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum  → Load冲突
+L280: l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum  → Store冲突
+L282: 理想值: 0
+L283: 可接受: < 10% of total transactions
+L284: 需优化: > 20%
+L286: 也可用CUDA-MEMCHECK:
+  L290: 10. 总结
+
+## cuda_operator/09_cublas_algorithm.md (221 lines)
+L1: Chapter 09: cuBLAS GEMM算法选择与调优 深度分析
+  L3: 1. 设计动机
+  L11: 2. cuBLAS API层次
+  L33: 3. cublasLt算法搜索
+    L35: 3.1 Heuristic API
+    L51: 3.2 算法参数空间
+    L64: 3.3 SplitK策略
+  L84: 4. Workspace管理
+  L109: 5. 性能特征分析
+    L111: 5.1 Shape对性能的影响
+    L129: 5.2 dtype对算法选择的影响
+    L139: 5.3 Profiling方法
+L142: 用NSight Compute分析cuBLAS kernel
+L146: 关注指标:
+L147: sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed  ← TC利用率
+L148: dram__bytes_read.sum / dram__bytes_write.sum  ← HBM流量
+L149: l2__throughput.avg.pct_of_peak_sustained_elapsed  ← L2命中
+  L152: 6. Autotuning实战
+    L154: 6.1 PyTorch TunableOp
+L160: 启用tunable op
+L166: Warmup + tuning
+    L173: 6.2 手动cublasLt Autotuning
+  L200: 7. cuBLAS vs CUTLASS选择指南
+  L212: 8. 总结
+
+## cuda_operator/10_memory_hierarchy_bandwidth.md (331 lines)
+L1: Chapter 10: Memory Hierarchy与带宽优化 深度分析
+  L3: 1. 设计动机
+  L10: 2. H100内存层次
+    L36: 2.1 各层带宽利用率
+  L56: 3. Roofline Model
+    L58: 3.1 H100 Roofline
+    L80: 3.2 常见Op分类
+  L92: 4. Memory-Bound Kernel优化策略
+    L94: 4.1 核心原则: 减少GMEM Touch
+    L110: 4.2 Vectorized Load/Store
+    L128: 4.3 Coalesced Access
+  L147: 5. Compute-Bound Kernel优化策略
+    L149: 5.1 Occupancy vs Instruction-Level Parallelism
+    L168: 5.2 Register Pressure管理
+  L190: 6. L2 Cache优化
+    L192: 6.1 Persistent Kernel
+    L218: 6.2 Tile Traversal Order
+  L236: 7. HBM带宽优化
+    L238: 7.1 Page与Channel
+    L255: 7.2 为什么实际带宽<理论
+  L270: 8. 量化: 减少数据搬运
+    L272: 8.1 精度与带宽
+  L290: 9. Profiling带宽利用率
+L293: DRAM带宽利用率:
+L298: L2 hit rate:
+L303: SMEM利用率:
+L308: 带宽指标解读:
+L309: < 60% peak: 优化空间大 (访问模式/vectorize/coalesce)
+L310: 60-80% peak: 正常 (多数优化后kernel)
+L311: > 80% peak: 接近极限 (考虑算法改进)
+  L314: 10. 总结
+
+## cuda_operator/11_h100_microarch.md (291 lines)
+L1: Chapter 11: H100 SM微架构 深度分析
+  L3: 1. 设计动机
+  L9: 2. H100 SXM5 全局规格
+  L29: 3. SM内部结构
+    L31: 3.1 SM分区
+    L64: 3.2 4th Gen Tensor Core
+    L85: 3.3 Warpgroup MMA (WGMMA)
+  L98: 4. 内存层级
+    L100: 4.1 层级图
+    L117: 4.2 Bandwidth计算
+    L131: 4.3 SMEM配置
+  L153: 5. TMA Engine (Tensor Memory Accelerator)
+    L155: 5.1 硬件能力
+    L168: 5.2 TMA vs 传统LDG
+  L178: 6. 指令流水线
+    L180: 6.1 Warp Scheduler
+    L200: 6.2 Occupancy与寄存器压力
+  L221: 7. NVLink与多GPU
+  L236: 8. Async Architecture总结
+  L257: 9. 对算子开发的指导意义
+  L268: 10. 关键PTX指令参考
+
+## cuda_operator/12_occupancy_launch_config.md (254 lines)
+L1: Chapter 12: Occupancy与Launch配置 深度分析
+  L3: 1. 设计动机
+  L9: 2. 硬件资源约束 (H100)
+  L33: 3. Occupancy分析
+    L35: 3.1 计算方法
+L38: 示例: GEMM kernel
+L43: 约束1: thread限制
+L46: 约束2: register限制
+L49: 约束3: SMEM限制
+L52: 实际blocks per SM = min(16, 3, 1, 32) = 1
+L53: Occupancy = 1 × 128 / 2048 = 6.25%
+L55: 看似很低，但这个GEMM kernel能达到85%+ peak!
+    L58: 3.2 WHY低Occupancy不等于低性能
+    L80: 3.3 什么时候需要高Occupancy
+  L96: 4. Grid配置策略
+    L98: 4.1 Wave Quantization
+    L112: 4.2 Persistent Grid
+    L132: 4.3 Thread Block Cluster (H100)
+  L158: 5. Block Size选择
+    L160: 5.1 常见选择
+    L170: 5.2 经验法则
+  L189: 6. Occupancy Calculator使用
+L192: Python API:
+L196: 自动选择最优配置:
+L205: CUDA API:
+L210: 指定SMEM:
+  L215: 7. 调优工作流
+  L237: 8. 总结
+
+## cuda_operator/13_profiling_ncu.md (266 lines)
+L1: Chapter 13: NSight Compute Profiling实战 深度分析
+  L3: 1. 设计动机
+  L9: 2. NCU基础使用
+    L11: 2.1 命令行模式
+L14: 基础profile (所有metrics):
+L17: 只profile特定kernel:
+L20: 限制kernel实例:
+L22: 跳过前5次launch, profile接下来3次
+L24: 指定metric子集 (更快):
+    L32: 2.2 关键Metric分类
+  L64: 3. 性能瓶颈诊断
+    L66: 3.1 Speed of Light分析
+    L87: 3.2 Stall原因分析
+  L107: 4. Tensor Core Profiling
+    L109: 4.1 TC利用率计算
+L118: 目标值:
+L119: - 简单GEMM: > 80% (CUTLASS benchmark)
+L120: - FlashAttention: 60-70% (有softmax overhead)
+L121: - TE Linear (FP8): > 75%
+L122: - MoE grouped GEMM: 50-65% (小矩阵)
+L124: 如果TC < 50%:
+L125: 检查1: tile size是否太小 (TC under-utilized per instruction)
+L126: 检查2: K-loop是否有unnecessary sync
+L127: 检查3: epilogue是否太重 (compute在non-TC pipe上)
+    L130: 4.2 Pipeline效率
+  L153: 5. Memory Profiling
+    L155: 5.1 带宽效率
+L158: 实际达到的HBM带宽:
+L162: 与理论峰值(3.35 TB/s)比较
+L164: 理想情况:
+L165: Bandwidth-limited kernel: > 80% peak
+L166: 如果 < 60%:
+L167: 1. Non-coalesced access → 检查access pattern
+L168: 2. Small transfers → 检查vectorization
+L169: 3. Page faults → 检查unified memory usage
+    L172: 5.2 Cache效率
+L175: L2 hit rate:
+L181: GEMM: 通常 30-50% (tile reuse)
+L182: Elementwise: 接近0% (streaming, no reuse)
+L183: 小tensor操作: > 80% (fit in L2)
+L185: L1 (SMEM/Texture) 效率:
+  L191: 6. 自定义Kernel Profiling流程
+  L215: 7. 常见问题诊断表
+  L227: 8. NCCL通信Profiling
+L230: 通信kernel profiling:
+L236: 关键指标:
+L237: - gpu__time_duration: 通信耗时
+L238: - dram__bytes: 数据搬运量
+L239: - 计算 effective bandwidth:
+L240: BW = data_size / time (应接近IB/NVLink带宽)
+L242: nsys更适合系统级通信分析:
+L246: → Timeline view showing compute/comm overlap
+  L249: 9. 总结
+
+## cuda_operator/14_custom_kernel_patterns.md (388 lines)
+L1: Chapter 14: 自定义高性能Kernel编写模式 深度分析
+  L3: 1. 设计动机
+  L11: 2. Kernel设计方法论
+    L13: 2.1 分析框架
+    L33: 2.2 Kernel骨架模板
+  L78: 3. Pattern 1: Fused Elementwise
+    L80: 3.1 适用场景
+    L90: 3.2 实现模式
+    L152: 3.3 性能分析
+  L165: 4. Pattern 2: Online Reduction
+    L167: 4.1 Softmax实现
+  L219: 5. Pattern 3: Warp-Level Primitives
+    L221: 5.1 Warp Shuffle Reduction
+  L258: 6. Pattern 4: Multi-Stage Pipeline (SM90)
+  L314: 7. Pattern 5: Split-K 与 Stream-K
+    L316: 7.1 Split-K
+    L332: 7.2 Stream-K (CUTLASS)
+  L350: 8. 性能优化Checklist
+  L375: 9. 总结

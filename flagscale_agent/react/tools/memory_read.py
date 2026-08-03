@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Memory read tool — retrieve a specific memory entry."""
+"""Memory read tool — retrieve a specific memory entry or list by prefix."""
 
 from flagscale_agent.react.tools.base import Tool, EFFECT_READ_MEMORY
 
@@ -21,57 +21,55 @@ class MemoryReadTool(Tool):
     name = "memory_read"
     effects = EFFECT_READ_MEMORY
     description = (
-        "Read a specific memory entry by key. "
-        "Use when you know a memory exists and want to retrieve its details. "
-        "Searches session memory first, then global memory. "
-        "If both session and global have the same key, the session entry takes precedence and the global entry is not returned. "
-        "To explicitly read the global version, pass scope='global'."
+        "Read a specific memory entry by key, or list entries by prefix.\n\n"
+        "Exact key: memory_read(key='fact/cluster/ssh_port')\n"
+        "Prefix: memory_read(key='fact/cluster/') → all cluster facts\n"
+        "Prefix: memory_read(key='pitfall/') → all pitfalls"
     )
     parameters = {
         "type": "object",
         "properties": {
             "key": {
                 "type": "string",
-                "description": "The key of the memory entry to read.",
-            },
-            "scope": {
-                "type": "string",
-                "enum": ["session", "global", "all"],
                 "description": (
-                    "'all' (default): search session memory first, then global. "
-                    "'session': only search current session memory. "
-                    "'global': only search global shared memory."
+                    "Exact key (e.g. 'fact/cluster/ssh_port') or prefix ending "
+                    "with '/' (e.g. 'fact/cluster/', 'pitfall/nccl/')."
                 ),
             },
         },
         "required": ["key"],
     }
 
-    def __init__(self, global_memory, session_memory):
-        self._global_memory = global_memory
-        self._session_memory = session_memory
+    def __init__(self, memory):
+        self._memory = memory
 
     def execute(self, **kwargs) -> str:
         key = kwargs["key"]
-        scope = kwargs.get("scope", "all")
 
-        if scope == "session":
-            entry = self._session_memory.get(key)
-            if entry is None:
-                return f"No session memory found for '{key}'."
-            return f"[{entry.get('type', '?')}] [session] {entry.get('content', '')}"
+        # Prefix mode: key ends with /
+        if key.endswith("/"):
+            entries = self._memory.list_by_prefix(key)
+            if not entries:
+                return f"No entries found with prefix '{key}'."
+            lines = []
+            for e in entries:
+                content = e.get("content", "")
+                if len(content) > 200:
+                    content = content[:197] + "..."
+                lines.append(
+                    f"[{e.get('type', '?')}] {e.get('key', '?')}: {content}"
+                )
+            return f"Found {len(entries)} entries:\n" + "\n".join(lines)
 
-        if scope == "global":
-            entry = self._global_memory.get(key)
-            if entry is None:
-                return f"No global memory found for '{key}'."
-            return f"[{entry.get('type', '?')}] [global] {entry.get('content', '')}"
-
-        # scope == "all": session first, then global
-        entry = self._session_memory.get(key)
-        if entry is not None:
-            return f"[{entry.get('type', '?')}] [session] {entry.get('content', '')}"
-        entry = self._global_memory.get(key)
-        if entry is not None:
-            return f"[{entry.get('type', '?')}] [global] {entry.get('content', '')}"
-        return f"No memory found for '{key}'."
+        # Exact key mode
+        entry = self._memory.get(key)
+        if entry is None:
+            return f"No memory found for '{key}'."
+        return (
+            f"[{entry.get('type', '?')}] {entry.get('key', '?')}\n"
+            f"Content: {entry.get('content', '')}\n"
+            f"Created: {entry.get('created_at', '?')} "
+            f"(session: {entry.get('created_session', '?')})\n"
+            f"Updated: {entry.get('updated_at', '?')} "
+            f"(session: {entry.get('updated_session', '?')})"
+        )

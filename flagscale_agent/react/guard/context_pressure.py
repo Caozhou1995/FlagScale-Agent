@@ -99,7 +99,7 @@ class ContextPressureGuard(Guard):
             
             # Normal case: evictable content exists
             self._hard_remind_count += 1
-            idx_hint = f"Evictable indexes: {evictable[:30]}{'...' if len(evictable) > 30 else ''} ({len(evictable)} total)."
+            idx_hint = f"Evictable indexes: {evictable} ({len(evictable)} total)."
 
             msg = (
                 f"[Context pressure CRITICAL: {int(pressure * 100)}% "
@@ -121,7 +121,7 @@ class ContextPressureGuard(Guard):
             self._soft_warned = True
             evictable = ctx.evictable_indexes
             if evictable:
-                idx_hint = f" Evictable indexes: {evictable[:20]}{'...' if len(evictable) > 20 else ''} ({len(evictable)} total)."
+                idx_hint = f" Evictable indexes: {evictable} ({len(evictable)} total)."
             else:
                 idx_hint = ""
             return GuardVerdict.inject(

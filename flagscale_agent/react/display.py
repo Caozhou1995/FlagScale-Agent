@@ -305,8 +305,8 @@ def pasted_input(text: str):
     for _ in range(erase_count):
         sys.stdout.write("\033[A\033[2K")
     sys.stdout.flush()
-    first = lines[0][:100]
-    last = lines[-1][:100]
+    first = lines[0]
+    last = lines[-1]
     _print(f"  {first}")
     _print(dim(f"  ... ({len(lines)} lines)"))
     _print(f"  {last}")
@@ -446,11 +446,21 @@ def context_compacted(from_tokens, to_tokens, compaction_num=None, ratio=None):
 
 # ── LLM done ────────────────────────────────────────────────────────────
 
-def llm_done(elapsed, input_tokens=None, output_tokens=None):
+def llm_done(elapsed, input_tokens=None, output_tokens=None,
+             cache_read_tokens=None, cache_creation_tokens=None):
     ts = time.strftime("%H:%M:%S")
     parts = [f"[{ts}]", green("✓"), f"{elapsed:.1f}s"]
     if input_tokens is not None:
-        parts.append(f"↑{_fmt_tokens(input_tokens)}")
+        token_str = f"↑{_fmt_tokens(input_tokens)}"
+        # Show cache breakdown when caching is active
+        if cache_read_tokens or cache_creation_tokens:
+            cache_parts = []
+            if cache_read_tokens:
+                cache_parts.append(f"cache:{_fmt_tokens(cache_read_tokens)}")
+            if cache_creation_tokens:
+                cache_parts.append(f"new:{_fmt_tokens(cache_creation_tokens)}")
+            token_str += f"({'+'.join(cache_parts)})"
+        parts.append(token_str)
     if output_tokens is not None:
         parts.append(f"↓{_fmt_tokens(output_tokens)}")
     _print(dim(" | ".join(parts)))
@@ -679,10 +689,8 @@ def parallel_tools_finish():
 # ── Guard display ──────────────────────────────────────────────────────────────
 
 def _guard_truncate_line(line: str, max_chars: int = 120) -> str:
-    """Truncate a single guard message line to max_chars."""
-    if len(line) <= max_chars:
-        return line
-    return line[:max_chars] + "..."
+    """Return guard message line as-is (no truncation)."""
+    return line
 
 
 # ── Turn / session summary ──────────────────────────────────────────────
@@ -740,11 +748,14 @@ def guard_escalate(message):
         _print(f"     {line.strip()}")
 
 
-def turn_summary(turn_num, elapsed, input_tokens, output_tokens):
+def turn_summary(turn_num, elapsed, input_tokens, output_tokens,
+                 session_input_tokens=None, session_output_tokens=None):
     _stop_all_spinners()
     _print()
     parts = [f"Turn {turn_num}", f"{elapsed:.1f}s",
              f"↑{_fmt_tokens(input_tokens)} ↓{_fmt_tokens(output_tokens)}"]
+    if session_input_tokens is not None:
+        parts.append(f"Σ↑{_fmt_tokens(session_input_tokens)} ↓{_fmt_tokens(session_output_tokens or 0)}")
     _print(dim(f"── {' | '.join(parts)} ──"))
     _print()
 

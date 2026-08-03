@@ -49,7 +49,12 @@ class WriteFileTool(Tool):
         "IMPORTANT: Each call's content parameter MUST be under 3000 characters. "
         "If content exceeds 3000 chars, you MUST split into multiple calls: "
         "first call with mode='write', subsequent calls with mode='append'. "
-        "Failing to split will cause output truncation and incomplete file writes."
+        "Failing to split will cause output truncation and incomplete file writes. "
+        "SPLITTING STRATEGY for large documents: Plan your sections BEFORE writing. "
+        "Write section 1 (≤3000 chars) with mode='write', then each subsequent section "
+        "with mode='append'. NEVER attempt to write an entire large document in one call — "
+        "if your content has multiple sections/chapters, split at natural boundaries (## headers). "
+        "A truncated write_file call loses ALL content including the path parameter, wasting the entire turn."
     )
     parameters = {
         "type": "object",

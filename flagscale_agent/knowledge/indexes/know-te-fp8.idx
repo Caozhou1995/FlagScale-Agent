@@ -1,0 +1,156 @@
+# know-te-fp8
+# TransformerEngine FP8量化：Float8Tensor底层、量化系统、fused linear ops
+# Source: TransformerEngine-FL @ 2cb485f
+
+## transformerengine_fl/01_fp8_quantization_system.md (495 lines)
+L1: 第一章：FP8 量化系统源码深度分析
+  L3: 1. 概述与源文件定位
+    L7: 1.1 核心源文件映射
+    L18: 1.2 架构层次图
+  L59: 2. Quantizer 抽象与实现
+    L61: 2.1 Quantizer 基类协议
+L66: quantized_tensor.py (抽象基类)
+    L83: 2.2 Float8Quantizer — Delayed Scaling 实现
+    L115: 2.3 Float8CurrentScalingQuantizer — 即时 Scaling
+  L153: 3. Float8Tensor — FP8 数据容器
+    L155: 3.1 类继承与存储布局
+    L174: 3.2 dequantize 流程 (L510-523)
+    L190: 3.3 quantize_ 原地量化 (L525-543)
+    L201: 3.4 双存储 (rowwise + columnwise) 机制
+  L223: 4. RecipeState — 量化策略状态管理
+    L225: 4.1 RecipeState 抽象层次
+    L250: 4.2 DelayedScalingRecipeState 详解 (L1054-1101)
+    L285: 4.3 Scale 更新流程 (reduce_and_update_fp8_tensors)
+L290: 用户代码 (training loop)
+L294: === Scale 更新发生在此处 ===
+L295: FP8GlobalStateManager.reduce_and_update_fp8_tensors() 被自动调用
+  L308: 5. FP8GlobalStateManager — 全局状态协调
+    L310: 5.1 核心职责
+    L321: 5.2 模块注册与 RecipeState 绑定
+L324: quantization.py 中的注册逻辑 (简化)
+    L336: 5.3 分布式 Amax 同步
+L341: reduce_and_update_fp8_tensors 内部逻辑 (简化)
+  L352: 6. 量化精度与数值分析
+    L354: 6.1 FP8 格式对比
+    L365: 6.2 Scaling Factor 计算公式
+    L380: 6.3 溢出保护机制
+  L388: 7. GEMM 集成与数据流
+    L390: 7.1 前向 GEMM 数据流
+    L414: 7.2 反向 GEMM 数据流
+  L430: 8. 与 Megatron-LM-FL 的集成点
+    L432: 8.1 集成入口
+L437: megatron/core/transformer/transformer_config.py
+    L445: 8.2 fp8_autocast 上下文管理
+L448: megatron training loop 中
+  L462: 9. 设计决策总结
+  L475: 10. 调优与问题排查
+    L477: 10.1 常见配置参数
+L480: FlagScale 配置示例
+    L488: 10.2 问题排查清单
+
+## transformerengine_fl/02_fused_linear_userbuffers.md (514 lines)
+L1: 第二章：Fused Linear Ops & Userbuffers 通信-计算重叠
+  L3: 1. 概述与设计动机
+  L13: 2. 源文件定位
+  L26: 3. 架构层次
+  L51: 4. Forward 通信重叠 — UserbuffersForwardLinear
+    L53: 4.1 类结构 (L36-84)
+    L74: 4.2 _functional_forward 核心逻辑 (L86-277)
+      L76: ColumnParallel 模式 (AllGather + GEMM)
+L79: L192-224: AllGather 准备
+L84: L201-216: 量化 + 填充 UB buffer
+      L94: fill_userbuffers_buffer_for_all_gather 详解 (base.py L500-600)
+      L119: GEMM 执行 (L242-257)
+L122: L243-253: GEMM 通过 general_gemm 统一接口执行
+    L138: 4.3 ColumnParallel vs RowParallel 时序对比
+    L161: 4.4 ub_comm_name 命名约定
+L164: L193: get_ub(ub_comm_name + "_fprop", with_quantized_compute)
+L165: 约定命名:
+L166: "qkv_fprop"  — QKV 投影的前向
+L167: "proj_fprop" — attention output projection 前向
+L168: "fc1_fprop"  — FFN 第一层前向
+L169: "fc2_fprop"  — FFN 第二层前向
+  L176: 5. Backward 通信重叠 — UserbuffersBackwardLinear
+    L178: 5.1 _functional_backward 核心逻辑 (L91-497)
+      L184: 5.1.1 dgrad GEMM + AG (L332-401)
+L187: ColumnParallel backward: dy 需要 AllGather (因为前向 RS 了 output)
+L193: dgrad GEMM: dx = dy_full @ W_columnwise
+      L204: 5.1.2 wgrad GEMM + Bulk Overlap (L403-483)
+L207: wgrad GEMM: dW = x^T @ dy
+L208: wgrad 与 dgrad 的 reduce-scatter 重叠执行
+      L222: 5.1.3 MXFP8 特殊路径 (L408-450)
+L225: L408-413: MXFP8 不支持 pipelined AG-wgrad overlap
+    L234: 5.2 Backward 完整时序图
+  L259: 6. Userbuffers 底层机制详解
+    L261: 6.1 NCCL Registered Memory 原理
+    L275: 6.2 零拷贝 vs 传统模式对比
+    L291: 6.3 性能分析
+  L303: 7. general_gemm 统一接口
+    L305: 7.1 函数签名 (cpp_extensions/gemm.py L75+)
+    L328: 7.2 通信-GEMM Pipeline 执行模式
+  L346: 8. 高层 API 集成 (module/linear.py)
+    L348: 8.1 ColumnParallelLinear 路径选择
+    L365: 8.2 Userbuffers 启用条件
+L368: 必须同时满足:
+L369: 1. TP > 1 (否则无通信可重叠)
+L370: 2. SP = True (AG/RS 发生在 sequence 维度)
+L371: 3. UB 环境变量/配置启用: NVTE_UB_OVERLAP=1
+L372: 4. NCCL 版本支持 user registration API
+  L377: 9. FP8 与 Userbuffers 的协同
+    L379: 9.1 FP8 AllGather 特殊处理
+L384: base.py L541-561:
+    L396: 9.2 数据类型对通信量的影响
+  L408: 10. Backward 量化器传递与存储管理
+    L410: 10.1 Forward 保存的反向所需信息 (L354-367)
+L413: fuser_forward 中保存状态:
+    L424: 10.2 weight 的 rowwise/columnwise 使用切换 (L260-264)
+L427: Forward 后准备反向的 weight:
+  L435: 11. 性能模型与通信量化
+    L437: 11.1 单层通信量分析
+    L449: 11.2 Overlap 理论加速比
+L457: H100 估算 (hidden=8192, TP=8, seq×batch=8192):
+L458: T_gemm ≈ 8192^2 × 8192 / 989e12 ≈ 0.56 ms (BF16 TFLOPS)
+L459: T_comm ≈ 8192 × 8192 × 2 / 450e9 ≈ 0.30 ms (NVLink 单向)
+L460: 加速比 ≈ (0.56+0.30)/0.56 = 1.54x (理论上限)
+    L463: 11.3 Overlap 效率的影响因素
+  L474: 12. 设计决策总结
+  L487: 13. 调优指南
+    L489: 13.1 启用配置
+L492: Megatron-LM-FL 配置
+L502: 环境变量
+    L507: 13.2 问题排查
+
+## transformerengine_fl/10_float8_tensor.md (316 lines)
+L1: TE-FL 第10章：Float8Tensor 底层机制 深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 核心问题
+    L14: 1.2 WHY: 为什么需要自定义 Tensor 类？
+L17: 如果用标准 PyTorch tensor:
+L19: 无法正确反量化：需要 x_fp8 * scale_inv
+L21: Float8Tensor 解决方案:
+  L29: 2. 源码定位
+  L36: 3. Quantizer 体系 — 量化策略抽象
+    L38: 3.1 Float8Quantizer (Delayed Scaling, L42-226)
+L41: float8_tensor.py L42-226
+    L70: 3.2 Float8CurrentScalingQuantizer (L228-468)
+L73: float8_tensor.py L228-468
+    L96: 3.3 make_empty — 内存预分配 (L116-157)
+  L120: 4. Float8Tensor 类详解 (L470-1178)
+    L122: 4.1 核心属性
+    L136: 4.2 dequantize — 反量化 (L510-523)
+L139: L510-523
+    L150: 4.3 quantize_ — 原地量化 (L525-543)
+L153: L525-543
+    L161: 4.4 view / reshape 支持 (L1087-1178)
+L164: L1087: 自定义 autograd Function 保持 Float8Tensor 类型
+  L186: 5. 与 PyTorch 的交互模式
+    L188: 5.1 __torch_dispatch__ 拦截
+    L203: 5.2 ONNX 导出 (L203-216)
+  L217: 6. 数据流示意
+  L241: 7. 性能量化分析
+    L243: 7.1 内存布局
+    L253: 7.2 量化 kernel 开销
+  L269: 8. Delayed vs Current Scaling 决策流
+  L289: 9. 设计决策对比
+  L304: 10. 与其他章节的关联
+  L311: 11. 源码版本信息

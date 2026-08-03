@@ -1,0 +1,341 @@
+# know-megatron-parallel
+# Megatron并行机制：TP/PP/DP/CP/EP进程组创建、通信模式、流水线调度
+# Source: Megatron-LM-FL @ c024887
+
+## megatron_lm_fl/01_pipeline_parallel.md (579 lines)
+L1: 01 - Pipeline Parallelism (PP) 完整分析
+  L3: 源码位置
+  L18: 1. Schedule 调度入口
+L43: no_pipelining 内 (schedules.py:686)
+L47: interleaved 内 (schedules.py:1397)
+  L54: 2. Schedule 变体详解
+    L56: 2.1 forward_backward_no_pipelining (schedules.py:621)
+    L77: 2.2 forward_backward_pipelining_without_interleaving (schedules.py:2059)
+L89: Stage 0 (第一个): warmup = pp_size - 1 (最多)
+L90: Stage pp-1 (最后): warmup = 0 (最少, 立即进入 steady state)
+    L123: 2.3 forward_backward_pipelining_with_interleaving (schedules.py:914)
+    L163: 2.4 Combined 1F1B (combined_1f1b.py) — EP A2A 通信隐藏调度
+      L171: 2.4.1 三层架构
+      L190: 2.4.2 Level 1: Microbatch 配对 (combined_1f1b.py:23-113)
+L195: 伪代码 (combined_1f1b_schedule_for_no_pipelining)
+L217: 原始 (schedules.py):
+L221: Combined (combined_1f1b.py:116):
+      L230: 2.4.3 Level 2: Model Chunk 内层间交错 (model_chunk_schedule_plan.py:484-639)
+      L283: 2.4.4 Level 3: Layer 内双 Stream 交错 (model_chunk_schedule_plan.py:204-269)
+      L328: 2.4.5 ScheduleNode 基础设施 (utils.py:163-337)
+      L355: 2.4.6 SchedulePlan 构建流程
+      L374: 2.4.7 性能收益分析
+    L397: 2.5 Hybrid CP Schedule (hybrid_cp_schedule.py:482)
+    L416: 2.6 DualPipeV (FlagScale 扩展)
+  L479: 3. P2P 通信机制
+    L483: 3.1 通信模式
+    L492: 3.2 通信数据量
+    L505: 3.3 overlap_p2p_comm 实现原理
+L508: schedules.py:1604 (简化)
+L509: 1. 异步发送上一步的 output
+L511: 2. 执行当前步的 forward (计算与 send 并行)
+L513: 3. 等待接收下一步的 input
+  L521: 4. 关键配置参数
+  L537: 5. 组合约束矩阵
+  L556: 6. 性能影响总结
+  L570: 7. 设计决策对比
+
+## megatron_lm_fl/02_tensor_parallel.md (535 lines)
+L1: 02 - Tensor Parallelism (TP) & Sequence Parallelism (SP) 完整分析
+  L3: 源码位置
+  L16: 1. TP 切分原理
+    L20: 1.1 Column Parallel Linear (layers.py:776-1116)
+L27: output_size_per_partition = output_size / tp_size
+L28: weight 存储为转置形式 (PyTorch convention: F.linear does XW^T)
+L66: allreduce_dgrad 和 sequence_parallel 互斥
+    L78: 1.2 Row Parallel Linear (layers.py:1118-1369)
+L90: input_size_per_partition = input_size / tp_size
+L91: partition_dim = 1 (沿第 1 维切分)
+    L115: 1.3 Vocab Parallel Embedding (layers.py:207-430)
+L121: 1. 判断 token 是否属于本 rank
+L126: 2. Embedding lookup (本地)
+L130: 3. 跨 rank 合并
+  L141: 2. Sequence Parallelism (SP)
+    L143: 2.1 原理 (arXiv:2205.05198, Reducing Activation Recomputation in Large Transformer Models)
+    L153: 2.2 完整 Transformer Layer 数据流 (TP + SP)
+    L200: 2.3 通信原语实现 (mappings.py)
+L216: 例: _GatherFromSequenceParallelRegion (line 302-354)
+  L236: 3. 异步通信与计算重叠 (layers.py:443-650)
+    L238: 3.1 核心类: LinearWithGradAccumulationAndAsyncCommunication
+    L244: 3.2 Forward 路径 (layers.py:480-493)
+    L266: 3.3 Backward 路径 — 三阶段 overlap (layers.py:497-650)
+    L328: 3.4 CUDA_DEVICE_MAX_CONNECTIONS=1 的必要性
+    L337: 3.5 Gradient Accumulation Fusion (layers.py:568-599)
+    L354: 3.6 Wgrad Deferral (layers.py:511-514)
+  L366: 4. 分布式 Cross Entropy (cross_entropy.py)
+    L368: 4.1 问题
+    L372: 4.2 算法 (VocabParallelCrossEntropy)
+L377: Step 1: 数值稳定 — 全局 max (跨所有 rank)
+L382: Step 2: 获取 target 对应的 logit (本地索引)
+L389: Step 3: 全局 exp-sum
+L394: Step 4: 计算 loss
+L402: grad = softmax - one_hot(target)
+    L407: 4.3 Label Smoothing 支持 (line 165-182)
+  L419: 5. 关键配置参数
+  L433: 6. TP 通信量分析
+    L435: 6.1 每层通信 (单个 Transformer Layer)
+    L444: 6.2 Qwen3-10B 实例 (H=4096, S=4096, B=1, TP=2, bf16)
+    L456: 6.3 内存节省对比 (SP vs 无 SP)
+  L469: 7. FlagScale 扩展
+    L471: 7.1 Platform Abstraction (layers.py:68-72)
+    L480: 7.2 te_fl_prefer wgrad 路径 (layers.py:576-599)
+    L486: 7.3 AMP custom_fwd/custom_bwd 适配 (layers.py:74-87)
+  L500: 8. 组合约束矩阵
+  L515: 9. 设计决策与 Trade-off
+  L527: 10. 性能建议
+
+## megatron_lm_fl/03_data_parallel_distributed_optimizer.md (682 lines)
+L1: 03 - Data Parallelism (DP) & Distributed Optimizer 完整分析
+  L3: 源码位置
+  L17: 1. DDP 架构概述
+    L19: 1.1 设计哲学
+    L34: 1.2 核心数据结构 (param_and_grad_buffer.py)
+    L59: 1.3 参数三路分类 (ddp.py:118-144)
+L77: FlagScale: engram embedding 独立 buffer
+    L82: 1.4 梯度缩放策略 (ddp.py:276-322)
+  L95: 2. Overlap Grad Reduce 机制
+    L97: 2.1 原理 (overlap_grad_reduce=True)
+    L110: 2.2 Backward Hook 注册 (ddp.py:366-498)
+    L139: 2.3 Golden Count 机制 (param_and_grad_buffer.py)
+    L160: 2.4 start_grad_sync 通信调度 (param_and_grad_buffer.py:527-676)
+    L191: 2.5 Bucket 大小策略 (ddp.py:60-76, 106-113)
+L194: 自动计算 bucket size
+L200: 非 overlap 模式: 单 bucket (全部参数一次通信)
+L204: PP rank > 0: 关闭 bucket (不在 critical path)
+    L211: 2.6 no_sync 上下文 (ddp.py:500-523)
+  L231: 3. Distributed Optimizer (ZeRO Stage 1+2)
+    L233: 3.1 原理
+    L253: 3.2 数据布局: Shard 映射 (distrib_optimizer.py:124-186)
+    L278: 3.3 完整训练步骤时序
+    L303: 3.4 Optimizer Step 实现 (distrib_optimizer.py:2714-2741)
+  L327: 4. Overlap Param Gather 机制
+    L329: 4.1 原理 (overlap_param_gather=True)
+    L341: 4.2 Forward Pre-Hook (ddp.py:434-468)
+L364: 设置 prefetch 链: 逆序遍历 (因为 AG 按逆序执行)
+L371: 效果: BG_K-1.next → BG_K-2.next → BG_K-3.next → ... → BG_0.next → None
+    L374: 4.3 finish_param_sync 内部流程
+    L392: 4.4 内存代价
+  L402: 5. finalize_model_grads: 梯度后处理 (finalize_model_grads.py)
+    L404: 5.1 调用时机
+    L408: 5.2 Shared Word Embedding 梯度同步
+    L432: 5.3 Sequence Parallel 梯度求和
+L437: finalize_model_grads.py:463-467
+    L443: 5.4 Per-Token Loss 归一化
+L446: finalize_model_grads.py:593-606
+    L458: 5.5 完整调用序列
+  L488: 6. 内存分析
+    L490: 6.1 各模式内存对比 (Qwen3-10B, bf16, Adam)
+    L503: 6.2 实际配置计算
+    L518: 6.3 额外内存开销
+  L529: 7. 通信量分析
+    L531: 7.1 每步通信总量 (Ring Algorithm)
+    L540: 7.2 Qwen3-10B 实例 (TP=2, PP=2, DP=2, bf16)
+    L555: 7.3 跨节点场景 (DP 跨 IB)
+  L567: 8. Num Distributed Optimizer Instances
+    L569: 8.1 原理 (ddp_config:num_distributed_optimizer_instances > 1)
+    L584: 8.2 通信模式
+  L593: 9. 关键配置参数
+  L611: 10. FlagScale 扩展
+    L613: 10.1 Engram Embedding (ddp.py:94-96, 121-144, 338-351)
+    L621: 10.2 Platform Abstraction (ddp.py:20-24, 698-722)
+L627: 设备相关操作全部通过 platform 抽象
+    L634: 10.3 Partial Reduce for Shared Embedding (finalize_model_grads.py:322-356)
+  L642: 11. 组合约束矩阵
+  L659: 12. 设计决策与 Trade-off
+  L673: 13. 性能建议
+
+## megatron_lm_fl/04_context_parallel_sequence_parallel.md (710 lines)
+L1: 04 - Context Parallelism (CP) & Sequence Parallelism (SP) 源码深度分析
+  L3: 源码位置
+  L16: 1. Sequence Parallelism (SP) — 激活内存的序列维切分
+    L18: 1.1 设计动机与核心思想
+    L38: 1.2 通信原语实现 (mappings.py)
+L43: mappings.py L282-300: _ScatterToSequenceParallelRegion
+L58: mappings.py L302-355: _GatherFromSequenceParallelRegion
+L70: mappings.py L357-404: _ReduceScatterToSequenceParallelRegion
+    L87: 1.3 SP 在 Linear 层的集成 (layers.py)
+L91: === ColumnParallelLinear.forward (layers.py ~L965-1010) ===
+L106: === RowParallelLinear.forward (layers.py ~L1300-1369) ===
+    L143: 1.4 SP 的内存收益量化
+    L153: 1.5 SP 通信开销分析
+  L173: 2. Context Parallelism (CP) — Attention 层的长序列切分
+    L175: 2.1 设计动机
+    L190: 2.2 四种通信类型 (transformer_config.py L974-988)
+L193: transformer_config.py L974
+L195: 可以是全局字符串 (所有层相同), 也可以是 per-layer list:
+L196: transformer_config.py L2506-2514
+    L208: 2.3 Ring Attention 实现 (TEDotProductAttention)
+L213: transformer_engine.py L1447-1471
+    L258: 2.4 Hierarchical CP — 多级通信拓扑 (parallel_state.py L389-448, L1046-1052)
+L265: parallel_state.py L1046-1052
+L273: parallel_state.py L389-448: create_hierarchical_groups
+    L310: 2.5 CP 约束条件 (transformer_config.py L1283-1299)
+L313: GQA 场景: num_kv_heads 必须能被 TP×CP 整除
+L320: 非 GQA (MHA): num_attention_heads % TP×CP == 0
+  L329: 3. Hybrid CP Schedule — 变长序列的动态调度 (hybrid_cp_schedule.py)
+    L331: 3.1 设计动机
+    L354: 3.2 BalancedCPScheduler 核心算法 (L19-479)
+    L379: 3.3 调度五步法 — next_hdp_group (L109-459)
+    L414: 3.4 执行入口 — hybrid_context_parallel_forward_backward (L482-665)
+    L471: 3.5 Sub-sample CP Size 传播
+L474: L544-555: _get_new_data_iterator
+  L491: 4. SP vs CP 深度对比
+    L505: 4.1 组合使用数据流
+  L531: 5. FlagScale 平台抽象扩展
+    L533: 5.1 cp_stream 平台适配 (transformer_engine.py L1368, L1452)
+L536: 原始 Megatron: torch.cuda.Stream() — 仅支持 NVIDIA GPU
+L537: FlagScale 扩展:
+L541: 初始化时:
+L546: 作用: CP ring 通信在专用 stream 上执行
+L547: 与 attention 计算 stream 并行 → overlap
+    L550: 5.2 Hybrid CP 设备抽象 (hybrid_cp_schedule.py L11-15)
+L553: FlagScale Begin
+L556: FlagScale End
+L558: 使用场景: broadcast 时获取当前设备
+    L565: 5.3 设计意义
+  L574: 6. 配置参数速查
+    L586: 6.1 约束条件汇总
+L589: 1. KV head 约束 (transformer_config.py L1283-1299)
+L595: 2. Per-layer cp_comm_type 长度校验 (L2506-2514)
+L599: 3. Hierarchical CP 乘积校验 (parallel_state.py L1047)
+L602: 4. Hybrid CP 与 PP 互斥 (当前实现)
+L603: hybrid_cp_schedule 不支持 PP > 1 (TODO in source)
+  L608: 7. 通信量量化分析
+    L610: 7.1 SP 通信 (TP=2, S=4096, H=5120, BF16)
+    L627: 7.2 CP Ring 通信 (CP=4, S=128K, H=5120, n_kv_heads=8, TP=2, BF16)
+    L646: 7.3 Hierarchical CP 通信 (CP=16, [8,2])
+  L665: 8. 设计决策与权衡
+  L681: 9. 性能调优建议
+    L683: 9.1 短序列 (S ≤ 8K)
+    L687: 9.2 中等序列 (8K < S ≤ 64K)
+    L692: 9.3 超长序列 (S > 64K)
+    L697: 9.4 变长序列训练
+  L704: 10. 扩展阅读
+
+## megatron_lm_fl/05_expert_parallelism.md (604 lines)
+L1: 05 - Expert Parallelism (EP) & Mixture-of-Experts 源码深度分析
+  L3: 源码位置
+  L15: 1. MoE 层架构与执行流程
+    L17: 1.1 MoELayer 四阶段 Pipeline (moe_layer.py L532-633)
+L20: moe_layer.py L532
+    L52: 1.2 完整数据流 ASCII 图
+  L112: 2. TopKRouter 路由机制 (router.py L144-763)
+    L114: 2.1 完整路由流程
+L117: router.py L664-763: TopKRouter.routing()
+    L163: 2.2 负载均衡策略详解
+    L175: 2.3 Grouped TopK Routing (DeepSeek-V3 风格)
+L178: topk_routing_with_score_function 支持的参数:
+L179: num_groups: 将 experts 分为 G 组
+L180: group_topk: 先选 top-G_k 组, 再在组内选 top-k experts
+L181: scaling_factor: 归一化 topk 权重
+L183: 流程:
+L184: 1. logits [tokens, E] → reshape [tokens, G, E/G]
+L185: 2. group_scores = max(scores_per_group) → top-G_k 组选择
+L186: 3. 在选中的组内: top-k expert selection
+L187: 4. scaling: probs *= scaling_factor / sum(probs)
+    L190: 2.4 Hash Routing (DSv4-Pro, router.py L623-663)
+  L213: 3. Token Dispatcher 深度分析
+    L215: 3.1 AlltoAll Dispatcher 七步工作流 (token_dispatcher.py L357-865)
+    L228: 3.2 Permutation 详解
+L231: dispatch_preprocess (L605-660):
+L232: Permutation 1: 将 tokens 按 routing_map 中 expert 分配排序
+L241: 结果: tokens 按 [expert_0_tokens, expert_1_tokens, ..., expert_E_tokens] 排列
+L242: reversed_mapping: 用于 combine 阶段恢复原始顺序
+L244: dispatch_postprocess (L691-760):
+L245: Permutation 2: 将 all-to-all 后的 tokens 按 LOCAL expert 排序
+L246: 因为 A2A 后的布局是 [from_rank_0, from_rank_1, ...], 每段内含多个 expert
+L247: 需要 transpose 为 [expert_0_all_ranks, expert_1_all_ranks, ...]
+    L256: 3.3 AlltoAll 通信细节
+L259: token_dispatch (L662-689):
+    L273: 3.4 TP×EP 联合通信模式
+    L292: 3.5 CUDA DtoH 同步优化 (L438-601)
+L295: 关键优化: AlltoAll 需要 CPU 端的 split sizes, 但计算在 GPU 上
+L296: 直接 DtoH 同步会阻塞 → 使用专用 stream 异步拷贝
+L300: 5 个同步点 (按优先级):
+L301: "before_permutation_1" → 最早同步 (最安全)
+L302: "before_ep_alltoall"   → AlltoAll 前同步 (CUDAGraph 需要)
+L303: "before_permutation_2" → 第二次 permute 前
+L304: "before_finish"        → 最终输出前
+L305: "no_sync"              → 不需要同步 (drop_and_pad 模式)
+L307: 异步 DtoH 拷贝:
+L312: 在 sync point 处: cuda_dtoh_stream.synchronize()
+    L315: 3.6 DeepEP 集成 (_DeepepManager, L1109-1300)
+    L344: 3.7 Flex Dispatcher (L1347-1547)
+  L365: 4. Shared Expert 与通信-计算 Overlap
+    L367: 4.1 Overlap 机制 (moe_layer.py L320-321, token_dispatcher.py L638, L704, L844-864)
+    L399: 4.2 backward_dw 分离 (moe_layer.py L634-654)
+  L418: 5. Latent Projection — 通信量压缩 (moe_layer.py L246-276)
+L421: 设计动机: AlltoAll 通信量 ∝ hidden_size
+L422: Latent projection: H → latent_size (降维), 通信后再 latent_size → H (升维)
+L423: 通信量减少: hidden_size / latent_size 倍
+L431: 数据流:
+L432: [S×B, H] → fc1_latent → [S×B, latent] → AlltoAll → Expert → AlltoAll → fc2_latent → [S×B, H]
+L433: 通信量: 2 × S×B × latent_size × dtype (vs 原始 2 × S×B × H × dtype)
+  L438: 6. 通信量量化分析
+    L440: 6.1 AlltoAll 通信量
+    L460: 6.2 Latent Projection 的通信收益
+    L470: 6.3 Shared Expert Overlap 收益
+  L486: 7. Expert 计算实现
+    L488: 7.1 GroupedMLP vs SequentialMLP
+    L498: 7.2 GroupedMLP 数据流
+  L515: 8. FlagScale 扩展点
+  L527: 9. 配置参数速查
+  L558: 10. 设计决策与权衡
+  L575: 11. EP vs 其他并行策略的选择
+  L598: 12. 扩展阅读
+
+## megatron_lm_fl/15_parallel_state.md (461 lines)
+L1: 第15章：parallel_state 进程组管理 深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 解决什么问题
+    L11: 1.2 核心设计思想
+    L17: 1.3 为什么不用 PyTorch 内置的组管理？
+  L25: 2. 源码定位
+  L33: 3. 架构总览
+    L35: 3.1 全局变量注册表 (L36-175)
+    L64: 3.2 核心数据流
+  L87: 4. RankGenerator 核心算法
+    L89: 4.1 设计动机 (WHY)
+    L100: 4.2 实现分析 (parallel_state.py:L476-551)
+    L128: 4.3 generate_masked_orthogonal_rank_groups 算法 (L278-370)
+    L149: 4.4 时序图：8 GPU, TP=2, PP=2, DP=2, order="tp-dp-pp"
+  L178: 5. initialize_model_parallel 详解
+    L180: 5.1 函数签名 (L577-602)
+    L198: 5.2 组创建顺序 (L870-1200)
+    L214: 5.3 设计决策：为什么 DP+CP 先于 DP？
+    L219: 5.4 Expert 组的独立 RankGenerator (L836-848)
+    L239: 5.5 FlagScale 扩展
+      L241: 5.5.1 DualPipeV (L83-85, L601)
+      L250: 5.5.2 Engram Embedding Parallel (L849-868)
+      L261: 5.5.3 Platform 抽象 (L22-23)
+L265: 使得代码可适配非 NVIDIA 硬件
+  L268: 6. 组查询 API 分析
+    L270: 6.1 基础 Getter 函数 (L1700-2000)
+    L280: 6.2 Rank/World Size 查询 (L1813-2000)
+    L294: 6.3 Pipeline Stage 判断 (L1893-1940)
+    L309: 6.4 PP 邻居查询 (L2114-2141)
+  L322: 7. 性能与通信量化分析
+    L324: 7.1 进程组数量
+    L339: 7.2 NCCL 通信器开销
+    L351: 7.3 order 参数对通信拓扑的影响
+  L367: 8. 设计决策对比表
+  L384: 9. 边界条件与约束
+    L386: 9.1 维度约束 (L483-485, L806-825)
+L389: EP 和 CP 互斥（一个 RankGenerator 内）
+L392: world_size 必须整除
+L395: Expert TP 默认等于 Dense TP
+L398: Expert DP 自动计算
+    L402: 9.2 与其他特性的互斥
+    L411: 9.3 destroy 与重新初始化 (L2661+)
+  L420: 10. 配置建议与调优指南
+    L422: 10.1 order 参数选择
+    L430: 10.2 NCCL Communicator 调优
+L433: nccl_communicator_config.yaml
+    L446: 10.3 high_priority_stream_groups
+L449: 推荐将通信密集组设为高优先级
+    L456: 10.4 常见陷阱

@@ -221,11 +221,11 @@ class ConstraintGuard(Guard):
             "constraint": constraint.description,
             "prompt": constraint.prompt,
             "tool_name": ctx.tool_name,
-            "tool_args": str(ctx.tool_args)[:2000],  # Truncate to avoid huge payloads
+            "tool_args": str(ctx.tool_args),
         }
         # Include recent tool history if available for context
         if hasattr(ctx, 'recent_tool_history') and ctx.recent_tool_history:
-            judge_context["recent_history"] = str(ctx.recent_tool_history[-5:])[:1000]
+            judge_context["recent_history"] = str(ctx.recent_tool_history[-5:])
 
         try:
             result = ctx.classify_fn("is_constraint_violated", judge_context)

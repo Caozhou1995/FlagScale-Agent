@@ -65,7 +65,7 @@ class PlanUpdateTool(Tool):
             },
             "notes": {
                 "type": "string",
-                "description": "Notes or reason for the update.",
+                "description": "Append a note to this step (scratchpad). Use freely to record: attempts, failures, key decisions, things to remember. Each call appends a new line — previous notes are preserved.",
             },
             "new_steps": {
                 "type": "array",

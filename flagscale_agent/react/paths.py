@@ -14,8 +14,9 @@
 
 """Centralized path management for FlagScale Agent.
 
-All agent state lives under ~/.flagscale — one fixed location regardless
-of where the agent is launched from. This avoids polluting project directories.
+All agent state lives under a single root directory. Default is ~/.flagscale,
+but can be overridden via FLAGSCALE_HOME environment variable for shared storage
+or multi-node container setups.
 """
 
 import os
@@ -23,12 +24,19 @@ from pathlib import Path
 
 
 def get_dot_flagscale_root() -> str:
-    """Get the .flagscale root directory (~/.flagscale).
+    """Get the .flagscale root directory.
+    
+    Resolution order:
+        1. FLAGSCALE_HOME env var (for shared storage / multi-node setups)
+        2. ~/.flagscale (default, backward compatible)
     
     Returns:
-        Absolute path to ~/.flagscale directory (created if not exists).
+        Absolute path to .flagscale directory (created if not exists).
     """
-    dot_flagscale = os.path.join(Path.home(), ".flagscale")
+    dot_flagscale = os.environ.get("FLAGSCALE_HOME")
+    if not dot_flagscale:
+        dot_flagscale = os.path.join(Path.home(), ".flagscale")
+    dot_flagscale = os.path.abspath(dot_flagscale)
     os.makedirs(dot_flagscale, exist_ok=True)
     return dot_flagscale
 
@@ -41,14 +49,6 @@ def get_sessions_root() -> str:
 def get_memory_dir() -> str:
     """Get global agent memory directory (~/.flagscale/agent_memory)."""
     return os.path.join(get_dot_flagscale_root(), "agent_memory")
-
-
-def get_session_memory_dir(session_id: str) -> str:
-    """Get per-session memory directory (~/.flagscale/sessions/{session_id}/memory).
-
-    Session memory is isolated per session and never mixed with global memory.
-    """
-    return os.path.join(get_sessions_root(), session_id, "memory")
 
 
 def get_input_history_file() -> str:

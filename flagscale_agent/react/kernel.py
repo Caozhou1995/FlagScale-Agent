@@ -99,6 +99,7 @@ class AgentKernel:
 
         self._interrupted = False
         self._plan_auto_continue_count = 0  # Reset per turn to avoid poisoning
+        self._signal_reminder_sent = False  # Reset fallback signal reminder
         self.fsm.transition(AgentState.EXECUTING, reason="new turn")
         d.judge.reset_turn()
         d.guard_registry.reset_new_turn()
@@ -167,12 +168,16 @@ class AgentKernel:
                 elapsed = time.time() - getattr(self, "_t0", time.time())
                 in_tok = usage.get("input_tokens") or 0
                 out_tok = usage.get("output_tokens") or 0
+                cache_read = usage.get("cache_read_input_tokens") or 0
+                cache_create = usage.get("cache_creation_input_tokens") or 0
                 result.input_tokens += in_tok
                 result.output_tokens += out_tok
                 if in_tok:
-                    d.history.report_actual_tokens(in_tok)
+                    d.history.report_actual_tokens(in_tok + cache_read + cache_create)
 
-                d.display.llm_done(elapsed, in_tok, out_tok)
+                d.display.llm_done(elapsed, in_tok, out_tok,
+                                   cache_read_tokens=cache_read or None,
+                                   cache_creation_tokens=cache_create or None)
 
                 if self._interrupted:
                     break
@@ -231,6 +236,16 @@ class AgentKernel:
                                 continue
                             else:
                                 self._short_output_retries = 0
+                        # Fallback: give LLM one chance to add the missing signal
+                        if not getattr(self, "_signal_reminder_sent", False):
+                            self._signal_reminder_sent = True
+                            d.history.append({"role": "user", "content": (
+                                "[system] 你刚才的回复没有包含 [TASK_COMPLETE] 或 [NEED_USER_INPUT]。"
+                                "如果当前指令已响应完成且不需要用户输入，请回复 [TASK_COMPLETE]。"
+                                "如果需要用户确认或提供信息，请回复 [NEED_USER_INPUT]。"
+                            )})
+                            continue
+                        self._signal_reminder_sent = False
                         result.stop_reason = "no_tool_calls"
                         break
                     # Plan auto-continue — check token budget first
@@ -458,32 +473,43 @@ class AgentKernel:
                 d.inject_message_fn(verdict.message)
             display.guard_inject(verdict.message)
         elif verdict.action == "force_compact":
-            d.history.force_compact()
+            # V3: force_compact = evict oldest 30% of evictable messages
+            evictable = d.history.get_evictable_indexes()
+            if evictable:
+                count = max(1, len(evictable) * 30 // 100)
+                for idx in evictable[:count]:
+                    d.history.evict_message(idx)
         return False
 
     def _recover_context_overflow(self, exc, schemas):
-        """Try progressively aggressive compaction on context overflow."""
+        """Evict old messages on context overflow, then retry LLM call once."""
         d = self.deps
 
-        # Save recovery state to plan before compaction
+        # Save recovery state to plan before eviction
         self._save_recovery_state()
 
         d.display.thinking_clear()
-        display.warn("Context overflow, compacting...")
+        display.warn("Context overflow, evicting old messages...")
+
+        evictable = d.history.get_evictable_indexes()
+        if not evictable:
+            display.warn("No evictable messages — cannot recover.")
+            return None, {}
+
+        # Evict 50% of evictable messages (aggressive, single pass)
+        count = max(1, len(evictable) * 50 // 100)
+        for idx in evictable[:count]:
+            d.history.evict_message(idx)
+
+        messages = d.history.get_messages()
         _call = d.call_llm_fn or (lambda m, s: d.provider.chat_stream(m, s))
-        for ratio in [0.50, 0.35, 0.25]:
-            overflow_limit = d.history._actual_input_tokens or d.config.max_context_tokens
-            d.history.force_compact(target_ratio=ratio, base_limit=int(overflow_limit * 0.80))
-            messages = d.history.get_messages()
-            try:
-                d.display.thinking()
-                return _call(messages, schemas)
-            except Exception as e2:
-                d.display.thinking_clear()
-                if not d.is_context_limit_error_fn(e2):
-                    display.warn(f"LLM error after compact: {e2}")
-                    return None, {}
-        return None, {}
+        try:
+            d.display.thinking()
+            return _call(messages, schemas)
+        except Exception as e2:
+            d.display.thinking_clear()
+            display.warn(f"LLM call failed after eviction: {e2}")
+            return None, {}
 
     def _detect_self_modification(self, tool_calls: list) -> bool:
         """Check if any tool call modified flagscale_agent/ source files.

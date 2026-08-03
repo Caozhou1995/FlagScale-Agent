@@ -1,0 +1,279 @@
+# know-te-comm
+# TransformerEngine通信优化：Userbuffers comm-gemm overlap、TP集成、CPU offload
+# Source: TransformerEngine-FL @ 2cb485f
+
+## transformerengine_fl/05_userbuffers_comm_gemm_overlap.md (559 lines)
+L1: 第五章：Userbuffers & Comm-GEMM Overlap 系统深度源码分析
+  L3: 1. 概述与源文件定位
+    L16: 1.1 设计动机
+  L34: 2. 分层架构
+  L67: 3. Python Op层深度分析
+    L69: 3.1 UserbuffersForwardLinear._functional_forward (L90-277)
+      L71: 3.1.1 通信模式判定
+L74: 源码 L192-196
+      L83: 3.1.2 AllGather模式执行流程（ColumnParallel）
+L86: 源码 L198-224
+      L102: 3.1.3 GEMM + 通信Overlap执行
+L105: 源码 L243-253 - 关键：general_gemm内部处理overlap
+    L120: 3.2 Op Fusion机制 (fuse_forward_ops, L373-448)
+    L135: 3.3 ub_comm_name命名规范
+  L147: 4. C++ CommOverlapCore 核心 (L48-170)
+    L149: 4.1 初始化流程
+    L164: 4.2 关键配置参数
+    L197: 4.3 SM划分策略
+  L214: 5. split_overlap_rs 详解 (L489-619)
+    L218: 5.1 算法伪代码
+    L268: 5.2 时序图
+    L282: 5.3 最后一个chunk的特殊处理 (L603-604)
+  L291: 6. atomic_gemm_overlap_rs (L392-484)
+    L293: 6.1 设计动机
+    L308: 6.2 环境变量控制
+  L316: 7. CommOverlapP2PBase: Ring模式 (L660+)
+    L318: 7.1 Buffer分配策略
+    L337: 7.2 P2P Ring vs NCCL集合通信对比
+  L347: 8. Userbuffers底层内存管理
+    L349: 8.1 Buffer注册 (userbuffers.cu)
+    L378: 8.2 零拷贝数据流
+  L389: 9. FP8支持详解
+    L391: 9.1 FP8 AllGather路径 (源码L198-216)
+L394: ColumnParallel FP8前向:
+L395: 1. 本地输入量化为FP8
+L398: 2. fill_userbuffers: 将FP8 tensor拷贝到userbuffer
+L400: x指向userbuffer中AllGather后的完整FP8 tensor
+L402: 3. general_gemm: FP8 GEMM with AG overlap
+L403: 通信传输FP8数据(1字节/元素)，带宽需求减半
+    L406: 9.2 FP8 ReduceScatter路径 (C++ L606-611)
+    L418: 9.3 MXFP8约束 (C++ L216-217)
+  L427: 10. 性能模型
+    L429: 10.1 Overlap效率公式
+    L447: 10.2 最优num_splits选择
+    L462: 10.3 H100实测参考 (Hidden=4096, SeqLen=4096, TP=8)
+  L486: 11. 与Megatron-LM集成
+    L488: 11.1 配置入口
+L491: megatron/core/transformer/transformer_config.py
+    L501: 11.2 Layer-wise Communicator映射
+    L521: 11.3 启用条件检查
+L524: UserbuffersForwardLinear._functional_forward (L167-177):
+L525: 必须满足以下条件才能使用userbuffers:
+L526: 1. tensor_parallel_size > 1
+L527: 2. tensor_parallel_mode in ("column", "row")
+L528: 3. sequence_parallel = True (必须启用SP)
+L529: 4. TE编译时包含userbuffers支持
+  L532: 12. 设计决策总结
+  L545: 13. 调优checklist
+
+## transformerengine_fl/07_distributed_tp_integration.md (596 lines)
+L1: Chapter 07: 分布式通信与张量并行集成 — 源码深度分析
+  L3: 源码位置
+  L12: 1. 架构总览
+  L31: 2. CudaRNGStatesTracker：TP-RNG一致性管理 (L812-923)
+    L33: 2.1 问题背景
+    L37: 2.2 类结构
+    L67: 2.3 使用模式
+L70: 模型初始化时 (每个TP rank不同seed)
+L73: Dropout执行时
+L77: 退出后恢复全局RNG（保证非TP操作的一致性）
+    L80: 2.4 Graph-safe RNG
+  L87: 3. _CheckpointFunction：TE增强型激活检查点 (L332-477)
+    L89: 3.1 与PyTorch原生torch.utils.checkpoint的区别
+    L99: 3.2 Forward核心逻辑 (L341-405)
+    L134: 3.3 Backward重计算逻辑 (L408-477)
+    L177: 3.4 内存节省分析
+  L188: 4. gather_along_first_dim：多格式智能AllGather (L1637-1787)
+    L190: 4.1 统一入口，多格式路由
+    L217: 4.2 FP8 AllGather详解 (_all_gather_fp8, L979-1070)
+    L258: 4.3 scale一致性假设
+  L266: 5. reduce_scatter_along_first_dim (L925-948)
+  L293: 6. symmetric_all_reduce：NVLink对称内存加速 (L1842-1943)
+    L295: 6.1 设计动机
+    L299: 6.2 实现
+    L325: 6.3 使用场景
+  L331: 7. SP通信数据流：完整链路分析
+    L333: 7.1 Column Linear + SP Forward
+    L349: 7.2 Row Linear + SP Forward
+    L366: 7.3 SP vs 非SP通信量对比
+    L382: 7.4 与Userbuffers的集成
+  L400: 8. FusibleOperation通信算子封装
+    L402: 8.1 AllGather Op (ops/comm/all_gather.py)
+    L423: 8.2 融合触发条件
+  L438: 9. TP线性层通信模式矩阵（完整版）
+  L454: 10. activation_recompute_forward上下文管理 (L243-289)
+L476: FP8 linear的forward中:
+  L482: 11. 通信量化精度影响分析
+    L484: 11.1 FP8 AllGather的精度保证
+    L498: 11.2 NVFP4 AllGather带宽优势
+  L510: 12. 端到端通信流水线时序
+    L512: 12.1 单层Transformer Block (SP + UB overlap)
+  L551: 13. 设计决策总结
+  L563: 14. 配置与调优建议
+L566: Megatron配置
+L570: TransformerEngine配置
+L576: FP8通信
+L578: 注意：仅影响forward的AG通信，RS仍为BF16
+L580: Symmetric Memory (实验性)
+    L585: 14.1 调优决策树
+
+## transformerengine_fl/08_cpu_offload_cuda_graph.md (636 lines)
+L1: Chapter 08: CPU Offload & CUDA Graph — 源码深度分析
+  L3: 源码位置
+  L12: Part I: CPU Offload 系统
+  L14: 1. 架构总览
+  L36: 2. TensorGroup与TensorGroupProcessor (L90-225)
+    L38: 2.1 TensorGroup数据结构
+    L48: 2.2 Offload前优化 (tensor_group_process_before_offload)
+L73: 记录view元信息(shape, stride, offset)用于reload后恢复
+L82: 用id(tensor)做key，跳过重复引用
+    L92: 2.3 Reload后恢复 (tensor_group_process_after_reload)
+  L104: 3. OffloadableLayerState：单层Offload执行引擎 (L228-492)
+    L106: 3.1 状态机
+    L116: 3.2 三阶段TensorGroup
+    L126: 3.3 start_offload() (L259-312)
+    L158: 3.4 release_activation_forward_gpu_memory() (L313-328)
+    L174: 3.5 start_reload() (L330-363)
+    L208: 3.6 Offload过滤条件 (_check_if_offload, L453-492)
+  L230: 4. DefaultOffloadSynchronizer：自动调度策略 (L575-653)
+    L232: 4.1 调度算法 (_init_offload_synchronization_dicts, L601-625)
+    L260: 4.2 时序示例 (8层模型，offload 4层)
+  L286: 5. _CpuOffloadContext：用户接口 (L868-943)
+    L288: 5.1 saved_tensors_hooks机制
+    L309: 5.2 synchronization_function (L898-930)
+    L328: 5.3 使用模式
+L331: 自动模式
+L339: 手动模式 (PP场景)
+L349: 延迟释放 (overlap with后续compute)
+L353: backward前预取
+  L360: Part II: CUDA Graph 系统
+  L362: 6. 架构总览 (graph.py)
+  L387: 7. Warmup阶段详解 (L452-556)
+    L389: 7.1 为什么需要Warmup？
+    L395: 7.2 Warmup执行
+    L416: 7.3 TE Module发现机制
+  L432: 8. Graph Capture阶段 (L558-700)
+    L434: 8.1 Forward Capture
+L440: RNG状态注册（确保graph replay时RNG正确推进）
+L445: Capture
+    L450: 8.2 Pipeline Parallel支持 (_order参数)
+L453: _order示例 (2 model chunks, 2 microbatches):
+L454: [1, 2, 1, 2, -1, -2, -1, -2]
+L455: ↑fwd chunk0  ↑fwd chunk1  ↑bwd chunk0  ↑bwd chunk1
+L457: delay_wgrad_compute: 小数值表示wgrad
+L458: [1, 2, 1, 2, -1.5, -2.5, -1, -2, -1.5, -2.5]
+L459: ↑wgrad only     ↑dx only     ↑wgrad
+    L464: 8.3 三个Graph类型
+  L474: 9. FP8与CUDA Graph的交互 (L1075-1122)
+    L476: 9.1 问题
+    L480: 9.2 解决方案：save/restore FP8 tensors
+    L503: 9.3 执行流程
+    L514: 9.4 cache_quantized_params优化
+L517: make_graphed_callables参数
+  L527: 10. Static Buffer与输入/输出映射
+    L529: 10.1 问题
+    L533: 10.2 解决方案
+L536: Capture时记录static input surface
+L542: Replay时: 将新input拷贝到static buffer
+  L550: 11. 限制条件与规避
+  L561: 12. 端到端性能模型
+    L563: 12.1 CPU Offload收益分析
+    L577: 12.2 CUDA Graph收益分析
+    L593: 12.3 两者组合
+  L602: 13. 设计决策总结
+  L615: 14. 调试与排查
+L618: 检查offload统计
+L622: 检查单层offload状态
+L628: 标记不需要offload的tensor
+L631: 强制offload base tensor (view场景)
+L634: CUDA Graph debug: 禁用graph查看kernel list
+
+## transformerengine_fl/09_megatron_integration.md (652 lines)
+L1: Chapter 09: Megatron-LM 集成接口 — 源码深度分析
+  L3: 源码位置
+  L13: 1. 架构总览
+  L32: 2. TELinear：基类设计 (L675-916)
+    L34: 2.1 初始化参数映射
+    L66: 2.2 is_first_microbatch 优化 (L720, L878-884)
+    L82: 2.3 delay_wgrad_compute支持 (L730-734, L912-915)
+L85: 初始化时透传给TE (需要TE >= 2.3.0)
+L89: 提供backward_dw方法供外部显式调用
+    L97: 2.4 Expert并行参数标记 (L846-858)
+  L113: 3. TELayerNormColumnParallelLinear：融合LN+Linear (L918-1143)
+    L115: 3.1 设计动机
+    L127: 3.2 Userbuffers配置映射 (L988-1019)
+    L155: 3.3 symmetric_ar_type参数 (L1021-1026)
+L158: FlagScale扩展: NVLink对称内存AllReduce
+    L164: 3.4 split_te_layernorm_column_parallel_linear (L325-403)
+  L185: 4. TEColumnParallelLinear & TERowParallelLinear (L1145-1357)
+    L187: 4.1 列并行 vs 行并行参数差异
+    L198: 4.2 sharded_state_dict (分布式检查点)
+L201: TEColumnParallelLinear (列切分, 沿axis 0)
+L211: TERowParallelLinear (行切分, 沿axis 1)
+  L220: 5. TEDotProductAttention：全特性注意力适配 (L1359-2445)
+    L222: 5.1 初始化核心流程
+L225: 步骤1: 构建ProcessGroupCollection
+L232: 步骤2: CP配置注入
+L249: 步骤3: 版本条件特性
+    L257: 5.2 cp_stream共享设计
+    L269: 5.3 PackedSeqParams版本兼容 (L1509-1529)
+L275: 根据TE版本裁剪不支持的参数
+L282: 非注意力字段过滤
+  L287: 6. 量化配置系统 (L86-307)
+    L289: 6.1 三层配置结构
+    L306: 6.2 TEQuantizationRecipe (L93-160)
+    L325: 6.3 运行时量化决策 (_get_should_context_be_quantized_params, L285-305)
+L347: 场景1: 只让某些层用FP8，其余BF16
+L348: 全局不开fp8_autocast，对特定层设置 override_nonquantized_autocast=True
+L350: 场景2: 全局FP8，但某层回退到BF16
+L351: 全局开fp8_autocast，对特定层设置 override_quantized_autocast=False
+    L354: 6.4 forward中的量化context注入 (L876-892)
+  L367: 7. TEDelayedScaling：FP8 Recipe Megatron适配 (L2447-2480)
+    L369: 7.1 参数映射
+    L394: 7.2 在Megatron中的使用
+L397: training.py中的典型调用
+  L411: 8. TECudaRNGStatesTracker：RNG兼容适配 (L2483-2515)
+    L413: 8.1 Megatron与TE的RNG差异
+    L422: 8.2 is_initialized状态追踪
+  L445: 9. te_checkpoint：跨版本激活检查点 (L2518-2542)
+  L478: 10. get_cpu_offload_context：跨版本CPU Offload封装 (L2558-2637)
+    L480: 10.1 版本分支逻辑
+  L517: 11. _get_extra_te_kwargs：通用参数注入 (L307-317)
+  L536: 12. FlagScale特定扩展
+    L538: 12.1 tp_size动态获取 (L1037, L1547)
+L541: FlagScale修改: 支持FlexDistributed (get_parallel_context() != None时)
+    L549: 12.2 cp_stream FlagScale Add (L1368, L1452)
+    L561: 12.3 device抽象 (L316)
+  L567: 13. 端到端配置传递链路
+    L569: 13.1 FP8训练完整链路
+    L604: 13.2 模块替换关系
+  L617: 14. 设计决策与取舍
+  L630: 15. 调试与验证
+L633: 检查模块替换是否生效
+L639: 验证UB overlap配置
+L644: 检查FP8量化状态
+L649: 验证CP stream共享
+
+## transformerengine_fl/11_cuda_kernels.md (352 lines)
+L1: TE-FL 第11章：CUDA Kernel 层深度源码分析
+  L3: 1. 概述与设计动机
+    L5: 1.1 核心问题
+    L16: 1.2 WHY: 为什么不直接用 PyTorch native 操作？
+  L28: 2. 源码目录结构
+  L81: 3. Fused Attention Kernel 详解
+    L83: 3.1 路由策略 (fused_attn.cpp)
+    L101: 3.2 Flash Attention 封装 (flash_attn.cu)
+    L119: 3.3 Context Parallel 通信 (context_parallel.cu)
+  L147: 4. Activation 融合模板
+    L149: 4.1 模板设计 (activation_template.h)
+    L177: 4.2 具体实例化
+  L196: 5. Cast + Transpose 融合
+    L198: 5.1 WHY 融合 cast 和 transpose？
+    L213: 5.2 实现策略
+  L236: 6. GEMM 封装 (gemm/)
+    L238: 6.1 FP8 GEMM 接口
+    L253: 6.2 Comm-GEMM Overlap (comm_gemm_overlap/)
+  L273: 7. Normalization 融合
+    L275: 7.1 LayerNorm + FP8 Cast
+  L304: 8. MoE 专用 Kernel
+    L306: 8.1 Fused Router (fused_router/)
+    L319: 8.2 Token Permutation (permutation/)
+  L328: 9. 性能量化对比
+  L338: 10. 与其他章节的关联
+  L347: 11. 源码版本信息

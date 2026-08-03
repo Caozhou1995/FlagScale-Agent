@@ -207,7 +207,7 @@ class DebugDisciplineGuard(Guard):
                     matched = False
                     for pat in _DEBUG_RESIDUE_PATTERNS:
                         if pat.search(line):
-                            residue_found.append(f"  {filepath}:{i}: {line.strip()[:80]}")
+                            residue_found.append(f"  {filepath}:{i}: {line.strip()}")
                             matched = True
                             break
                     # Collect ambiguous cases for LLM tier
@@ -233,14 +233,14 @@ class DebugDisciplineGuard(Guard):
                             "filepath": filepath,
                             "lineno": lineno,
                             "line_content": line_content,
-                            "context": context[:500],
+                            "context": context,
                         },
                         default={"is_residue": False, "reason": ""},
                     )
                     if is_trusted(source) and isinstance(result, dict) and result.get("is_residue"):
                         reason = result.get("reason", "LLM detected debug code")
                         residue_found.append(
-                            f"  {filepath}:{lineno}: {line_content[:60]} (LLM: {reason})"
+                            f"  {filepath}:{lineno}: {line_content} (LLM: {reason})"
                         )
                 except Exception:
                     continue

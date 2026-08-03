@@ -1,0 +1,170 @@
+# Knowledge System Configuration
+# Each group becomes a loadable knowledge unit via load_knowledge tool.
+# 'docs' paths are relative to knowledge/docs/ directory.
+
+_sources:
+  megatron_lm_fl:
+    repo: Megatron-LM-FL
+    commit: c024887
+  transformerengine_fl:
+    repo: TransformerEngine-FL
+    commit: 2cb485f
+  megatron_energon:
+    repo: Megatron-Energon
+    commit: bef8be2
+  nccl:
+    repo: NCCL
+    commit: docs-only
+  flash_attention:
+    repo: FlashAttention
+    commit: docs-only
+  pytorch:
+    repo: PyTorch
+    commit: docs-only
+  cuda_operator:
+    repo: CUDA-Operator-Analysis
+    commit: docs-only
+  profiling:
+    repo: Profiling-Analysis
+    commit: docs-only
+
+know-megatron-parallel:
+  description: "Megatron并行机制：TP/PP/DP/CP/EP进程组创建、通信模式、流水线调度"
+  docs:
+    - megatron_lm_fl/01_pipeline_parallel.md
+    - megatron_lm_fl/02_tensor_parallel.md
+    - megatron_lm_fl/03_data_parallel_distributed_optimizer.md
+    - megatron_lm_fl/04_context_parallel_sequence_parallel.md
+    - megatron_lm_fl/05_expert_parallelism.md
+    - megatron_lm_fl/15_parallel_state.md
+
+know-megatron-training:
+  description: "Megatron训练循环：初始化、forward/backward、optimizer step、checkpoint保存恢复"
+  docs:
+    - megatron_lm_fl/09_optimizer.md
+    - megatron_lm_fl/12_dist_checkpointing.md
+    - megatron_lm_fl/13_training_loop.md
+    - megatron_lm_fl/14_transformer_layer_spec.md
+
+know-megatron-model:
+  description: "Megatron模型层：Transformer抽象、MLA/MTP、RoPE、混合精度、MoE、内存优化"
+  docs:
+    - megatron_lm_fl/06_mixed_precision_fp8.md
+    - megatron_lm_fl/07_memory_optimization.md
+    - megatron_lm_fl/08_communication_optimization.md
+    - megatron_lm_fl/10_flagscale_extensions.md
+    - megatron_lm_fl/11_transformer_engine_fl.md
+    - megatron_lm_fl/16_mla_mtp.md
+    - megatron_lm_fl/17_rope.md
+
+know-te-fp8:
+  description: "TransformerEngine FP8量化：Float8Tensor底层、量化系统、fused linear ops"
+  docs:
+    - transformerengine_fl/01_fp8_quantization_system.md
+    - transformerengine_fl/02_fused_linear_userbuffers.md
+    - transformerengine_fl/10_float8_tensor.md
+
+know-te-attention:
+  description: "TransformerEngine注意力：DotProductAttention、Context Parallel、融合实现"
+  docs:
+    - transformerengine_fl/03_dot_product_attention.md
+    - transformerengine_fl/04_context_parallel.md
+    - transformerengine_fl/06_ops_abstraction_layer.md
+
+know-te-comm:
+  description: "TransformerEngine通信优化：Userbuffers comm-gemm overlap、TP集成、CPU offload"
+  docs:
+    - transformerengine_fl/05_userbuffers_comm_gemm_overlap.md
+    - transformerengine_fl/07_distributed_tp_integration.md
+    - transformerengine_fl/08_cpu_offload_cuda_graph.md
+    - transformerengine_fl/09_megatron_integration.md
+    - transformerengine_fl/11_cuda_kernels.md
+
+know-nccl-core:
+  description: "NCCL核心：整体架构、拓扑检测算法、channel/ring/tree路径选择"
+  docs:
+    - nccl/00_topology_detection_guide.md
+    - nccl/01_architecture_overview.md
+    - nccl/02_topology_detection.md
+
+know-nccl-runtime:
+  description: "NCCL运行时：集合通信算法实现、Transport层(P2P/SHM/NET)、任务调度、性能调优"
+  docs:
+    - nccl/03_collective_algorithms.md
+    - nccl/04_transport_layer.md
+    - nccl/05_enqueue_scheduling.md
+    - nccl/06_performance_tuning.md
+
+know-flash-attn:
+  description: "FlashAttention：Online Softmax tiling、SM90 TMA/WGMMA kernel、backward pass、KV cache推理"
+  docs:
+    - flash_attention/01_architecture_overview.md
+    - flash_attention/02_online_softmax_tiling.md
+    - flash_attention/03_sm90_kernel_tma_wgmma.md
+    - flash_attention/04_backward_pass.md
+    - flash_attention/05_kvcache_inference.md
+
+know-torch-distributed:
+  description: "PyTorch分布式：ProcessGroup/NCCL backend、DDP reducer、FSDP sharding、DeviceMesh、torchrun"
+  docs:
+    - pytorch/01_process_group_collective.md
+    - pytorch/02_ddp.md
+    - pytorch/03_fsdp.md
+    - pytorch/04_device_mesh_dtensor.md
+    - pytorch/05_elastic_launch.md
+
+know-cuda-kernel:
+  description: "CUDA算子开发：ATen dispatch机制、CUTLASS 3.x GEMM、CuTe Layout、TMA异步流水线、WGMMA"
+  docs:
+    - cuda_operator/00_overview.md
+    - cuda_operator/01_aten_dispatch.md
+    - cuda_operator/02_cublaslt_selection.md
+    - cuda_operator/03_te_fused_ops.md
+    - cuda_operator/04_cutlass_gemm.md
+    - cuda_operator/05_cute_layout.md
+    - cuda_operator/06_tma_async_pipeline.md
+    - cuda_operator/07_wgmma_tensor_core.md
+
+know-cuda-optimization:
+  description: "CUDA性能优化：shared memory/bank conflict、cuBLAS算法选择、occupancy、NCU分析、自定义kernel模式"
+  docs:
+    - cuda_operator/08_shared_memory_bank_conflict.md
+    - cuda_operator/09_cublas_algorithm.md
+    - cuda_operator/10_memory_hierarchy_bandwidth.md
+    - cuda_operator/11_h100_microarch.md
+    - cuda_operator/12_occupancy_launch_config.md
+    - cuda_operator/13_profiling_ncu.md
+    - cuda_operator/14_custom_kernel_patterns.md
+
+know-profiling:
+  description: "性能分析全链路：Nsys时间线、NCU kernel分析、PyTorch Profiler、Megatron内置profiler集成"
+  docs:
+    - profiling/01_profiling_tools_overview.md
+    - profiling/02_nsys_deep_dive.md
+    - profiling/03_pytorch_profiler.md
+    - profiling/04_ncu_kernel_profiling.md
+    - profiling/05_megatron_profiler_integration.md
+
+know-cluster-infra:
+  description: "集群基础设施：IB拓扑检测方法、网络fabric结构、GPU监控方案、Slurm调度"
+  docs:
+    - nccl/00_topology_detection_guide.md
+    - cluster_management/01_gpu_cluster_monitoring.md
+
+know-source-analysis:
+  description: "分析标准方法论：基础设施源码分析、模型实现分析、论文技术报告调研、硬件与通信基础设施分析的文档产出规范"
+  docs:
+    - analysis_standards/01_infrastructure_analysis.md
+    - analysis_standards/02_implementation_analysis.md
+    - analysis_standards/03_paper_research.md
+    - analysis_standards/04_hardware_analysis.md
+
+know-energon:
+  description: "Megatron-Energon数据加载：架构总览、WebDataset存储索引、TaskEncoder编码、Metadataset混合、Wrappers组合、分布式断点恢复"
+  docs:
+    - megatron_energon/01_architecture_overview.md
+    - megatron_energon/02_webdataset_storage_indexing.md
+    - megatron_energon/03_task_encoder.md
+    - megatron_energon/04_metadataset.md
+    - megatron_energon/05_wrappers.md
+    - megatron_energon/06_distributed_loading.md

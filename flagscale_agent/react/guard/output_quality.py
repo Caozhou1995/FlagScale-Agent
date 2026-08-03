@@ -94,7 +94,7 @@ class OutputQualityGuard(Guard):
         )):
             self._consecutive_silent_failures += 1
             old_str = ctx.tool_args.get("old_string", "")
-            preview = old_str[:80] + "..." if len(old_str) > 80 else old_str
+            preview = old_str
             return GuardVerdict.inject(
                 f"[OutputQuality] edit_file did not find the target string. "
                 f"The file content may have changed. Re-read the file and retry.\n"
@@ -138,7 +138,7 @@ class OutputQualityGuard(Guard):
             self._consecutive_silent_failures += 1
             if self._consecutive_silent_failures >= 2:
                 return GuardVerdict.inject(
-                    f"[OutputQuality] '{cmd[:60]}' produced no output "
+                    f"[OutputQuality] '{cmd}' produced no output "
                     f"({self._consecutive_silent_failures} times). "
                     f"Check if the command is correct or the target exists.",
                     reason="shell_empty_output",

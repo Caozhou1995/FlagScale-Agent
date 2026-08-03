@@ -16,7 +16,8 @@
 
 Two responsibilities:
 1. Write Length Check: Before write_file with large content, inject a reminder
-   to use append mode for content > 3000 chars.
+   to use append mode for content > 3000 chars. Also detects when path is missing
+   (sign of output truncation) and provides recovery guidance.
 2. Read Efficiency: After read_file on a large file (500 line limit hit),
    suggest using summarize patterns or targeted reads.
 
@@ -44,7 +45,23 @@ class FileToolGuard(Guard):
         """Check write_file content length and warn about splitting."""
         if ctx.tool_name == "write_file":
             content = ctx.tool_args.get("content", "")
+            path = ctx.tool_args.get("path", "")
             mode = ctx.tool_args.get("mode", "write")
+
+            # Detect missing path — strong sign of output truncation
+            if not path:
+                self._truncation_count += 1
+                return GuardVerdict.inject(
+                    f"[FileTool] CRITICAL: write_file called with empty path — "
+                    f"this means the LLM output was truncated before the tool call "
+                    f"could be fully formed. The content was too long for a single response. "
+                    f"RECOVERY: Split the document into chunks of ≤2500 chars each. "
+                    f"Write chunk 1 with mode='write', then append remaining chunks. "
+                    f"Plan the split BEFORE generating content — do NOT attempt to write "
+                    f"the full document in one shot. "
+                    f"(Truncation count this session: {self._truncation_count})",
+                    reason="truncation_detected_no_path",
+                )
 
             # Only warn for initial writes (not appends) with large content
             if mode == "write" and len(content) > 4000:
@@ -54,8 +71,10 @@ class FileToolGuard(Guard):
                     return GuardVerdict.inject(
                         f"[FileTool] WARNING: Content appears truncated "
                         f"({len(content)} chars). This file write may be "
-                        f"incomplete. Split large files: write first 3000 chars "
-                        f"with mode='write', then append remaining with mode='append'.",
+                        f"incomplete. Split large files: write first 2500 chars "
+                        f"with mode='write', then append remaining with mode='append'. "
+                        f"Split at natural boundaries (## headers, function defs). "
+                        f"(Truncation count this session: {self._truncation_count})",
                         reason="possible_truncation",
                     )
 
@@ -77,14 +96,29 @@ class FileToolGuard(Guard):
                         reason="large_file_efficiency",
                     )
 
-        # Check if write_file produced a file smaller than expected
+        # Check if write_file had a path-missing error (output truncation)
         if ctx.tool_name == "write_file" and ctx.tool_result:
-            content = ctx.tool_args.get("content", "")
+            if "'path' parameter is required but was empty or missing" in ctx.tool_result:
+                self._truncation_count += 1
+                return GuardVerdict.inject(
+                    f"[FileTool] TRUNCATION FAILURE: Your write_file call was truncated — "
+                    f"the content was too long and the output hit the token limit. "
+                    f"DO NOT retry with the same approach. Instead:\n"
+                    f"  1. Plan the document structure (list sections/headers)\n"
+                    f"  2. Write section 1 (≤2500 chars) with mode='write'\n"
+                    f"  3. Append each subsequent section (≤2500 chars) with mode='append'\n"
+                    f"  4. Never put more than ~2500 chars of content in a single write_file call\n"
+                    f"(Total truncation failures this session: {self._truncation_count})",
+                    reason="truncation_recovery_guidance",
+                )
+
+            # Check if write_file produced a file smaller than expected
             if "total file size:" in ctx.tool_result:
                 # Extract reported size
                 import re
                 m = re.search(r"total file size:\s*(\d+)", ctx.tool_result)
                 if m:
+                    content = ctx.tool_args.get("content", "")
                     actual_size = int(m.group(1))
                     expected_size = len(content.encode("utf-8"))
                     if actual_size < expected_size * 0.9:
