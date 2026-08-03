@@ -736,7 +736,9 @@ class WorkerAgent:
                 elif isinstance(event, dict):
                     result_text += event.get("text", "")
             return result_text.strip()
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[Hard Reset] Summary generation failed: {e}")
             return ""
 
     def _generate_hard_reset_summary(self) -> str:
@@ -752,7 +754,11 @@ class WorkerAgent:
         """
         try:
             # Use current messages as context for the summary
-            messages = self.history.messages
+            # Strip internal fields (like _ext_idx) that APIs don't accept
+            messages = []
+            for msg in self.history.messages:
+                clean = {k: v for k, v in msg.items() if not k.startswith("_")}
+                messages.append(clean)
 
             # Also include plan status if available
             plan_info = ""
@@ -785,16 +791,17 @@ class WorkerAgent:
 
             # Prepend the current conversation as context
             context_msgs = list(messages) + prompt_msgs
-            stream, _ = self.provider.chat_stream(context_msgs, [])
+            stream = self.provider.chat_stream(context_msgs, [])
             result_text = ""
             for event in stream:
-                if hasattr(event, "type"):
+                if isinstance(event, dict):
+                    if event.get("type") == "text":
+                        result_text += event.get("content", "")
+                elif hasattr(event, "type"):
                     if event.type == "content_block_delta":
                         delta = getattr(event, "delta", None)
                         if delta and hasattr(delta, "text"):
                             result_text += delta.text
-                elif isinstance(event, dict):
-                    result_text += event.get("text", "")
             return result_text.strip()
         except Exception:
             return ""
