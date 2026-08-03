@@ -74,14 +74,19 @@ class MemoryDisciplineGuard(Guard):
                 self._evolution_reminded = True
                 return GuardVerdict.inject(
                     "[MemoryDiscipline] About to TASK_COMPLETE but no memory review this session. "
-                    "Before completing, run memory_list() and check: "
-                    "(1) Any new fact/pitfall/insight to save? "
-                    "(2) Can any existing pitfall be elevated to an insight (recurring pattern recognized)? "
+                    "Before completing, run memory_list() and check:\n"
+                    "(1) Any new fact/pitfall/insight to save?\n"
+                    "(2) Can any existing pitfall be elevated to an insight (recurring pattern)?\n"
                     "(3) Can any existing insight be digested into a concrete artifact — "
-                    "i.e. create/improve a skill, create/improve a knowledge doc, "
-                    "or create/improve agent code? "
-                    "(4) Any existing fact invalidated by this session's work? "
-                    "Report suggestions to user; do NOT self-execute digest/delete.",
+                    "create/improve a skill, knowledge doc, or agent code?\n"
+                    "(4) Any existing fact invalidated by this session's work?\n\n"
+                    "Evolution example:\n"
+                    "  pitfall/nccl/nic_exclude_syntax (hit 2+ times, same root cause)\n"
+                    "  → elevate to insight/nccl/whitelist_over_exclude\n"
+                    "  → digest: add step to skill 'train-run': always use NCCL_IB_HCA=<list> whitelist, "
+                    "排除式(^dev) in NCCL 2.28+ has known bugs\n\n"
+                    "Report [Memory suggestions] to user with proposed actions; "
+                    "do NOT self-execute digest/delete without confirmation.",
                     reason="evolution_check_before_complete",
                     category="memory_evolution_reminder",
                 )
@@ -103,8 +108,8 @@ class MemoryDisciplineGuard(Guard):
                 f"[MemoryDiscipline] {self.reminder_threshold} tool calls without "
                 "reading or writing memory. Consider: saving key findings as fact/pitfall/insight, "
                 "or checking existing memories to avoid repeating past work. "
-                "If a pitfall pattern is recurring, elevate it to an insight. "
-                "If an insight has enough evidence, digest it into a skill, knowledge doc, or agent code.",
+                "If a pitfall recurs, elevate to insight; "
+                "if an insight has enough evidence, digest into skill/knowledge/agent code.",
                 reason="no_memory_ops_recently",
                 category="memory_idle_reminder",
             )
