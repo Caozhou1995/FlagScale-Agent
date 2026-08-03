@@ -99,6 +99,8 @@ from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
+from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
+from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
 from flagscale_agent.react.constraint.cache import ConstraintCache
 from flagscale_agent.react.prompt_builder import PromptBuilder
@@ -362,6 +364,10 @@ class WorkerAgent:
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
+        # Post-evict recovery guard (always active)
+        guard_registry.register(PostEvictRecoveryGuard())
+        # Knowledge-first guard (always active, inject-only)
+        guard_registry.register(KnowledgeFirstGuard())
 
         deps = KernelDeps(
             provider=self.provider,
