@@ -211,7 +211,12 @@ class HistoryManager:
         self._actual_input_tokens = input_tokens
 
     def get_context_pressure(self) -> float:
-        """Return current context usage as ratio against dynamic working window (60% of max_context_tokens)."""
+        """Return current context usage as ratio against dynamic working window (60% of max_context_tokens).
+        
+        Uses max(estimated, actual) where:
+        - estimated: character-based estimation of all current messages
+        - actual: last API-reported input tokens (reset on eviction since it becomes stale)
+        """
         estimated = sum(_message_tokens(m) for m in self._messages)
         actual = self._actual_input_tokens or 0
         total = max(estimated, actual)
@@ -527,6 +532,9 @@ class HistoryManager:
         msg["content"] = placeholder
         msg["_evicted"] = True
         msg["_evicted_tokens"] = tokens
+
+        # Invalidate actual tokens — stale after eviction
+        self._actual_input_tokens = 0
 
         # Apply paired eviction
         if paired_evict:
