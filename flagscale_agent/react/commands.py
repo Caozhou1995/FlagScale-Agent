@@ -177,10 +177,22 @@ class CommandHandler:
                         evicted += 1
                 print(f"Evicted {evicted} messages.")
             return True
+        elif cmd == "/reset":
+            self._handle_reset()
+            return True
         elif cmd == "/session":
             self._handle_session()
             return True
         return False
+
+    def _handle_reset(self):
+        """Handle /reset command - manually trigger context hard reset."""
+        print("Triggering context hard reset...")
+        try:
+            self.agent._hard_reset_context()
+            print("Hard reset complete.")
+        except Exception as e:
+            print(f"Hard reset failed: {e}")
 
     def _handle_skill(self, user_input: str):
         """Handle /skill command - list or load skills."""

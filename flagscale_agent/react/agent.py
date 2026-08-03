@@ -362,9 +362,6 @@ class WorkerAgent:
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
-        # Code context guard (always active — tracks reads/writes across compaction)
-        from flagscale_agent.react.guard.code_context import CodeContextGuard
-        guard_registry.register(CodeContextGuard())
 
         deps = KernelDeps(
             provider=self.provider,
@@ -741,6 +738,141 @@ class WorkerAgent:
             return result_text.strip()
         except Exception:
             return ""
+
+    def _generate_hard_reset_summary(self) -> str:
+        """Call LLM to generate a work-state summary for hard reset continuation.
+
+        Uses all current messages as context. The summary should capture:
+        - What task is being worked on
+        - Key progress and decisions made
+        - Current step / what to do next
+        - Critical paths, values, configs discovered
+
+        Returns empty string on failure (fallback to programmatic summary).
+        """
+        try:
+            # Use current messages as context for the summary
+            messages = self.history.messages
+
+            # Also include plan status if available
+            plan_info = ""
+            try:
+                from flagscale_agent.react.tools.plan import PlanManager
+                pm = PlanManager()
+                status = pm.get_status()
+                if status:
+                    plan_info = f"\nCurrent plan:\n{status}"
+            except Exception:
+                pass
+
+            prompt_msgs = [
+                {"role": "user", "content": (
+                    "You are generating a context continuation summary. The conversation "
+                    "is being compacted to free up context space. Summarize the FULL work "
+                    "state in a structured format that will allow seamless continuation.\n\n"
+                    "Include:\n"
+                    "1. TASK: What is being worked on (one paragraph)\n"
+                    "2. PROGRESS: Key steps completed, decisions made, paths/values discovered\n"
+                    "3. CURRENT STATE: What was just happening, any pending operations\n"
+                    "4. NEXT STEPS: What to do next\n"
+                    "5. CRITICAL CONTEXT: File paths, configs, error messages, any values "
+                    "that would be lost without this summary\n\n"
+                    f"{plan_info}\n\n"
+                    "Be comprehensive but concise. This summary replaces the full conversation "
+                    "history. Output the summary directly, no preamble."
+                )}
+            ]
+
+            # Prepend the current conversation as context
+            context_msgs = list(messages) + prompt_msgs
+            stream, _ = self.provider.chat_stream(context_msgs, [])
+            result_text = ""
+            for event in stream:
+                if hasattr(event, "type"):
+                    if event.type == "content_block_delta":
+                        delta = getattr(event, "delta", None)
+                        if delta and hasattr(delta, "text"):
+                            result_text += delta.text
+                elif isinstance(event, dict):
+                    result_text += event.get("text", "")
+            return result_text.strip()
+        except Exception:
+            return ""
+
+    def _build_programmatic_summary(self) -> str:
+        """Build a programmatic fallback summary when LLM call fails."""
+        parts = ["[Context Hard Reset — conversation auto-compacted]"]
+
+        # Plan status
+        try:
+            from flagscale_agent.react.tools.plan import PlanManager
+            pm = PlanManager()
+            status = pm.get_status()
+            if status:
+                parts.append(f"\n## Current Plan\n{status}")
+        except Exception:
+            pass
+
+        # Session metadata
+        parts.append(f"\nSession dir: {self._session_dir}")
+        parts.append(f"Reset count: {self.history._reset_count}")
+        parts.append(f"Full conversation log: {self._session_dir}/conversation_full.json")
+        parts.append("\nUse read_file on conversation_full.json or memory_list() for more context.")
+
+        return "\n".join(parts)
+
+    def _build_continuation_message(self, summary: str) -> str:
+        """Build the full continuation message to inject after hard reset."""
+        reset_count = self.history._reset_count
+        total_messages = len(self.history._full_log)
+
+        header = (
+            f"[Context Hard Reset #{reset_count} — conversation auto-compacted]\n"
+            f"Previous conversation: {total_messages} messages total, "
+            f"saved in conversation_full.json.\n"
+            f"Session: {self._session_dir}\n"
+        )
+
+        footer = (
+            "\n---\n"
+            "If you need more historical context, use:\n"
+            "- plan_status() for current task state\n"
+            "- memory_list() for cross-session knowledge\n"
+            "- read_file on conversation_full.json for full history\n"
+            "- recall(index=N) for specific messages by index"
+        )
+
+        return f"{header}\n{summary}\n{footer}"
+
+    def _hard_reset_context(self):
+        """Execute hard reset: generate summary, clear context, rebuild.
+
+        This is called when should_hard_reset() is True. Uses the 40%
+        remaining headroom to call LLM for summary before clearing.
+        """
+        from flagscale_agent.react import display
+
+        display.info("[Hard Reset] Context pressure high, compacting conversation...")
+
+        # 1. Generate LLM summary (we have headroom since working_window < max)
+        summary = self._generate_hard_reset_summary()
+        if not summary:
+            display.info("[Hard Reset] LLM summary failed, using programmatic fallback.")
+            summary = self._build_programmatic_summary()
+
+        # 2. Build continuation message
+        continuation = self._build_continuation_message(summary)
+
+        # 3. Execute hard reset on history manager
+        stats = self.history.hard_reset(continuation, preserve_last_n=4)
+
+        # 4. Save conversation state (persist full_log)
+        self._save_conversation_full()
+
+        display.info(
+            f"[Hard Reset] Done. Cleared {stats['cleared_count']} messages, "
+            f"kept last {stats['preserved_count']}. Reset #{stats['reset_count']}."
+        )
 
     def _exit(self):
         display.goodbye()
@@ -2095,9 +2227,21 @@ class WorkerAgent:
             """Evict old messages on context overflow. Returns True if retry is safe."""
             try:
                 hm = self.history
+
+                # Check if we should do a full hard reset instead of normal eviction
+                if hm.should_hard_reset():
+                    self._hard_reset_context()
+                    nonlocal messages
+                    messages = hm.get_messages()
+                    return True
+
                 evictable = hm.get_evictable_indexes()
                 if not evictable:
-                    return False
+                    # No evictable messages and hard reset not triggered — try hard reset as last resort
+                    self._hard_reset_context()
+                    messages = hm.get_messages()
+                    return True
+
                 # Evict at least 30% of evictable messages (oldest first)
                 count = max(1, len(evictable) * 30 // 100)
                 to_evict = evictable[:count]
@@ -2110,7 +2254,6 @@ class WorkerAgent:
                             self._swap_store.save(idx, result)
                         evicted_any = True
                 if evicted_any:
-                    nonlocal messages
                     messages = hm.get_messages()
                 return evicted_any
             except Exception:
@@ -2556,8 +2699,15 @@ class WorkerAgent:
 
         content = self._swap_store.load(index)
         if content is None:
-            display.tool_done("recall", time.time() - t0, detail=f"index {index} not found", error=True)
-            return f"ERROR: No evicted content found at index {index}."
+            # Fallback: try recall from full_log (handles pre-reset or non-evicted messages)
+            content = self.history.recall_from_full_log(index)
+            if content is None:
+                display.tool_done("recall", time.time() - t0, detail=f"index {index} not found", error=True)
+                return f"ERROR: No evicted content found at index {index}."
+            # full_log recall — no in-place restoration (message not in current _messages)
+            elapsed = time.time() - t0
+            display.tool_done("recall", elapsed, detail=f"index={index} from full_log")
+            return content
 
         # Restore the original content back into history so subsequent LLM calls
         # see it in-place (not just as this turn's tool_result).

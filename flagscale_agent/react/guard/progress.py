@@ -97,8 +97,8 @@ class ProgressGuard(Guard):
                         self._shared_state.issue_read_warning()
                     return GuardVerdict.inject(
                         f"[Progress] You've re-read '{path.split('/')[-1]}' "
-                        f"{self._reread_count} times. You already have this content — "
-                        f"act on it or save key findings to memory.",
+                        f"{self._reread_count} times. You already have this content "
+                        f"in context — act on it instead of re-reading.",
                         reason="re-read_same_file",
                         category="read_stall",
                     )

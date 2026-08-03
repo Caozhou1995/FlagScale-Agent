@@ -68,7 +68,8 @@ class PlanUpdateGuard(Guard):
                 return GuardVerdict.inject(
                     message=(
                         f"[PlanUpdate] Active step {step_id} not updated in {turns_elapsed} turns. "
-                        f"Mark it done or skipped."
+                        f"Mark it done/skipped, or add notes (decisions, attempts, key values) "
+                        f"to preserve context."
                     ),
                     reason="plan_not_updated"
                 )

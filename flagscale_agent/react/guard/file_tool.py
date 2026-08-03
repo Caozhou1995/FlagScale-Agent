@@ -91,8 +91,7 @@ class FileToolGuard(Guard):
                     return GuardVerdict.inject(
                         f"[FileTool] Large file hit read limit. For {path}:\n"
                         f"  - To find specific functions: grep -n 'def function_name' {path}\n"
-                        f"  - To read a specific range: read_file(path, start_line=X, end_line=Y)\n"
-                        f"  - Save key findings to memory_write() to avoid re-reading.",
+                        f"  - To read a specific range: read_file(path, start_line=X, end_line=Y)",
                         reason="large_file_efficiency",
                     )
 
