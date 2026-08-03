@@ -156,8 +156,8 @@ class ComprehensionGateGuard(Guard):
                     f"(1) TIMELINE: per-rank, per-step sequence of operations, "
                     f"(2) INVARIANTS: rules that must always hold, "
                     f"(3) IMPACT PREDICTION: what your edit changes in the timeline. "
-                    f"Use memory_write(key='comprehension_<feature>', type='finding', "
-                    f"content='TIMELINE: ...\\nINVARIANTS: ...').",
+                    f"Use memory_write(key='insight/comprehension/<feature>', type='insight', "
+                    f"content='Discovery: TIMELINE: ...\\nDigestion: INVARIANTS: ...\\nTarget: IMPACT PREDICTION: ...').",
                     reason="no_comprehension_model",
                     category="comprehension",
                 )
@@ -274,7 +274,7 @@ class ComprehensionGateGuard(Guard):
                 "Based on what you've already read, write a comprehension model to memory "
                 "containing: (1) per-rank timeline of operations, "
                 "(2) invariants that must hold, (3) which invariant this failure likely violates. "
-                "Use memory_write with key='comprehension_<feature>'.",
+                "Use memory_write with key='insight/comprehension/<feature>'.",
                 reason="failure_without_model",
                 category="comprehension",
             )
