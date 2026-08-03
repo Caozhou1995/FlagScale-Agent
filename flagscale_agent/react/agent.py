@@ -1988,6 +1988,9 @@ class WorkerAgent:
         Anthropic format (role=user, content=[{type: tool_result, ...}]).
         Falls back to a lightweight user message if no tool_result exists.
         """
+        # Display advisory to user terminal (same dim gray style as inject verdict)
+        display.guard_inject(msg)
+        
         advisory_suffix = (
             f"\n\n---\n"
             f"[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"

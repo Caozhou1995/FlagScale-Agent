@@ -521,8 +521,10 @@ class ToolExecutor:
             display.parallel_tools_finish()
             # Append pending advisories even for skip-only batches
             if hasattr(self, '_pending_advisories') and self._pending_advisories:
+                advisory_msg = "\n".join(self._pending_advisories)
+                display.guard_inject(advisory_msg)  # Display to terminal
                 advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
-                advisory_text += "\n".join(self._pending_advisories)
+                advisory_text += advisory_msg
                 for i in range(len(results) - 1, -1, -1):
                     if results[i] is not None:
                         results[i] += advisory_text
@@ -540,8 +542,10 @@ class ToolExecutor:
         # Append any pending guard advisories to the LAST tool result
         # so they appear inside tool_result messages (safe for API ordering)
         if hasattr(self, '_pending_advisories') and self._pending_advisories:
+            advisory_msg = "\n".join(self._pending_advisories)
+            display.guard_inject(advisory_msg)  # Display to terminal
             advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
-            advisory_text += "\n".join(self._pending_advisories)
+            advisory_text += advisory_msg
             # Find last non-None result to append to
             for i in range(len(results) - 1, -1, -1):
                 if results[i] is not None:
