@@ -231,7 +231,7 @@ No test coverage = not complete. Tests are not optional — they protect other u
 
     "user_commands": """## User Commands
 
-`/mode auto|confirm`, `/memory list|clear|delete`, `/skill <name>`, `/plan`, `/plan abandon`, `/save`, `/resume`, `/compact`, `/reload`, `/quit`""",
+`/mode auto|confirm`, `/memory list|clear|delete`, `/skill <name>`, `/plan`, `/plan abandon`, `/save`, `/resume`, `/compact`, `/reset`, `/reload`, `/quit`""",
 
     "inference": """## Inference Workflow
 

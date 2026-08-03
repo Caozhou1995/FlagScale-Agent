@@ -912,7 +912,7 @@ class WorkerAgent:
         os.makedirs(os.path.dirname(history_file), exist_ok=True)
         completer = WordCompleter(
             ["/quit", "/reload", "/skill", "/save", "/memory",
-             "/mode", "/plan", "/resume", "/compact", "/session"],
+             "/mode", "/plan", "/resume", "/compact", "/reset", "/session"],
             sentence=True,
         )
         # Key bindings: Enter submits, but pasted newlines are preserved
