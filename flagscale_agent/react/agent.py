@@ -852,12 +852,12 @@ class WorkerAgent:
         """
         from flagscale_agent.react import display
 
-        display.info("[Hard Reset] Context pressure high, compacting conversation...")
+        display.warn("[Hard Reset] Context pressure high, compacting conversation...")
 
         # 1. Generate LLM summary (we have headroom since working_window < max)
         summary = self._generate_hard_reset_summary()
         if not summary:
-            display.info("[Hard Reset] LLM summary failed, using programmatic fallback.")
+            display.warn("[Hard Reset] LLM summary failed, using programmatic fallback.")
             summary = self._build_programmatic_summary()
 
         # 2. Build continuation message
@@ -869,7 +869,7 @@ class WorkerAgent:
         # 4. Save conversation state (persist full_log)
         self._save_conversation_full()
 
-        display.info(
+        display.warn(
             f"[Hard Reset] Done. Cleared {stats['cleared_count']} messages, "
             f"kept last {stats['preserved_count']}. Reset #{stats['reset_count']}."
         )
