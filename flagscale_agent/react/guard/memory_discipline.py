@@ -74,10 +74,14 @@ class MemoryDisciplineGuard(Guard):
                 self._evolution_reminded = True
                 return GuardVerdict.inject(
                     "[MemoryDiscipline] About to TASK_COMPLETE but no memory review this session. "
-                    "Before completing, check: (1) any new fact/pitfall/insight to save? "
-                    "(2) any existing insight ready to digest? "
-                    "(3) any existing fact invalidated by this session's work? "
-                    "Run memory_list() to review, then report suggestions to user.",
+                    "Before completing, run memory_list() and check: "
+                    "(1) Any new fact/pitfall/insight to save? "
+                    "(2) Can any existing pitfall be elevated to an insight (recurring pattern recognized)? "
+                    "(3) Can any existing insight be digested into a concrete artifact — "
+                    "e.g. strengthen a guard inject message, improve system prompt wording, "
+                    "add a skill step, write a knowledge doc section, or add defensive code to agent? "
+                    "(4) Any existing fact invalidated by this session's work? "
+                    "Report suggestions to user; do NOT self-execute digest/delete.",
                     reason="evolution_check_before_complete",
                     category="memory_evolution_reminder",
                 )
@@ -97,8 +101,10 @@ class MemoryDisciplineGuard(Guard):
             self._calls_since_memory = 0
             return GuardVerdict.inject(
                 f"[MemoryDiscipline] {self.reminder_threshold} tool calls without "
-                "reading or writing memory. Consider saving key findings or "
-                "checking existing memories to avoid repeating past work.",
+                "reading or writing memory. Consider: saving key findings as fact/pitfall/insight, "
+                "or checking existing memories to avoid repeating past work. "
+                "If a pitfall pattern is recurring, elevate it to an insight. "
+                "If an insight has enough evidence, digest it into a guard message / skill / knowledge / agent code.",
                 reason="no_memory_ops_recently",
                 category="memory_idle_reminder",
             )
