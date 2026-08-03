@@ -118,6 +118,7 @@ class AnthropicProvider(LLMProvider):
                 raise
 
         stream_error = None
+        final_message = None
         try:
             for event in stream:
                 if event.type == "content_block_start":
@@ -130,6 +131,13 @@ class AnthropicProvider(LLMProvider):
                         yield {"type": "text", "content": delta.text}
                     elif delta.type == "input_json_delta":
                         yield {"type": "tool_delta", "id": "", "arguments_delta": delta.partial_json}
+            
+            # Get usage BEFORE closing the stream
+            if stream_ctx is not None:
+                try:
+                    final_message = stream.get_final_message()
+                except Exception:
+                    pass
         except Exception as e:
             stream_error = e
         finally:
@@ -142,26 +150,21 @@ class AnthropicProvider(LLMProvider):
         if stream_error:
             raise stream_error
 
-        # Only try to get usage if stream completed normally
-        if stream_ctx is not None:
-            try:
-                final = stream.get_final_message()
-                if final and final.usage:
-                    usage_data = {
-                        "type": "usage",
-                        "input_tokens": final.usage.input_tokens,
-                        "output_tokens": final.usage.output_tokens,
-                    }
-                    # Include cache info when prompt caching is active
-                    cache_read = getattr(final.usage, "cache_read_input_tokens", None)
-                    cache_create = getattr(final.usage, "cache_creation_input_tokens", None)
-                    if cache_read:
-                        usage_data["cache_read_input_tokens"] = cache_read
-                    if cache_create:
-                        usage_data["cache_creation_input_tokens"] = cache_create
-                    yield usage_data
-            except Exception:
-                pass
+        # Yield usage data if we got it
+        if final_message and final_message.usage:
+            usage_data = {
+                "type": "usage",
+                "input_tokens": final_message.usage.input_tokens,
+                "output_tokens": final_message.usage.output_tokens,
+            }
+            # Include cache info when prompt caching is active
+            cache_read = getattr(final_message.usage, "cache_read_input_tokens", None)
+            cache_create = getattr(final_message.usage, "cache_creation_input_tokens", None)
+            if cache_read:
+                usage_data["cache_read_input_tokens"] = cache_read
+            if cache_create:
+                usage_data["cache_creation_input_tokens"] = cache_create
+            yield usage_data
 
         yield {"type": "done"}
 

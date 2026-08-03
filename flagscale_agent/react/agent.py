@@ -2201,6 +2201,8 @@ class WorkerAgent:
                         usage = {
                             "input_tokens": event.get("input_tokens"),
                             "output_tokens": event.get("output_tokens"),
+                            "cache_read_input_tokens": event.get("cache_read_input_tokens"),
+                            "cache_creation_input_tokens": event.get("cache_creation_input_tokens"),
                         }
                     elif event["type"] == "done":
                         break
