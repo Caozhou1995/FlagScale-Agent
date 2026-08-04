@@ -43,7 +43,7 @@ Knowledge: {knowledge}
 **Information retrieval priority**:
 1. memory_read(key) — cross-session high-value knowledge base
 2. recall(index=N) — evicted content from this session
-3. conversation_full.json — the COMPLETE un-evicted conversation history lives in the current session directory. When evict_list() doesn't find what you need, grep/read this file to recover any past context (user instructions, tool results, code snippets) without re-executing.
+3. conversation_full.json — the COMPLETE un-evicted conversation history lives in the current session directory (find it via `shell("find .flagscale/sessions -name conversation_full.json -newer /tmp 2>/dev/null | tail -1")`). When evict_list() doesn't find what you need, grep/read this file to recover any past context (user instructions, tool results, code snippets) without re-executing.
 4. read_file / shell — information never fetched before
 
 ## Capabilities

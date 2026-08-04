@@ -104,7 +104,10 @@ class PostEvictRecoveryGuard(Guard):
             f"significant context was lost. Before continuing, restore your working state:\n"
             f"1. plan_status() — check current task progress and step notes\n"
             f"2. memory_read(key='fact/cluster/') or relevant prefix — recover environment facts\n"
-            f"3. If needed: recall(index=N) for specific evicted content\n\n"
+            f"3. If needed: recall(index=N) for specific evicted content\n"
+            f"4. For deep recovery: read conversation_full.json in your session directory "
+            f"(grep/read_file on it to find past instructions, tool results, or code snippets "
+            f"without re-executing commands)\n\n"
             f"Do NOT proceed on stale assumptions. Verify key parameters "
             f"(IPs, ports, paths, parallelism config) from memory or plan notes.",
             reason="heavy_eviction_detected",

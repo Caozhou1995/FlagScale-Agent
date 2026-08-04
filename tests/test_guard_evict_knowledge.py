@@ -47,6 +47,7 @@ class TestPostEvictRecoveryGuard:
         assert verdict is not None
         assert "evicted" in verdict.message.lower()
         assert "plan_status" in verdict.message
+        assert "conversation_full.json" in verdict.message
 
     def test_no_reminder_for_recovery_tools(self):
         guard = PostEvictRecoveryGuard()
