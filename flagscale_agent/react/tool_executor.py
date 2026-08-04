@@ -437,9 +437,7 @@ class ToolExecutor:
                 if not hasattr(self, '_pending_advisories'):
                     self._pending_advisories = []
                 self._pending_advisories.append(verdict.message)
-                print(display.yellow(
-                    f"  🛡 [{tc['name']}]: {verdict.message}"
-                ))
+                display.guard_inject(verdict.message)
 
         # Pre-confirm shell commands
         shell_tool = agent.tool_registry.get("shell")
@@ -522,7 +520,7 @@ class ToolExecutor:
             # Append pending advisories even for skip-only batches
             if hasattr(self, '_pending_advisories') and self._pending_advisories:
                 advisory_msg = "\n".join(self._pending_advisories)
-                display.guard_inject(advisory_msg)  # Display to terminal
+                # NOTE: display already done at verdict time (line ~440). Don't re-display.
                 advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
                 advisory_text += advisory_msg
                 for i in range(len(results) - 1, -1, -1):
@@ -543,7 +541,7 @@ class ToolExecutor:
         # so they appear inside tool_result messages (safe for API ordering)
         if hasattr(self, '_pending_advisories') and self._pending_advisories:
             advisory_msg = "\n".join(self._pending_advisories)
-            display.guard_inject(advisory_msg)  # Display to terminal
+            # NOTE: display already done per-tool at verdict time (line ~440). Don't re-display.
             advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
             advisory_text += advisory_msg
             # Find last non-None result to append to

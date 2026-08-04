@@ -2133,8 +2133,9 @@ class WorkerAgent:
         Anthropic format (role=user, content=[{type: tool_result, ...}]).
         Falls back to a lightweight user message if no tool_result exists.
         """
-        # Display advisory to user terminal (same dim gray style as inject verdict)
-        display.guard_inject(msg)
+        # NOTE: Do NOT call display.guard_inject(msg) here — the caller
+        # (kernel.py _handle_guard_verdict) already displays it. Calling here
+        # would produce duplicate display on terminal.
         
         advisory_suffix = (
             f"\n\n---\n"
