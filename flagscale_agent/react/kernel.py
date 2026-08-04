@@ -287,11 +287,12 @@ class AgentKernel:
                         if verdict is not None:
                             if verdict.action in ("block", "escalate"):
                                 blocked_indices.add(i)
-                                _pre_guard_verdicts.append(verdict)
-                                if verdict.action == "block":
-                                    display.guard_block(verdict.message)
-                                else:
-                                    display.guard_escalate(verdict.message)
+                                # Deduplicate block/escalate across tool_calls
+                                msg_key = verdict.message[:120]
+                                if msg_key not in _seen_inject_msgs:
+                                    _seen_inject_msgs.add(msg_key)
+                                    _pre_guard_verdicts.append(verdict)
+                                # Display is handled later in _apply_verdict — don't display here
                             elif verdict.action == "inject_msg":
                                 # Soft advisory — defer until after tool_results are appended
                                 # Deduplicate: same message from same guard across tool_calls
@@ -345,12 +346,11 @@ class AgentKernel:
                     )
                     verdict = d.guard_registry.check_post(ctx)
                     if verdict is not None:
-                        # Deduplicate inject verdicts across multiple tool_calls
-                        if verdict.action == "inject_msg":
-                            msg_key = verdict.message[:120]
-                            if msg_key in _seen_post_inject_msgs:
-                                continue
-                            _seen_post_inject_msgs.add(msg_key)
+                        # Deduplicate all verdict types across multiple tool_calls
+                        msg_key = verdict.message[:120]
+                        if msg_key in _seen_post_inject_msgs:
+                            continue
+                        _seen_post_inject_msgs.add(msg_key)
                         post_verdicts.append(verdict)
 
                 tool_results = [
