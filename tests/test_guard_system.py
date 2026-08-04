@@ -18,7 +18,6 @@ from unittest.mock import MagicMock
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
 from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
-from flagscale_agent.react.guard.experiment_tracking import ExperimentTrackingGuard
 from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
@@ -39,7 +38,7 @@ def make_ctx(tool_name="", tool_args=None, tool_result=""):
 
 
 class TestTrainingAttemptGuard:
-    """Test the 2-Strike rule at attempt granularity."""
+    """Test the 2-Strike rule — blocks after 2 consecutive failure results."""
 
     def test_initial_state_no_block(self):
         guard = TrainingAttemptGuard()
@@ -47,112 +46,72 @@ class TestTrainingAttemptGuard:
         result = guard.check_pre(ctx)
         assert result is None  # No block on first launch
 
-    def test_two_same_category_failures_block(self):
+    def test_two_failures_trigger_block(self):
         guard = TrainingAttemptGuard()
 
-        # First attempt: edit + launch + fail with AttributeError
-        ctx_edit = make_ctx("edit_file", {"path": "model.py", "new_string": "fix"})
-        guard.check_post(ctx_edit)
+        # First failure recorded
+        ctx1 = make_ctx("workspace_experiment",
+                        {"action": "update_last_attempt", "result": "failed: OOM error"})
+        guard.check_post(ctx1)
+        assert guard._consecutive_failures == 1
 
-        ctx_launch = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        guard.check_post(ctx_launch)
+        # Second failure recorded
+        ctx2 = make_ctx("workspace_experiment",
+                        {"action": "update_last_attempt", "result": "crashed: NCCL timeout"})
+        result = guard.check_post(ctx2)
+        assert guard._consecutive_failures == 2
+        assert guard._is_blocked is True
+        assert result is not None
+        assert result.action == "inject_msg"
 
-        ctx_fail = make_ctx("flagscale_train_monitor", {"output_dir": "/tmp/test"},
-                           tool_result="TRAINING CRASHED\nAttributeError: 'X' has no attribute 'y'")
-        guard.check_post(ctx_fail)
-
-        # Second attempt: edit + launch + fail with same category
-        ctx_edit2 = make_ctx("edit_file", {"path": "model.py", "new_string": "fix2"})
-        guard.check_post(ctx_edit2)
-
-        ctx_launch2 = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        guard.check_post(ctx_launch2)
-
-        ctx_fail2 = make_ctx("flagscale_train_monitor", {"output_dir": "/tmp/test"},
-                            tool_result="TRAINING CRASHED\nAttributeError: 'Z' has no attribute 'w'")
-        guard.check_post(ctx_fail2)
-
-        # Now trying to launch again should be BLOCKED
-        ctx_launch3 = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        result = guard.check_pre(ctx_launch3)
+    def test_blocked_prevents_launch(self):
+        guard = TrainingAttemptGuard()
+        guard._is_blocked = True
+        guard._consecutive_failures = 2
+        ctx = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
+        result = guard.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
 
-    def test_different_categories_no_block(self):
+    def test_success_resets_counter(self):
         guard = TrainingAttemptGuard()
+        guard._consecutive_failures = 1
 
-        # First attempt: fail with AttributeError
-        ctx_launch = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        guard.check_post(ctx_launch)
-        ctx_fail = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nAttributeError: missing")
-        guard.check_post(ctx_fail)
-
-        # Second attempt: fail with shape error (different category)
-        ctx_edit = make_ctx("edit_file", {"path": "model.py", "new_string": "x"})
-        guard.check_post(ctx_edit)
-        ctx_launch2 = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        guard.check_post(ctx_launch2)
-        ctx_fail2 = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nRuntimeError: mat1 size mismatch")
-        guard.check_post(ctx_fail2)
-
-        # Should NOT be blocked (different categories)
-        ctx_launch3 = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        result = guard.check_pre(ctx_launch3)
-        assert result is None
+        ctx = make_ctx("workspace_experiment",
+                       {"action": "update_last_attempt", "result": "success: training completed 100 steps"})
+        guard.check_post(ctx)
+        assert guard._consecutive_failures == 0
+        assert guard._is_blocked is False
 
     def test_source_reading_unblocks(self):
         guard = TrainingAttemptGuard()
         guard._is_blocked = True
-        guard._blocked_category = "attribute"
         guard._source_reads_since_block = 0
 
         # Reading source files should count toward unblock
-        for i in range(3):
+        for i in range(2):
             ctx = make_ctx("read_file", {"path": f"/src/model_{i}.py"}, tool_result="class Model:...")
             guard.check_post(ctx)
 
-        assert guard._source_reads_since_block >= 3
+        assert guard._source_reads_since_block >= 2
 
         # Also need hypothesis to fully unblock
-        guard._hypothesis_declared = True
+        ctx_plan = make_ctx("plan_update", {"notes": "Root cause: missing __restore_key__ in batch method"})
+        guard.check_post(ctx_plan)
+        assert guard._hypothesis_declared is True
 
         # Now launch should be unblocked
         ctx_launch = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
         result = guard.check_pre(ctx_launch)
         assert result is None
 
-
-class TestExperimentTrackingGuard:
-    """Test experiment recording enforcement."""
-
-    def test_warns_on_first_unrecorded_launch(self):
-        guard = ExperimentTrackingGuard()
-        ctx = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
+    def test_non_launch_not_blocked(self):
+        guard = TrainingAttemptGuard()
+        guard._is_blocked = True
+        # Non-launch commands should pass
+        ctx = make_ctx("shell", {"command": "grep error stderr.log"})
         result = guard.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
-
-    def test_blocks_after_three_unrecorded(self):
-        guard = ExperimentTrackingGuard()
-        ctx = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        guard.check_pre(ctx)  # warn 1
-        guard._attempt_recorded = False
-        guard.check_pre(ctx)  # warn 2
-        guard._attempt_recorded = False
-        result = guard.check_pre(ctx)  # block 3
-        assert result is not None
-        assert result.action == "block"
-
-    def test_recording_resets_count(self):
-        guard = ExperimentTrackingGuard()
-        guard._unrecorded_launches = 2
-
-        # Record an attempt
-        ctx = make_ctx("workspace_experiment", {"action": "add_attempt", "name": "test"})
-        guard.check_post(ctx)
-
-        assert guard._attempt_recorded is True
-        assert guard._unrecorded_launches == 0
+        assert result is None
 
 
 class TestDebugDisciplineGuard:
@@ -208,54 +167,6 @@ class TestFileToolGuard:
         # Balanced content shouldn't trigger truncation warning
         assert result is None
 
-
-class TestLLMFallback:
-    """Test that guards fall back to LLM classify when regex doesn't match."""
-
-    def test_error_classify_falls_through_to_llm(self):
-        """When regex can't classify, try LLM."""
-        guard = TrainingAttemptGuard()
-        # Create a classify_fn that returns a known category
-        def mock_classify(category, context, default=None):
-            if category == "training_error_category":
-                return {"category": "config", "confidence": 0.9}
-            return default
-
-        ctx = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nSome weird custom error nobody expected")
-        ctx.classify_fn = mock_classify
-
-        # This error doesn't match any regex pattern
-        result = guard._classify_training_error(ctx.tool_result, ctx)
-        assert result == "config"  # LLM said config with high confidence
-
-    def test_error_classify_ignores_low_confidence_llm(self):
-        """LLM results below confidence threshold are ignored."""
-        guard = TrainingAttemptGuard()
-
-        def mock_classify(category, context, default=None):
-            if category == "training_error_category":
-                return {"category": "nccl", "confidence": 0.3}  # Low confidence
-            return default
-
-        ctx = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nVague error message")
-        ctx.classify_fn = mock_classify
-
-        result = guard._classify_training_error(ctx.tool_result, ctx)
-        assert result == "general"  # Falls back to general
-
-    def test_error_classify_regex_takes_priority(self):
-        """Regex fast-path should win even if LLM would disagree."""
-        guard = TrainingAttemptGuard()
-
-        def mock_classify(category, context, default=None):
-            return {"category": "data", "confidence": 1.0}  # Would return data
-
-        ctx = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nAttributeError: 'X' has no attr")
-        ctx.classify_fn = mock_classify
-
-        # Regex should catch AttributeError → "attribute"
-        result = guard._classify_training_error(ctx.tool_result, ctx)
-        assert result == "attribute"
 
     def test_memory_discipline_reminder_threshold(self):
         """Memory discipline reminds every 10 non-memory tool calls."""

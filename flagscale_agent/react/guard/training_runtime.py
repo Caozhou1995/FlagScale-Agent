@@ -12,68 +12,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TrainingRuntimeGuard — monitor enforcement, hang/kill-retry/zombie detection,
-auto-restart strategy, and multi-node health check reminders.
+"""TrainingRuntimeGuard — monitor enforcement and heartbeat.
 
-Uses two-phase detection: cheap keyword trigger + LLM classify() for confirmation.
+Responsibilities:
+1. After training launch: BLOCK until monitor is called
+2. Heartbeat: periodic reminders to check training progress
+3. Detect training stopped (from monitor output or GPU idle)
+4. GPU zombie detection
+
+Does NOT manage:
+- Experiment recording (→ ExperimentGuard)
+- Failure counting or source read enforcement (→ TrainingAttemptGuard)
 """
 
 from __future__ import annotations
 
 import re
-import time
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.state_machine import AgentState
 
 
-# Cheap trigger patterns for training launch detection.
-# Only commands matching these get sent to LLM for confirmation.
-# NOTE: serve/inference patterns are NOT here — this guard only manages
-# training lifecycle (monitor enforcement, failure tracking, restart strategy).
-_LAUNCH_TRIGGER_PATTERNS = (
-    r"\btorchrun\b",
-    r"\bpython\s+-m\s+torch\.distributed\b",
-    r"\bdeepspeed\b",
-    r"\bflagscale\s+train\b",
-    r"\bmegatron\b.*\btrain\b",
-    r"\btrain\.py\b",
-    r"\bpretrain\.py\b",
-    r"\bpretrain\s",
-    # FlagScale launcher patterns (run.py with Hydra config)
-    r"\brun\.py\b.*\baction\s*=\s*run\b",
-    r"\brun\.py\b.*--config",
-    # conda run wrapping any training command
-    r"\bconda\s+run\b.*\brun\.py\b",
-    r"\bconda\s+run\b.*\btorchrun\b",
-    r"\bconda\s+run\b.*\bflagscale\b",
+# Simple launch keywords
+_LAUNCH_KEYWORDS = (
+    "torchrun", "deepspeed", "flagscale", "train.py",
+    "pretrain.py", "pretrain_", "run.py",
 )
-_LAUNCH_TRIGGER_RE = re.compile("|".join(_LAUNCH_TRIGGER_PATTERNS), re.IGNORECASE)
-
-# Patterns that indicate training failure in monitor() output
-_MONITOR_FAILURE_PATTERNS = (
-    r"TRAINING CRASHED",
-    r"Process\s+died",
-    r"Traceback\s+\(most\s+recent",
-    r"RuntimeError:",
-    r"NCCL\s+error",
-    r"Out\s+of\s+memory",
-    r"CUDA\s+error",
-    r"AttributeError:",
-    r"ModuleNotFoundError:",
-    r"all\s+\d+\s+rank.*stderr.*error",
-    r"exit\s+code\s+[1-9]",
-)
-_MONITOR_FAILURE_RE = re.compile("|".join(_MONITOR_FAILURE_PATTERNS), re.IGNORECASE)
 
 
-
+def _is_launch_command(cmd: str) -> bool:
+    """Simple keyword check for training launch commands."""
+    cmd_lower = cmd.lower()
+    if cmd_lower.lstrip().startswith(("grep ", "cat ", "echo ", "find ", "ls ", "head ", "tail ")):
+        return False
+    return any(kw in cmd_lower for kw in _LAUNCH_KEYWORDS)
 
 
 class TrainingRuntimeGuard(Guard):
-    """Training lifecycle management and monitoring enforcement.
+    """Monitor enforcement and training heartbeat.
 
-    Only activates for training scenes (registered conditionally).
+    After detecting a training launch, blocks all non-diagnostic actions
+    until flagscale_train_monitor is called. Then periodically reminds
+    to check training health.
     """
 
     name = "training_runtime"
@@ -83,362 +63,144 @@ class TrainingRuntimeGuard(Guard):
 
     # Thresholds
     _MONITOR_GATE_MAX_BLOCKS = 5
-    _KILL_RETRY_WINDOW = 120  # seconds
-    _KILL_RETRY_MAX = 3
-    _MIN_SOURCE_READS_BEFORE_FIX = 2
-    _HEARTBEAT_MONITOR_INTERVAL = 3
-    _HEARTBEAT_GPU_CHECK_INTERVAL = 5
+    _HEARTBEAT_MONITOR_INTERVAL = 4  # turns between monitor reminders
+    _HEARTBEAT_GPU_CHECK_INTERVAL = 6  # turns between GPU check reminders
 
     def __init__(self):
         self._awaiting_monitor: bool = False
         self._monitor_gate_block_count: int = 0
-        self._consecutive_train_failures: int = 0
-        self._last_train_failure_reasons: list[str] = []
-        self._kill_retry_timestamps: list[float] = []
-        self._training_launch_timestamps: list[float] = []
-        self._source_reads_since_last_failure: int = 0
         self._training_started: bool = False
         self._turns_since_last_monitor: int = 0
         self._turns_since_last_gpu_check: int = 0
         self._last_launch_output_dir: str = ""
-        self._multi_node_warned: bool = False
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
             return None
 
-        # Monitor enforcement
+        # --- Monitor enforcement gate ---
         if self._awaiting_monitor:
             if ctx.tool_name == "flagscale_train_monitor":
                 self._awaiting_monitor = False
                 self._monitor_gate_block_count = 0
                 return None
-            if ctx.tool_name in ("plan_update", "workspace_experiment", "read_file"):
+            # Allow diagnostic and recording tools
+            if ctx.tool_name in ("plan_update", "workspace_experiment", "read_file",
+                                 "memory_write", "memory_read", "memory_list"):
                 return None
-
-            # Allow read-only diagnostic shell commands
+            # Allow read-only shell commands
             if ctx.tool_name == "shell":
                 cmd = ctx.tool_args.get("command", "")
-                if not isinstance(cmd, str):
-                    cmd = ""
-                cmd = cmd.strip()
-                # Fast-path: common read-only prefixes don't need LLM
-                if self._is_read_only_shell_fast(cmd):
-                    return None
-                classify = ctx.classify_fn
-                if classify and classify("is_read_only_shell", {"command": cmd}, default=True):
+                if isinstance(cmd, str) and self._is_read_only_shell(cmd):
                     return None
 
             self._monitor_gate_block_count += 1
             if self._monitor_gate_block_count >= self._MONITOR_GATE_MAX_BLOCKS:
+                # Give up blocking after too many attempts
                 self._awaiting_monitor = False
                 self._monitor_gate_block_count = 0
                 return None
 
             return GuardVerdict.block(
                 "[TrainingRuntime] BLOCKED: Monitor training before doing other work. "
-                "Read-only commands (pgrep, ps, cat, ls) are allowed.",
-                reason="monitor required after train launch",
+                "Call flagscale_train_monitor(output_dir='...'). "
+                "Read-only commands (nvidia-smi, ps, cat, ls) are allowed.",
+                reason="monitor_required",
             )
 
-        # Source reading gate
-        if self._consecutive_train_failures >= 2:
-            if ctx.tool_name in ("write_file", "edit_file"):
-                if self._source_reads_since_last_failure < self._MIN_SOURCE_READS_BEFORE_FIX:
-                    target = ctx.tool_args.get("path", "") or ctx.tool_args.get("file_path", "")
-                    if not target or any(ext in target for ext in (".yaml", ".yml", ".md", ".txt", ".json")):
-                        return None
-                    return GuardVerdict.inject(
-                        f"[TrainingRuntime] {self._consecutive_train_failures} consecutive failures, "
-                        f"only {self._source_reads_since_last_failure} source reads. "
-                        f"Read the upstream framework code to understand what it expects before fixing.",
-                        reason="source reading required before fix",
-                    )
-
-        # Heartbeat: periodic GPU check reminder
+        # --- Heartbeat reminders ---
         if self._training_started and not self._awaiting_monitor:
-            gpu_overdue = self._turns_since_last_gpu_check >= self._HEARTBEAT_GPU_CHECK_INTERVAL
-            monitor_overdue = self._turns_since_last_monitor >= self._HEARTBEAT_MONITOR_INTERVAL
-
-            if gpu_overdue and monitor_overdue:
-                self._turns_since_last_gpu_check = 0
+            if self._turns_since_last_monitor >= self._HEARTBEAT_MONITOR_INTERVAL:
                 self._turns_since_last_monitor = 0
                 return GuardVerdict.inject(
-                    "[HEARTBEAT] Training running but not monitored. Check GPU utilization and training progress.",
-                    reason="periodic gpu health check + monitor overdue",
+                    "[HEARTBEAT] Training running but not monitored for "
+                    f"{self._HEARTBEAT_MONITOR_INTERVAL} turns. "
+                    "Check progress with flagscale_train_monitor.",
+                    reason="heartbeat_monitor",
                 )
-
-            if gpu_overdue:
+            if self._turns_since_last_gpu_check >= self._HEARTBEAT_GPU_CHECK_INTERVAL:
                 self._turns_since_last_gpu_check = 0
                 return GuardVerdict.inject(
-                    "[HEARTBEAT] Check GPU utilization — if 0% with active process, training may be hung.",
-                    reason="periodic gpu health check",
+                    "[HEARTBEAT] Check GPU utilization — if 0% with active process, "
+                    "training may be hung.",
+                    reason="heartbeat_gpu",
                 )
-
-            if monitor_overdue:
-                self._turns_since_last_monitor = 0
-                if self._last_launch_output_dir:
-                    return GuardVerdict.inject(
-                        "[HEARTBEAT] Monitor training progress — no observation in "
-                        f"{self._HEARTBEAT_MONITOR_INTERVAL} turns.",
-                        reason="monitor overdue",
-                    )
-                else:
-                    return GuardVerdict.inject(
-                        "[HEARTBEAT] Training running but unobserved for "
-                        f"{self._HEARTBEAT_MONITOR_INTERVAL} turns. Check progress.",
-                        reason="monitor overdue",
-                    )
 
         return None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        classify = ctx.classify_fn
-
-        # Track monitor calls for heartbeat — and detect training stopped
+        # --- Track monitor calls ---
         if ctx.tool_name == "flagscale_train_monitor":
             self._turns_since_last_monitor = 0
             self._turns_since_last_gpu_check = 0
-            # If monitor shows training is not running, clear heartbeat state
             if ctx.tool_result and self._training_started:
                 if self._detect_training_stopped(ctx.tool_result):
                     self._training_started = False
 
-        # GPU check: if nvidia-smi shows 0% utilization, training likely stopped
+        # --- Track GPU checks ---
         if ctx.tool_name == "shell" and ctx.tool_result and self._training_started:
             cmd = ctx.tool_args.get("command", "")
             if isinstance(cmd, str) and "nvidia-smi" in cmd:
+                self._turns_since_last_gpu_check = 0
                 if self._detect_gpu_idle(ctx.tool_result):
                     self._training_started = False
 
-        # Detect training launch (two-phase: cheap trigger + LLM confirm)
+        # --- Detect training launch ---
         if ctx.tool_name == "shell":
             cmd = ctx.tool_args.get("command", "")
-            # Phase 1: cheap regex trigger — skip LLM call for non-launch commands
-            if _LAUNCH_TRIGGER_RE.search(cmd):
-                # Phase 2: LLM confirmation
-                if classify and classify("is_training_command", {"command": cmd}, default=False):
-                    self._training_launch_timestamps.append(time.time())
-                    self._awaiting_monitor = True
-                    self._training_started = True
-                    self._turns_since_last_monitor = 0
-                    self._turns_since_last_gpu_check = 0
-                    # Extract output_dir
-                    output_dir = ctx.tool_args.get("output_dir", "")
-                    if not output_dir:
-                        m = re.search(r'--output[_-]dir\s+(\S+)', cmd, re.IGNORECASE)
-                        if m:
-                            output_dir = m.group(1).strip('\'"')
-                    self._last_launch_output_dir = output_dir
-
-                    # Multi-node health check
-                    multi_node_msg = self._check_multi_node_setup(ctx)
-                    if multi_node_msg and not self._multi_node_warned:
-                        self._multi_node_warned = True
-                        return GuardVerdict.inject(multi_node_msg, reason="multi-node health check reminder")
-
-            # Detect kill commands (only if training is active)
-            if self._training_started and re.search(r'\b(kill|pkill|killall)\b', cmd):
-                if classify and classify("is_kill_command", {"command": cmd}, default=False):
-                    self._kill_retry_timestamps.append(time.time())
-                    cutoff = time.time() - self._KILL_RETRY_WINDOW
-                    self._kill_retry_timestamps = [t for t in self._kill_retry_timestamps if t > cutoff]
-                    if len(self._kill_retry_timestamps) >= self._KILL_RETRY_MAX:
-                        return GuardVerdict.inject(
-                            "[TrainingRuntime] Kill-retry loop detected — "
-                            f"{len(self._kill_retry_timestamps)} kill commands in "
-                            f"{self._KILL_RETRY_WINDOW}s. "
-                            "Diagnose the root cause before restarting.",
-                            reason="kill-retry loop",
-                        )
-
-        # Track training failures (from shell OR monitor results)
-        _failure_detected = False
-        _failure_result = ""
-        
-        if self._training_started and ctx.tool_result:
-            if ctx.tool_name == "shell":
-                if classify and classify("is_training_failure", {
-                    "command": ctx.tool_args.get("command", ""),
-                    "result": ctx.tool_result,
-                }, default=False):
-                    _failure_detected = True
-                    _failure_result = ctx.tool_result
-            elif ctx.tool_name in ("flagscale_train_monitor", "flagscale_train_monitor", "parse_training_metrics"):
-                # Check monitor/log tool output for failure patterns
-                if _MONITOR_FAILURE_RE.search(ctx.tool_result):
-                    _failure_detected = True
-                    _failure_result = ctx.tool_result
-
-        if _failure_detected:
-            self._consecutive_train_failures += 1
-            self._last_train_failure_reasons.append(_failure_result[-300:])
-            self._source_reads_since_last_failure = 0
-            # Training has stopped — clear heartbeat state
-            self._training_started = False
-
-            compare_msg = ""
-            if ctx.current_experiment_name and ctx.experiment_diff_fn:
-                try:
-                    diff_result = ctx.experiment_diff_fn(ctx.current_experiment_name)
-                    if diff_result.get("diffs"):
-                        compare_msg = (
-                            f"\n\n[AUTO-COMPARE] Config diffs between last two attempts "
-                            f"of '{ctx.current_experiment_name}':\n"
-                            f"{diff_result['summary']}\n"
-                            "Review which config change likely caused this failure."
-                        )
-                except Exception:
-                    pass
-
-            if self._consecutive_train_failures >= 3:
-                return GuardVerdict.escalate(
-                    f"[TrainingRuntime] {self._consecutive_train_failures} "
-                    "consecutive training failures. The current configuration "
-                    "will not succeed without changes. Diagnose root cause "
-                    f"before retrying.{compare_msg}",
-                    reason="consecutive training failures",
-                )
-            elif compare_msg:
-                return GuardVerdict.inject(
-                    compare_msg.strip(),
-                    reason="config diff after failure",
-                )
-        else:
-            # Track source code reading (not a failure)
-            if self._training_started and ctx.tool_name == "read_file" and self._consecutive_train_failures > 0:
-                path = ctx.tool_args.get("path", "") or ctx.tool_args.get("file_path", "")
-                if path and path.endswith(".py"):
-                    self._source_reads_since_last_failure += 1
-
-        # GPU zombie detection
-        if ctx.tool_name == "shell" and ctx.tool_result:
-            cmd = ctx.tool_args.get("command", "")
-            if classify and classify("is_zombie_gpu", {
-                "command": cmd,
-                "result": ctx.tool_result,
-            }, default=False):
-                return GuardVerdict.inject(
-                    "[TrainingRuntime] Possible zombie GPU processes detected. "
-                    "Clean them up before launching new training.",
-                    reason="gpu zombie process detected",
-                )
+            if isinstance(cmd, str) and _is_launch_command(cmd):
+                self._awaiting_monitor = True
+                self._training_started = True
+                self._turns_since_last_monitor = 0
+                self._turns_since_last_gpu_check = 0
 
         return None
 
-    @staticmethod
-    def _detect_training_stopped(monitor_output: str) -> bool:
-        """Detect if monitor output indicates training is not running.
-
-        Returns True if training has clearly stopped (crashed, exited, or never started).
-        """
-        indicators = (
-            r'"training_started":\s*false',
-            r"Phase:\s*init.*error",
-            r"all\s+\d+\s+rank.*error",
-            r"Process.*exited",
-            r"No active training",
-            r"training_started.*false",
-        )
-        for pattern in indicators:
-            if re.search(pattern, monitor_output, re.IGNORECASE):
-                return True
-        # If monitor shows errors on all ranks, training is dead
-        if re.search(r'"error_ranks":\s*\[', monitor_output):
-            # Count error ranks — if substantial, training stopped
-            error_ranks = re.findall(r'"error_ranks":\s*\[([\d,\s]+)\]', monitor_output)
-            if error_ranks and len(error_ranks[0].split(",")) > 4:
-                return True
-        return False
-
-    @staticmethod
-    def _detect_gpu_idle(nvidia_smi_output: str) -> bool:
-        """Detect if all GPUs show 0% utilization from nvidia-smi output.
-
-        Returns True only if ALL reported GPUs are at 0%.
-        """
-        # Match patterns like "0 %, 0 MiB" or "0 %"
-        util_values = re.findall(r'(\d+)\s*%', nvidia_smi_output)
-        if not util_values:
-            return False
-        # All GPUs must be at 0%
-        return all(int(v) == 0 for v in util_values)
-
-    def reset_turn(self):
-        """Increment heartbeat counters once per iteration (not per tool call)."""
+    def reset_new_turn(self):
+        """Increment heartbeat counters. Lifecycle state persists."""
         if self._training_started:
             self._turns_since_last_monitor += 1
             self._turns_since_last_gpu_check += 1
 
     def reset_state(self):
-        """v3: Full state reset — called on decay or override acceptance."""
+        """Full reset."""
         super().reset_state()
         self._awaiting_monitor = False
         self._monitor_gate_block_count = 0
-        self._consecutive_train_failures = 0
-        self._last_train_failure_reasons.clear()
-        self._source_reads_since_last_failure = 0
-
-    def reset_new_turn(self):
-        """Reset per-turn transient state. Training lifecycle state persists
-        across turns (training_started, launch history) but block counts reset."""
-        self._monitor_gate_block_count = 0
+        self._training_started = False
+        self._turns_since_last_monitor = 0
+        self._turns_since_last_gpu_check = 0
 
     @staticmethod
-    def _is_read_only_shell_fast(cmd: str) -> bool:
-        """Fast-path check for read-only shell commands (no LLM needed).
-
-        Covers common diagnostic commands that should never be blocked by monitor gate.
-        """
-        cmd_lower = cmd.lower().strip()
-        # Handle piped commands: check the first command in the pipe
-        first_cmd = cmd_lower.split("|")[0].strip()
-        # Handle command chains: check the first command
-        for sep in ("&&", ";"):
-            if sep in first_cmd:
-                first_cmd = first_cmd.split(sep)[0].strip()
-
-        _PREFIXES = (
-            "ls", "find ", "cat ", "head ", "tail ", "grep ", "wc ",
-            "which ", "echo ", "pwd", "env ", "printenv",
-            "nvidia-smi", "nvcc ", "ps ", "pgrep ", "top ",
-            "df ", "du ", "free ", "uname ", "whoami", "hostname", "date",
-            "python --version", "python -c \"import", "python -c 'import",
-            "python3 --version", "python3 -c \"import", "python3 -c 'import",
-            "timeout ", "conda info", "conda list", "pip list", "pip show",
+    def _detect_training_stopped(monitor_output: str) -> bool:
+        """Detect if monitor output indicates training has stopped."""
+        indicators = (
+            "training_started.*false",
+            "all.*rank.*error",
+            "Process.*exited",
+            "No active training",
+            "no running process",
         )
-        return any(first_cmd.startswith(p) for p in _PREFIXES)
+        text = monitor_output.lower()
+        return any(re.search(p, text, re.I) for p in indicators)
 
     @staticmethod
-    def _check_multi_node_setup(ctx: GuardContext) -> str | None:
-        """Detect multi-node config and generate health check instructions."""
-        cmd = ctx.tool_args.get("command", "")
-        config = ctx.tool_args.get("config", {})
-        args = ctx.tool_args.get("args", {})
+    def _detect_gpu_idle(nvidia_smi_output: str) -> bool:
+        """Detect if all GPUs show 0% utilization (training likely stopped)."""
+        lines = nvidia_smi_output.strip().split("\n")
+        util_values = re.findall(r"(\d+)\s*%", nvidia_smi_output)
+        if not util_values:
+            return False
+        # If ALL GPUs at 0%, training stopped
+        return all(int(v) == 0 for v in util_values)
 
-        is_multi_node = False
-        indicators = []
-
-        if "nnodes" in cmd or "node_rank" in cmd or "hostfile" in cmd:
-            is_multi_node = True
-            indicators.append("command line contains multi-node args")
-
-        nnodes = config.get("nnodes") or args.get("nnodes")
-        if nnodes and int(nnodes) > 1:
-            is_multi_node = True
-            indicators.append(f"nnodes={nnodes}")
-
-        tp = config.get("tp") or args.get("tp") or 1
-        dp = config.get("dp") or args.get("dp") or 1
-        if int(tp) * int(dp) > 8:
-            is_multi_node = True
-            indicators.append(f"tp={tp}, dp={dp} ({(int(tp) * int(dp))} GPUs)")
-
-        if not is_multi_node:
-            return None
-
-        return (
-            "[MULTI-NODE] Multi-node training detected "
-            f"({' ; '.join(indicators)}). "
-            "Verify inter-node connectivity (NCCL allreduce, SSH, shared storage) before launching."
+    @staticmethod
+    def _is_read_only_shell(cmd: str) -> bool:
+        """Check if a shell command is read-only (safe during monitor gate)."""
+        cmd_stripped = cmd.strip().lower()
+        read_only_prefixes = (
+            "cat ", "head ", "tail ", "less ", "grep ", "find ", "ls ",
+            "wc ", "nvidia-smi", "ps ", "pgrep ", "top ", "df ", "du ",
+            "ssh ", "ping ", "curl ", "wget ",
         )
+        return cmd_stripped.startswith(read_only_prefixes)

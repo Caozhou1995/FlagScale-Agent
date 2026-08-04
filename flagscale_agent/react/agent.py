@@ -91,7 +91,6 @@ from flagscale_agent.react.guard.budget import BudgetGuard
 from flagscale_agent.react.guard.env_compat import EnvCompatGuard
 from flagscale_agent.react.guard.output_quality import OutputQualityGuard
 from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
-from flagscale_agent.react.guard.experiment_tracking import ExperimentTrackingGuard
 from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
 from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
@@ -351,7 +350,6 @@ class WorkerAgent:
         if "is_training" in constraints or "is_inference" in constraints or not constraints:
             guard_registry.register(TrainingRuntimeGuard())
             guard_registry.register(TrainingAttemptGuard())
-            guard_registry.register(ExperimentTrackingGuard())
             guard_registry.register(OutputDirReuseGuard())
             guard_registry.register(MegatronPathGuard())
             guard_registry.register(PackageSearchGuard())

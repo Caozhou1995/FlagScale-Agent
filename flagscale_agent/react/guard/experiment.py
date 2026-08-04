@@ -12,80 +12,70 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ExperimentGuard — enforces experiment lifecycle before launching runs.
+"""ExperimentGuard — enforces experiment recording discipline.
 
-Uses two-phase detection:
-1. Cheap trigger: keyword scan for launch-related terms
-2. Precise judgment: classify_fn("is_training_command") to confirm
+Lifecycle:
+  create experiment → add_attempt (with change description) → launch → monitor
+  → update_last_attempt (with result) → add_attempt → launch → ...
+
+Rules:
+  1. Before first launch: must have create + add_attempt → else BLOCK
+  2. Before subsequent launch: must have update_last_attempt for previous run
+     AND add_attempt for new run → else BLOCK
+  3. No complex regex. Simple keyword detection for launch commands.
 """
 
-import re
-
-from flagscale_agent.react import display
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.guard.utils import get_judge_result, is_trusted
 from flagscale_agent.react.state_machine import AgentState
 
 
-# Shell commands that indicate a training/inference launch.
-# These are actual launch patterns, not just substrings that appear in paths.
-# Each entry is a regex pattern matched against the command.
-_LAUNCH_PATTERNS = (
-    r"\btorchrun\b",
-    r"\bpython\s+-m\s+torch\.distributed\b",
-    r"\bdeepspeed\b",
-    r"\bflagscale\s+train\b",
-    r"\bflagscale\s+serve\b",
-    r"\bmegatron\b.*\btrain\b",
-    r"\btrain\.py\b",
-    r"\bpretrain\.py\b",
-    r"\bpretrain\s",
-    r"\bsglang\s+serve\b",
-    r"\bvllm\s+serve\b",
-    r"\binference\.py\b",
-    r"\bpython\b.*\bserve\b",
+# Simple launch keywords — if any appears in a shell command, it's likely a launch
+_LAUNCH_KEYWORDS = (
+    "torchrun",
+    "deepspeed",
+    "flagscale",
+    "train.py",
+    "pretrain.py",
+    "pretrain_",
+    "run.py",
 )
 
-# Precompile for performance
-_LAUNCH_RE = re.compile("|".join(_LAUNCH_PATTERNS), re.IGNORECASE)
+
+def _is_launch_command(cmd: str) -> bool:
+    """Simple keyword check for training launch commands."""
+    cmd_lower = cmd.lower()
+    # Must be a substantive command, not just grep/cat/echo referencing keywords
+    if cmd_lower.lstrip().startswith(("grep ", "cat ", "echo ", "find ", "ls ", "head ", "tail ")):
+        return False
+    return any(kw in cmd_lower for kw in _LAUNCH_KEYWORDS)
 
 
 class ExperimentGuard(Guard):
-    """Enforces workspace_experiment lifecycle before launching runs.
+    """Enforces experiment recording discipline throughout training lifecycle.
 
-    Blocks shell commands that look like training/inference launches
-    unless an experiment has been created and an attempt has been added.
-
-    Two-phase detection:
-    1. Cheap trigger: _LAUNCH_KEYWORDS in command
-    2. LLM confirm: classify_fn("is_training_command") eliminates false positives
+    State machine:
+      IDLE → (create+add_attempt) → READY → (launch) → LAUNCHED
+      LAUNCHED → (update_last_attempt) → RESULT_RECORDED → (add_attempt) → READY
     """
 
     name = "experiment_lifecycle"
-    priority = 45  # Run before PlanUpdateGuard
+    priority = 40  # High priority — blocks before other guards
     activate_on_states = {AgentState.EXECUTING}
     overridable = True
 
-    def __init__(self, experiment_manager):
+    def __init__(self, experiment_manager=None):
         self._experiment_manager = experiment_manager
+        # Lifecycle state
         self._experiment_created = False
         self._attempt_added = False
-        self._inject_count: int = 0  # track repeated injects for escalation
+        self._result_pending = False  # True after launch, cleared by update_last_attempt
+        self._launched_without_result = False  # True if launched and no result recorded yet
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         """Block launch commands if experiment lifecycle not followed."""
-        # Track workspace_experiment calls
+        # Track workspace_experiment calls (pre-phase catches same-batch scenarios)
         if ctx.tool_name == "workspace_experiment":
-            action = ctx.tool_args.get("action", "")
-            if action == "create":
-                self._experiment_created = True
-                self._inject_count = 0  # reset: agent complied
-            elif action == "add_attempt":
-                self._attempt_added = True
-                self._inject_count = 0  # reset: agent complied
-            elif action == "update_last_attempt":
-                # Reset attempt flag so next launch requires a new attempt
-                self._attempt_added = False
+            self._handle_experiment_call(ctx.tool_args)
             return None
 
         # Only check shell commands
@@ -93,66 +83,84 @@ class ExperimentGuard(Guard):
             return None
 
         cmd = ctx.tool_args.get("command", "")
-        cmd_lower = cmd.lower()
-
-        # Phase 1: Cheap trigger — quick keyword scan
-        if not self._cheap_trigger(cmd_lower):
+        if not _is_launch_command(cmd):
             return None
 
-        print(display.dim(f"  🔍 [experiment] triggered: launch keyword in command"))
+        # --- Enforcement ---
 
-        # Phase 2: LLM precise judgment
-        if ctx.classify_fn:
-            is_launch, source = get_judge_result(
-                ctx.classify_fn, "is_training_command",
-                {"command": cmd}, default=False
+        # Rule 2: Previous run result not recorded
+        if self._result_pending:
+            return GuardVerdict.block(
+                "[Experiment] BLOCKED: Previous training result not recorded. "
+                "Call workspace_experiment(action='update_last_attempt', result='...') "
+                "to record what happened, then add_attempt for the new run.",
+                reason="result_not_recorded",
             )
-            if is_trusted(source) and not is_launch:
-                print(display.dim(f"     ✓  [experiment] override: not a training launch"))
-                return None  # LLM says not a launch — allow
-            if is_trusted(source) and is_launch:
-                print(display.yellow(f"     ⚠  [experiment] confirmed: training launch detected"))
-        # If classify_fn unavailable, fall through to enforcement (conservative)
 
-        # Enforce experiment lifecycle
+        # Rule 1: No experiment created
         if not self._experiment_created:
-            self._inject_count += 1
-            if self._inject_count >= 3:
-                return GuardVerdict.escalate(
-                    "[Experiment] Training launch blocked — create an experiment record first." .format(self._inject_count),
-                    reason="experiment_not_created_persistent"
-                )
             return GuardVerdict.block(
-                "[Experiment] Training launch blocked — create an experiment record and add an attempt before launching.",
-                reason="experiment_not_created"
+                "[Experiment] BLOCKED: No experiment record. "
+                "Call workspace_experiment(action='create', name='...', purpose='...') "
+                "then workspace_experiment(action='add_attempt', ...) before launching.",
+                reason="no_experiment",
             )
 
+        # Rule 1: No attempt added
         if not self._attempt_added:
-            self._inject_count += 1
-            if self._inject_count >= 3:
-                return GuardVerdict.escalate(
-                    "[Experiment] Training launch blocked — add an experiment attempt first.".format(self._inject_count),
-                    reason="attempt_not_added_persistent"
-                )
             return GuardVerdict.block(
-                "[Experiment] Training launch blocked — add an experiment attempt before launching.",
-                reason="attempt_not_added"
+                "[Experiment] BLOCKED: No attempt recorded for this run. "
+                "Call workspace_experiment(action='add_attempt', change='...') "
+                "before launching.",
+                reason="no_attempt",
             )
 
         return None
 
-    @staticmethod
-    def _cheap_trigger(cmd_lower: str) -> bool:
-        """Phase 1: regex check for launch patterns. May have false positives."""
-        return bool(_LAUNCH_RE.search(cmd_lower))
+    def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        """Track launch and result events."""
+        # Track workspace_experiment calls
+        if ctx.tool_name == "workspace_experiment":
+            self._handle_experiment_call(ctx.tool_args)
+            return None
 
-    def reset_state(self):
-        """v3: Full state reset — called on decay or override acceptance."""
-        super().reset_state()
-        self._inject_count = 0
-        # Don't reset _experiment_created/_attempt_added — those reflect
-        # actual lifecycle state, not guard enforcement state.
+        # Detect successful launch (shell with launch command that didn't error)
+        if ctx.tool_name == "shell":
+            cmd = ctx.tool_args.get("command", "")
+            if _is_launch_command(cmd):
+                # Mark as launched — next launch requires update_last_attempt
+                self._result_pending = True
+                self._attempt_added = False  # Consume the attempt
+
+        # Detect training result from monitor
+        if ctx.tool_name in ("flagscale_train_monitor", "parse_training_metrics"):
+            # Monitor was called — if result_pending, remind to record
+            if self._result_pending and ctx.tool_result:
+                return GuardVerdict.inject(
+                    "[Experiment] Training result observed. Record it with "
+                    "workspace_experiment(action='update_last_attempt', result='...').",
+                    reason="record_result_reminder",
+                )
+
+        return None
+
+    def _handle_experiment_call(self, tool_args: dict):
+        """Update lifecycle state based on workspace_experiment calls."""
+        action = tool_args.get("action", "")
+        if action == "create":
+            self._experiment_created = True
+        elif action == "add_attempt":
+            self._attempt_added = True
+        elif action == "update_last_attempt":
+            self._result_pending = False
 
     def reset_new_turn(self):
-        """Reset block escalation counter per turn. Lifecycle state persists."""
-        self._inject_count = 0
+        """Lifecycle state persists across turns. Never reset."""
+        pass
+
+    def reset_state(self):
+        """Full reset — only on decay or override."""
+        super().reset_state()
+        self._experiment_created = False
+        self._attempt_added = False
+        self._result_pending = False

@@ -296,25 +296,16 @@ class TestPlanGuard:
 
 class TestTrainingRuntimeGuard:
     def test_detects_training_launch(self):
-        # Fast path handles is_training_command(torchrun)=True and is_kill_command(torchrun)=False
-        # No LLM calls needed
-        provider = MockProvider(responses=[])
-        judge = Judge(provider)
         g = TrainingRuntimeGuard()
-        ctx = _ctx("shell",
-                   {"command": "torchrun --nproc_per_node=8 train.py"},
-                   classify_fn=judge.classify)
+        ctx = _ctx("shell", {"command": "torchrun --nproc_per_node=8 train.py"})
         g.check_post(ctx)
         assert g._awaiting_monitor is True
         assert g._training_started is True
 
     def test_monitor_gate_blocks_after_launch(self):
-        provider = MockProvider(responses=['{"real": false, "need_more": null}'])
-        judge = Judge(provider)
         g = TrainingRuntimeGuard()
         g._awaiting_monitor = True
-        ctx = _ctx("shell", {"command": "pip install pkg"},
-                   classify_fn=judge.classify)
+        ctx = _ctx("shell", {"command": "pip install pkg"})
         result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
@@ -327,58 +318,30 @@ class TestTrainingRuntimeGuard:
         assert result is None
         assert g._awaiting_monitor is False
 
-    def test_escalates_after_3_failures(self):
-        g = TrainingRuntimeGuard()
-        g._consecutive_train_failures = 2
-        g._training_started = True
-        # With cheap trigger: torchrun matches _LAUNCH_TRIGGER_RE, so
-        # is_training_command is called. Kill detection skipped (no kill keyword).
-        # Then is_training_failure and is_zombie_gpu are called.
-        provider = MockProvider(responses=[
-            '{"real": true, "need_more": null}',   # is_training_command (torchrun matches trigger)
-            '{"real": true, "need_more": null}',   # is_training_failure
-            '{"real": false, "need_more": null}',  # is_zombie_gpu
-        ])
-        judge = Judge(provider)
-        ctx = _ctx("shell", {"command": "torchrun train.py"},
-                   "RuntimeError: OOM", classify_fn=judge.classify)
-        result = g.check_post(ctx)
-        assert g._consecutive_train_failures == 3
-        assert result is not None
-        assert result.action == "escalate"
-
     def test_read_only_diagnostic_allowed(self):
-        # nvidia-smi is fast-pathed as read-only — no LLM call needed
-        provider = MockProvider(responses=[])
-        judge = Judge(provider)
         g = TrainingRuntimeGuard()
         g._awaiting_monitor = True
-        ctx = _ctx("shell", {"command": "nvidia-smi"},
-                   classify_fn=judge.classify)
+        ctx = _ctx("shell", {"command": "nvidia-smi"})
         result = g.check_pre(ctx)
-        assert result is None or result.action != "block"
+        assert result is None
 
     def test_training_stopped_on_failure_detection(self):
-        """When monitor detects failure, _training_started should be cleared."""
         g = TrainingRuntimeGuard()
         g._training_started = True
-        g._consecutive_train_failures = 0
         ctx = _ctx("flagscale_train_monitor", {"output_dir": "/tmp"},
                    '"training_started": false\n"error_ranks": [0,1,2,3]')
         g.check_post(ctx)
         assert g._training_started is False
 
     def test_training_stopped_on_gpu_idle(self):
-        """When nvidia-smi shows all GPUs at 0%, _training_started should be cleared."""
         g = TrainingRuntimeGuard()
         g._training_started = True
-        ctx = _ctx("shell", {"command": "nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader"},
+        ctx = _ctx("shell", {"command": "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader"},
                    "0 %, 0 MiB\n0 %, 0 MiB\n0 %, 0 MiB\n0 %, 0 MiB")
         g.check_post(ctx)
         assert g._training_started is False
 
     def test_training_not_stopped_when_gpu_active(self):
-        """nvidia-smi with active GPUs should NOT clear _training_started."""
         g = TrainingRuntimeGuard()
         g._training_started = True
         ctx = _ctx("shell", {"command": "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader"},
@@ -387,31 +350,37 @@ class TestTrainingRuntimeGuard:
         assert g._training_started is True
 
     def test_heartbeat_not_triggered_after_training_stopped(self):
-        """After training stops, HEARTBEAT should NOT fire."""
         g = TrainingRuntimeGuard()
         g._training_started = False
         g._turns_since_last_monitor = 10
         g._turns_since_last_gpu_check = 10
         ctx = _ctx("shell", {"command": "grep foo bar.py"})
         result = g.check_pre(ctx)
-        # No heartbeat inject since _training_started is False
         assert result is None
 
-    def test_failure_clears_training_started(self):
-        """Consecutive failure detection should also clear _training_started."""
-        provider = MockProvider(responses=[
-            '{"real": true, "need_more": null}',   # is_training_failure
-            '{"real": false, "need_more": null}',  # is_zombie_gpu
-        ])
-        judge = Judge(provider)
+    def test_heartbeat_fires_when_overdue(self):
         g = TrainingRuntimeGuard()
         g._training_started = True
-        g._consecutive_train_failures = 0
-        ctx = _ctx("shell", {"command": "cat stderr.log"},
-                   "RuntimeError: CUDA out of memory", classify_fn=judge.classify)
-        g.check_post(ctx)
-        assert g._training_started is False
-        assert g._consecutive_train_failures == 1
+        g._turns_since_last_monitor = 4  # >= _HEARTBEAT_MONITOR_INTERVAL
+        ctx = _ctx("shell", {"command": "echo test"})
+        result = g.check_pre(ctx)
+        assert result is not None
+        assert result.action == "inject_msg"
+        assert "HEARTBEAT" in result.message
+
+    def test_reset_new_turn_increments_counters(self):
+        g = TrainingRuntimeGuard()
+        g._training_started = True
+        g._turns_since_last_monitor = 0
+        g.reset_new_turn()
+        assert g._turns_since_last_monitor == 1
+        assert g._turns_since_last_gpu_check == 1
+
+    def test_reset_new_turn_noop_when_not_training(self):
+        g = TrainingRuntimeGuard()
+        g._training_started = False
+        g.reset_new_turn()
+        assert g._turns_since_last_monitor == 0
 
 
 # ── GuardRegistry ─────────────────────────────────────────────────────────
