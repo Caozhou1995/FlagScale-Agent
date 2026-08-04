@@ -358,6 +358,61 @@ class TestTrainingRuntimeGuard:
         result = g.check_pre(ctx)
         assert result is None or result.action != "block"
 
+    def test_training_stopped_on_failure_detection(self):
+        """When monitor detects failure, _training_started should be cleared."""
+        g = TrainingRuntimeGuard()
+        g._training_started = True
+        g._consecutive_train_failures = 0
+        ctx = _ctx("flagscale_train_monitor", {"output_dir": "/tmp"},
+                   '"training_started": false\n"error_ranks": [0,1,2,3]')
+        g.check_post(ctx)
+        assert g._training_started is False
+
+    def test_training_stopped_on_gpu_idle(self):
+        """When nvidia-smi shows all GPUs at 0%, _training_started should be cleared."""
+        g = TrainingRuntimeGuard()
+        g._training_started = True
+        ctx = _ctx("shell", {"command": "nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader"},
+                   "0 %, 0 MiB\n0 %, 0 MiB\n0 %, 0 MiB\n0 %, 0 MiB")
+        g.check_post(ctx)
+        assert g._training_started is False
+
+    def test_training_not_stopped_when_gpu_active(self):
+        """nvidia-smi with active GPUs should NOT clear _training_started."""
+        g = TrainingRuntimeGuard()
+        g._training_started = True
+        ctx = _ctx("shell", {"command": "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader"},
+                   "95 %\n92 %\n88 %\n91 %")
+        g.check_post(ctx)
+        assert g._training_started is True
+
+    def test_heartbeat_not_triggered_after_training_stopped(self):
+        """After training stops, HEARTBEAT should NOT fire."""
+        g = TrainingRuntimeGuard()
+        g._training_started = False
+        g._turns_since_last_monitor = 10
+        g._turns_since_last_gpu_check = 10
+        ctx = _ctx("shell", {"command": "grep foo bar.py"})
+        result = g.check_pre(ctx)
+        # No heartbeat inject since _training_started is False
+        assert result is None
+
+    def test_failure_clears_training_started(self):
+        """Consecutive failure detection should also clear _training_started."""
+        provider = MockProvider(responses=[
+            '{"real": true, "need_more": null}',   # is_training_failure
+            '{"real": false, "need_more": null}',  # is_zombie_gpu
+        ])
+        judge = Judge(provider)
+        g = TrainingRuntimeGuard()
+        g._training_started = True
+        g._consecutive_train_failures = 0
+        ctx = _ctx("shell", {"command": "cat stderr.log"},
+                   "RuntimeError: CUDA out of memory", classify_fn=judge.classify)
+        g.check_post(ctx)
+        assert g._training_started is False
+        assert g._consecutive_train_failures == 1
+
 
 # ── GuardRegistry ─────────────────────────────────────────────────────────
 

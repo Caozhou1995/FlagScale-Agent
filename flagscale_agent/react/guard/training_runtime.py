@@ -195,10 +195,21 @@ class TrainingRuntimeGuard(Guard):
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         classify = ctx.classify_fn
 
-        # Track monitor calls for heartbeat
+        # Track monitor calls for heartbeat — and detect training stopped
         if ctx.tool_name == "flagscale_train_monitor":
             self._turns_since_last_monitor = 0
             self._turns_since_last_gpu_check = 0
+            # If monitor shows training is not running, clear heartbeat state
+            if ctx.tool_result and self._training_started:
+                if self._detect_training_stopped(ctx.tool_result):
+                    self._training_started = False
+
+        # GPU check: if nvidia-smi shows 0% utilization, training likely stopped
+        if ctx.tool_name == "shell" and ctx.tool_result and self._training_started:
+            cmd = ctx.tool_args.get("command", "")
+            if isinstance(cmd, str) and "nvidia-smi" in cmd:
+                if self._detect_gpu_idle(ctx.tool_result):
+                    self._training_started = False
 
         # Detect training launch (two-phase: cheap trigger + LLM confirm)
         if ctx.tool_name == "shell":
@@ -263,6 +274,8 @@ class TrainingRuntimeGuard(Guard):
             self._consecutive_train_failures += 1
             self._last_train_failure_reasons.append(_failure_result[-300:])
             self._source_reads_since_last_failure = 0
+            # Training has stopped — clear heartbeat state
+            self._training_started = False
 
             compare_msg = ""
             if ctx.current_experiment_name and ctx.experiment_diff_fn:
@@ -312,6 +325,44 @@ class TrainingRuntimeGuard(Guard):
                 )
 
         return None
+
+    @staticmethod
+    def _detect_training_stopped(monitor_output: str) -> bool:
+        """Detect if monitor output indicates training is not running.
+
+        Returns True if training has clearly stopped (crashed, exited, or never started).
+        """
+        indicators = (
+            r'"training_started":\s*false',
+            r"Phase:\s*init.*error",
+            r"all\s+\d+\s+rank.*error",
+            r"Process.*exited",
+            r"No active training",
+            r"training_started.*false",
+        )
+        for pattern in indicators:
+            if re.search(pattern, monitor_output, re.IGNORECASE):
+                return True
+        # If monitor shows errors on all ranks, training is dead
+        if re.search(r'"error_ranks":\s*\[', monitor_output):
+            # Count error ranks — if substantial, training stopped
+            error_ranks = re.findall(r'"error_ranks":\s*\[([\d,\s]+)\]', monitor_output)
+            if error_ranks and len(error_ranks[0].split(",")) > 4:
+                return True
+        return False
+
+    @staticmethod
+    def _detect_gpu_idle(nvidia_smi_output: str) -> bool:
+        """Detect if all GPUs show 0% utilization from nvidia-smi output.
+
+        Returns True only if ALL reported GPUs are at 0%.
+        """
+        # Match patterns like "0 %, 0 MiB" or "0 %"
+        util_values = re.findall(r'(\d+)\s*%', nvidia_smi_output)
+        if not util_values:
+            return False
+        # All GPUs must be at 0%
+        return all(int(v) == 0 for v in util_values)
 
     def reset_turn(self):
         """Increment heartbeat counters once per iteration (not per tool call)."""
