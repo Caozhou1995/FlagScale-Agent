@@ -795,7 +795,7 @@ class WorkerAgent:
 
             # Prepend the current conversation as context
             context_msgs = list(messages) + prompt_msgs
-            stream = self.provider.chat_stream(context_msgs, [])
+            stream, _ = self.provider.chat_stream(context_msgs, [])
             result_text = ""
             for event in stream:
                 if isinstance(event, dict):
