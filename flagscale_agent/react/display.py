@@ -715,7 +715,7 @@ def guard_inject(message):
     lines = [l for l in message.strip().split('\n') if l.strip()]
     if not lines:
         return
-    _print(f"  {dim('🛡')} {dim(lines[0].strip())}")
+    _print(f"  🛡 {dim(lines[0].strip())}")
     for line in lines[1:]:
         _print(f"     {dim(line.strip())}")
 
