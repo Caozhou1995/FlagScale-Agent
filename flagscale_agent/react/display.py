@@ -201,7 +201,7 @@ _TOOL_ICONS = {
     "plan_create": "📋",
     "plan_update": "📋",
     "plan_status": "📋",
-    "find_latest_log": "📄",
+    "flagscale_train_monitor": "🚂",
     "evict": "🗑️",
     "recall": "↩️",
     "evict_list": "📑",

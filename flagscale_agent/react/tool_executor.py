@@ -117,21 +117,13 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         return f"{action} step_{step_id}" if step_id else action
     if tool_name == "plan_status":
         return ""
-    if tool_name == "monitor":
-        # Show what's being monitored: file, command, or output_dir
-        file = arguments.get("file", "")
-        command = arguments.get("command", "")
+    if tool_name == "flagscale_train_monitor":
+        # Show what's being monitored
         output_dir = arguments.get("output_dir", "")
+        mode = arguments.get("mode", "watch")
         duration = arguments.get("duration", 300)
         target = arguments.get("target_step")
-        if output_dir:
-            summary = _short_path(output_dir, 40)
-        elif file:
-            summary = _short_path(file, 40)
-        elif command:
-            summary = command
-        else:
-            summary = "poll"
+        summary = _short_path(output_dir, 40) if output_dir else "unknown"
         if target:
             summary += f" →step {target}"
         summary += f" ({duration}s)"
@@ -145,7 +137,7 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         if path:
             summary += f" in {_short_path(path, 40)}"
         return summary
-    if tool_name == "find_latest_log":
+    if tool_name == "flagscale_train_monitor":
         exp = arguments.get("experiment", "")
         log_type = arguments.get("log_type", "both")
         filt = arguments.get("filter", "")

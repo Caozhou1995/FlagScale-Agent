@@ -109,7 +109,7 @@ class TrainingRuntimeGuard(Guard):
 
         # Monitor enforcement
         if self._awaiting_monitor:
-            if ctx.tool_name == "monitor":
+            if ctx.tool_name == "flagscale_train_monitor":
                 self._awaiting_monitor = False
                 self._monitor_gate_block_count = 0
                 return None
@@ -196,7 +196,7 @@ class TrainingRuntimeGuard(Guard):
         classify = ctx.classify_fn
 
         # Track monitor calls for heartbeat
-        if ctx.tool_name == "monitor":
+        if ctx.tool_name == "flagscale_train_monitor":
             self._turns_since_last_monitor = 0
             self._turns_since_last_gpu_check = 0
 
@@ -253,7 +253,7 @@ class TrainingRuntimeGuard(Guard):
                 }, default=False):
                     _failure_detected = True
                     _failure_result = ctx.tool_result
-            elif ctx.tool_name in ("monitor", "find_latest_log", "parse_training_metrics"):
+            elif ctx.tool_name in ("flagscale_train_monitor", "flagscale_train_monitor", "parse_training_metrics"):
                 # Check monitor/log tool output for failure patterns
                 if _MONITOR_FAILURE_RE.search(ctx.tool_result):
                     _failure_detected = True

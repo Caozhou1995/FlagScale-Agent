@@ -59,7 +59,7 @@ from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.shell import ShellTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
-from flagscale_agent.react.tools.find_log import FindLatestLogTool
+# find_log removed — merged into monitor
 from flagscale_agent.react.tools.parse_metrics import ParseTrainingMetricsTool
 from flagscale_agent.react.tools.workspace_experiment import WorkspaceExperimentTool
 from flagscale_agent.react.memory import Memory
@@ -67,7 +67,7 @@ from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
 from flagscale_agent.react.tools.memory_list import MemoryListTool
 from flagscale_agent.react.plan import TaskPlan
-from flagscale_agent.react.tools.monitor import MonitorTool
+from flagscale_agent.react.tools.monitor import FlagScaleTrainMonitorTool
 from flagscale_agent.react.tools.plan_create import PlanCreateTool
 from flagscale_agent.react.tools.plan_update import PlanUpdateTool
 from flagscale_agent.react.tools.plan_status import PlanStatusTool
@@ -409,9 +409,9 @@ class WorkerAgent:
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
         self.tool_registry.register(LoadKnowledgeTool(self._knowledge_manager))
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
-        self.tool_registry.register(FindLatestLogTool())
+        # FindLatestLogTool removed — merged into FlagScaleTrainMonitorTool
         self.tool_registry.register(ParseTrainingMetricsTool())
-        self.tool_registry.register(MonitorTool(classify_fn=self._judge_confirm))
+        self.tool_registry.register(FlagScaleTrainMonitorTool(classify_fn=self._judge_confirm))
         self.tool_registry.register(WorkspaceExperimentTool(self._experiment_manager, task_plan=self.task_plan))
         self.tool_registry.register(ValidateConfigTool())
         self.tool_registry.register(InspectCheckpointTool())

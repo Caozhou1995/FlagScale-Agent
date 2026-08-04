@@ -204,7 +204,7 @@ class ComprehensionGateGuard(Guard):
         if (
             self._in_complex_context
             and ctx.tool_result
-            and ctx.tool_name in ("shell", "monitor", "find_latest_log")
+            and ctx.tool_name in ("shell", "flagscale_train_monitor", "flagscale_train_monitor")
         ):
             if self._is_complex_failure(ctx.tool_result):
                 self._failure_in_complex_code = True

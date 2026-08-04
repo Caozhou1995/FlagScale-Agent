@@ -12,179 +12,281 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the monitor tool."""
+"""Tests for FlagScaleTrainMonitorTool (unified monitor)."""
 
+import json
 import os
 import tempfile
 import time
-import threading
 
 import pytest
 
-from flagscale_agent.react.tools.monitor import MonitorTool
+from flagscale_agent.react.tools.monitor import (
+    FlagScaleTrainMonitorTool,
+    _parse_megatron_metrics,
+    _health_check,
+    _is_harmless,
+    _last_sorted_subdir,
+    _numeric_key,
+)
 
 
-_LIVE_PATTERN = "pytest|python"  # matches the test runner AND any python process
+# ─── Helper: create FlagScale log structure ───────────────────────────────────
 
-
-def _always_true_classify(category, text, context="", **kwargs):
-    """Mock classify that always returns True (error detected)."""
-    return True
-
-
-class TestMonitorTool:
-
-    def test_basic_file_watch_timeout(self, tmp_path):
-        log_file = tmp_path / "test.log"
-        log_file.write_text("line 1\n")
-
-        tool = MonitorTool()
-        result = tool.execute(file=str(log_file), duration=3, interval=1,
-                              process_pattern=_LIVE_PATTERN)
-
-        assert "timeout" in result
-        assert "polls" in result
-
-    def test_file_not_found_waits(self, tmp_path):
-        tool = MonitorTool()
-        result = tool.execute(file=str(tmp_path / "nonexistent.log"), duration=3, interval=1,
-                              process_pattern=_LIVE_PATTERN)
-        assert "timeout" in result
-
-    def test_target_step_reached(self, tmp_path):
-        log_file = tmp_path / "log.txt"
-        log_file.write_text("")
-
-        def write_steps():
-            time.sleep(1)
-            with open(str(log_file), "a") as f:
-                f.write("(step=0000005) loss: 0.5\n")
-            time.sleep(1)
-            with open(str(log_file), "a") as f:
-                f.write("(step=0000010) loss: 0.3\n")
-
-        t = threading.Thread(target=write_steps, daemon=True)
-        t.start()
-
-        tool = MonitorTool()
-        result = tool.execute(file=str(log_file), target_step=10, duration=10, interval=1,
-                              process_pattern=_LIVE_PATTERN)
-
-        assert "target_reached" in result
-        assert "step=0000010" in result
-        t.join(timeout=3)
-
-    def test_success_pattern(self, tmp_path):
-        log_file = tmp_path / "log.txt"
-        log_file.write_text("loading model...\n")
-
-        def write_success():
-            time.sleep(1)
-            with open(str(log_file), "a") as f:
-                f.write("training complete!\n")
-
-        t = threading.Thread(target=write_success, daemon=True)
-        t.start()
-
-        tool = MonitorTool()
-        result = tool.execute(
-            file=str(log_file), success_pattern="training complete",
-            duration=10, interval=1, process_pattern=_LIVE_PATTERN
+def _make_flagscale_logs(base, num_hosts=1, num_ranks_per_host=8,
+                         stdout_content=None, stderr_content=None):
+    """Create a realistic FlagScale log directory structure.
+    
+    Returns output_dir path.
+    """
+    output_dir = os.path.join(base, "experiment_output")
+    for host_idx in range(num_hosts):
+        host_name = f"host_{host_idx}_gpu{host_idx:02d}"
+        attempt_dir = os.path.join(
+            output_dir, "logs", "details", host_name,
+            "2024-08-04_12-00-00", "run_0", "attempt_0"
         )
+        for rank in range(host_idx * num_ranks_per_host,
+                         (host_idx + 1) * num_ranks_per_host):
+            rank_dir = os.path.join(attempt_dir, str(rank))
+            os.makedirs(rank_dir, exist_ok=True)
+            # stdout
+            content = stdout_content if stdout_content else ""
+            if rank == num_hosts * num_ranks_per_host - 1 and stdout_content is None:
+                # Last rank gets default metrics
+                content = "iteration 10 | lm loss: 8.5432 | grad norm: 1.234\n"
+            with open(os.path.join(rank_dir, "stdout.log"), "w") as f:
+                f.write(content)
+            # stderr
+            err = stderr_content if stderr_content else ""
+            with open(os.path.join(rank_dir, "stderr.log"), "w") as f:
+                f.write(err)
+    return output_dir
 
-        assert "success" in result.lower() or "SUCCESS" in result
-        t.join(timeout=3)
 
-    def test_fail_pattern(self, tmp_path):
-        log_file = tmp_path / "log.txt"
-        log_file.write_text("starting...\n")
+# ─── Unit tests: metrics parsing ──────────────────────────────────────────────
 
-        def write_error():
-            time.sleep(1)
-            with open(str(log_file), "a") as f:
-                f.write("CUDA error: out of memory\n")
+class TestMetricsParsing:
+    def test_parse_basic_iteration(self):
+        text = " iteration      42/ 1000 | lm loss: 7.8234E+00 | grad norm: 1.456"
+        m = _parse_megatron_metrics(text)
+        assert m["last_iter"] == 42
+        assert abs(m["last_loss"]["lm_loss"] - 7.8234) < 0.001
+        assert abs(m["last_loss"]["grad_norm"] - 1.456) < 0.001
 
-        t = threading.Thread(target=write_error, daemon=True)
-        t.start()
-
-        tool = MonitorTool()
-        result = tool.execute(
-            file=str(log_file), fail_pattern="CUDA error",
-            duration=10, interval=1, process_pattern=_LIVE_PATTERN
+    def test_parse_multiple_iterations(self):
+        text = (
+            "iteration 1 | loss: 10.0\n"
+            "iteration 2 | loss: 9.5\n"
+            "iteration 3 | loss: 9.0\n"
         )
+        m = _parse_megatron_metrics(text)
+        assert m["last_iter"] == 3
+        assert len(m["iterations"]) == 3
 
-        assert "error_detected" in result or "FAIL" in result
-        t.join(timeout=3)
+    def test_parse_no_metrics(self):
+        m = _parse_megatron_metrics("Loading model weights...\nDone.")
+        assert m["last_iter"] is None
+        assert m["iterations"] == []
 
-    def test_interesting_change_detected(self, tmp_path):
-        log_file = tmp_path / "log.txt"
-        log_file.write_text("normal output\n")
+    def test_health_check_random_output(self):
+        metrics = {"last_iter": 5, "last_loss": {"lm_loss": 11.9}, "iterations": [5], "anomalies": []}
+        # ln(151936) ≈ 11.93
+        warnings = _health_check(metrics, vocab_size=151936)
+        assert any("random" in w for w in warnings)
 
-        def write_error():
-            time.sleep(1)
-            with open(str(log_file), "a") as f:
-                f.write("RuntimeError: NCCL timeout\n")
+    def test_health_check_ok(self):
+        metrics = {"last_iter": 100, "last_loss": {"lm_loss": 5.0}, "iterations": [100], "anomalies": []}
+        warnings = _health_check(metrics, vocab_size=151936)
+        assert warnings == []
 
-        t = threading.Thread(target=write_error, daemon=True)
-        t.start()
+    def test_health_check_zero_grad(self):
+        metrics = {"last_iter": 5, "last_loss": {"grad_norm": 0}, "iterations": [5], "anomalies": []}
+        warnings = _health_check(metrics)
+        assert any("grad_norm=0" in w for w in warnings)
 
-        tool = MonitorTool(classify_fn=_always_true_classify)
-        result = tool.execute(file=str(log_file), duration=10, interval=1,
-                              process_pattern=_LIVE_PATTERN)
 
-        assert "interesting_change" in result
-        assert "NCCL" in result
-        t.join(timeout=3)
+# ─── Unit tests: utilities ────────────────────────────────────────────────────
 
-    def test_command_mode(self):
-        tool = MonitorTool()
-        result = tool.execute(command="echo hello", duration=3, interval=1,
-                              process_pattern=_LIVE_PATTERN)
-        # Should timeout since output doesn't change
-        assert "timeout" in result
+class TestUtilities:
+    def test_last_sorted_subdir(self, tmp_path):
+        os.makedirs(tmp_path / "a")
+        os.makedirs(tmp_path / "b")
+        os.makedirs(tmp_path / "c")
+        assert _last_sorted_subdir(str(tmp_path)).endswith("c")
 
-    def test_both_file_and_command_accepted(self):
-        tool = MonitorTool()
-        result = tool.execute(file="/tmp/nonexistent_xyz", command="echo y", duration=2, interval=1,
-                              process_pattern=_LIVE_PATTERN)
-        # No longer an error — tool accepts both; just check it runs
-        assert "ERROR" not in result or "No such file" in result
+    def test_last_sorted_subdir_numeric(self, tmp_path):
+        os.makedirs(tmp_path / "attempt_0")
+        os.makedirs(tmp_path / "attempt_1")
+        os.makedirs(tmp_path / "attempt_10")
+        result = _last_sorted_subdir(str(tmp_path), key=_numeric_key)
+        assert result.endswith("attempt_10")
 
-    def test_error_neither_file_nor_command(self):
-        tool = MonitorTool()
-        result = tool.execute()
+    def test_last_sorted_subdir_empty(self, tmp_path):
+        assert _last_sorted_subdir(str(tmp_path)) == ""
+
+    def test_last_sorted_subdir_nonexist(self):
+        assert _last_sorted_subdir("/nonexistent/path") == ""
+
+    def test_is_harmless_deprecation(self):
+        assert _is_harmless("DeprecationWarning: something old")
+
+    def test_is_harmless_user_warning(self):
+        assert _is_harmless("UserWarning: torch.cuda.amp is deprecated")
+
+    def test_not_harmless_error(self):
+        assert not _is_harmless("RuntimeError: CUDA out of memory")
+
+    def test_not_harmless_traceback(self):
+        assert not _is_harmless("Traceback (most recent call last):")
+
+
+# ─── Integration tests: check mode ───────────────────────────────────────────
+
+class TestCheckMode:
+    def test_check_basic(self, tmp_path):
+        output_dir = _make_flagscale_logs(str(tmp_path))
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="check")
+        assert "FlagScale Training Status" in result
+        assert "iteration" in result.lower() or "Loss Rank" in result
+
+    def test_check_finds_loss_rank(self, tmp_path):
+        output_dir = _make_flagscale_logs(str(tmp_path), num_hosts=1, num_ranks_per_host=4)
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="check")
+        assert "rank 3" in result  # last rank has metrics
+
+    def test_check_multi_host_shared_storage(self, tmp_path):
+        output_dir = _make_flagscale_logs(str(tmp_path), num_hosts=4, num_ranks_per_host=8)
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="check")
+        assert "shared" in result
+        assert "4 host" in result
+        assert "0-31" in result
+
+    def test_check_with_errors(self, tmp_path):
+        output_dir = _make_flagscale_logs(
+            str(tmp_path),
+            stderr_content="RuntimeError: CUDA out of memory\nTraceback..."
+        )
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="check")
+        assert "Error" in result or "error" in result
+
+    def test_check_no_logs(self, tmp_path):
+        output_dir = str(tmp_path / "empty_experiment")
+        os.makedirs(output_dir)
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="check")
         assert "ERROR" in result
 
-    def test_metrics_recorded_in_events(self, tmp_path):
-        log_file = tmp_path / "log.txt"
-        log_file.write_text("init\n")
+    def test_check_filter_progress(self, tmp_path):
+        content = (
+            "Loading model...\n"
+            "iteration 1 | loss: 10.0\n"
+            "Some debug info\n"
+            "iteration 2 | loss: 9.5\n"
+        )
+        output_dir = _make_flagscale_logs(str(tmp_path), stdout_content=content)
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="check", filter="progress")
+        assert "iteration" in result
+        # "Loading model" should be filtered out in progress mode from the filtered section
+        # But it may appear in other parts of the output
 
-        def write_metrics():
-            time.sleep(0.5)
-            with open(str(log_file), "a") as f:
-                f.write("step=5 loss=0.5 MFU=30%\n")
+    def test_check_json_summary(self, tmp_path):
+        output_dir = _make_flagscale_logs(str(tmp_path))
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="check")
+        assert "JSON" in result
+        # Extract JSON part
+        json_start = result.index("{")
+        json_end = result.rindex("}") + 1
+        summary = json.loads(result[json_start:json_end])
+        assert "loss_rank" in summary
+        assert "training_started" in summary
 
-        t = threading.Thread(target=write_metrics, daemon=True)
-        t.start()
+    def test_check_nonexistent_dir(self):
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir="/nonexistent/path", mode="check")
+        assert "ERROR" in result
 
-        tool = MonitorTool()
-        result = tool.execute(file=str(log_file), duration=8, interval=1,
-                              process_pattern=_LIVE_PATTERN)
 
-        # Metrics are recorded but don't break the loop (timeout expected)
-        assert "timeout" in result
-        assert "metric" in result.lower()
-        t.join(timeout=3)
+# ─── Integration tests: watch mode ───────────────────────────────────────────
 
-    def test_schema(self):
-        tool = MonitorTool()
-        schema = tool.to_openai_schema()
-        assert schema["function"]["name"] == "monitor"
-        assert "file" in schema["function"]["parameters"]["properties"]
-        assert "target_step" in schema["function"]["parameters"]["properties"]
+class TestWatchMode:
+    def test_watch_immediate_error(self, tmp_path):
+        """Watch should return immediately if stderr already has errors."""
+        output_dir = _make_flagscale_logs(
+            str(tmp_path),
+            stderr_content="RuntimeError: CUDA error: device-side assert\n"
+        )
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="watch", duration=10, interval=5)
+        assert "CRASHED" in result or "ERROR" in result
 
-    def test_anthropic_schema(self):
-        tool = MonitorTool()
-        schema = tool.to_anthropic_schema()
-        assert schema["name"] == "monitor"
-        assert "file" in schema["input_schema"]["properties"]
+    def test_watch_timeout_no_activity(self, tmp_path):
+        """Watch with short timeout should return timeout."""
+        output_dir = _make_flagscale_logs(str(tmp_path), stdout_content="init done\n")
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir=output_dir, mode="watch", duration=6, interval=5)
+        # Should timeout or detect dead (no GPU process in test env)
+        assert "timeout" in result.lower() or "DEAD" in result
+
+    def test_watch_nonexistent_dir(self):
+        tool = FlagScaleTrainMonitorTool()
+        result = tool.execute(output_dir="/nonexistent", mode="watch", duration=5, interval=5)
+        assert "ERROR" in result
+
+
+# ─── Test liveness detection ──────────────────────────────────────────────────
+
+class TestLiveness:
+    def test_alive_recent_log_growth(self):
+        tool = FlagScaleTrainMonitorTool()
+        # Log grew 10s ago — should be alive
+        assert tool._is_alive("training", time.time() - 10) is True
+
+    def test_dead_no_signals(self):
+        tool = FlagScaleTrainMonitorTool()
+        # Log grew 300s ago, no GPU, no pgrep match
+        assert tool._is_alive("training", time.time() - 300) is False
+
+    def test_grace_period_rendezvous(self):
+        tool = FlagScaleTrainMonitorTool()
+        # In rendezvous phase, 90s without log growth is still OK (grace=120s)
+        assert tool._is_alive("rendezvous", time.time() - 90) is True
+
+    def test_grace_period_init(self):
+        tool = FlagScaleTrainMonitorTool()
+        # In init phase, 200s without log growth is still OK (grace=300s)
+        assert tool._is_alive("init", time.time() - 200) is True
+
+
+# ─── Test log discovery ───────────────────────────────────────────────────────
+
+class TestLogDiscovery:
+    def test_discover_single_host(self, tmp_path):
+        output_dir = _make_flagscale_logs(str(tmp_path), num_hosts=1, num_ranks_per_host=8)
+        tool = FlagScaleTrainMonitorTool()
+        logs = tool._discover_logs(output_dir)
+        assert not logs.get("error")
+        assert len(logs["rank_dirs"]) == 8
+        assert len(logs["stderr_logs"]) == 8
+        assert logs["stdout_log"]  # should find the one with metrics
+
+    def test_discover_multi_host(self, tmp_path):
+        output_dir = _make_flagscale_logs(str(tmp_path), num_hosts=4, num_ranks_per_host=8)
+        tool = FlagScaleTrainMonitorTool()
+        logs = tool._discover_logs(output_dir)
+        assert not logs.get("error")
+        assert len(logs["rank_dirs"]) == 32
+        assert len(logs["host_dirs"]) == 4
+
+    def test_discover_no_logs_dir(self, tmp_path):
+        output_dir = str(tmp_path / "empty")
+        os.makedirs(output_dir)
+        tool = FlagScaleTrainMonitorTool()
+        logs = tool._discover_logs(output_dir)
+        assert "ERROR" in logs.get("error", "")

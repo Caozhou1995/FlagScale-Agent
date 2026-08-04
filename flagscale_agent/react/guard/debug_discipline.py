@@ -129,7 +129,7 @@ class DebugDisciplineGuard(Guard):
         # NOTE: "shell" excluded because inline Python training (e.g., conv solvers)
         # produces Tracebacks as normal operation (architecture didn't converge).
         # Only dedicated training tools indicate a real infrastructure failure.
-        if ctx.tool_name in ("monitor", "find_latest_log", "parse_training_metrics"):
+        if ctx.tool_name in ("flagscale_train_monitor", "flagscale_train_monitor", "parse_training_metrics"):
             if ctx.tool_result and _MONITOR_CRASH_RE.search(ctx.tool_result):
                 self._failure_observed = True
                 self._hypothesis_declared = False

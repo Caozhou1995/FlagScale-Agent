@@ -187,7 +187,7 @@ class ExperimentTrackingGuard(Guard):
 
         # Track training result (from monitor)
         if self._training_launched and ctx.tool_name in (
-            "monitor", "find_latest_log", "parse_training_metrics"
+            "flagscale_train_monitor", "flagscale_train_monitor", "parse_training_metrics"
         ):
             if ctx.tool_result:
                 self._training_launched = False

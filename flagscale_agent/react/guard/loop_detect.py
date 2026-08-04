@@ -37,7 +37,7 @@ from flagscale_agent.react.state_machine import AgentState
 # Tools that only read state without modifying it
 _READ_ONLY_TOOL_NAMES = frozenset({
     "read_file", "memory_read", "memory_list", "plan_status",
-    "find_log", "parse_metrics", "monitor", "web_fetch",
+    "flagscale_train_monitor", "parse_metrics", "flagscale_train_monitor", "web_fetch",
     "validate_config", "inspect_checkpoint",
 })
 

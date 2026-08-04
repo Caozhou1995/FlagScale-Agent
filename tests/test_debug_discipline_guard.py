@@ -45,7 +45,7 @@ class TestHypothesisGate:
         """First edit after failure is allowed (threshold is 2)."""
         g = DebugDisciplineGuard()
         # Simulate failure detection via check_post
-        post_ctx = _ctx("monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: CUDA OOM")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: CUDA OOM")
         g.check_post(post_ctx)
         assert g._failure_observed is True
 
@@ -58,7 +58,7 @@ class TestHypothesisGate:
         """Second edit after failure without hypothesis is blocked."""
         g = DebugDisciplineGuard()
         # Simulate failure
-        post_ctx = _ctx("monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: boom")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: boom")
         g.check_post(post_ctx)
 
         # First edit — passes
@@ -76,7 +76,7 @@ class TestHypothesisGate:
         """Edits to non-.py files are never blocked."""
         g = DebugDisciplineGuard()
         # Simulate failure
-        post_ctx = _ctx("monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: x")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: x")
         g.check_post(post_ctx)
 
         # .yaml edit — should pass regardless
@@ -93,7 +93,7 @@ class TestHypothesisDetection:
         """When LLM writes 'HYPOTHESIS:' in response, gate clears."""
         g = DebugDisciplineGuard()
         # Simulate failure
-        post_ctx = _ctx("monitor", tool_result="RuntimeError: NCCL error")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="RuntimeError: NCCL error")
         g.check_post(post_ctx)
         # First edit
         g.check_pre(_ctx("write_file", {"path": "/tmp/f.py"}, assistant_text="try"))
@@ -108,7 +108,7 @@ class TestHypothesisDetection:
     def test_hypothesis_bold_format(self):
         """Detects **hypothesis** markdown format."""
         g = DebugDisciplineGuard()
-        post_ctx = _ctx("monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: x")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: x")
         g.check_post(post_ctx)
         g.check_pre(_ctx("write_file", {"path": "/tmp/f.py"}, assistant_text="x"))
 
@@ -120,7 +120,7 @@ class TestHypothesisDetection:
     def test_chinese_hypothesis(self):
         """Detects Chinese hypothesis patterns."""
         g = DebugDisciplineGuard()
-        post_ctx = _ctx("monitor", tool_result="RuntimeError: OOM")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="RuntimeError: OOM")
         g.check_post(post_ctx)
         g.check_pre(_ctx("write_file", {"path": "/tmp/f.py"}, assistant_text="x"))
 
@@ -132,7 +132,7 @@ class TestHypothesisDetection:
     def test_root_cause_clears_gate(self):
         """'root cause:' also counts as hypothesis."""
         g = DebugDisciplineGuard()
-        post_ctx = _ctx("monitor", tool_result="CUDA error: device-side assert")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="CUDA error: device-side assert")
         g.check_post(post_ctx)
         g.check_pre(_ctx("write_file", {"path": "/tmp/f.py"}, assistant_text="x"))
 
@@ -144,7 +144,7 @@ class TestHypothesisDetection:
     def test_empty_assistant_text_skips_gate(self):
         """When assistant_text is empty, guard skips entirely (safety valve)."""
         g = DebugDisciplineGuard()
-        post_ctx = _ctx("monitor", tool_result="RuntimeError: fail")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="RuntimeError: fail")
         g.check_post(post_ctx)
         g.check_pre(_ctx("write_file", {"path": "/tmp/f.py"}, assistant_text=""))
 
@@ -226,14 +226,14 @@ class TestFailureDetection:
     def test_monitor_traceback_triggers(self):
         """monitor tool with traceback DOES set _failure_observed."""
         g = DebugDisciplineGuard()
-        ctx = _ctx("monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: NCCL")
+        ctx = _ctx("flagscale_train_monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: NCCL")
         g.check_post(ctx)
         assert g._failure_observed is True
 
     def test_find_latest_log_triggers(self):
         """find_latest_log with error triggers failure."""
         g = DebugDisciplineGuard()
-        ctx = _ctx("find_latest_log", tool_result="CUDA error: device-side assert triggered")
+        ctx = _ctx("flagscale_train_monitor", tool_result="CUDA error: device-side assert triggered")
         g.check_post(ctx)
         assert g._failure_observed is True
 
@@ -247,7 +247,7 @@ class TestFailureDetection:
     def test_monitor_clean_output_no_trigger(self):
         """monitor with clean output does NOT trigger failure."""
         g = DebugDisciplineGuard()
-        ctx = _ctx("monitor", tool_result="iteration 100 | loss 2.34 | grad_norm 1.2")
+        ctx = _ctx("flagscale_train_monitor", tool_result="iteration 100 | loss 2.34 | grad_norm 1.2")
         g.check_post(ctx)
         assert g._failure_observed is False
 

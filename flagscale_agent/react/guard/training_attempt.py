@@ -21,7 +21,7 @@ Unlike CircuitBreakerGuard (which counts consecutive tool-level errors),
 this guard understands the training workflow:
 1. Detect code modification (edit_file/write_file to .py files)
 2. Detect training launch (shell with run.py/torchrun/flagscale)
-3. Detect training result (monitor/find_latest_log returning crash or success)
+3. Detect training result (flagscale_train_monitor returning crash or success)
 
 When 2 consecutive attempts fail with the SAME error category,
 the guard BLOCKS further launches until the agent demonstrates
@@ -245,7 +245,7 @@ class TrainingAttemptGuard(Guard):
 
         # Detect training result
         if self._current_attempt and ctx.tool_result:
-            if ctx.tool_name in ("monitor", "find_latest_log", "parse_training_metrics"):
+            if ctx.tool_name in ("flagscale_train_monitor", "flagscale_train_monitor", "parse_training_metrics"):
                 if _MONITOR_CRASH_RE.search(ctx.tool_result):
                     # Training failed
                     category = self._classify_training_error(ctx.tool_result, ctx)

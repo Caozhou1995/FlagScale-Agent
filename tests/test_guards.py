@@ -322,7 +322,7 @@ class TestTrainingRuntimeGuard:
     def test_monitor_clears_gate(self):
         g = TrainingRuntimeGuard()
         g._awaiting_monitor = True
-        ctx = _ctx("monitor", {"output_dir": "/tmp/train"})
+        ctx = _ctx("flagscale_train_monitor", {"output_dir": "/tmp/train"})
         result = g.check_pre(ctx)
         assert result is None
         assert g._awaiting_monitor is False

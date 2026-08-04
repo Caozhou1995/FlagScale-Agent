@@ -237,7 +237,7 @@ class TestEndToEndOverrideFlow:
         g = DebugDisciplineGuard()
 
         # Trigger failure via check_post
-        post_ctx = _ctx("monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: CUDA OOM")
+        post_ctx = _ctx("flagscale_train_monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: CUDA OOM")
         g.check_post(post_ctx)
         assert g._failure_observed is True
 

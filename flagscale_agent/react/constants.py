@@ -27,7 +27,7 @@ READ_ONLY_TOOLS = {
 CORE_TOOLS = {
     "read_file", "write_file", "edit_file", "shell",
     "load_skill", "load_knowledge", "web_fetch", "memory_write", "memory_read",
-    "memory_list", "monitor", "workspace_experiment",
+    "memory_list", "flagscale_train_monitor", "workspace_experiment",
     "plan_create", "plan_update", "plan_status",
     "evict", "evict_list", "recall",
 }
@@ -35,15 +35,15 @@ CORE_TOOLS = {
 PHASE_TOOL_SETS = {
     "idle": {
         "read_file", "shell", "load_skill", "load_knowledge", "memory_read", "memory_list",
-        "web_fetch", "workspace_experiment", "find_latest_log",
+        "web_fetch", "workspace_experiment", "flagscale_train_monitor",
         "plan_create", "plan_status", "memory_write", "write_file",
-        "edit_file", "monitor", "validate_config",
+        "edit_file", "flagscale_train_monitor", "validate_config",
         "evict", "recall",
     },
     "analysis": {
         "read_file", "shell", "memory_read", "memory_list",
         "web_fetch", "load_skill", "load_knowledge", "workspace_experiment",
-        "find_latest_log", "memory_write",
+        "flagscale_train_monitor", "memory_write",
         "plan_create", "plan_update", "plan_status",
         "write_file", "edit_file", "inspect_checkpoint",
         "validate_config",
@@ -53,13 +53,13 @@ PHASE_TOOL_SETS = {
         "read_file", "write_file", "edit_file", "shell",
         "load_skill", "load_knowledge", "memory_write", "memory_read",
         "plan_update", "plan_status", "workspace_experiment",
-        "find_latest_log", "monitor", "validate_config",
+        "flagscale_train_monitor", "validate_config",
         "inspect_checkpoint", "parse_training_metrics",
         "evict", "recall",
     },
     "verification": {
         "read_file", "shell", "write_file", "edit_file",
-        "monitor", "find_latest_log", "parse_training_metrics",
+        "flagscale_train_monitor", "parse_training_metrics",
         "memory_write", "memory_read", "workspace_experiment",
         "plan_update", "plan_status", "load_skill", "load_knowledge",
         "inspect_checkpoint", "validate_config",

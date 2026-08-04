@@ -322,8 +322,8 @@ Identify issues and provide SHORT, actionable annotations. Consider:
 - Network errors (connection refused, timeout, DNS): suggest proxy or retry
 - Download failures: suggest resume with wget -c or curl -C -
 - PyTorch/CUDA incompatibility: suggest version check commands
-- Inefficient patterns (sleep+tail for monitoring): suggest find_latest_log or timeout+tail -f
-- Log searching with find/ls -R/ls -lt: suggest find_latest_log tool or workspace_experiment list
+- Inefficient patterns (sleep+tail for monitoring): suggest flagscale_train_monitor or timeout+tail -f
+- Log searching with find/ls -R/ls -lt: suggest flagscale_train_monitor tool or workspace_experiment list
 - Training launch (flagscale/torchrun/deepspeed): remind to verify GPU utilization and logs
 - Package install success (pip/conda): remind to verify runtime compatibility
 - pip upgraded/downgraded a critical package (torch, numpy, etc.): WARN that this may break CUDA compatibility

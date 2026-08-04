@@ -20,7 +20,7 @@ import re
 import subprocess
 
 from flagscale_agent.react.tools.base import Tool, EFFECT_READ_FS
-from flagscale_agent.react.tools.find_log import _parse_megatron_metrics, _health_check
+from flagscale_agent.react.tools.monitor import _parse_megatron_metrics, _health_check
 
 
 class ParseTrainingMetricsTool(Tool):

@@ -57,7 +57,7 @@ class TestTrainingAttemptGuard:
         ctx_launch = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
         guard.check_post(ctx_launch)
 
-        ctx_fail = make_ctx("monitor", {"output_dir": "/tmp/test"},
+        ctx_fail = make_ctx("flagscale_train_monitor", {"output_dir": "/tmp/test"},
                            tool_result="TRAINING CRASHED\nAttributeError: 'X' has no attribute 'y'")
         guard.check_post(ctx_fail)
 
@@ -68,7 +68,7 @@ class TestTrainingAttemptGuard:
         ctx_launch2 = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
         guard.check_post(ctx_launch2)
 
-        ctx_fail2 = make_ctx("monitor", {"output_dir": "/tmp/test"},
+        ctx_fail2 = make_ctx("flagscale_train_monitor", {"output_dir": "/tmp/test"},
                             tool_result="TRAINING CRASHED\nAttributeError: 'Z' has no attribute 'w'")
         guard.check_post(ctx_fail2)
 
@@ -84,7 +84,7 @@ class TestTrainingAttemptGuard:
         # First attempt: fail with AttributeError
         ctx_launch = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
         guard.check_post(ctx_launch)
-        ctx_fail = make_ctx("monitor", tool_result="TRAINING CRASHED\nAttributeError: missing")
+        ctx_fail = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nAttributeError: missing")
         guard.check_post(ctx_fail)
 
         # Second attempt: fail with shape error (different category)
@@ -92,7 +92,7 @@ class TestTrainingAttemptGuard:
         guard.check_post(ctx_edit)
         ctx_launch2 = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
         guard.check_post(ctx_launch2)
-        ctx_fail2 = make_ctx("monitor", tool_result="TRAINING CRASHED\nRuntimeError: mat1 size mismatch")
+        ctx_fail2 = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nRuntimeError: mat1 size mismatch")
         guard.check_post(ctx_fail2)
 
         # Should NOT be blocked (different categories)
@@ -168,7 +168,7 @@ class TestDebugDisciplineGuard:
         guard = DebugDisciplineGuard()
 
         # Observe failure
-        ctx_fail = make_ctx("monitor", tool_result="TRAINING CRASHED\nRuntimeError: bad")
+        ctx_fail = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nRuntimeError: bad")
         guard.check_post(ctx_fail)
 
         # First edit is fine
@@ -221,7 +221,7 @@ class TestLLMFallback:
                 return {"category": "config", "confidence": 0.9}
             return default
 
-        ctx = make_ctx("monitor", tool_result="TRAINING CRASHED\nSome weird custom error nobody expected")
+        ctx = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nSome weird custom error nobody expected")
         ctx.classify_fn = mock_classify
 
         # This error doesn't match any regex pattern
@@ -237,7 +237,7 @@ class TestLLMFallback:
                 return {"category": "nccl", "confidence": 0.3}  # Low confidence
             return default
 
-        ctx = make_ctx("monitor", tool_result="TRAINING CRASHED\nVague error message")
+        ctx = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nVague error message")
         ctx.classify_fn = mock_classify
 
         result = guard._classify_training_error(ctx.tool_result, ctx)
@@ -250,7 +250,7 @@ class TestLLMFallback:
         def mock_classify(category, context, default=None):
             return {"category": "data", "confidence": 1.0}  # Would return data
 
-        ctx = make_ctx("monitor", tool_result="TRAINING CRASHED\nAttributeError: 'X' has no attr")
+        ctx = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nAttributeError: 'X' has no attr")
         ctx.classify_fn = mock_classify
 
         # Regex should catch AttributeError → "attribute"

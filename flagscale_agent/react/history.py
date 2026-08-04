@@ -697,10 +697,8 @@ class HistoryManager:
             return args.get("path", "")[:80]
         if tool_name == "web_fetch":
             return args.get("url", "")[:80]
-        if tool_name in ("find_latest_log", "parse_training_metrics"):
-            return args.get("experiment", args.get("log_path", ""))[:60]
-        if tool_name == "monitor":
-            return args.get("file", args.get("output_dir", ""))[:60]
+        if tool_name in ("flagscale_train_monitor", "parse_training_metrics"):
+            return args.get("output_dir", args.get("log_path", args.get("experiment", "")))[:60]
         for v in args.values():
             if isinstance(v, str) and v:
                 return v[:60]

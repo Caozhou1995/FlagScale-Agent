@@ -51,12 +51,12 @@ class TestToolRegistryFiltered:
         reg.register(DummyTool("shell"))
         reg.register(DummyTool("read_file"))
         reg.register(DummyTool("write_file"))
-        reg.register(DummyTool("monitor"))
+        reg.register(DummyTool("flagscale_train_monitor"))
         reg.register(DummyTool("plan_create"))
 
-        schemas = reg.to_schemas_filtered("openai", {"shell", "monitor"})
+        schemas = reg.to_schemas_filtered("openai", {"shell", "flagscale_train_monitor"})
         names = {s["function"]["name"] for s in schemas}
-        assert names == {"shell", "monitor"}
+        assert names == {"shell", "flagscale_train_monitor"}
 
     def test_to_schemas_filtered_empty_set(self):
         reg = ToolRegistry()
@@ -73,7 +73,7 @@ class TestToolRegistryFiltered:
     def test_to_schemas_filtered_anthropic_format(self):
         reg = ToolRegistry()
         reg.register(DummyTool("shell"))
-        reg.register(DummyTool("monitor"))
+        reg.register(DummyTool("flagscale_train_monitor"))
         schemas = reg.to_schemas_filtered("anthropic", {"shell"})
         assert len(schemas) == 1
         assert schemas[0]["name"] == "shell"
@@ -95,7 +95,7 @@ class TestPhaseDetection:
     def test_filtered_schemas_monitoring(self):
         agent = self._make_agent_stub()
         reg = ToolRegistry()
-        for name in ["shell", "read_file", "monitor", "write_file", "plan_create",
+        for name in ["shell", "read_file", "flagscale_train_monitor", "write_file", "plan_create",
                      "parse_training_metrics", "workspace_experiment"]:
             reg.register(DummyTool(name))
         agent.tool_registry = reg
@@ -105,7 +105,7 @@ class TestPhaseDetection:
         schemas = agent._get_filtered_schemas("monitoring")
         names = {s["function"]["name"] for s in schemas}
         # "monitoring" is not a defined phase, so only _CORE_TOOLS are available
-        assert "monitor" in names
+        assert "flagscale_train_monitor" in names
         assert "shell" in names
         assert "read_file" in names
         assert "write_file" in names  # write_file is a core tool
@@ -116,7 +116,7 @@ class TestPhaseDetection:
     def test_filtered_schemas_default_returns_all(self):
         agent = self._make_agent_stub()
         reg = ToolRegistry()
-        for name in ["shell", "read_file", "monitor", "write_file", "plan_create"]:
+        for name in ["shell", "read_file", "flagscale_train_monitor", "write_file", "plan_create"]:
             reg.register(DummyTool(name))
         agent.tool_registry = reg
         agent.provider = MagicMock()
@@ -129,7 +129,7 @@ class TestPhaseDetection:
         agent = self._make_agent_stub()
         agent._extra_tools_next_iter = {"write_file"}
         reg = ToolRegistry()
-        for name in ["shell", "read_file", "monitor", "write_file"]:
+        for name in ["shell", "read_file", "flagscale_train_monitor", "write_file"]:
             reg.register(DummyTool(name))
         agent.tool_registry = reg
         agent.provider = MagicMock()
