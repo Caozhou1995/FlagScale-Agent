@@ -428,5 +428,61 @@ class TestMemoryEvolution:
         assert guard._has_memory_review is True
 
 
+# ── Override Hint Tests ──
+
+class TestOverrideHint:
+    def test_override_hint_format(self):
+        """Override hint should contain _override_reason instruction."""
+        from flagscale_agent.react.guard import _OVERRIDE_HINT
+        assert "_override_reason" in _OVERRIDE_HINT
+        assert "OVERRIDE REQUIRED" in _OVERRIDE_HINT
+
+    def test_hint_added_to_overridable_block(self):
+        """Block verdicts from overridable guards get override hint appended."""
+        from flagscale_agent.react.guard import _maybe_add_override_hint, GuardVerdict, Guard, GuardContext
+        
+        class FakeGuard(Guard):
+            name = "fake"
+            overridable = True
+        
+        verdict = GuardVerdict(action="block", message="[Blocked] reason")
+        ctx = MagicMock(spec=GuardContext)
+        ctx.override_reason = ""
+        
+        result = _maybe_add_override_hint(verdict, FakeGuard(), ctx)
+        assert "_override_reason" in result
+        assert "OVERRIDE REQUIRED" in result
+
+    def test_hint_not_added_when_not_overridable(self):
+        """Non-overridable guards don't get override hint."""
+        from flagscale_agent.react.guard import _maybe_add_override_hint, GuardVerdict, Guard, GuardContext
+        
+        class StrictGuard(Guard):
+            name = "strict"
+            overridable = False
+        
+        verdict = GuardVerdict(action="block", message="[Blocked] strict")
+        ctx = MagicMock(spec=GuardContext)
+        ctx.override_reason = ""
+        
+        result = _maybe_add_override_hint(verdict, StrictGuard(), ctx)
+        assert "_override_reason" not in result
+
+    def test_hint_not_re_added_after_rejected_override(self):
+        """If override was already attempted and rejected, no re-hint."""
+        from flagscale_agent.react.guard import _maybe_add_override_hint, GuardVerdict, Guard, GuardContext
+        
+        class FakeGuard(Guard):
+            name = "fake"
+            overridable = True
+        
+        verdict = GuardVerdict(action="block", message="[Blocked] still wrong")
+        ctx = MagicMock(spec=GuardContext)
+        ctx.override_reason = "I already tried"
+        
+        result = _maybe_add_override_hint(verdict, FakeGuard(), ctx)
+        assert "_override_reason" not in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

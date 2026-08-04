@@ -337,13 +337,10 @@ def _infer_category(verdict: GuardVerdict) -> str:
 
 
 _OVERRIDE_HINT = (
-    "\n\n[To override this block: re-issue the EXACT same tool call, but add "
-    "\"_override_reason\" as an extra field in tool_args with a brief justification.\n"
-    "Example — if your blocked call was:\n"
-    "  tool: shell, args: {\"command\": \"rm -rf /tmp/old\"}\n"
-    "Then override with:\n"
-    "  tool: shell, args: {\"command\": \"rm -rf /tmp/old\", \"_override_reason\": \"Confirmed safe: only temp files, needed to free space\"}\n"
-    "The reason must explain WHY this action is justified despite the guard's concern.]"
+    '\n\n⚠️ OVERRIDE REQUIRED: Add "_override_reason" to your next tool call to proceed.\n'
+    "DO: re-call the same tool with an extra parameter:\n"
+    '  {"command": "...", "_override_reason": "reason why this is safe/justified"}\n'
+    "DON'T: explain in text. Only _override_reason in tool_args works."
 )
 
 

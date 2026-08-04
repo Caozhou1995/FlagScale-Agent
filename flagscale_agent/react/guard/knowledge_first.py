@@ -53,6 +53,7 @@ class KnowledgeFirstGuard(Guard):
     name = "knowledge_first"
     priority = 85  # Low priority — advisory
     overridable = True
+    escalate_after = 0  # Never escalate — inject-only by design
 
     def __init__(self):
         super().__init__()

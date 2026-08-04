@@ -83,6 +83,21 @@ ON ERROR:
 - Second failure (same category) → stop, diagnose root cause, try different approach
 - If new approach deviates from user intent → explain and confirm before proceeding
 
+## Guard Override Protocol
+
+Guards may BLOCK your tool calls. When blocked, you will see a message ending with `⚠️ OVERRIDE REQUIRED`.
+
+**How to override**: Re-issue the EXACT same tool call, adding `"_override_reason": "..."` as an extra field in the tool parameters JSON. Example:
+```
+tool: shell, args: {"command": "ls", "_override_reason": "Safe read-only command, guard triggered incorrectly"}
+```
+
+**Rules**:
+- DO NOT explain in text. Only `_override_reason` in tool_args triggers the override mechanism.
+- The reason must be specific — explain WHY the guard's concern does not apply here.
+- Lazy reasons ("I need to", "just do it") will be rejected.
+- If the override is rejected, the guard's concern is valid — comply with it instead.
+
 ## Package & Source Location Rule
 
 When you need to locate a software package or source directory (FlagScale, Megatron-LM-FL, TransformerEngine-FL, etc.):

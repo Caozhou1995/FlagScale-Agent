@@ -178,3 +178,11 @@ class TestKnowledgeFirstGuard:
             verdict = guard.check_pre(ctx)
             if verdict is not None:
                 assert verdict.action == "inject_msg"
+
+    def test_escalate_after_is_zero(self):
+        """KnowledgeFirst must never escalate — escalate_after=0 ensures inject-only."""
+        guard = KnowledgeFirstGuard()
+        assert guard.escalate_after == 0
+        # _get_escalation_level always returns "inject"
+        guard._inject_counts["knowledge"] = 100
+        assert guard._get_escalation_level("knowledge") == "inject"
