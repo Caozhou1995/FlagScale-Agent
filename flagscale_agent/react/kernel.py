@@ -170,12 +170,13 @@ class AgentKernel:
                 out_tok = usage.get("output_tokens") or 0
                 cache_read = usage.get("cache_read_input_tokens") or 0
                 cache_create = usage.get("cache_creation_input_tokens") or 0
-                result.input_tokens += in_tok
+                total_in_tok = in_tok + cache_read + cache_create
+                result.input_tokens += total_in_tok
                 result.output_tokens += out_tok
-                if in_tok:
-                    d.history.report_actual_tokens(in_tok + cache_read + cache_create)
+                if total_in_tok:
+                    d.history.report_actual_tokens(total_in_tok)
 
-                d.display.llm_done(elapsed, in_tok, out_tok,
+                d.display.llm_done(elapsed, total_in_tok, out_tok,
                                    cache_read_tokens=cache_read or None,
                                    cache_creation_tokens=cache_create or None)
 

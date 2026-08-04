@@ -222,7 +222,7 @@ find . -name "__pycache__" -path "*/conf/*" -exec rm -rf {} +
 
 1. `data_path` with suffix: `data_path: ./data/file.bin` is WRONG. Use `data_path: ./data/file` (no suffix)
 2. `before_start` conda: if `cmds.before_start` activates a different env than your current shell, training runs in that env — verify it has all dependencies
-3. `global_batch_size` not divisible: must be divisible by `DP × micro_batch_size`. DP = total_GPUs / (TP × PP × CP × EP)
+3. `global_batch_size` not divisible: must be divisible by `DP × micro_batch_size`. DP = total_GPUs / (TP × PP × CP)
 4. `transformer_impl` mismatch: if `transformer_impl: transformer_engine` but TransformerEngine-FL is not installed, training crashes immediately. Fall back to `transformer_impl: local`
 5. `hostfile` null vs missing: for single-node, explicitly set `hostfile: null`. Omitting it may cause Hydra to use a default
 6. Modifying the wrong YAML: changes to `train.yaml` don't affect model/data params — those are in `train/<size>.yaml`
@@ -241,14 +241,14 @@ ls ${data_path}.bin ${data_path}.idx
 ls ${checkpoint_load_path}/
 
 # 3. GPU count matches parallelism
-# total_GPUs = TP * PP * DP * EP (DP is implicit)
+# DP = total_GPUs / (TP * PP * CP)  — EP does NOT reduce DP
 # nproc_per_node * nnodes must equal total_GPUs
 
 # 4. global_batch_size divisibility
 python3 -c "
-tp, pp, ep, cp = TP, PP, EP, CP
+tp, pp, cp = TP, PP, CP
 total_gpus = NPROC * NNODES
-dp = total_gpus // (tp * pp * ep * cp)
+dp = total_gpus // (tp * pp * cp)
 gbs = GLOBAL_BATCH_SIZE
 mbs = MICRO_BATCH_SIZE
 assert gbs % (dp * mbs) == 0, f'GBS {gbs} not divisible by DP*MBS={dp*mbs}'
@@ -268,7 +268,7 @@ Do NOT skip this check. Config errors waste GPU hours.
 |-----------|----------|---------------|
 | TP (Tensor Parallel) | `system.tensor_model_parallel_size` | Splits weight matrices across GPUs within a node |
 | PP (Pipeline Parallel) | `system.pipeline_model_parallel_size` | Splits layers across GPU groups |
-| DP (Data Parallel) | Implicit: total_GPUs / (TP × PP × CP × EP) | Replicates model, splits data |
+| DP (Data Parallel) | Implicit: total_GPUs / (TP × PP × CP) | Replicates model, splits data |
 | EP (Expert Parallel) | `system.expert_model_parallel_size` | Splits MoE experts across GPUs |
 | CP (Context Parallel) | `system.context_parallel_size` | Splits sequence length across GPUs |
 | VPP (Virtual Pipeline) | `system.num_layers_per_virtual_pipeline_stage` | Reduces PP bubble when PP ≥ 4 |
@@ -297,11 +297,13 @@ Don't hardcode parallelism choices based on generic rules. The optimal strategy 
 
 ```
 total_GPUs = nnodes × nproc_per_node
-TP × PP × CP × EP must divide total_GPUs evenly
-DP = total_GPUs / (TP × PP × CP × EP)
+TP × PP × CP must divide total_GPUs evenly
+DP = total_GPUs / (TP × PP × CP)
+Expert_DP = total_GPUs / (expert_TP × EP × PP)  # expert_TP defaults to TP
 global_batch_size must be divisible by (DP × micro_batch_size)
 num_layers must be divisible by PP
 If VPP: num_layers / PP must be divisible by num_layers_per_virtual_pipeline_stage
+Note: EP does NOT reduce Dense DP. EP operates within the DP group.
 ```
 
 ### Topology-Aware Defaults

@@ -815,15 +815,16 @@ class TestFullLog:
         self.hm.append({"role": "user", "content": "latest 3"})
         self.hm.append({"role": "assistant", "content": "latest 4"})
 
-        # Evict message at index 1
-        result = self.hm.evict_message(1)
+        # Evict message at ext_idx 2 (the "hello world" user message)
+        # Note: ext_idx starts at 1 for first appended msg; system is ext_idx=1
+        result = self.hm.evict_message(2)
         assert result is not None
 
-        # _messages[1] should now be placeholder
+        # _messages[1] should now be placeholder (internal pos 1 = ext_idx 2)
         assert self.hm._messages[1].get("_evicted") is True
         assert "evicted" in self.hm._messages[1]["content"]
 
-        # _full_log[1] should still have original content
+        # _full_log[1] should still have original content (full_log is 0-based)
         assert self.hm._full_log[1]["content"] == "hello world"
         assert self.hm._full_log[1].get("_evicted") is None
 

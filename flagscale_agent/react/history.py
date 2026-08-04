@@ -158,7 +158,16 @@ class HistoryManager:
     V3 design: no automatic compaction/aging/truncation.
     Context management is fully handled by the model via evict/recall tools.
     Guard provides pressure awareness, model decides what to evict.
+    
+    Hard Reset: when eviction is exhausted, hard_reset() clears all messages
+    (except system prompt + last N) and injects a continuation message.
+    Supports multiple resets per session via _index_offset tracking.
     """
+
+    # Threshold: trigger hard reset when evictable messages fall below this
+    HARD_RESET_EVICTABLE_THRESHOLD = 20
+    # Minimum messages between resets (cooldown)
+    HARD_RESET_COOLDOWN_MESSAGES = 100
 
     def __init__(self, max_context_tokens: int = 200000):
         self.max_context_tokens = max_context_tokens
@@ -166,6 +175,9 @@ class HistoryManager:
         self._messages: List[Dict[str, Any]] = []
         self._full_log: List[Dict[str, Any]] = []
         self._actual_input_tokens: int = 0
+        # Hard reset state
+        self._index_offset: int = 0
+        self._reset_count: int = 0
         # Legacy properties (kept for compatibility, no longer used for compaction)
         self._compaction_count: int = 0
         self._compaction_happened: bool = False
@@ -184,6 +196,8 @@ class HistoryManager:
         self._messages.append(message)
         # Store a deep copy so eviction (which modifies in-place) doesn't affect the full log
         self._full_log.append(copy.deepcopy(message))
+        # Tag message with its external index (full_log position + 1; 0 = system prompt)
+        message["_ext_idx"] = len(self._full_log)  # 1-based: full_log[-1] is at position len-1, ext = len
 
     def set_system_prompt(self, content: str):
         """Replace or prepend the system message."""
@@ -197,7 +211,12 @@ class HistoryManager:
         self._actual_input_tokens = input_tokens
 
     def get_context_pressure(self) -> float:
-        """Return current context usage as ratio against dynamic working window (60% of max_context_tokens)."""
+        """Return current context usage as ratio against dynamic working window (60% of max_context_tokens).
+        
+        Uses max(estimated, actual) where:
+        - estimated: character-based estimation of all current messages
+        - actual: last API-reported input tokens (reset on eviction since it becomes stale)
+        """
         estimated = sum(_message_tokens(m) for m in self._messages)
         actual = self._actual_input_tokens or 0
         total = max(estimated, actual)
@@ -208,10 +227,20 @@ class HistoryManager:
         return _validate_tool_pairs(list(self._messages))
 
     def get_message_at(self, index: int) -> Optional[Dict[str, Any]]:
-        """Return message at given index, or None if out of range or already evicted."""
-        if index < 0 or index >= len(self._messages):
+        """Return message at given index (external), or None if not found/evicted.
+
+        Resolves external index to internal position via _ext_idx scan.
+        """
+        pos = self.internal_pos_for_ext(index)
+        if pos is None:
+            # Fallback: try direct internal position (backward compat, no reset case)
+            if index >= 0 and index < len(self._messages):
+                msg = self._messages[index]
+                if msg.get("_evicted"):
+                    return None
+                return msg
             return None
-        msg = self._messages[index]
+        msg = self._messages[pos]
         if msg.get("_evicted"):
             return None
         return msg
@@ -222,40 +251,225 @@ class HistoryManager:
         self._messages.clear()
         self._full_log.clear()
         self._actual_input_tokens = 0
+        self._index_offset = 0
+        self._reset_count = 0
+
+    # ── Hard Reset ─────────────────────────────────────────────────────────────
+
+    def should_hard_reset(self) -> bool:
+        """Determine if a hard reset should be triggered.
+
+        Conditions (any triggers reset):
+        1. Evictable < threshold AND context pressure > 0.80
+        2. Total messages > 200 AND evictable/total < 5%
+
+        Cooldown: at least HARD_RESET_COOLDOWN_MESSAGES new messages since last reset.
+        """
+        evictable = self.get_evictable_indexes()
+        pressure = self.get_context_pressure()
+        total_messages = len(self._messages)
+
+        # Cooldown check: don't reset too soon after previous reset
+        if self._reset_count > 0:
+            messages_since_reset = len(self._full_log) - self._index_offset
+            if messages_since_reset < self.HARD_RESET_COOLDOWN_MESSAGES:
+                return False
+
+        # Condition 1: eviction nearly exhausted + high pressure
+        if (len(evictable) < self.HARD_RESET_EVICTABLE_THRESHOLD
+                and pressure > 0.80):
+            return True
+
+        # Condition 2: mostly placeholders
+        if (total_messages > 200
+                and len(evictable) / max(total_messages, 1) < 0.05):
+            return True
+
+        return False
+
+    def hard_reset(self, continuation_message: str, preserve_last_n: int = 4) -> dict:
+        """Execute hard reset: discard all messages except last N, inject continuation.
+
+        Can be called multiple times in a single session. Each call:
+        - Appends continuation + ack to _full_log (time order)
+        - Clears _messages, rebuilds with system + continuation + ack + last N
+        - Updates _index_offset to current len(_full_log)
+        - _messages order (presentation) differs from _full_log order (chronological)
+
+        Design note:
+            _full_log records events in time order: ...last4...continuation...ack...
+            _messages presents in comprehension order: system, continuation, ack, last4
+            This is intentional — _full_log is an audit log, _messages is an LLM prompt.
+
+        Args:
+            continuation_message: The summary/continuation text (role=user).
+            preserve_last_n: Number of recent messages to keep (default 4).
+
+        Returns:
+            dict with stats: {cleared_count, preserved_count, new_offset, reset_count}
+        """
+        import copy
+
+        total = len(self._messages)
+        self._reset_count += 1
+
+        # Identify system prompt
+        system_msg = None
+        if self._messages and self._messages[0].get("role") == "system":
+            system_msg = self._messages[0]
+
+        # Preserve last N messages (these already exist in _full_log)
+        preserved = self._messages[-preserve_last_n:] if preserve_last_n > 0 else []
+
+        # Build continuation + ack messages
+        cont_msg = {"role": "user", "content": continuation_message}
+        ack_msg = {
+            "role": "assistant",
+            "content": (
+                "Understood. I've read the continuation summary and will resume work. "
+                "If I need more context, I'll check conversation_full.json, "
+                "plan_status(), or memory_list()."
+            ),
+        }
+
+        # Append continuation + ack to full_log (chronological order)
+        self._full_log.append(copy.deepcopy(cont_msg))
+        cont_ext_idx = len(self._full_log)  # 1-based
+        cont_msg["_ext_idx"] = cont_ext_idx
+
+        self._full_log.append(copy.deepcopy(ack_msg))
+        ack_ext_idx = len(self._full_log)  # 1-based
+        ack_msg["_ext_idx"] = ack_ext_idx
+
+        # Set new offset = current full_log length (after cont+ack)
+        # Post-reset appends will start at this offset in full_log
+        new_offset = len(self._full_log)
+        self._index_offset = new_offset
+
+        # Clear and rebuild _messages (presentation order)
+        cleared_count = total - (1 if system_msg else 0) - preserve_last_n
+        self._messages.clear()
+
+        if system_msg:
+            self._messages.append(system_msg)
+
+        # Continuation + ack first (macro context)
+        self._messages.append(cont_msg)
+        self._messages.append(ack_msg)
+
+        # Then preserved last N (micro context — LLM continues from here)
+        for msg in preserved:
+            self._messages.append(msg)
+
+        # Reset actual tokens (will be re-reported on next API call)
+        self._actual_input_tokens = 0
+
+        return {
+            "cleared_count": cleared_count,
+            "preserved_count": preserve_last_n,
+            "new_offset": new_offset,
+            "reset_count": self._reset_count,
+        }
+
+    # ── Index Mapping (for hard reset support) ─────────────────────────────────
+
+    def external_index(self, internal_pos: int) -> int:
+        """Convert internal _messages position to external index.
+
+        Uses _ext_idx tag on the message if available.
+        _messages[0] = system prompt → always external index 0.
+        For newly appended messages, _ext_idx is set by append().
+        For preserved messages after reset, _ext_idx is their original index.
+        """
+        if internal_pos == 0:
+            return 0  # system prompt
+        if internal_pos < 0 or internal_pos >= len(self._messages):
+            return -1
+        msg = self._messages[internal_pos]
+        ext = msg.get("_ext_idx")
+        if ext is not None:
+            return ext
+        # Fallback for messages without tag (shouldn't happen after this change)
+        return self._index_offset + (internal_pos - 1)
+
+    def internal_pos_for_ext(self, external_index: int) -> Optional[int]:
+        """Convert external index to internal _messages position.
+
+        Returns None if the index is not in current _messages
+        (use recall_from_full_log instead).
+        """
+        if external_index == 0:
+            return 0  # system prompt
+        for i, msg in enumerate(self._messages):
+            if msg.get("_ext_idx") == external_index:
+                return i
+        return None
+
+    def recall_from_full_log(self, external_index: int) -> Optional[str]:
+        """Recall content for any external index from _full_log.
+
+        _full_log[0] corresponds to external index 1
+        (first message after system prompt).
+
+        Returns:
+            Content string, or None if index is invalid.
+        """
+        if external_index == 0:
+            return None  # system prompt, not in full_log
+        full_log_pos = external_index - 1  # -1: ext_idx is 1-based, full_log is 0-based
+        if full_log_pos < 0 or full_log_pos >= len(self._full_log):
+            return None
+        msg = self._full_log[full_log_pos]
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            return json.dumps(content, ensure_ascii=False)
+        return str(content)
 
     # ── Evict/Recall (V3 Context Management) ──────────────────────────────────
 
     def evict_message(self, index: int) -> Dict[str, Any] | None:
-        """Evict a message at the given index.
+        """Evict a message at the given external index.
 
         Can evict any message except:
         - System prompt (index 0 if role=system)
         - Already evicted messages
         - The last 4 messages (to keep recent context intact)
 
+        Resolves external index via _ext_idx. Falls back to direct position
+        for backward compatibility (no reset scenario).
+
         Returns the original message data (for storage), or None if invalid.
         """
-        if index < 0 or index >= len(self._messages):
-            return None
-        msg = self._messages[index]
+        # Resolve external index to internal position
+        internal = self.internal_pos_for_ext(index)
+        if internal is None:
+            # Fallback: direct internal position (pre-reset compat)
+            if index >= 0 and index < len(self._messages):
+                internal = index
+            else:
+                return None
+
+        msg = self._messages[internal]
         # Never evict system prompt
         if msg.get("role") == "system":
             return None
         if msg.get("_evicted"):
             return None
         # Protect the last 4 messages (recent context)
-        if index >= len(self._messages) - 4:
+        if internal >= len(self._messages) - 4:
             return None
 
         content = msg.get("content", "")
         tokens = _message_tokens(msg)
 
         # Build placeholder based on message type
+        # Use _ext_idx for the displayed index so recall works across resets
+        display_index = msg.get("_ext_idx", index)
         role = msg.get("role", "unknown")
         if _is_tool_result(msg):
             tool_name, tool_input = self._extract_tool_info_for_index(index)
             placeholder = (
-                f"[evicted | index={index} | {tool_name}({tool_input}) | {tokens} tokens]"
+                f"[evicted | index={display_index} | {tool_name}({tool_input}) | {tokens} tokens]"
             )
         else:
             # For assistant/user messages, show a brief summary
@@ -268,7 +482,7 @@ class HistoryManager:
                         text_preview = b.get("text", "")[:50].replace("\n", " ")
                         break
             placeholder = (
-                f"[evicted | index={index} | role={role} | {text_preview}... | {tokens} tokens]"
+                f"[evicted | index={display_index} | role={role} | {text_preview}... | {tokens} tokens]"
             )
 
         original_content = content
@@ -278,34 +492,38 @@ class HistoryManager:
         # Otherwise the API will see orphaned tool_result without matching tool_use.
         paired_evict = None
         if role == "assistant" and _has_tool_use(msg):
-            next_idx = index + 1
-            if next_idx < len(self._messages) - 4:
-                next_msg = self._messages[next_idx]
+            next_internal = internal + 1
+            if next_internal < len(self._messages) - 4:
+                next_msg = self._messages[next_internal]
                 if next_msg.get("role") == "user" and not next_msg.get("_evicted"):
                     next_content = next_msg.get("content", "")
                     next_tokens = _message_tokens(next_msg)
+                    next_display_idx = next_msg.get("_ext_idx", next_internal)
                     next_placeholder = (
-                        f"[evicted | index={next_idx} | role=user | tool_results | {next_tokens} tokens]"
+                        f"[evicted | index={next_display_idx} | role=user | tool_results | {next_tokens} tokens]"
                     )
                     paired_evict = {
-                        "index": next_idx,
+                        "internal": next_internal,
+                        "ext_idx": next_display_idx,
                         "content": next_content,
                         "tokens": next_tokens,
                         "placeholder": next_placeholder,
                     }
         # Reverse: if evicting a user message with tool_result, also evict preceding assistant
         elif role == "user" and _is_tool_result(msg):
-            prev_idx = index - 1
-            if prev_idx > 0:
-                prev_msg = self._messages[prev_idx]
+            prev_internal = internal - 1
+            if prev_internal > 0:
+                prev_msg = self._messages[prev_internal]
                 if prev_msg.get("role") == "assistant" and _has_tool_use(prev_msg) and not prev_msg.get("_evicted"):
                     prev_content = prev_msg.get("content", "")
                     prev_tokens = _message_tokens(prev_msg)
+                    prev_display_idx = prev_msg.get("_ext_idx", prev_internal)
                     prev_placeholder = (
-                        f"[evicted | index={prev_idx} | role=assistant | tool_use | {prev_tokens} tokens]"
+                        f"[evicted | index={prev_display_idx} | role=assistant | tool_use | {prev_tokens} tokens]"
                     )
                     paired_evict = {
-                        "index": prev_idx,
+                        "internal": prev_internal,
+                        "ext_idx": prev_display_idx,
                         "content": prev_content,
                         "tokens": prev_tokens,
                         "placeholder": prev_placeholder,
@@ -315,12 +533,15 @@ class HistoryManager:
         msg["_evicted"] = True
         msg["_evicted_tokens"] = tokens
 
+        # Invalidate actual tokens — stale after eviction
+        self._actual_input_tokens = 0
+
         # Apply paired eviction
         if paired_evict:
-            next_msg = self._messages[paired_evict["index"]]
-            next_msg["content"] = paired_evict["placeholder"]
-            next_msg["_evicted"] = True
-            next_msg["_evicted_tokens"] = paired_evict["tokens"]
+            paired_msg = self._messages[paired_evict["internal"]]
+            paired_msg["content"] = paired_evict["placeholder"]
+            paired_msg["_evicted"] = True
+            paired_msg["_evicted_tokens"] = paired_evict["tokens"]
 
         metadata = {
             "role": role,
@@ -328,27 +549,42 @@ class HistoryManager:
         }
         # Include tool info in metadata for tool_result messages
         if _is_tool_result(msg) or (role == "tool"):
-            tool_name_meta, tool_input_meta = self._extract_tool_info_for_index(index)
+            tool_name_meta, tool_input_meta = self._extract_tool_info_for_index(internal)
             metadata["tool_name"] = tool_name_meta
             metadata["tool_input"] = tool_input_meta
+
+        # Include paired evict info with external index for the caller
+        paired_info = None
+        if paired_evict:
+            paired_info = {
+                "index": paired_evict["ext_idx"],
+                "content": paired_evict["content"],
+                "tokens": paired_evict["tokens"],
+            }
 
         return {
             "content": original_content,
             "metadata": metadata,
-            "paired_evict": paired_evict,
+            "paired_evict": paired_info,
         }
 
     def recall_message(self, index: int, content: str) -> bool:
-        """Restore evicted content at a given index (in-place).
+        """Restore evicted content at a given index (external index, in-place).
         
         Clears the _evicted flag to allow re-eviction if needed.
         This enables evict → recall → re-evict cycles for dynamic context management.
 
         Returns True if restored, False if index invalid or not evicted.
         """
-        if index < 0 or index >= len(self._messages):
-            return False
-        msg = self._messages[index]
+        # Resolve external index to internal position
+        internal = self.internal_pos_for_ext(index)
+        if internal is None:
+            # Fallback: direct position (backward compat)
+            if index >= 0 and index < len(self._messages):
+                internal = index
+            else:
+                return False
+        msg = self._messages[internal]
         if not msg.get("_evicted"):
             return False
         # Deserialize JSON content back to original structure if possible
@@ -391,11 +627,10 @@ class HistoryManager:
         return True
 
     def get_evictable_indexes(self) -> List[int]:
-        """Return indexes of messages that can be evicted, in index order.
+        """Return external indexes of messages that can be evicted, in order.
 
         All messages except system prompt, already-evicted, and last 4 are evictable.
-        Returns in natural index order — no priority implied.
-        LLM should decide what to evict based on its own judgment.
+        Returns external indexes (_ext_idx) for use by the LLM.
         """
         protected_tail = max(0, len(self._messages) - 4)
         result = []
@@ -406,7 +641,8 @@ class HistoryManager:
                 continue
             if i >= protected_tail:
                 continue
-            result.append(i)
+            ext = msg.get("_ext_idx", i)
+            result.append(ext)
         return result
 
     def _extract_tool_info_for_index(self, index: int) -> tuple:
