@@ -89,7 +89,7 @@ Guards may BLOCK your tool calls. When blocked, you will see a message ending wi
 
 **How to override**: Re-issue the EXACT same tool call, adding `"_override_reason": "..."` as an extra field in the tool parameters JSON. Example:
 ```
-tool: shell, args: {"command": "ls", "_override_reason": "Safe read-only command, guard triggered incorrectly"}
+tool: shell, args: {{"command": "ls", "_override_reason": "Safe read-only command, guard triggered incorrectly"}}
 ```
 
 **Rules**:

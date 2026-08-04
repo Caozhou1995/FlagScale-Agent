@@ -838,6 +838,31 @@ class TestFullLog:
 class TestPromptIntegrity:
     """Test that prompt modules load correctly after refactoring."""
 
+    def test_static_prompt_format_no_keyerror(self):
+        """SYSTEM_PROMPT_STATIC.format() must not raise KeyError.
+
+        All braces in example JSON/code blocks must be escaped as {{ }}.
+        Regression test for: unescaped {"command": ...} caused KeyError.
+        """
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        # These are the actual placeholders used by prompt_builder.py
+        try:
+            result = SYSTEM_PROMPT_STATIC.format(
+                cwd="/workspace/test",
+                tools="shell, read_file, write_file",
+                skills="train-run, train-config",
+                knowledge="know-megatron-training",
+                critical_rules="",
+                optional_sections="",
+                skill_context="",
+            )
+        except KeyError as e:
+            raise AssertionError(
+                f"SYSTEM_PROMPT_STATIC has unescaped braces causing KeyError: {e}. "
+                f"Escape literal braces as {{{{ }}}} in prompt.py."
+            )
+        assert len(result) > 1000  # sanity: prompt is non-trivial
+
     def test_static_prompt_is_english(self):
         import re
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
