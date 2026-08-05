@@ -17,11 +17,21 @@
 Includes:
 - Two-phase detection helpers (classify_fn)
 - Launch command detection (_is_flagscale_launch_command)
+- Read-only tool classification
 """
 
 from __future__ import annotations
 
 import re
+
+
+# Tools that only read state and never modify anything.
+# Used by guards to distinguish exploratory actions from mutations.
+READ_ONLY_TOOLS = frozenset({
+    "read_file", "memory_read", "memory_list", "evict_list", "recall",
+    "load_skill", "load_knowledge", "plan_status", "parse_training_metrics",
+    "inspect_checkpoint", "validate_config", "web_fetch", "flagscale_train_monitor",
+})
 
 # Source constants — must match judge.py
 SOURCE_LLM = "llm"

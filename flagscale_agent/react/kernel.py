@@ -427,11 +427,8 @@ class AgentKernel:
         d = self.deps
         history = d.history
         # Resolve tool effects from registry
-        from flagscale_agent.react.tools.base import ToolEffect
-        tool_effects = ToolEffect()
         try:
             tool = d.tool_registry.get(tool_name)
-            tool_effects = tool.effects
         except (KeyError, AttributeError):
             pass
         # Extract override_reason from tool_args (LLM declares why a blocked call is justified)
@@ -446,7 +443,7 @@ class AgentKernel:
             tool_name=tool_name,
             tool_args=tool_args,
             tool_result=tool_result,
-            tool_effects=tool_effects,
+            
             turn_count=getattr(d.config, "_turn_count", 0),
             context_pressure=history.get_context_pressure() if history else 0.0,
             evictable_indexes=history.get_evictable_indexes() if history else [],

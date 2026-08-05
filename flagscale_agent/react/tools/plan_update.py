@@ -16,9 +16,8 @@
 
 import re
 
-from flagscale_agent.react.tools.base import Tool, ToolEffect
+from flagscale_agent.react.tools.base import Tool
 
-_EFFECT_PLAN_WRITE = ToolEffect(reads=frozenset({"plan"}), writes=frozenset({"plan"}))
 
 # Pattern to extract integer from strings like "step_1", "step 2", "Step_3", "#4"
 _STEP_ID_RE = re.compile(r'(?:step[_\s]?)?#?(\d+)', re.IGNORECASE)
@@ -46,7 +45,6 @@ def _parse_step_id(raw) -> int | None:
 
 class PlanUpdateTool(Tool):
     name = "plan_update"
-    effects = _EFFECT_PLAN_WRITE
     description = (
         "Update the active task plan: mark steps done/skipped, add new steps, "
         "replan, or complete/abandon the plan. Use to track progress as you work."

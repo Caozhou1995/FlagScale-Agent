@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_SHELL
+from flagscale_agent.react.tools.base import Tool
 
 FATAL_PATTERNS = [
     r"rm\s+-[^\s]*r[^\s]*f\s+/\s*$",
@@ -385,7 +385,6 @@ def _protect_self_kill(command: str) -> str:
 
 class ShellTool(Tool):
     name = "shell"
-    effects = EFFECT_SHELL
     description = "Execute a shell command and return its output (stdout + stderr)."
     parameters = {
         "type": "object",

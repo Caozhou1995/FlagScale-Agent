@@ -37,7 +37,7 @@ from flagscale_agent.react.state_machine import AgentState
 class SafetyGuard(Guard):
     """Detects dangerous commands and escalating error patterns.
 
-    Checked first (priority=10). Uses tool_effects to scope checks.
+    Checked first (priority=10). Uses tool_name to scope checks.
     """
 
     name = "safety"

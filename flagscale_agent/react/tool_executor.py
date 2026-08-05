@@ -365,11 +365,8 @@ class ToolExecutor:
         for i, tc in enumerate(tool_calls):
             # Guard pre-checks (these also block)
             from flagscale_agent.react.guard import GuardContext
-            from flagscale_agent.react.tools.base import ToolEffect
-            tool_effects = ToolEffect()
             try:
                 tool = agent.tool_registry.get(tc["name"])
-                tool_effects = tool.effects
             except (KeyError, AttributeError):
                 pass
             # Sanitize tool_args: if shell command is a dict (malformed LLM output),
@@ -383,7 +380,7 @@ class ToolExecutor:
             guard_ctx = GuardContext(
                 tool_name=tc["name"],
                 tool_args=raw_args,
-                tool_effects=tool_effects,
+                
                 turn_count=agent.turn_count,
                 recent_tool_history=agent._recent_tool_history[-8:],
                 context_pressure=agent.history.get_context_pressure() if agent.history else 0.0,

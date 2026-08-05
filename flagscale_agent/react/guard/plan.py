@@ -31,7 +31,7 @@ from flagscale_agent.react.state_machine import AgentState
 class PlanGuard(Guard):
     """Detects complex tasks without a plan and prompts plan creation.
 
-    Uses tool_effects.is_read_only to identify exploratory calls.
+    Uses tool_name to identify exploratory (read-only) calls.
     v2: Integrates with SharedState for TaskMode-aware thresholds.
     """
 
@@ -99,8 +99,9 @@ class PlanGuard(Guard):
         if self._has_active_plan():
             return None
 
-        # Use tool_effects to classify: read-only = exploratory
-        if ctx.tool_effects.is_read_only:
+        # Use tool_name to classify: read-only = exploratory
+        from flagscale_agent.react.guard.utils import READ_ONLY_TOOLS
+        if ctx.tool_name in READ_ONLY_TOOLS:
             self._consecutive_reads += 1
         else:
             self._consecutive_reads = 0

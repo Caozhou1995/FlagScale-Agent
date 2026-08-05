@@ -590,18 +590,15 @@ class WorkerAgent:
         tool_result: str | None = None,
     ) -> "GuardContext":
         from flagscale_agent.react.guard import GuardContext
-        from flagscale_agent.react.tools.base import ToolEffect
-        tool_effects = ToolEffect()
         try:
             tool = self.tool_registry.get(tool_name)
-            tool_effects = tool.effects
         except (KeyError, AttributeError):
             pass
         ctx = GuardContext(
             tool_name=tool_name,
             tool_args=tool_args or {},
             tool_result=tool_result,
-            tool_effects=tool_effects,
+            
             turn_count=self.turn_count,
             recent_tool_names=list(self._last_tool_calls_deque)[-10:],
             context_pressure=self.history.get_context_pressure() if self.history else 0.0,
@@ -2203,7 +2200,7 @@ class WorkerAgent:
             return self._phase_override
         # If runtime is active (training running / inference serving), verification mode
         runtime_active = any(
-            isinstance(g, TrainingRuntimeGuard) and g._training_started
+            isinstance(g, TrainingRuntimeGuard)
             for g in self._kernel.deps.guard_registry.guards
         )
         if runtime_active:

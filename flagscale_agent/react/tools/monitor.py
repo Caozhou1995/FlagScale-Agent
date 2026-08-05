@@ -29,7 +29,7 @@ import re
 import subprocess
 import time
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_READ_FS
+from flagscale_agent.react.tools.base import Tool
 
 
 # ─── Metrics parsing ───────────────────────────────────────────────────────────
@@ -160,7 +160,6 @@ def _is_harmless(line: str) -> bool:
 
 class FlagScaleTrainMonitorTool(Tool):
     name = "flagscale_train_monitor"
-    effects = EFFECT_READ_FS
     description = (
         "Monitor FlagScale distributed training launched via torchrun. "
         "Two modes: 'check' (one-shot log inspection) and 'watch' (continuous polling). "

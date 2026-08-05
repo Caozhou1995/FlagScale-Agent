@@ -1,6 +1,6 @@
 """Evict list tool — browse summaries of evicted messages to find what to recall."""
 
-from flagscale_agent.react.tools.base import Tool, ToolEffect
+from flagscale_agent.react.tools.base import Tool
 
 
 class EvictListTool(Tool):
@@ -20,7 +20,6 @@ class EvictListTool(Tool):
         },
         "required": [],
     }
-    effects = ToolEffect()
 
     def execute(self, **kwargs) -> str:
         # Execution is intercepted by agent._handle_evict_list

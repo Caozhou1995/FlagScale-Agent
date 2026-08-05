@@ -16,7 +16,7 @@
 
 import os
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_WRITE_FS
+from flagscale_agent.react.tools.base import Tool
 from flagscale_agent.react.tools.read_file import get_file_cache
 
 # -- Paths that should never be written by the agent --
@@ -43,7 +43,6 @@ def _is_protected_path(path: str) -> bool:
 
 class WriteFileTool(Tool):
     name = "write_file"
-    effects = EFFECT_WRITE_FS
     description = (
         "Create or overwrite a file at the given path with the provided content. "
         "IMPORTANT: Each call's content parameter MUST be under 3000 characters. "

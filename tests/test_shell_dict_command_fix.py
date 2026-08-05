@@ -68,7 +68,7 @@ class TestShellDictCommandFix:
         ctx = GuardContext(
             tool_name="shell",
             tool_args={"command": {"type": "string", "value": "echo hello"}},
-            tool_effects=None,
+            
         )
         # Should NOT raise 'dict' object has no attribute 'lower'
         # The key test: no exception is thrown

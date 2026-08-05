@@ -18,7 +18,7 @@ import os
 
 import yaml
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_READ_FS
+from flagscale_agent.react.tools.base import Tool
 
 # --- Schema definitions ---
 
@@ -313,7 +313,6 @@ def validate_config(path: str) -> str:
 
 class ValidateConfigTool(Tool):
     name = "validate_config"
-    effects = EFFECT_READ_FS
     description = (
         "Validate a FlagScale YAML config file for structural correctness. "
         "Detects wrong nesting, misplaced keys, and missing required fields. "

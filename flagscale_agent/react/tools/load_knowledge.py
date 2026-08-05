@@ -14,15 +14,11 @@
 
 """Load knowledge tool — retrieves domain knowledge for distributed training."""
 
-from flagscale_agent.react.tools.base import Tool, ToolEffect
+from flagscale_agent.react.tools.base import Tool
 
 
 class LoadKnowledgeTool(Tool):
     name = "load_knowledge"
-    effects = ToolEffect(
-        reads=frozenset({"filesystem"}),
-        side_effects=frozenset({"knowledge_load"}),
-    )
     description = (
         "Load domain knowledge for distributed training infrastructure. "
         "Returns a structured index (TOC with file paths and line numbers) by default. "

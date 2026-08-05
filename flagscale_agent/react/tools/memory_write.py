@@ -14,12 +14,11 @@
 
 """Memory write tool — save facts, pitfalls, and insights."""
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_WRITE_MEMORY
+from flagscale_agent.react.tools.base import Tool
 
 
 class MemoryWriteTool(Tool):
     name = "memory_write"
-    effects = EFFECT_WRITE_MEMORY
     description = (
         "Save a memory entry for cross-session continuity. "
         "Three types only:\n"

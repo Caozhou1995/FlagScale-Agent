@@ -26,7 +26,6 @@ from flagscale_agent.react.guard.training_runtime import TrainingRuntimeGuard
 from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
 from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
 from flagscale_agent.react.state_machine import AgentState
-from flagscale_agent.react.tools.base import ToolEffect
 from flagscale_agent.react.judge import Judge, JudgeBudget
 
 
@@ -129,7 +128,7 @@ class TestProgressGuard:
         # Without SharedState, ProgressGuard uses ctx.recent_tool_names fallback
         for i in range(5):
             ctx = _ctx("read_file", {"path": f"/tmp/file_{i}.py"}, "content",
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+                       )
             ctx.recent_tool_names = ["read_file"] * (i + 1)
             g.check_post(ctx)
         # Track unique files read
@@ -141,7 +140,7 @@ class TestProgressGuard:
         g._reread_count = 3
         ctx = _ctx("write_file", {"path": "/tmp/test.py", "content": "x=1"},
                    "File written",
-                   tool_effects=ToolEffect(writes=frozenset({"filesystem"})))
+                   )
         g.check_post(ctx)
         assert len(g._read_files) == 0
         assert g._reread_count == 0
@@ -153,7 +152,7 @@ class TestProgressGuard:
         # Need to re-read enough times to hit threshold
         for i in range(4):
             ctx = _ctx("read_file", {"path": "/tmp/same.py"}, "content",
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+                       )
             ctx.recent_tool_names = ["read_file"] * (i + 6)  # simulate streak
             result = g.check_post(ctx)
         # After multiple re-reads, should trigger inject
@@ -236,10 +235,10 @@ class TestPlanGuard:
         g._complex_task_no_plan = True
         for i in range(7):
             ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+                       )
             g.check_pre(ctx)
         ctx = _ctx("read_file", {"path": "/tmp/extra.py"},
-                   tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+                   )
         result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
@@ -268,7 +267,7 @@ class TestPlanGuard:
         # Simulate many consecutive reads — should NOT block because plan exists
         for i in range(20):
             ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+                       )
             result = g.check_pre(ctx)
             assert result is None, f"Should not block at call {i+1} when plan exists"
 
@@ -282,7 +281,7 @@ class TestPlanGuard:
         # Do NOT call mark_complex_task — this tests independent mode
         for i in range(15):
             ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+                       )
             result = g.check_pre(ctx)
             assert result is None, f"Independent mode should not block at call {i+1} when plan exists"
 
@@ -292,7 +291,7 @@ class TestPlanGuard:
         # Use the dynamic property that accounts for TaskMode multiplier
         g._consecutive_reads = g._plan_gate_independent_warn - 1
         ctx = _ctx("read_file", {"path": "/tmp/warn.py"},
-                   tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+                   )
         result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "inject_msg"

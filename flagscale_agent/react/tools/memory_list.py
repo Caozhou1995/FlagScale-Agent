@@ -14,12 +14,11 @@
 
 """Memory list tool — browse and search memory entries, grouped by type."""
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_READ_MEMORY
+from flagscale_agent.react.tools.base import Tool
 
 
 class MemoryListTool(Tool):
     name = "memory_list"
-    effects = EFFECT_READ_MEMORY
     description = (
         "List and search memory entries. Returns entries grouped by type "
         "(fact → pitfall → insight). Supports domain-level filtering and "

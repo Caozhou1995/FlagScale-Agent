@@ -587,7 +587,6 @@ class TestEscalationChain:
 
     def _simulate_ineffective_cycles(self, reg, n_cycles=3):
         """Simulate n_cycles of: inject fires in pre, then post marks ineffective."""
-        from flagscale_agent.react.tools.base import ToolEffect
 
         for _ in range(n_cycles):
             pre_ctx = _ctx("shell")
@@ -598,14 +597,12 @@ class TestEscalationChain:
 
             # Post: tool was "shell" (not "target_tool"), so ineffective
             post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
         return v
 
     def test_inject_becomes_escalate_after_ineffective(self):
         """After 3 consecutive ineffective injects, should_suppress triggers escalation."""
-        from flagscale_agent.react.tools.base import ToolEffect
 
         reg = _make_registry([EscalatingGuard()])
 
@@ -617,7 +614,6 @@ class TestEscalationChain:
             assert v is not None
 
             post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
         # After 3+ ineffective injects, the tracker should escalate on next pre
@@ -631,7 +627,6 @@ class TestEscalationChain:
 
     def test_effective_action_resets_escalation(self):
         """If agent responds to inject, escalation counter resets."""
-        from flagscale_agent.react.tools.base import ToolEffect
 
         reg = _make_registry([EscalatingGuard()])
 
@@ -641,7 +636,6 @@ class TestEscalationChain:
             pre_ctx.turn_count = i + 1
             reg.check_pre(pre_ctx)
             post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
         # Now agent responds correctly
@@ -649,7 +643,6 @@ class TestEscalationChain:
         pre_ctx.turn_count = 3
         reg.check_pre(pre_ctx)
         post_ctx = _ctx("target_tool")
-        post_ctx.tool_effects = ToolEffect(writes=frozenset({"filesystem"}))
         reg.check_post(post_ctx)
 
         # Next cycle should be inject again (not escalate), counter reset
@@ -662,7 +655,6 @@ class TestEscalationChain:
             assert v.action == "inject_msg", \
                 f"Expected inject_msg after reset, got {v.action}"
             post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
     def test_memory_discipline_escalation(self):
@@ -672,7 +664,6 @@ class TestEscalationChain:
         terminates the turn — it's injected as a strong advisory).
         """
         from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
-        from flagscale_agent.react.tools.base import ToolEffect
 
         guard = MemoryDisciplineGuard()
         reg = _make_registry([guard])
@@ -700,7 +691,6 @@ class TestEscalationChain:
 
             # Post: agent used read_file, not memory
             post_ctx = _ctx("read_file")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
         # After multiple ineffective cycles, check tracker state

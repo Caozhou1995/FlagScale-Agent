@@ -76,7 +76,8 @@ class ProgressGuard(Guard):
             return None
 
         # If this is a productive (write) tool, reset state
-        if not ctx.tool_effects.is_read_only:
+        from flagscale_agent.react.guard.utils import READ_ONLY_TOOLS
+        if ctx.tool_name not in READ_ONLY_TOOLS:
             self._read_files.clear()
             self._reread_count = 0
             self._warned_this_turn = False

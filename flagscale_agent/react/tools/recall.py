@@ -14,12 +14,11 @@
 
 """Recall tool — retrieve previously evicted message content."""
 
-from flagscale_agent.react.tools.base import Tool, ToolEffect
+from flagscale_agent.react.tools.base import Tool
 
 
 class RecallTool(Tool):
     name = "recall"
-    effects = ToolEffect()
     description = (
         "Retrieve a previously evicted message by its index. "
         "Use when you see a placeholder like [evicted | index=N | ...] "

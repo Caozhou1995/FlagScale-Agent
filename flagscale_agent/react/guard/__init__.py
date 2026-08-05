@@ -31,7 +31,7 @@ from flagscale_agent.react import display
 from typing import Literal, Any
 
 from flagscale_agent.react.state_machine import AgentState
-from flagscale_agent.react.tools.base import ToolEffect
+
 
 
 @dataclass
@@ -45,7 +45,6 @@ class GuardContext:
     tool_name: str = ""
     tool_args: dict = field(default_factory=dict)
     tool_result: str | None = None
-    tool_effects: ToolEffect = field(default_factory=ToolEffect)
     turn_count: int = 0
     recent_tool_names: list[str] = field(default_factory=list)
     recent_tool_history: list[dict] = field(default_factory=list)  # [{tool, args_summary, result_summary}]
@@ -559,9 +558,10 @@ class GuardRegistry:
         first_reason = ""
 
         # v2: Update shared state with tool call info
+        from flagscale_agent.react.guard.utils import READ_ONLY_TOOLS
         self._shared_state.record_tool_call(
             ctx.tool_name, ctx.tool_args,
-            is_read_only=ctx.tool_effects.is_read_only
+            is_read_only=(ctx.tool_name in READ_ONLY_TOOLS)
         )
 
         # v4: Universal effectiveness check — ask each guard if its inject worked

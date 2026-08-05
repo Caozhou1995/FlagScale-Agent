@@ -12,71 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tool base class with effect declarations."""
+"""Tool base class."""
 
+import copy
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import Any, Dict
 
 
-@dataclass(frozen=True)
-class ToolEffect:
-    """Declares what a tool reads, writes, and what side effects it has.
-
-    Used by Guards for permission checks and by the state machine
-    for automatic phase transitions.
-
-    Resource types: "filesystem", "memory", "network", "process", "config", "plan"
-    Side effect types: "training_launch", "training_kill", "model_modify",
-                       "data_delete", "config_modify", "skill_load"
-    """
-
-    reads: frozenset[str] = frozenset()
-    writes: frozenset[str] = frozenset()
-    side_effects: frozenset[str] = frozenset()
-
-    @property
-    def is_read_only(self) -> bool:
-        return not self.writes and not self.side_effects
-
-    @property
-    def is_write(self) -> bool:
-        return bool(self.writes)
-
-    @property
-    def touches_filesystem(self) -> bool:
-        return "filesystem" in self.reads or "filesystem" in self.writes
-
-    @property
-    def touches_network(self) -> bool:
-        return "network" in self.reads or "network" in self.writes
-
-    @property
-    def touches_process(self) -> bool:
-        return "process" in self.reads or "process" in self.writes
-
-
-# Common effect presets for convenience
-EFFECT_READ_FS = ToolEffect(reads=frozenset({"filesystem"}))
-EFFECT_WRITE_FS = ToolEffect(reads=frozenset({"filesystem"}), writes=frozenset({"filesystem"}))
-EFFECT_READ_MEMORY = ToolEffect(reads=frozenset({"memory"}))
-EFFECT_WRITE_MEMORY = ToolEffect(reads=frozenset({"memory"}), writes=frozenset({"memory"}))
-EFFECT_NETWORK = ToolEffect(reads=frozenset({"network"}))
-EFFECT_SHELL = ToolEffect(
-    reads=frozenset({"filesystem", "process", "network"}),
-    writes=frozenset({"filesystem", "process"}),
-    side_effects=frozenset({"training_launch", "training_kill"}),
-)
-
-
 class Tool(ABC):
-    """Base class for all agent tools."""
+    """Base class for all agent tools.
+
+    Subclasses must set name, description, parameters and implement execute().
+    """
 
     name: str = ""
     description: str = ""
     parameters: Dict[str, Any] = {}
     max_result_size: int = 50000
-    effects: ToolEffect = ToolEffect()  # Subclasses override
 
     @abstractmethod
     def execute(self, **kwargs) -> str:
@@ -92,8 +44,6 @@ class Tool(ABC):
         """
         if "properties" not in params:
             return params
-        # Deep copy to avoid mutating the class-level parameters dict
-        import copy
         params = copy.deepcopy(params)
         params["properties"]["_override_reason"] = {
             "description": (

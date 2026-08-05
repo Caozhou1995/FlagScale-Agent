@@ -14,12 +14,11 @@
 
 """Evict tool — swap out conversation messages to free context space."""
 
-from flagscale_agent.react.tools.base import Tool, ToolEffect
+from flagscale_agent.react.tools.base import Tool
 
 
 class EvictTool(Tool):
     name = "evict"
-    effects = ToolEffect()
     description = (
         "Swap out conversation messages to free context space. "
         "Replaces message content with a lightweight placeholder. "
