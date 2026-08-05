@@ -418,6 +418,10 @@ class WorkerAgent:
         self.tool_registry.register(EvictListTool())
         self.tool_registry.register(RecallTool())
 
+        # Hard reset — LLM-initiated full context reset
+        from flagscale_agent.react.tools.hard_reset import HardResetTool
+        self.tool_registry.register(HardResetTool(self))
+
     def _build_dynamic_constraints(self):
         """Build runtime-detected constraints and register with ConstraintGuard.
 

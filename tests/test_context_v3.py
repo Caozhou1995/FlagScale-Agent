@@ -300,9 +300,11 @@ class TestHistoryEvictRecall:
 class MockGuardContext:
     """Minimal mock of GuardContext for testing."""
 
-    def __init__(self, pressure: float):
+    def __init__(self, pressure: float, evictable_count: int = 60):
         self.context_pressure = pressure
-        self.evictable_indexes = list(range(1, 20))
+        self.evictable_indexes = list(range(1, evictable_count + 1))
+        self.tool_name = ""
+        self.tool_args = {}
 
 
 class TestContextPressureGuard:
@@ -414,6 +416,42 @@ class TestContextPressureGuard:
         """Zero pressure returns None."""
         result = self.guard.check_post(MockGuardContext(0.0))
         assert result is None
+
+    def test_hard_reset_condition(self):
+        """pressure > 85% AND evictable < 50 → sets flag, check_pre blocks."""
+        # check_post sets the flag and injects
+        ctx_post = MockGuardContext(0.88, evictable_count=10)
+        result = self.guard.check_post(ctx_post)
+        assert result is not None
+        assert result.action == "inject_msg"
+        assert "hard_reset" in (result.category or "")
+        assert self.guard._hard_reset_needed is True
+
+        # check_pre now blocks non-save tools
+        from flagscale_agent.react.guard import GuardContext
+        ctx_pre = MockGuardContext(0.88, evictable_count=10)
+        ctx_pre.tool_name = "shell"
+        ctx_pre.tool_args = {"command": "echo hi"}
+        result = self.guard.check_pre(ctx_pre)
+        assert result is not None
+        assert result.action == "block"
+
+    def test_hard_reset_allows_save_tools(self):
+        """When hard_reset_needed, memory_write/plan_update/hard_reset pass through."""
+        self.guard._hard_reset_needed = True
+        ctx = MockGuardContext(0.88, evictable_count=10)
+        ctx.tool_name = "memory_write"
+        ctx.tool_args = {}
+        result = self.guard.check_pre(ctx)
+        assert result is None
+
+    def test_no_hard_reset_with_enough_evictable(self):
+        """pressure > 85% but evictable >= 50 → normal eviction flow, no hard_reset."""
+        ctx = MockGuardContext(0.88, evictable_count=60)
+        result = self.guard.check_post(ctx)
+        # Should NOT trigger hard_reset
+        if result is not None:
+            assert "hard_reset" not in (result.category or "")
 
 
 # ════════════════════════════════════════════════════════════════════════════════

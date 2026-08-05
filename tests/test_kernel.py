@@ -152,10 +152,6 @@ class TestGuardVerdict:
         v = GuardVerdict.inject("reminder")
         assert v.action == "inject_msg"
 
-    def test_compact_factory(self):
-        v = GuardVerdict.compact(reason="pressure")
-        assert v.action == "force_compact"
-
     def test_escalate_factory(self):
         v = GuardVerdict.escalate("review needed")
         assert v.action == "escalate"

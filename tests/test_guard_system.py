@@ -38,76 +38,54 @@ def make_ctx(tool_name="", tool_args=None, tool_result=""):
 
 
 class TestTrainingAttemptGuard:
-    """Test the 2-Strike rule — blocks after 2 consecutive failure results."""
+    """Test the 2-Strike rule — blocks after every 2 attempts without finalize."""
 
     def test_initial_state_no_block(self):
         guard = TrainingAttemptGuard()
-        ctx = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
+        ctx = make_ctx("shell", {"command": "python run.py --config-path conf --config-name t action=run"})
         result = guard.check_pre(ctx)
-        assert result is None  # No block on first launch
+        assert result is None  # No block without experiment
 
-    def test_two_failures_trigger_block(self):
+    def test_two_attempts_trigger_block(self):
         guard = TrainingAttemptGuard()
+        # Create experiment
+        ctx_create = make_ctx("workspace_experiment", {"action": "create", "name": "test_exp"})
+        guard.check_post(ctx_create)
+        assert guard._current_experiment == "test_exp"
 
-        # First failure recorded
-        ctx1 = make_ctx("workspace_experiment",
-                        {"action": "update_last_attempt", "result": "failed: OOM error"})
-        guard.check_post(ctx1)
-        assert guard._consecutive_failures == 1
-
-        # Second failure recorded
-        ctx2 = make_ctx("workspace_experiment",
-                        {"action": "update_last_attempt", "result": "crashed: NCCL timeout"})
-        result = guard.check_post(ctx2)
-        assert guard._consecutive_failures == 2
-        assert guard._is_blocked is True
+        # Add 2 attempts
+        ctx_add = make_ctx("workspace_experiment", {"action": "add_attempt"})
+        guard.check_post(ctx_add)
+        assert guard._attempt_count == 1
+        result = guard.check_post(ctx_add)
+        assert guard._attempt_count == 2
+        # Warning inject at strike point
         assert result is not None
         assert result.action == "inject_msg"
 
     def test_blocked_prevents_launch(self):
         guard = TrainingAttemptGuard()
-        guard._is_blocked = True
-        guard._consecutive_failures = 2
-        ctx = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
+        guard._current_experiment = "test_exp"
+        guard._attempt_count = 2  # At strike point
+        ctx = make_ctx("shell", {"command": "flagscale train qwen3"})
         result = guard.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
 
-    def test_success_resets_counter(self):
+    def test_finalize_resets_counter(self):
         guard = TrainingAttemptGuard()
-        guard._consecutive_failures = 1
+        guard._current_experiment = "test_exp"
+        guard._attempt_count = 2
 
-        ctx = make_ctx("workspace_experiment",
-                       {"action": "update_last_attempt", "result": "success: training completed 100 steps"})
+        ctx = make_ctx("workspace_experiment", {"action": "finalize"})
         guard.check_post(ctx)
-        assert guard._consecutive_failures == 0
-        assert guard._is_blocked is False
-
-    def test_source_reading_unblocks(self):
-        guard = TrainingAttemptGuard()
-        guard._is_blocked = True
-        guard._source_reads_since_block = 0
-
-        # Reading source files should count toward unblock
-        for i in range(2):
-            ctx = make_ctx("read_file", {"path": f"/src/model_{i}.py"}, tool_result="class Model:...")
-            guard.check_post(ctx)
-
-        assert guard._source_reads_since_block >= 2
-
-        # Also need hypothesis to fully unblock
-        ctx_plan = make_ctx("plan_update", {"notes": "Root cause: missing __restore_key__ in batch method"})
-        guard.check_post(ctx_plan)
-        assert guard._hypothesis_declared is True
-
-        # Now launch should be unblocked
-        ctx_launch = make_ctx("shell", {"command": "python run.py --config-path conf action=run"})
-        result = guard.check_pre(ctx_launch)
-        assert result is None
+        assert guard._current_experiment == ""
+        assert guard._attempt_count == 0
 
     def test_non_launch_not_blocked(self):
         guard = TrainingAttemptGuard()
-        guard._is_blocked = True
+        guard._current_experiment = "test_exp"
+        guard._attempt_count = 2
         # Non-launch commands should pass
         ctx = make_ctx("shell", {"command": "grep error stderr.log"})
         result = guard.check_pre(ctx)

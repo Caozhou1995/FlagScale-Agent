@@ -83,7 +83,7 @@ class GuardContext:
 class GuardVerdict:
     """What the guard wants the agent to do."""
 
-    action: Literal["allow", "block", "inject_msg", "force_compact", "escalate", "redirect"]
+    action: Literal["allow", "block", "inject_msg", "escalate", "redirect"]
     message: str = ""
     reason: str = ""
     metadata: dict = field(default_factory=dict)
@@ -97,10 +97,6 @@ class GuardVerdict:
     @classmethod
     def inject(cls, message: str, reason: str = "", category: str = "") -> GuardVerdict:
         return cls(action="inject_msg", message=message, reason=reason, category=category)
-
-    @classmethod
-    def compact(cls, reason: str = "") -> GuardVerdict:
-        return cls(action="force_compact", reason=reason)
 
     @classmethod
     def escalate(cls, message: str, reason: str = "", category: str = "") -> GuardVerdict:
@@ -388,8 +384,8 @@ class GuardRegistry:
         """Run all guards' pre-checks with inject deduplication."""
         inject_messages = []
         inject_categories_seen: set = set()
-        first_hard_verdict = None
-        first_hard_guard = None
+        blocking_verdicts: list = []  # v6: collect ALL blocking verdicts
+        blocking_guards: list = []
         first_reason = ""
         fired_guards: set[str] = set()
 
@@ -418,7 +414,7 @@ class GuardRegistry:
             # v3: Track which guards fired
             fired_guards.add(guard.name)
 
-            if verdict.action in ("block", "escalate", "force_compact", "redirect"):
+            if verdict.action in ("block", "escalate", "redirect"):
                 # Override mechanism: only block is overridable.
                 # Escalate is the ultimate enforcement — no override path.
                 if (
@@ -434,9 +430,8 @@ class GuardRegistry:
                 # Suppress non-critical blocks when context is full and un-evictable
                 if _suppress_other_blocks and guard.name != "context_pressure":
                     continue
-                if first_hard_verdict is None:
-                    first_hard_verdict = verdict
-                    first_hard_guard = guard
+                blocking_verdicts.append(verdict)
+                blocking_guards.append(guard)
                 continue
 
             if verdict.action == "inject_msg":
@@ -467,11 +462,10 @@ class GuardRegistry:
                         f"This advisory has been ignored {guard.escalate_after * 2}+ times. "
                         f"You MUST address it before continuing."
                     )
-                    if first_hard_verdict is None:
-                        first_hard_verdict = GuardVerdict.escalate(
-                            esc_msg, reason=f"escalated_{guard.name}"
-                        )
-                        first_hard_guard = guard
+                    blocking_verdicts.append(GuardVerdict.escalate(
+                        esc_msg, reason=f"escalated_{guard.name}"
+                    ))
+                    blocking_guards.append(guard)
                     # Record trigger (keeps counting)
                     guard._record_trigger(escalation_key)
                     fired_guards.add(guard.name)
@@ -496,9 +490,8 @@ class GuardRegistry:
                             self._shared_state.record_override(guard.name, ctx.override_reason)
                             display.guard_overridden(guard.name, ctx.override_reason)
                             continue
-                    if first_hard_verdict is None:
-                        first_hard_verdict = block_verdict
-                        first_hard_guard = guard
+                    blocking_verdicts.append(block_verdict)
+                    blocking_guards.append(guard)
                     # Record trigger (keeps counting toward escalate)
                     guard._record_trigger(escalation_key)
                     fired_guards.add(guard.name)
@@ -518,17 +511,30 @@ class GuardRegistry:
                     guard.name, category or verdict.reason, ctx.turn_count
                 )
 
-        # If there's a hard verdict, return it WITHOUT unrelated inject messages.
-        # Rationale: inject messages from other guards about unrelated concerns create
-        # confusing multi-signal noise. The block message itself is sufficient.
-        if first_hard_verdict:
-            # v3: Still tick lifecycle for idle guards
+        # v6: If there are blocking verdicts, merge into one multi-block message
+        if blocking_verdicts:
             self.tick_guard_lifecycle(fired_guards)
-            # Add override hint if the blocking guard is overridable
-            first_hard_verdict.message = _maybe_add_override_hint(
-                first_hard_verdict, first_hard_guard, ctx
-            )
-            return first_hard_verdict
+            if len(blocking_verdicts) == 1:
+                # Single block — add override hint
+                v = blocking_verdicts[0]
+                v.message = _maybe_add_override_hint(v, blocking_guards[0], ctx)
+                return v
+            else:
+                # Multiple blocks — format as list
+                lines = [f"[{len(blocking_verdicts)} Guard(s) blocking]"]
+                for i, (v, g) in enumerate(zip(blocking_verdicts, blocking_guards), 1):
+                    override_hint = "(可 _override_reason 绕过)" if g.overridable else "(不可绕过)"
+                    lines.append(f"  {i}. [{g.name}] {override_hint} {v.message}")
+                lines.append("解决对应条件后重试。")
+                # Use the strongest action among all verdicts
+                has_escalate = any(v.action == "escalate" for v in blocking_verdicts)
+                if has_escalate:
+                    return GuardVerdict.escalate(
+                        "\n".join(lines), reason="multi_guard_block"
+                    )
+                return GuardVerdict.block(
+                    "\n".join(lines), reason="multi_guard_block"
+                )
 
         # Merge all inject messages into one verdict (deduplicated)
         if inject_messages:
@@ -576,7 +582,7 @@ class GuardRegistry:
             if verdict is None:
                 continue
 
-            if verdict.action in ("block", "escalate", "force_compact", "redirect"):
+            if verdict.action in ("block", "escalate", "redirect"):
                 # Override mechanism (same as check_pre) — only block is overridable
                 if (
                     verdict.action == "block"

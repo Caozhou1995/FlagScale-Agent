@@ -26,28 +26,8 @@ Rules:
 """
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
 from flagscale_agent.react.state_machine import AgentState
-
-
-# Simple launch keywords — if any appears in a shell command, it's likely a launch
-_LAUNCH_KEYWORDS = (
-    "torchrun",
-    "deepspeed",
-    "flagscale",
-    "train.py",
-    "pretrain.py",
-    "pretrain_",
-    "run.py",
-)
-
-
-def _is_launch_command(cmd: str) -> bool:
-    """Simple keyword check for training launch commands."""
-    cmd_lower = cmd.lower()
-    # Must be a substantive command, not just grep/cat/echo referencing keywords
-    if cmd_lower.lstrip().startswith(("grep ", "cat ", "echo ", "find ", "ls ", "head ", "tail ")):
-        return False
-    return any(kw in cmd_lower for kw in _LAUNCH_KEYWORDS)
 
 
 class ExperimentGuard(Guard):
@@ -83,7 +63,7 @@ class ExperimentGuard(Guard):
             return None
 
         cmd = ctx.tool_args.get("command", "")
-        if not _is_launch_command(cmd):
+        if not _is_flagscale_launch_command(cmd):
             return None
 
         # --- Enforcement ---
@@ -127,7 +107,7 @@ class ExperimentGuard(Guard):
         # Detect successful launch (shell with launch command that didn't error)
         if ctx.tool_name == "shell":
             cmd = ctx.tool_args.get("command", "")
-            if _is_launch_command(cmd):
+            if _is_flagscale_launch_command(cmd):
                 # Mark as launched — next launch requires update_last_attempt
                 self._result_pending = True
                 self._attempt_added = False  # Consume the attempt

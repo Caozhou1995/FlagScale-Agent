@@ -12,61 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TrainingAttemptGuard — 2-Strike Rule.
+"""TrainingAttemptGuard — 2-Strike Rule (periodic).
 
-After 2 consecutive training failures (recorded via workspace_experiment),
-blocks further launches until agent demonstrates root cause analysis:
-1. Read relevant source code (at least 2 read_file calls to .py files)
-2. State a hypothesis (via plan_update notes or explicit statement)
+Every 2 attempts within an unfinished experiment, blocks further launches
+and requires root cause analysis before continuing.
 
-This guard does NOT detect launches or failures itself — it relies on
-ExperimentGuard's lifecycle enforcement to ensure results are recorded.
-It only reacts to workspace_experiment(action='update_last_attempt') results.
+Trigger: attempt_count % 2 == 0 AND attempt_count > 0 AND experiment not finalized.
+Bypass: _override_reason (>=30 chars) OR finalize current experiment.
+
+This guard does NOT use regex/keywords to judge success/failure.
+It simply counts attempts — if you keep adding attempts without finalizing,
+that itself indicates something needs analysis.
 """
 
-import re
-
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
 from flagscale_agent.react.state_machine import AgentState
 
 
-_FAILURE_KEYWORDS = ("fail", "error", "crash", "oom", "timeout", "abort", "killed")
-_SUCCESS_KEYWORDS = ("success", "completed", "converged", "running", "pass")
-
-# Simple launch keywords (shared with ExperimentGuard)
-_LAUNCH_KEYWORDS = (
-    "torchrun", "deepspeed", "flagscale", "train.py",
-    "pretrain.py", "pretrain_", "run.py",
-)
-
-
-def _is_launch_command(cmd: str) -> bool:
-    """Simple keyword check for training launch commands."""
-    cmd_lower = cmd.lower()
-    if cmd_lower.lstrip().startswith(("grep ", "cat ", "echo ", "find ", "ls ", "head ", "tail ")):
-        return False
-    return any(kw in cmd_lower for kw in _LAUNCH_KEYWORDS)
-
-
-def _is_failure_result(result: str) -> bool:
-    """Check if an update_last_attempt result indicates failure."""
-    r = result.lower()
-    # If any success keyword present and no failure keyword, it's success
-    has_success = any(kw in r for kw in _SUCCESS_KEYWORDS)
-    has_failure = any(kw in r for kw in _FAILURE_KEYWORDS)
-    if has_failure:
-        return True
-    if has_success:
-        return False
-    # Ambiguous — treat as failure to be safe
-    return True
-
-
 class TrainingAttemptGuard(Guard):
-    """2-Strike Rule: blocks after 2 consecutive failures until root cause analysis.
+    """2-Strike: every STRIKE_INTERVAL attempts, block and require root cause analysis.
 
-    Relies on ExperimentGuard to enforce that results are recorded via
-    workspace_experiment(action='update_last_attempt', result='...').
+    Triggers at attempt #2, #4, #6, ... within a single unfinalized experiment.
     """
 
     name = "training_2strike"
@@ -74,97 +41,80 @@ class TrainingAttemptGuard(Guard):
     activate_on_states = {AgentState.EXECUTING}
     overridable = True
 
-    STRIKE_THRESHOLD = 2
-    SOURCE_READ_REQUIREMENT = 2  # Must read at least 2 source files
+    STRIKE_INTERVAL = 2  # Block every N attempts
+    MIN_OVERRIDE_LENGTH = 30
 
     def __init__(self):
-        self._consecutive_failures = 0
-        self._is_blocked = False
-        self._source_reads_since_block = 0
-        self._hypothesis_declared = False
+        super().__init__()
+        self._current_experiment = ""
+        self._attempt_count = 0
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
-        """Block launch if 2-strike triggered and requirements not met."""
-        if not self._is_blocked:
+        """Block launch if at a strike point (attempt_count % STRIKE_INTERVAL == 0)."""
+        # No experiment or no attempts yet — nothing to block
+        if not self._current_experiment:
+            return None
+        if self._attempt_count == 0:
+            return None
+        # Only block at strike intervals
+        if self._attempt_count % self.STRIKE_INTERVAL != 0:
             return None
 
         # Only block shell launch commands
         if ctx.tool_name != "shell":
             return None
         cmd = ctx.tool_args.get("command", "")
-        if not _is_launch_command(cmd):
+        if not _is_flagscale_launch_command(cmd):
             return None
 
-        # Check if unblock conditions met
-        if self._source_reads_since_block >= self.SOURCE_READ_REQUIREMENT:
-            if self._hypothesis_declared:
-                # Unblock — agent has done analysis
-                self._is_blocked = False
-                self._source_reads_since_block = 0
-                self._hypothesis_declared = False
-                return None
-            else:
-                return GuardVerdict.block(
-                    "[2-Strike] Source code read, but no hypothesis stated. "
-                    "Record your diagnosis in plan notes or experiment before relaunching.",
-                    reason="2strike_no_hypothesis",
-                )
-
         return GuardVerdict.block(
-            f"[2-Strike] BLOCKED: {self._consecutive_failures} consecutive failures. "
-            f"Read source code to diagnose root cause before retrying "
-            f"({self._source_reads_since_block}/{self.SOURCE_READ_REQUIREMENT} reads done). "
-            f"Then state your hypothesis.",
+            f"[2-Strike] 实验 '{self._current_experiment}' 已连续 "
+            f"{self._attempt_count} 次 attempt 未完成。"
+            "请先分析根因再继续。\n"
+            "解除方式：\n"
+            "1. workspace_experiment(finalize) 结束当前实验，开新实验\n"
+            "2. 提供 _override_reason（>=30字根因分析 + 修复方案）绕过",
             reason="2strike_blocked",
         )
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        """Track failure results and source reads."""
-        # Track update_last_attempt results
-        if ctx.tool_name == "workspace_experiment":
-            action = ctx.tool_args.get("action", "")
-            if action == "update_last_attempt":
-                result = ctx.tool_args.get("result", "")
-                if _is_failure_result(result):
-                    self._consecutive_failures += 1
-                    if self._consecutive_failures >= self.STRIKE_THRESHOLD:
-                        self._is_blocked = True
-                        self._source_reads_since_block = 0
-                        self._hypothesis_declared = False
-                        return GuardVerdict.inject(
-                            f"[2-Strike] {self._consecutive_failures} consecutive failures. "
-                            "Read relevant source code and state your hypothesis before "
-                            "launching again.",
-                            reason="2strike_warning",
-                        )
-                else:
-                    # Success resets the counter
-                    self._consecutive_failures = 0
-                    self._is_blocked = False
+        """Track experiment lifecycle via workspace_experiment calls."""
+        if ctx.tool_name != "workspace_experiment":
+            return None
 
-        # Track source code reads (when blocked)
-        if self._is_blocked and ctx.tool_name == "read_file":
-            path = ctx.tool_args.get("path", "")
-            if path.endswith(".py"):
-                self._source_reads_since_block += 1
+        action = ctx.tool_args.get("action", "")
 
-        # Track hypothesis declaration via plan_update notes
-        if self._is_blocked and ctx.tool_name == "plan_update":
-            notes = ctx.tool_args.get("notes", "")
-            if notes and len(notes) > 20:  # Substantive note
-                self._hypothesis_declared = True
+        if action == "create":
+            # New experiment starts — reset
+            name = ctx.tool_args.get("name", "")
+            self._current_experiment = name
+            self._attempt_count = 0
+
+        elif action == "add_attempt":
+            self._attempt_count += 1
+            # Inject warning when hitting a strike point
+            if (self._attempt_count > 0
+                    and self._attempt_count % self.STRIKE_INTERVAL == 0):
+                return GuardVerdict.inject(
+                    f"[2-Strike] 实验 '{self._current_experiment}' "
+                    f"已有 {self._attempt_count} 次 attempt。"
+                    "下次 launch 将被 block，请先分析根因。",
+                    reason="2strike_warning",
+                )
+
+        elif action == "finalize":
+            # Experiment done — reset
+            self._current_experiment = ""
+            self._attempt_count = 0
 
         return None
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
-        """Reject short/lazy override reasons. Require meaningful explanation."""
-        # Minimum length requirement
-        if len(reason) < 15:
+        """Validate override reason: >=30 chars, not lazy."""
+        if not reason or len(reason.strip()) < self.MIN_OVERRIDE_LENGTH:
             return False
-        # Reject common lazy phrases
-        lazy_patterns = ["try again", "just do it", "ignore this", "override"]
-        reason_lower = reason.lower()
-        if any(pattern in reason_lower for pattern in lazy_patterns):
+        lazy = ("try again", "just do it", "ignore", "skip", "override")
+        if reason.strip().lower() in lazy:
             return False
         return True
 
@@ -175,7 +125,5 @@ class TrainingAttemptGuard(Guard):
     def reset_state(self):
         """Full reset — only on decay or override."""
         super().reset_state()
-        self._consecutive_failures = 0
-        self._is_blocked = False
-        self._source_reads_since_block = 0
-        self._hypothesis_declared = False
+        self._current_experiment = ""
+        self._attempt_count = 0

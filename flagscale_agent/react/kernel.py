@@ -461,11 +461,10 @@ class AgentKernel:
     def _apply_verdict(self, verdict: GuardVerdict, pre: bool) -> bool:
         """Apply a guard verdict. Returns True if this tool call should be blocked.
 
-        v5 semantics (escalation chain: inject → block → escalate):
+        v6 semantics (escalation chain: inject → block → escalate):
         - inject_msg: soft advisory appended to tool_result, turn continues
         - block: prevent tool execution, LLM can override with reason
         - escalate: prevent tool execution + independent message, NOT overridable
-        - force_compact: trigger compaction, turn continues
         """
         d = self.deps
         if verdict.action == "block":
@@ -485,13 +484,6 @@ class AgentKernel:
             else:
                 d.inject_message_fn(verdict.message)
             display.guard_inject(verdict.message)
-        elif verdict.action == "force_compact":
-            # V3: force_compact = evict oldest 30% of evictable messages
-            evictable = d.history.get_evictable_indexes()
-            if evictable:
-                count = max(1, len(evictable) * 30 // 100)
-                for idx in evictable[:count]:
-                    d.history.evict_message(idx)
         return False
 
     def _recover_context_overflow(self, exc, schemas):
