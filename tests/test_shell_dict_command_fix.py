@@ -14,7 +14,7 @@ class TestShellDictCommandFix:
     def test_shell_execute_rejects_dict_command(self):
         """Shell execute() returns ERROR for dict commands."""
         from flagscale_agent.react.tools.shell import ShellTool
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command={"type": "string", "value": "ls"})
         assert "ERROR" in result
         assert "dict" in result
@@ -22,14 +22,14 @@ class TestShellDictCommandFix:
     def test_shell_execute_rejects_list_command(self):
         """Shell execute() returns ERROR for list commands."""
         from flagscale_agent.react.tools.shell import ShellTool
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command=["ls", "-la"])
         assert "ERROR" in result
 
     def test_shell_execute_accepts_string_command(self):
         """Shell execute() works normally for string commands."""
         from flagscale_agent.react.tools.shell import ShellTool
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command="echo hello_test_12345")
         assert "hello_test_12345" in result
 

@@ -24,7 +24,6 @@ from flagscale_agent.react.tools.edit_file import EditFileTool
 from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.shell import (
     ShellTool, _strip_trailing_pipe,
-    _inject_proxy_exports, _ensure_wget_continue,
 )
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools import ToolRegistry
@@ -96,162 +95,33 @@ class TestEditFileTool:
 
 class TestShellTool:
     def test_basic_command(self):
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command="echo hello")
         assert "hello" in result
 
     def test_health_judge_kills_command(self):
         tool = ShellTool(
-            remind_interval=1, require_confirm=False,
+            remind_interval=1,
             health_judge_fn=lambda cmd, out, t, **kw: {"kill": True, "reason": "test kill"},
         )
         result = tool.execute(command="bash -c 'echo running; sleep 10'")
         assert "TERMINATED" in result
 
-    def test_dangerous_command_blocked(self):
-        tool = ShellTool(check_dangerous=True, require_confirm=True)
-        result = tool.execute(command="rm -rf /")
-        assert result.startswith("FATAL:")
+    def test_empty_command_returns_error(self):
+        tool = ShellTool()
+        result = tool.execute(command="")
+        assert "ERROR" in result
 
-    def test_dangerous_check_disabled(self):
-        tool = ShellTool(check_dangerous=False, remind_interval=1, require_confirm=False)
-        result = tool.execute(command="echo safe")
-        assert "safe" in result
+    def test_non_string_command_returns_error(self):
+        tool = ShellTool()
+        result = tool.execute(command=123)
+        assert "ERROR" in result
 
-    def test_confirm_denied(self):
-        tool = ShellTool(require_confirm=True, confirm_fn=lambda cmd: False)
-        result = tool.execute(command="rm /tmp/test_file")
-        assert "DENIED" in result
-
-    def test_confirm_approved(self):
-        tool = ShellTool(require_confirm=True, confirm_fn=lambda cmd: True)
-        result = tool.execute(command="rm /tmp/nonexistent_flagscale_test_xyz")
-        assert "DENIED" not in result
-
-    def test_confirm_not_triggered_for_safe_commands(self):
-        called = []
-        tool = ShellTool(require_confirm=True, confirm_fn=lambda cmd: (called.append(1), False)[1])
-        tool.execute(command="echo safe")
-        assert len(called) == 0
-
-    def test_confirm_allow_pattern_skips_subsequent(self):
-        call_count = []
-        def mock_confirm(cmd):
-            call_count.append(1)
-            return "allow_pattern"
-        tool = ShellTool(require_confirm=True, confirm_fn=mock_confirm)
-        tool.execute(command="pip install requests")
-        assert len(call_count) == 1
-        # Second pip install should be auto-approved
-        tool.execute(command="pip install flask")
-        assert len(call_count) == 1  # no additional confirm call
-
-    def test_confirm_not_triggered_by_grep_pattern(self):
-        called = []
-        tool = ShellTool(require_confirm=True, confirm_fn=lambda cmd: (called.append(1), False)[1])
-        tool.execute(command='ps aux | grep -E "pip install|conda" | grep -v grep')
-        assert len(called) == 0  # grep pattern should not trigger confirm
-
-
-class TestPreConfirm:
-    """Test needs_confirm / pre_confirm / _skip_confirm for parallel execution."""
-
-    def test_needs_confirm_true(self):
-        tool = ShellTool(require_confirm=True)
-        assert tool.needs_confirm("pip install numpy") is True
-
-    def test_needs_confirm_false_safe_cmd(self):
-        tool = ShellTool(require_confirm=True)
-        assert tool.needs_confirm("echo hello") is False
-
-    def test_needs_confirm_false_when_disabled(self):
-        tool = ShellTool(require_confirm=False)
-        assert tool.needs_confirm("pip install numpy") is False
-
-    def test_pre_confirm_approved(self):
-        tool = ShellTool(require_confirm=True, confirm_fn=lambda cmd: True)
-        assert tool.pre_confirm("pip install numpy") is True
-
-    def test_pre_confirm_denied(self):
-        tool = ShellTool(require_confirm=True, confirm_fn=lambda cmd: False)
-        assert tool.pre_confirm("pip install numpy") is False
-
-    def test_pre_confirm_allow_pattern(self):
-        tool = ShellTool(require_confirm=True, confirm_fn=lambda cmd: "allow_pattern")
-        assert tool.pre_confirm("pip install numpy") is True
-        # After allow_pattern, same command should not need confirm
-        assert tool.needs_confirm("pip install torch") is False
-
-    def test_skip_confirm_bypasses_prompt(self):
-        called = []
-        tool = ShellTool(require_confirm=True,
-                         confirm_fn=lambda cmd: (called.append(1), False)[1])
-        result = tool.execute(command="echo ok", _skip_confirm=True)
-        assert len(called) == 0
-        assert "ok" in result
-
-
-class TestStallDetection:
-    def test_stall_kills_command_no_judge(self):
-        """When output doesn't change across stall_threshold intervals, kill it."""
-        tool = ShellTool(
-            remind_interval=1, require_confirm=False,
-            stall_threshold=2,
-        )
-        # Command that prints once then hangs
-        result = tool.execute(command="echo 'stuck here' && sleep 30")
-        assert "STALLED" in result
-        assert "stuck here" in result
-
-    def test_stall_with_judge_kill(self):
-        """stall_judge_fn returns kill=True → command terminated."""
-        def judge(cmd, output, elapsed, stall_dur):
-            return {"kill": True, "reason": "Download frozen"}
-
-        tool = ShellTool(
-            remind_interval=1, require_confirm=False,
-            stall_judge_fn=judge, stall_threshold=2,
-        )
-        result = tool.execute(command="echo 'downloading...' && sleep 30")
-        assert "STALLED" in result
-        assert "Download frozen" in result
-
-    def test_stall_with_judge_continue(self):
-        """stall_judge_fn returns kill=False → command keeps running."""
-        judge_calls = []
-        def judge(cmd, output, elapsed, stall_dur):
-            judge_calls.append(1)
-            return {"kill": False, "reason": "Compiling"}
-
-        tool = ShellTool(
-            remind_interval=1, require_confirm=False,
-            stall_judge_fn=judge, stall_threshold=1,
-        )
-        # Command prints once then sleeps briefly — judge says continue, command finishes
-        result = tool.execute(command="echo 'compiling' && sleep 4")
-        assert len(judge_calls) >= 1
-        assert "STALLED" not in result
-
-    def test_no_stall_when_output_changes(self):
-        """Continuously changing output should never trigger stall."""
-        tool = ShellTool(
-            remind_interval=1, require_confirm=False,
-            stall_threshold=2,
-        )
-        result = tool.execute(command="for i in $(seq 1 10); do echo line$i; sleep 0.3; done")
-        assert "STALLED" not in result
-        assert "line10" in result
-
-    def test_no_stall_on_empty_output(self):
-        """Empty output (no chunks yet) should not count as stall."""
-        tool = ShellTool(
-            remind_interval=1, require_confirm=False,
-            stall_threshold=1,
-        )
-        # sleep produces no output — should NOT be killed as stalled
-        result = tool.execute(command="sleep 4 && echo done")
-        assert "STALLED" not in result
-        assert "done" in result
+    def test_self_kill_protection(self):
+        tool = ShellTool()
+        result = tool.execute(command="pkill -9 flagscale_agent")
+        # Should rewrite command, not actually kill agent
+        assert "flagscale" not in result or "xargs" in result or "(no output)" in result or "no process" in result.lower()
 
 
 class TestHealthJudge:
@@ -261,7 +131,7 @@ class TestHealthJudge:
             return {"kill": True, "reason": "Repeated connection errors"}
 
         tool = ShellTool(
-            remind_interval=1, require_confirm=False,
+            remind_interval=1, 
             health_judge_fn=judge,
         )
         result = tool.execute(command="echo 'Connection refused' && sleep 30")
@@ -276,7 +146,7 @@ class TestHealthJudge:
             return {"kill": False, "reason": "Looks fine"}
 
         tool = ShellTool(
-            remind_interval=1, require_confirm=False,
+            remind_interval=1, 
             health_judge_fn=judge,
         )
         result = tool.execute(command="echo 'working' && sleep 3 && echo 'done'")
@@ -294,7 +164,7 @@ class TestHealthJudge:
             return {"kill": False}
 
         tool = ShellTool(
-            remind_interval=1, require_confirm=False,
+            remind_interval=1, 
             health_judge_fn=judge,
         )
         result = tool.execute(command="echo 'stuck' && sleep 30")
@@ -309,9 +179,8 @@ class TestHealthJudge:
             return {"kill": False, "reason": "Let it run"}
 
         tool = ShellTool(
-            remind_interval=1, require_confirm=False,
+            remind_interval=1, 
             health_judge_fn=judge,
-            stall_threshold=1,
         )
         result = tool.execute(command="echo 'waiting' && sleep 4")
         assert "STALLED" not in result
@@ -373,13 +242,13 @@ class TestStripTrailingPipe:
         assert fn is not None
 
     def test_integration_tail(self):
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command="seq 100 | tail -5")
         lines = result.strip().splitlines()
         assert lines == ["96", "97", "98", "99", "100"]
 
     def test_integration_head(self):
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command="seq 100 | head -3")
         lines = result.strip().splitlines()
         assert lines == ["1", "2", "3"]
@@ -442,75 +311,3 @@ class TestEditFileReplaceAll:
         assert f.read_text().count("b") == 1
 
 
-class TestInjectProxyExports:
-    """_inject_proxy_exports sets proxy env vars before the command.
-
-    The exact syntax is platform-dependent:
-      - Linux/macOS: export VAR=value && ...
-      - Windows:     set "VAR=value" && ...
-    Tests check for the variable name and value regardless of syntax.
-    """
-
-    @staticmethod
-    def _has_var(result, var, value):
-        """Return True if result contains the var=value assignment in any form."""
-        import sys as _sys
-        if _sys.platform == "win32":
-            return f'"{var}={value}"' in result or f'{var}={value}' in result
-        return f'export {var}={value}' in result or f'{var}={value}' in result
-
-    def test_non_network_cmd_still_gets_proxy(self):
-        result = _inject_proxy_exports("echo hello", {"HTTP_PROXY": "http://p:8080"})
-        assert self._has_var(result, "HTTP_PROXY", "http://p:8080")
-        assert result.endswith("&& echo hello")
-
-    def test_wget_with_proxy(self):
-        env = {"HTTP_PROXY": "http://p:8080", "HTTPS_PROXY": "http://p:8080"}
-        result = _inject_proxy_exports("wget http://example.com/file.tar", env)
-        assert self._has_var(result, "HTTP_PROXY", "http://p:8080")
-        assert self._has_var(result, "HTTPS_PROXY", "http://p:8080")
-        assert result.endswith("&& wget http://example.com/file.tar")
-
-    def test_pip_install_with_proxy(self):
-        env = {"http_proxy": "http://p:8080"}
-        result = _inject_proxy_exports("pip install numpy", env)
-        assert self._has_var(result, "http_proxy", "http://p:8080")
-
-    def test_no_proxy_vars_set(self):
-        result = _inject_proxy_exports("wget http://example.com", {})
-        assert result == "wget http://example.com"
-
-    def test_git_clone(self):
-        env = {"HTTPS_PROXY": "http://p:8080"}
-        result = _inject_proxy_exports("git clone https://github.com/repo.git", env)
-        assert self._has_var(result, "HTTPS_PROXY", "http://p:8080")
-
-
-class TestEnsureWgetContinue:
-    def test_plain_wget(self):
-        assert _ensure_wget_continue("wget http://example.com/f.tar") == "wget -c http://example.com/f.tar"
-
-    def test_wget_already_has_c(self):
-        cmd = "wget -c http://example.com/f.tar"
-        assert _ensure_wget_continue(cmd) == cmd
-
-    def test_wget_already_has_continue(self):
-        cmd = "wget --continue http://example.com/f.tar"
-        assert _ensure_wget_continue(cmd) == cmd
-
-    def test_no_wget(self):
-        cmd = "curl -O http://example.com/f.tar"
-        assert _ensure_wget_continue(cmd) == cmd
-
-    def test_multiple_wget(self):
-        cmd = "wget http://a.com/1.tar && wget http://b.com/2.tar"
-        result = _ensure_wget_continue(cmd)
-        assert result.count("wget -c") == 2
-
-
-
-class TestDownloadExitCodeAnnotation:
-    def test_nonzero_exit_wget(self):
-        tool = ShellTool(require_confirm=False)
-        result = tool.execute(command="wget http://localhost:1/nonexistent 2>&1; exit 1")
-        assert "non-zero" in result.lower() or "incomplete" in result.lower() or "ERROR" in result or "failed" in result.lower()

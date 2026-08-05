@@ -260,7 +260,7 @@ class ToolExecutor:
         t0 = time.time()
         try:
             if skip_confirm and tool_name == "shell":
-                result = agent.tool_registry.execute(tool_name, _skip_confirm=True, **arguments)
+                result = agent.tool_registry.execute(tool_name, _quiet=True, **arguments)
             else:
                 result = agent.tool_registry.execute(tool_name, **arguments)
         except Exception as e:
@@ -428,22 +428,7 @@ class ToolExecutor:
                 self._pending_advisories.append(verdict.message)
                 display.guard_inject(verdict.message)
 
-        # Pre-confirm shell commands
-        shell_tool = agent.tool_registry.get("shell")
-        denied = set()
-        if shell_tool:
-            for i, tc in enumerate(tool_calls):
-                if i in skip_indices:
-                    continue
-                if tc["name"] == "shell":
-                    cmd = tc["arguments"].get("command", "")
-                    if not isinstance(cmd, str):
-                        cmd = str(cmd) if cmd else ""
-                    if shell_tool.needs_confirm(cmd):
-                        if not shell_tool.pre_confirm(cmd):
-                            denied.add(i)
-
-        skip_indices |= denied | dedup_indices | capped_indices
+        skip_indices |= dedup_indices | capped_indices
 
         # Serialize non-read shell commands
         write_shell_indices = []
@@ -489,8 +474,7 @@ class ToolExecutor:
             try:
                 if tool_name == "shell":
                     result = agent.tool_registry.execute(
-                        tool_name, _skip_confirm=True,
-                        _parallel_index=idx_to_line[idx], **arguments)
+                        tool_name, _quiet=True, **arguments)
                 else:
                     result = agent.tool_registry.execute(tool_name, **arguments)
             except Exception as e:

@@ -398,8 +398,6 @@ class WorkerAgent:
         self.tool_registry.register(
             ShellTool(
                 remind_interval=self.config.shell_remind_interval,
-                check_dangerous=self.config.dangerous_commands_check,
-                require_confirm=self.config.confirm_commands,
                 env=self.config.shell_env,
                 health_judge_fn=self._health_judge,
             )

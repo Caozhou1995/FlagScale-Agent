@@ -243,13 +243,11 @@ class CommandHandler:
             if mode == "auto":
                 self.agent.config.confirm_commands = False
                 self.agent.config.max_iterations = 2**31 - 1
-                # Re-register shell tool without confirm
+                # Re-register shell tool (auto-mode has no behavioral difference now)
                 self.agent.tool_registry._tools.pop("shell", None)
                 self.agent.tool_registry.register(
                     ShellTool(
                         remind_interval=self.agent.config.shell_remind_interval,
-                        check_dangerous=self.agent.config.dangerous_commands_check,
-                        require_confirm=False,
                         env=self.agent.config.shell_env,
                         health_judge_fn=self.agent._health_judge,
                     )
