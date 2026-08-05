@@ -697,7 +697,7 @@ class HistoryManager:
             return args.get("path", "")[:80]
         if tool_name == "web_fetch":
             return args.get("url", "")[:80]
-        if tool_name in ("flagscale_train_monitor", "parse_training_metrics"):
+        if tool_name in ("flagscale_train_monitor",):
             return args.get("output_dir", args.get("log_path", args.get("experiment", "")))[:60]
         for v in args.values():
             if isinstance(v, str) and v:

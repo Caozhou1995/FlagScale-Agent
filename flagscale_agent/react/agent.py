@@ -60,7 +60,6 @@ from flagscale_agent.react.tools.shell import ShellTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
 # find_log removed — merged into monitor
-from flagscale_agent.react.tools.parse_metrics import ParseTrainingMetricsTool
 from flagscale_agent.react.tools.workspace_experiment import WorkspaceExperimentTool
 from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
@@ -404,8 +403,6 @@ class WorkerAgent:
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
         self.tool_registry.register(LoadKnowledgeTool(self._knowledge_manager))
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
-        # FindLatestLogTool removed — merged into FlagScaleTrainMonitorTool
-        self.tool_registry.register(ParseTrainingMetricsTool())
         self.tool_registry.register(FlagScaleTrainMonitorTool(classify_fn=self._judge_confirm))
         self.tool_registry.register(WorkspaceExperimentTool(self._experiment_manager, task_plan=self.task_plan))
         self.tool_registry.register(ValidateConfigTool())

@@ -237,13 +237,6 @@ class TestFailureDetection:
         g.check_post(ctx)
         assert g._failure_observed is True
 
-    def test_parse_training_metrics_triggers(self):
-        """parse_training_metrics with error triggers failure."""
-        g = DebugDisciplineGuard()
-        ctx = _ctx("parse_training_metrics", tool_result="Out of memory\nRuntimeError: CUDA OOM")
-        g.check_post(ctx)
-        assert g._failure_observed is True
-
     def test_monitor_clean_output_no_trigger(self):
         """monitor with clean output does NOT trigger failure."""
         g = DebugDisciplineGuard()

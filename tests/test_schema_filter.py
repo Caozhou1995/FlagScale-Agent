@@ -96,7 +96,7 @@ class TestPhaseDetection:
         agent = self._make_agent_stub()
         reg = ToolRegistry()
         for name in ["shell", "read_file", "flagscale_train_monitor", "write_file", "plan_create",
-                     "parse_training_metrics", "workspace_experiment"]:
+                     "workspace_experiment"]:
             reg.register(DummyTool(name))
         agent.tool_registry = reg
         agent.provider = MagicMock()
@@ -110,8 +110,6 @@ class TestPhaseDetection:
         assert "read_file" in names
         assert "write_file" in names  # write_file is a core tool
         assert "plan_create" in names  # plan_create is a core tool
-        # parse_training_metrics is NOT a core tool, so it's excluded
-        assert "parse_training_metrics" not in names
 
     def test_filtered_schemas_default_returns_all(self):
         agent = self._make_agent_stub()

@@ -113,7 +113,7 @@ class ExperimentGuard(Guard):
                 self._attempt_added = False  # Consume the attempt
 
         # Detect training result from monitor
-        if ctx.tool_name in ("flagscale_train_monitor", "parse_training_metrics"):
+        if ctx.tool_name in ("flagscale_train_monitor",):
             # Monitor was called — if result_pending, remind to record
             if self._result_pending and ctx.tool_result:
                 return GuardVerdict.inject(
