@@ -73,7 +73,6 @@ from flagscale_agent.react.tools.plan_update import PlanUpdateTool
 from flagscale_agent.react.tools.plan_status import PlanStatusTool
 from flagscale_agent.react.tools.validate_config import ValidateConfigTool
 from flagscale_agent.react.tools.inspect_checkpoint import InspectCheckpointTool
-from flagscale_agent.react.tools.compact_context import CompactContextTool
 from flagscale_agent.react.tools.evict import EvictTool
 from flagscale_agent.react.tools.evict_list import EvictListTool
 from flagscale_agent.react.tools.recall import RecallTool
@@ -411,7 +410,6 @@ class WorkerAgent:
         self.tool_registry.register(WorkspaceExperimentTool(self._experiment_manager, task_plan=self.task_plan))
         self.tool_registry.register(ValidateConfigTool())
         self.tool_registry.register(InspectCheckpointTool())
-        self.tool_registry.register(CompactContextTool(self.history))
         self.tool_registry.register(EvictTool())
         self.tool_registry.register(EvictListTool())
         self.tool_registry.register(RecallTool())
