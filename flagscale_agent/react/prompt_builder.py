@@ -131,7 +131,6 @@ class PromptBuilder:
         )
 
         CONSTRAINT_TO_SECTION = {
-            "is_training": "experiment",
             "is_inference": "inference",
             "is_serving": "serving",
         }
@@ -140,12 +139,6 @@ class PromptBuilder:
                 section = SYSTEM_PROMPT_OPTIONAL.get(section_key, "")
                 if section:
                     optional_parts.append(section)
-
-        # Experiment workflow for training/inference
-        if "is_training" in scene_constraints or "is_inference" in scene_constraints:
-            exp_section = SYSTEM_PROMPT_OPTIONAL.get("experiment", "")
-            if exp_section and exp_section not in optional_parts:
-                optional_parts.append(exp_section)
 
         # Planning section — always inject (includes "when to create" guidance)
         planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")

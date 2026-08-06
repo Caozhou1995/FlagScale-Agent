@@ -18,7 +18,7 @@ Two activation modes:
 1. Complexity judge fired → hard block at _PLAN_GATE_MAX_EXPLORATORY
 2. Independent: warn at dynamic threshold, hard block at dynamic threshold
 
-v2: TaskMode-aware thresholds via SharedState. Analysis mode allows more
+v2: Configurable thresholds.
 exploratory calls before requiring a plan.
 """
 
@@ -31,7 +31,7 @@ class PlanGuard(Guard):
     """Detects complex tasks without a plan and prompts plan creation.
 
     Uses tool_name to identify exploratory (read-only) calls.
-    v2: Integrates with SharedState for TaskMode-aware thresholds.
+    v2: Configurable thresholds.
     """
 
     name = "plan"
@@ -39,7 +39,7 @@ class PlanGuard(Guard):
 
     overridable = True
 
-    # Base thresholds (multiplied by TaskMode.plan_required_threshold ratio)
+    # Base thresholds
     _PLAN_GATE_MAX_EXPLORATORY_BASE = 6
     _PLAN_GATE_INDEPENDENT_WARN_BASE = 8
     _PLAN_GATE_INDEPENDENT_BLOCK_BASE = 12
@@ -52,13 +52,10 @@ class PlanGuard(Guard):
         self._block_count: int = 0  # track repeated blocks for escalation
 
 
-    def set_shared_state(self, shared_state):
-        """Legacy stub — SharedState removed."""
-        pass
 
     @property
     def _threshold_multiplier(self) -> float:
-        """Get threshold multiplier from TaskMode. Higher = more tolerant."""
+        """Get threshold multiplier. Higher = more tolerant."""
         return 1.0
 
     @property

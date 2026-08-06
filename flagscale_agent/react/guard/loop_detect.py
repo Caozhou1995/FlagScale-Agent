@@ -19,7 +19,7 @@ Uses two-phase detection:
 2. Precise judgment: classify_fn("is_stuck_in_loop") confirms before escalation
 
 v2 improvements:
-- SharedState integration for TaskMode-aware thresholds
+- Configurable detection thresholds
 - Continuation-read exemption (same file, different line ranges)
 - Argument diversity check in same_tool_dominance
 - Read-warning suppression when another guard already warned
@@ -68,7 +68,7 @@ class LoopDetectGuard(Guard):
     3. Retry pattern: kill→launch cycles without diagnostic steps between them
 
     v2: Integrates with SharedState for:
-    - TaskMode-aware thresholds (analysis mode is more tolerant)
+    - Configurable thresholds
     - Continuation-read exemption (reading same file at different offsets)
     - Read-warning deduplication (only one guard warns about reads per turn)
     """
@@ -83,13 +83,13 @@ class LoopDetectGuard(Guard):
     # Detection 1: Exact match
     _LOOP_THRESHOLD = 3  # same (tool, args) N times in recent history
 
-    # Detection 1B: Same tool dominance (base thresholds, multiplied by TaskMode)
+    # Detection 1B: Same tool dominance
     _SAME_TOOL_DOMINANCE_BASE = 8  # same tool_name N times in window
     _SAME_TOOL_WINDOW = 12
 
     # Detection 2: Semantic read-only ratio (base thresholds)
     _SEMANTIC_WINDOW = 12
-    _SEMANTIC_READ_RATIO_BASE = 0.85  # adjusted by TaskMode
+    _SEMANTIC_READ_RATIO_BASE = 0.85
     _SEMANTIC_COOLDOWN = 4
 
     # Detection 3: Retry pattern
@@ -109,20 +109,6 @@ class LoopDetectGuard(Guard):
         self._semantic_warned: bool = False
         self._semantic_warn_at: int = 0
         self._semantic_warn_count: int = 0
-
-        # SharedState reference (set by GuardRegistry)
-        self._shared_state = None
-
-    def set_shared_state(self, shared_state):
-        """Called by GuardRegistry to inject shared state."""
-        pass  # shared_state removed
-
-    @property
-    def _task_mode_multiplier(self) -> float:
-        """Get loop sensitivity multiplier from TaskMode."""
-        if self._shared_state:
-            pass
-        return 1.0
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
@@ -183,8 +169,8 @@ class LoopDetectGuard(Guard):
         if len(self._tool_name_history) >= self._SAME_TOOL_WINDOW:
             window = self._tool_name_history[-self._SAME_TOOL_WINDOW:]
             same_tool_count = sum(1 for t in window if t == ctx.tool_name)
-            # Apply TaskMode multiplier to threshold
-            adjusted_threshold = int(self._SAME_TOOL_DOMINANCE_BASE * self._task_mode_multiplier)
+            
+            adjusted_threshold = self._SAME_TOOL_DOMINANCE_BASE
 
             if same_tool_count >= adjusted_threshold:
                 # NEW: Check argument diversity before triggering
@@ -235,8 +221,8 @@ class LoopDetectGuard(Guard):
             if productive_shells_in_window > 0:
                 has_productive = True
 
-            # Apply TaskMode to ratio threshold
-            adjusted_ratio = min(0.95, self._SEMANTIC_READ_RATIO_BASE + (self._task_mode_multiplier - 1.0) * 0.1)
+            
+            adjusted_ratio = self._SEMANTIC_READ_RATIO_BASE
 
             ratio = effective_read_count / len(window)
             if ratio >= adjusted_ratio and not has_productive:

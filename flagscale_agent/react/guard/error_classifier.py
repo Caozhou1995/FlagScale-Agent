@@ -70,8 +70,6 @@ class ErrorClassifierGuard(Guard):
         self._last_category: str | None = None
         self._consecutive_same: int = 0
 
-    def set_shared_state(self, shared_state):
-        pass
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_result:

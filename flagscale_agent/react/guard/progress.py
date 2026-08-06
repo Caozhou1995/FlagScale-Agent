@@ -29,14 +29,14 @@ class ProgressGuard(Guard):
     v2 changes:
     - Uses SharedState.read_stats instead of private counters
     - Checks SharedState.read_warning_issued before firing (avoids duplication)
-    - TaskMode-aware thresholds
+    - Configurable thresholds
     """
 
     name = "progress"
     priority = 30
 
 
-    # Base thresholds (multiplied by TaskMode.read_tolerance)
+    # Base thresholds
     _READ_ONLY_STREAK_WARN_BASE = 8    # Consecutive reads before warn
     _READ_ONLY_STREAK_BLOCK_BASE = 14  # Consecutive reads before block
     _REREAD_WARN_BASE = 3              # Re-reads of same file before warn
@@ -46,13 +46,10 @@ class ProgressGuard(Guard):
         self._reread_count: int = 0
         self._warned_this_turn: bool = False
 
-    def set_shared_state(self, shared_state):
-        """Legacy stub — SharedState removed."""
-        pass
 
     @property
     def _tolerance_multiplier(self) -> float:
-        """Get read tolerance from TaskMode."""
+        """Get read tolerance multiplier."""
         return 1.0
 
     @property

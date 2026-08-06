@@ -55,8 +55,6 @@ class OutputQualityGuard(Guard):
     def __init__(self):
         self._consecutive_silent_failures = 0
 
-    def set_shared_state(self, shared_state):
-        pass
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         result = ctx.tool_result or ""

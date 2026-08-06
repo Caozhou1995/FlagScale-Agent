@@ -217,10 +217,6 @@ Summarize suggestions in a `[Memory suggestions]` block; wait for user confirmat
 
 Forbidden: duplicate storage of same info, using Memory to replace Plan/Knowledge/Skill, retaining already-digested Insights.""",
 
-    "experiment": """## Experiment Workflow
-
-Lifecycle: create → add_attempt → launch → update_last_attempt → finalize.""",
-
     "decision": """## Code Quality Discipline
 
 Before writing new code:
