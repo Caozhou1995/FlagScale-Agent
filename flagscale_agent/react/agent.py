@@ -630,6 +630,8 @@ class WorkerAgent:
         data = {
             "session_id": self._session_id,
             "messages": full_log,
+            "index_offset": self.history._index_offset,
+            "reset_count": self.history._reset_count,
         }
         # Atomic write
         try:
@@ -1423,12 +1425,37 @@ class WorkerAgent:
             except Exception:
                 pass
 
+        # Restore _full_log from conversation_full.json if it exists.
+        # This preserves the complete audit trail across /reload and hard resets.
+        full_log_path = os.path.join(session_dir, "conversation_full.json")
+        full_log_seeded = False
+        if os.path.isfile(full_log_path):
+            try:
+                with open(full_log_path, "r", encoding="utf-8") as f:
+                    full_data_on_disk = json.load(f)
+                full_msgs = full_data_on_disk.get("messages", [])
+                if full_msgs:
+                    import copy
+                    self.history._full_log = [copy.deepcopy(m) for m in full_msgs]
+                    # Restore hard reset state
+                    self.history._index_offset = full_data_on_disk.get("index_offset", 0)
+                    self.history._reset_count = full_data_on_disk.get("reset_count", 0)
+                    full_log_seeded = True
+            except Exception:
+                pass
+
         messages = data.get("messages", [])
         # Skip the old system prompt — we already have a fresh one from __init__
         for msg in messages:
             if msg.get("role") == "system":
                 continue
-            self.history.append(msg)
+            if full_log_seeded:
+                # Only append to _messages; _full_log already has the complete history
+                self.history._messages.append(msg)
+                # Tag with ext_idx from full_log length (messages were already recorded there)
+                msg["_ext_idx"] = msg.get("_ext_idx", len(self.history._full_log))
+            else:
+                self.history.append(msg)
         # Restore turn count from message history
         self.turn_count = sum(
             1 for m in messages
