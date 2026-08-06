@@ -954,7 +954,6 @@ class WorkerAgent:
             self._auto_turn_count = 0
             self._inject_context(user_input)
             self._check_user_porting_confirmation(user_input)
-            self._detect_and_set_task_mode(user_input)
             self._reset_guard_escalation()
             self.history.append({"role": "user", "content": user_input})
             try:
@@ -1192,7 +1191,6 @@ class WorkerAgent:
         self._auto_turn_count = 0
         self._inject_context(user_input)
         self._check_user_porting_confirmation(user_input)
-        self._detect_and_set_task_mode(user_input)
         self.history.append({"role": "user", "content": user_input})
         try:
             self._react_loop()
@@ -1623,38 +1621,6 @@ class WorkerAgent:
             # Also reset loop detection history for fresh user intent
             if hasattr(guard, '_exact_repeat_count'):
                 guard._exact_repeat_count = {}
-
-    def _detect_and_set_task_mode(self, user_input: str):
-        """Auto-detect TaskMode from user input via LLM judge and set on SharedState.
-
-        Uses judge.classify("task_mode", ...) for semantic understanding.
-        Skips on very short/ambiguous inputs to save budget.
-        """
-        from flagscale_agent.react.guard.shared_state import TaskMode
-
-        shared_state = self._kernel.deps.guard_registry.shared_state
-
-        # Skip on trivially short inputs (saves a judge call)
-        stripped = user_input.strip()
-        if len(stripped) <= 2:
-            return
-
-        result, _ = self.judge.classify_traced(
-            "task_mode",
-            {"user_input": user_input},
-            default="keep",
-        )
-
-        mode_map = {
-            "porting": TaskMode.PORTING,
-            "analysis": TaskMode.ANALYSIS,
-            "debugging": TaskMode.DEBUGGING,
-            "implementation": TaskMode.IMPLEMENTATION,
-        }
-
-        if result in mode_map:
-            shared_state.set_task_mode(mode_map[result])
-        # "keep" or unrecognized → don't change current mode
 
     def _inject_context(self, user_input: str):
         # Memory is no longer injected into system prompt (accessed via tools).
