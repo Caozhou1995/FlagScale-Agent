@@ -1,0 +1,113 @@
+# know-flagscale
+# FlagScale框架：Repo结构、Hydra两级Config体系、Runner执行链路、训练Config字段全表、训练Runner详解、Examples目录规范
+
+## flagscale/01_repo_structure.md (180 lines)
+L1: FlagScale Repo 结构总览
+  L3: 1. 概述
+  L9: 2. 顶层目录
+  L27: 3. flagscale/ 核心模块
+  L105: 4. 任务类型与后端映射
+  L117: 5. 任务与 Action 映射
+  L136: 6. 关键设计决策
+    L138: 6.1 新旧 Runner 架构并存
+    L145: 6.2 Hydra 统一配置
+    L152: 6.3 多节点调度
+    L159: 6.4 Entrypoint 与 Backend 的关系
+  L166: 7. 依赖关系
+
+## flagscale/02_config_system.md (219 lines)
+L1: FlagScale Config 体系
+  L3: 1. 概述与设计动机
+  L11: 2. 目录约定
+  L34: 3. 顶层 Config 结构
+L39: === Hydra defaults（引用子配置）===
+L44: === 实验元信息 ===
+L81: === 执行动作 ===
+L84: === Hydra 输出配置 ===
+  L90: 4. Hydra 合并规则
+    L92: 4.1 defaults 加载顺序
+    L106: 4.2 合并后的完整 DictConfig
+    L120: 4.3 OmegaConf 插值
+  L134: 5. 参数展平（Config → 命令行参数）
+    L136: 5.1 Megatron Backend
+L141: 源码：flagscale/runner/utils.py
+    L168: 5.2 Native Backend
+  L175: 6. 多配置文件模式
+    L177: 6.1 单独顶层配置（常见）
+    L186: 6.2 多顶层配置
+    L203: 6.3 Hydra Override
+  L213: 7. 设计约束与注意事项
+
+## flagscale/03_runner_execution.md (151 lines)
+L1: FlagScale Runner 执行链
+  L3: 1. 概述
+  L7: 2. 入口链路
+  L24: 3. get_runner() 路由逻辑
+  L44: 4. 新架构：Runner（Backend + Launcher）
+    L46: 4.1 设计
+    L61: 4.2 RunnerFactory 注册表
+    L83: 4.3 Backend/Launcher 职责分离
+  L97: 5. 旧架构：SSHTrainRunner
+  L113: 6. execute_action() 分发
+  L129: 7. CLI 命令映射
+    L131: 7.1 任务命令（flagscale train/serve/inference）
+    L144: 7.2 通用命令（flagscale run）
+
+## flagscale/04_train_config.md (208 lines)
+L1: FlagScale 训练 Config 字段全表
+  L3: 1. 概述
+  L9: 2. system section
+    L13: 2.1 并行策略
+    L25: 2.2 分布式优化
+    L33: 2.3 模型配置（系统级）
+    L46: 2.4 precision 子块
+    L58: 2.5 logging 子块
+    L73: 2.6 checkpoint 子块
+  L82: 3. model section
+    L86: 3.1 架构参数
+    L114: 3.2 MoE 参数（可选）
+    L126: 3.3 训练超参
+    L138: 3.4 optimizer 子块
+    L146: 3.5 optimizer.lr_scheduler 子块
+  L162: 4. data section
+    L174: 4.1 data.tokenizer 子块
+  L185: 5. 常见误放规则
+  L200: 6. 层级结构验证规则
+
+## flagscale/05_train_runner.md (165 lines)
+L1: FlagScale 训练 Runner 详解
+  L3: 1. 概述
+  L7: 2. MegatronBackend 核心流程
+    L19: 2.1 _update_config_train()
+    L31: 2.2 _get_args_megatron()
+    L35: 2.3 generate_run_script()
+  L54: 3. SshLauncher 执行链
+    L58: 3.1 run() 流程
+    L86: 3.2 torchrun 命令构成
+    L101: 3.3 stop() 流程
+  L105: 4. 输出目录结构
+  L135: 5. 多节点调度
+    L137: 5.1 hostfile 格式
+    L146: 5.2 master 选择
+    L151: 5.3 no_shared_fs 模式
+  L158: 6. dryrun 模式
+
+## flagscale/06_examples_convention.md (181 lines)
+L1: FlagScale Examples 目录规范
+  L3: 1. 概述
+  L7: 2. 目录结构约定
+  L37: 3. 命名规范
+    L39: 3.1 模型目录名
+    L44: 3.2 子 config 命名
+    L56: 3.3 顶层 config 变体
+  L66: 4. 新模型添加流程
+    L68: Step 1: 创建目录
+    L74: Step 2: 创建训练子 config
+    L119: Step 3: 创建顶层 config
+    L150: Step 4: 创建 hostfile（多节点）
+  L157: 5. CLI 使用
+L160: 使用默认 config（train.yaml + 默认子 config）
+L163: 使用特定变体
+L166: dryrun 验证
+L169: 覆盖参数
+  L173: 6. 已有模型列表

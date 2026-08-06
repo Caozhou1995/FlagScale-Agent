@@ -201,7 +201,7 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 
 ## 六、示例产出指标
 
-基于知识库已有的 **77 篇文档**实践数据（覆盖 16 个知识组，总计 ~31,583 行）：
+基于知识库已有的 **83 篇文档**实践数据（覆盖 17 个知识组，总计 ~32,687 行）：
 
 ### know-megatron-model（7章，平均 ~561 行）
 
@@ -302,6 +302,17 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 | 04_ncu_kernel_profiling | Chapter 04: Nsight Compute (NCU) Kernel级Profiling 深度分析 | 269 |
 | 05_megatron_profiler_integration | Chapter 05: Megatron-LM-FL Profiler集成与分析 深度分析 | 242 |
 
+### know-flagscale（6章，平均 ~184 行）
+
+| 章节 | 主题 | 行数 |
+|------|------|------|
+| 01_repo_structure | FlagScale Repo 结构总览 | 180 |
+| 02_config_system | FlagScale Config 体系 | 219 |
+| 03_runner_execution | FlagScale Runner 执行链 | 151 |
+| 04_train_config | FlagScale 训练 Config 字段全表 | 208 |
+| 05_train_runner | FlagScale 训练 Runner 详解 | 165 |
+| 06_examples_convention | FlagScale Examples 目录规范 | 181 |
+
 ### 其他知识组汇总
 
 | 知识组 | 章数 | 平均行数 | 行数范围 |
@@ -316,7 +327,7 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 
 ### 总结
 
-- 全库 77 篇文档，总计 **~31,583 行**
+- 全库 83 篇文档，总计 **~32,687 行**
 - 核心深度分析章节：平均 **512 行**
-- 专题分析：平均 **304 行**
+- 专题分析：平均 **289 行**
 - 推荐标准：核心模块 ≥ 450 行，专题/工具类 ≥ 250 行

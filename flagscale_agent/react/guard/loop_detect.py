@@ -38,7 +38,7 @@ from flagscale_agent.react.state_machine import AgentState
 _READ_ONLY_TOOL_NAMES = frozenset({
     "read_file", "memory_read", "memory_list", "plan_status",
     "flagscale_train_monitor", "web_fetch",
-    "validate_config", "inspect_checkpoint",
+    "inspect_checkpoint",
 })
 
 # Shell command prefixes that are read-only (don't modify state)

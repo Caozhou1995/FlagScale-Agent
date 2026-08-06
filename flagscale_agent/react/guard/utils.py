@@ -30,7 +30,7 @@ import re
 READ_ONLY_TOOLS = frozenset({
     "read_file", "memory_read", "memory_list", "evict_list", "recall",
     "load_skill", "load_knowledge", "plan_status",
-    "inspect_checkpoint", "validate_config", "web_fetch", "flagscale_train_monitor",
+    "inspect_checkpoint", "web_fetch", "flagscale_train_monitor",
 })
 
 # Source constants — must match judge.py

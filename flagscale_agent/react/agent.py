@@ -70,7 +70,6 @@ from flagscale_agent.react.tools.monitor import FlagScaleTrainMonitorTool
 from flagscale_agent.react.tools.plan_create import PlanCreateTool
 from flagscale_agent.react.tools.plan_update import PlanUpdateTool
 from flagscale_agent.react.tools.plan_status import PlanStatusTool
-from flagscale_agent.react.tools.validate_config import ValidateConfigTool
 from flagscale_agent.react.tools.inspect_checkpoint import InspectCheckpointTool
 from flagscale_agent.react.tools.evict import EvictTool
 from flagscale_agent.react.tools.evict_list import EvictListTool
@@ -405,7 +404,6 @@ class WorkerAgent:
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
         self.tool_registry.register(FlagScaleTrainMonitorTool(classify_fn=self._judge_confirm))
         self.tool_registry.register(WorkspaceExperimentTool(self._experiment_manager, task_plan=self.task_plan))
-        self.tool_registry.register(ValidateConfigTool())
         self.tool_registry.register(InspectCheckpointTool())
         self.tool_registry.register(EvictTool())
         self.tool_registry.register(EvictListTool())

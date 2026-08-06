@@ -121,7 +121,6 @@ Use supersedes to replace outdated entries.
 - Load skills → load_skill (for workflow guidance on specific tasks)
 - Monitor training → flagscale_train_monitor (NOT repeated shell tail)
 - Check checkpoint → inspect_checkpoint (NOT python scripts)
-- Validate config → validate_config (before every launch)
 - Locate own source → shell(python -c "import flagscale_agent; print(flagscale_agent.__path__[0])")
 
 ## Tool Parameter Rules
