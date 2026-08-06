@@ -2416,7 +2416,15 @@ class WorkerAgent:
         # Execute normal tools
         if normal_calls:
             normal_tc_list = [tc for _, tc in normal_calls]
-            normal_results = self._tool_executor.execute_batch(normal_tc_list)
+            try:
+                normal_results = self._tool_executor.execute_batch(normal_tc_list)
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                normal_results = [
+                    f"Error executing tool: {e}\n\n[Tool: {tc['name']}]\n[Args: {tc.get('arguments', {})}]\n[Traceback]\n{tb}"
+                    for tc in normal_tc_list
+                ]
             for (orig_idx, _), result in zip(normal_calls, normal_results):
                 special_results[orig_idx] = result
 

@@ -260,7 +260,9 @@ class ToolExecutor:
             else:
                 result = agent.tool_registry.execute(tool_name, **arguments)
         except Exception as e:
-            result = f"ERROR: {e}"
+            import traceback
+            tb = traceback.format_exc()
+            result = f"Error executing tool: {e}\n\n[Tool: {tool_name}]\n[Args: {arguments}]\n[Traceback]\n{tb}"
         elapsed = time.time() - t0
 
         error = False
@@ -446,8 +448,7 @@ class ToolExecutor:
                     "Issue them sequentially in separate responses.\n"
                 )
 
-        for i in denied:
-            results[i] = "DENIED: User declined to execute this command."
+
         for i in dedup_indices:
             orig = seen_calls[(tool_calls[i]["name"], json.dumps(tool_calls[i].get("arguments", {}), sort_keys=True))]
             results[i] = f"[DEDUP: identical to call #{orig + 1} in this batch, skipped]"
@@ -474,9 +475,11 @@ class ToolExecutor:
                 else:
                     result = agent.tool_registry.execute(tool_name, **arguments)
             except Exception as e:
-                result = f"ERROR: {e}"
+                import traceback
+                tb = traceback.format_exc()
+                result = f"Error executing tool: {e}\n\n[Tool: {tool_name}]\n[Args: {arguments}]\n[Traceback]\n{tb}"
             elapsed = time.time() - t0
-            error = "ERROR" in result if result else False
+            error = "ERROR" in result or "Error executing tool" in result if result else False
             detail = ""
             if error and result:
                 raw = result.split('\n')[0].replace("ERROR:", "").strip()
