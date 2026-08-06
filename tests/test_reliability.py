@@ -23,7 +23,6 @@ import pytest
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
 from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
-from flagscale_agent.react.guard.budget import BudgetGuard
 from flagscale_agent.react.plan import TaskPlan, StepCheckpoint
 
 
@@ -260,74 +259,6 @@ class TestCircuitBreaker:
         result = guard.check_post(net_ctx)
         # Should not trip yet (only 2 consecutive)
         assert result is None or "TRIPPED" not in (result.message if result else "")
-
-
-# ── BudgetGuard Tests ───────────────────────────────────────────────────────
-
-
-class TestBudgetGuard:
-    def test_no_warning_under_80(self):
-        guard = BudgetGuard(max_tokens=1000, max_tool_calls=100)
-        guard.report_tokens(300, 100)  # 40%
-        ctx = _make_ctx()
-        result = guard.check_pre(ctx)
-        assert result is None
-
-    def test_warning_at_80_percent(self):
-        guard = BudgetGuard(max_tokens=1000, max_tool_calls=100)
-        guard.report_tokens(400, 400)  # 80%
-        ctx = _make_ctx()
-        result = guard.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
-        assert "80" in result.message or "Budget" in result.message
-
-    def test_warning_at_95_percent(self):
-        guard = BudgetGuard(max_tokens=1000, max_tool_calls=100)
-        guard.report_tokens(500, 450)  # 95%
-        ctx = _make_ctx()
-        # First call triggers 80% (since both thresholds crossed)
-        guard.check_pre(ctx)
-        # Second call triggers 95%
-        result = guard.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
-        assert "95" in result.message or "Wrap up" in result.message
-
-    def test_block_at_100_percent(self):
-        guard = BudgetGuard(max_tokens=1000, max_tool_calls=100)
-        guard.report_tokens(600, 500)  # 110% > 100%
-        ctx = _make_ctx()
-        result = guard.check_pre(ctx)
-        assert result is not None
-        assert result.action == "block"
-        assert "exhausted" in result.message.lower()
-
-    def test_tool_call_counting(self):
-        guard = BudgetGuard(max_tokens=10_000_000, max_tool_calls=3)
-        ctx = _make_ctx(tool_name="shell")
-        guard.check_post(ctx)
-        guard.check_post(ctx)
-        guard.check_post(ctx)
-        # Now at 100% tool calls
-        result = guard.check_pre(ctx)
-        assert result is not None
-        assert result.action == "block"
-
-    def test_tool_call_warning_independent_of_token_warning(self):
-        """Tool call warnings fire even if token budget is low (separate flags)."""
-        guard = BudgetGuard(max_tokens=10_000_000, max_tool_calls=10)
-        # Report low token usage — no token warning triggered
-        guard.report_tokens(100, 100)  # 0.002% tokens
-        # Add 8 tool calls to reach 80% tool calls
-        ctx = _make_ctx(tool_name="shell")
-        for _ in range(8):
-            guard.check_post(ctx)
-        # Should warn about tool calls at 80%
-        result = guard.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
-        assert "tool" in result.message.lower() or "Tool" in result.message
 
 
 # ── StepCheckpoint Tests ────────────────────────────────────────────────────

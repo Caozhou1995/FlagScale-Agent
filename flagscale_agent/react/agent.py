@@ -91,7 +91,6 @@ from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
-from flagscale_agent.react.guard.budget import BudgetGuard
 from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
 from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 from flagscale_agent.react.guard.output_quality import OutputQualityGuard
@@ -306,11 +305,6 @@ class WorkerAgent:
         guard_registry.register(ShellSafetyGuard())
 
         # Reliability guards (P7)
-        self._budget_guard = BudgetGuard(
-            max_tokens=self.config.budget_max_tokens,
-            max_tool_calls=self.config.budget_max_tool_calls,
-        )
-        guard_registry.register(self._budget_guard)
         guard_registry.register(CircuitBreakerGuard(
             trip_threshold=self.config.circuit_breaker_threshold,
             cooldown_iters=self.config.circuit_breaker_cooldown,
@@ -1976,7 +1970,6 @@ class WorkerAgent:
         self._interrupted = result.interrupted
         self._session_input_tokens += result.input_tokens
         self._session_output_tokens += result.output_tokens
-        self._budget_guard.report_tokens(result.input_tokens, result.output_tokens)
         self._turn_iteration_count = result.iterations
         display.turn_summary(self.turn_count, result.elapsed, result.input_tokens, result.output_tokens,
                              session_input_tokens=self._session_input_tokens,

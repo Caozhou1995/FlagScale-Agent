@@ -289,7 +289,6 @@ _INJECT_CATEGORY_PATTERNS = {
     "read_stall": re.compile(r"read.only|re.reading|gathering information|not acting", re.IGNORECASE),
     "loop": re.compile(r"loop|repeated|same tool|same call", re.IGNORECASE),
     "plan_needed": re.compile(r"plan|plan_create|organize", re.IGNORECASE),
-    "budget": re.compile(r"budget|token|exhausted", re.IGNORECASE),
 }
 
 # Category suppression: if a higher-priority category fires, suppress lower-priority ones.

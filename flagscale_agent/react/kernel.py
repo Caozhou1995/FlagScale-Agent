@@ -245,7 +245,7 @@ class AgentKernel:
                         self._signal_reminder_sent = False
                         result.stop_reason = "no_tool_calls"
                         break
-                    # Plan auto-continue — check token budget first
+                    # Plan auto-continue — check context pressure first
                     pressure = d.history.get_context_pressure() if hasattr(d.history, 'get_context_pressure') else 0
                     if pressure >= 0.85:
                         result.stop_reason = "context_pressure"
