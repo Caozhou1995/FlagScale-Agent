@@ -45,18 +45,15 @@ class ProgressGuard(Guard):
     def __init__(self):
         self._read_files: set = set()
         self._reread_count: int = 0
-        self._shared_state = None
         self._warned_this_turn: bool = False
 
     def set_shared_state(self, shared_state):
-        """Receive SharedState from GuardRegistry."""
-        self._shared_state = shared_state
+        """Legacy stub — SharedState removed."""
+        pass
 
     @property
     def _tolerance_multiplier(self) -> float:
         """Get read tolerance from TaskMode."""
-        if self._shared_state:
-            return self._shared_state.task_mode.read_tolerance
         return 1.0
 
     @property
@@ -83,19 +80,12 @@ class ProgressGuard(Guard):
             self._warned_this_turn = False
             return None
 
-        # v2: Check if LoopDetect or another guard already warned about reads this turn
-        if self._shared_state and self._shared_state.read_warning_issued_this_turn:
-            # Another guard already injected a read-stall warning; suppress ours.
-            return None
-
         # Track re-reads
         if ctx.tool_name == "read_file":
             path = ctx.tool_args.get("path", "")
             if path and path in self._read_files:
                 self._reread_count += 1
                 if self._reread_count >= self._reread_threshold:
-                    if self._shared_state:
-                        self._shared_state.issue_read_warning()
                     return GuardVerdict.inject(
                         f"[Progress] You've re-read '{path.split('/')[-1]}' "
                         f"{self._reread_count} times. You already have this content "
@@ -106,23 +96,16 @@ class ProgressGuard(Guard):
             else:
                 self._read_files.add(path)
 
-        # Use SharedState for centralized consecutive read count
+        # Count consecutive read-only calls from recent history
         consecutive_reads = 0
-        if self._shared_state:
-            consecutive_reads = self._shared_state.read_stats.consecutive_reads
-        else:
-            # Fallback: count from recent_tool_names
-            consecutive_reads = 0
-            for name in reversed(ctx.recent_tool_names):
-                if name in ("read_file", "shell"):
-                    consecutive_reads += 1
-                else:
-                    break
+        for name in reversed(ctx.recent_tool_names):
+            if name in ("read_file", "shell"):
+                consecutive_reads += 1
+            else:
+                break
 
         # Check thresholds
         if consecutive_reads >= self._block_threshold:
-            if self._shared_state:
-                self._shared_state.issue_read_warning()
             return GuardVerdict.inject(
                 f"[Progress] {consecutive_reads} consecutive read-only calls. "
                 f"You have enough information — produce output now.",
@@ -132,8 +115,6 @@ class ProgressGuard(Guard):
 
         if consecutive_reads >= self._warn_threshold and not self._warned_this_turn:
             self._warned_this_turn = True
-            if self._shared_state:
-                self._shared_state.issue_read_warning()
             return GuardVerdict.inject(
                 f"[Progress] {consecutive_reads}/{self._warn_threshold} "
                 f"consecutive read-only calls. Consider acting on what you've gathered.",

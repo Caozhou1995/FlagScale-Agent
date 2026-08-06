@@ -19,7 +19,7 @@ Guards fire at three points:
 - post: After tool execution (can inject messages)
 - strategic: At review points (can redirect plan)
 
-v2: Added SharedState for cross-guard communication and inject deduplication.
+v2: Guard lifecycle and inject deduplication.
 """
 
 from __future__ import annotations
@@ -261,10 +261,6 @@ class Guard(abc.ABC):
         """
         pass
 
-    def set_shared_state(self, shared_state):
-        """Optional: receive SharedState from GuardRegistry. Override to use."""
-        pass
-
     # --- v3: Lifecycle helpers (called by GuardRegistry) ---
 
     def _record_trigger(self, category: str = ""):
@@ -364,20 +360,9 @@ class GuardRegistry:
 
     def __init__(self):
         self._guards: list[Guard] = []
-        # v2: SharedState for cross-guard communication
-        from flagscale_agent.react.guard.shared_state import SharedState
-        self._shared_state = SharedState()
-
     def register(self, guard: Guard):
         self._guards.append(guard)
         self._guards.sort(key=lambda g: g.priority)
-        # Inject shared state into guards that support it
-        guard.set_shared_state(self._shared_state)
-
-    @property
-    def shared_state(self):
-        """Access the shared state for external use (e.g., agent setting TaskMode)."""
-        return self._shared_state
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         """Run all guards' pre-checks with inject deduplication."""
@@ -423,7 +408,6 @@ class GuardRegistry:
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
                     # Override accepted — skip this block, log it
-                    self._shared_state.record_override(guard.name, ctx.override_reason)
                     display.guard_overridden(guard.name, ctx.override_reason)
                     continue
                 # Suppress non-critical blocks when context is full and un-evictable
@@ -486,7 +470,6 @@ class GuardRegistry:
                     # Check if LLM is overriding this escalated block
                     if guard.overridable and ctx.override_reason:
                         if guard.accept_override(ctx.override_reason, ctx):
-                            self._shared_state.record_override(guard.name, ctx.override_reason)
                             display.guard_overridden(guard.name, ctx.override_reason)
                             continue
                     blocking_verdicts.append(block_verdict)
@@ -504,11 +487,6 @@ class GuardRegistry:
                 # Record trigger to track escalation progress
                 guard._record_trigger(escalation_key)
                 fired_guards.add(guard.name)
-
-                # Track in SharedState for effectiveness monitoring
-                self._shared_state.inject_tracker.record_inject(
-                    guard.name, category or verdict.reason, ctx.turn_count
-                )
 
         # v6: If there are blocking verdicts, merge into one multi-block message
         if blocking_verdicts:
@@ -557,20 +535,10 @@ class GuardRegistry:
         first_hard_guard = None
         first_reason = ""
 
-        # v2: Update shared state with tool call info
-        from flagscale_agent.react.guard.utils import READ_ONLY_TOOLS
-        self._shared_state.record_tool_call(
-            ctx.tool_name, ctx.tool_args,
-            is_read_only=(ctx.tool_name in READ_ONLY_TOOLS)
-        )
-
         # v4: Universal effectiveness check — ask each guard if its inject worked
         for guard in self._guards:
             result = guard.was_inject_effective(ctx)
             if result is not None:
-                self._shared_state.inject_tracker.mark_last_effective(
-                    guard.name, result
-                )
                 # v5: If effective, reset escalation counter — agent responded
                 if result is True:
                     guard._inject_counts.clear()
@@ -590,7 +558,6 @@ class GuardRegistry:
                     and ctx.override_reason
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
-                    self._shared_state.record_override(guard.name, ctx.override_reason)
                     display.guard_overridden(guard.name, ctx.override_reason)
                     continue
                 # Suppress non-critical blocks when context is full and un-evictable
@@ -651,10 +618,6 @@ class GuardRegistry:
 
                 guard._record_trigger(escalation_key)
 
-                self._shared_state.inject_tracker.record_inject(
-                    guard.name, category or verdict.reason, ctx.turn_count
-                )
-
         if first_hard_verdict:
             # Don't prepend unrelated inject messages — block message is sufficient
             first_hard_verdict.message = _maybe_add_override_hint(
@@ -685,7 +648,6 @@ class GuardRegistry:
         Called at the start of each iteration (LLM+tool loop) within a turn.
         v3: Satisfaction and decay are handled in tick_guard_lifecycle(), not here.
         """
-        self._shared_state.new_iteration()
         for guard in self._guards:
             # Call reset_turn — subclasses override this name
             guard.reset_turn()
@@ -699,7 +661,6 @@ class GuardRegistry:
         for guard in self._guards:
             guard.reset_new_turn()
         # Also reset shared state per-turn tracking
-        self._shared_state.inject_tracker.new_turn()
 
     # Backward compat alias
     reset_turn = reset_iteration

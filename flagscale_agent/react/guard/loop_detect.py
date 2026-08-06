@@ -116,13 +116,13 @@ class LoopDetectGuard(Guard):
 
     def set_shared_state(self, shared_state):
         """Called by GuardRegistry to inject shared state."""
-        self._shared_state = shared_state
+        pass  # shared_state removed
 
     @property
     def _task_mode_multiplier(self) -> float:
         """Get loop sensitivity multiplier from TaskMode."""
         if self._shared_state:
-            return self._shared_state.task_mode.loop_sensitivity
+            pass
         return 1.0
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
@@ -201,17 +201,13 @@ class LoopDetectGuard(Guard):
                 if arg_diversity > 0.50:
                     pass  # Not a loop — different targets each time
                 else:
-                    # Check SharedState: has another guard already warned about reads?
-                    if self._shared_state and not self._shared_state.issue_read_warning():
-                        pass  # Suppress — another guard already warned
-                    else:
-                        return GuardVerdict.inject(
-                            f"[LoopDetect] '{ctx.tool_name}' called {same_tool_count}/{self._SAME_TOOL_WINDOW} "
-                            f"times with low argument diversity ({arg_diversity:.0%}). "
-                            f"The tool is working fine — your calls succeeded. "
-                            f"You have enough information. Act on it instead of reading more.",
-                            reason=f"same_tool_dominance: {ctx.tool_name}",
-                        )
+                    return GuardVerdict.inject(
+                        f"[LoopDetect] '{ctx.tool_name}' called {same_tool_count}/{self._SAME_TOOL_WINDOW} "
+                        f"times with low argument diversity ({arg_diversity:.0%}). "
+                        f"The tool is working fine — your calls succeeded. "
+                        f"You have enough information. Act on it instead of reading more.",
+                        reason=f"same_tool_dominance: {ctx.tool_name}",
+                    )
 
         # ── Detection 2: Semantic loop (read-only dominance) ──
         if len(self._tool_name_history) >= self._SEMANTIC_WINDOW:
@@ -245,53 +241,43 @@ class LoopDetectGuard(Guard):
 
             ratio = effective_read_count / len(window)
             if ratio >= adjusted_ratio and not has_productive:
-                # Diversity check using SharedState if available
-                if self._shared_state:
-                    diversity = self._shared_state.read_stats.diversity
-                else:
-                    unique_entries = set(recent_entries)
-                    diversity = len(unique_entries) / len(recent_entries) if recent_entries else 1.0
+                # Diversity check
+                unique_entries = set(recent_entries)
+                diversity = len(unique_entries) / len(recent_entries) if recent_entries else 1.0
 
                 # High diversity = legitimate exploration
-                # Also exempt if continuation-heavy (reading long files sequentially)
-                is_continuation = (
-                    self._shared_state and self._shared_state.read_stats.is_continuation_heavy
-                )
+                is_continuation = False
                 if diversity > 0.60 or is_continuation:
                     pass  # Not a loop
                 else:
                     # Cooldown
                     calls_since_warn = self._total_tool_calls - self._semantic_warn_at
                     if not self._semantic_warned or calls_since_warn >= self._SEMANTIC_COOLDOWN:
-                        # Check SharedState: suppress if another guard already warned
-                        if self._shared_state and not self._shared_state.issue_read_warning():
-                            pass  # Suppress
-                        else:
-                            self._semantic_warned = True
-                            self._semantic_warn_at = self._total_tool_calls
-                            self._semantic_warn_count += 1
+                        self._semantic_warned = True
+                        self._semantic_warn_at = self._total_tool_calls
+                        self._semantic_warn_count += 1
 
-                            if self._semantic_warn_count >= 3:
-                                # Hard block — persistent read-only loops
-                                return GuardVerdict.block(
-                                    f"[LoopDetect] BLOCKED: {effective_read_count}/{len(window)} calls are read-only "
-                                    f"after {self._semantic_warn_count} warnings. "
-                                    "Produce output with the information you have. This call is blocked.",
-                                    reason=f"semantic_read_blocked: {effective_read_count}/{len(window)}",
-                                )
+                        if self._semantic_warn_count >= 3:
+                            # Hard block — persistent read-only loops
+                            return GuardVerdict.block(
+                                f"[LoopDetect] BLOCKED: {effective_read_count}/{len(window)} calls are read-only "
+                                f"after {self._semantic_warn_count} warnings. "
+                                "Produce output with the information you have. This call is blocked.",
+                                reason=f"semantic_read_blocked: {effective_read_count}/{len(window)}",
+                            )
 
-                            if self._semantic_warn_count >= 2:
-                                return GuardVerdict.escalate(
-                                    f"[LoopDetect] You've been reading without acting for "
-                                    f"{effective_read_count}/{len(window)} calls (diversity={diversity:.2f}). "
-                                    "State your findings so far and what's blocking you from acting.",
-                                    reason=f"semantic_read_persistent: {effective_read_count}/{len(window)}",
-                                )
+                        if self._semantic_warn_count >= 2:
+                            return GuardVerdict.escalate(
+                                f"[LoopDetect] You've been reading without acting for "
+                                f"{effective_read_count}/{len(window)} calls (diversity={diversity:.2f}). "
+                                "State your findings so far and what's blocking you from acting.",
+                                reason=f"semantic_read_persistent: {effective_read_count}/{len(window)}",
+                            )
 
-                            return GuardVerdict.inject(
-                                f"[LoopDetect] {effective_read_count}/{len(window)} recent calls are read-only "
-                                f"(diversity={diversity:.2f}). "
-                                "All reads succeeded — you have the data. "
+                        return GuardVerdict.inject(
+                            f"[LoopDetect] {effective_read_count}/{len(window)} recent calls are read-only "
+                            f"(diversity={diversity:.2f}). "
+                            "All reads succeeded — you have the data. "
                                 "Time to act: write code, edit a file, or produce output. "
                                 "Do NOT re-read the same information with a different tool.",
                                 reason=f"semantic_read_only: {effective_read_count}/{len(window)}",

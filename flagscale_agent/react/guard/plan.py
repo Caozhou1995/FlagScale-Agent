@@ -51,18 +51,15 @@ class PlanGuard(Guard):
         self._pre_plan_tool_calls: int = 0
         self._consecutive_reads: int = 0
         self._block_count: int = 0  # track repeated blocks for escalation
-        self._shared_state = None
+
 
     def set_shared_state(self, shared_state):
-        """Receive SharedState from GuardRegistry."""
-        self._shared_state = shared_state
+        """Legacy stub — SharedState removed."""
+        pass
 
     @property
     def _threshold_multiplier(self) -> float:
         """Get threshold multiplier from TaskMode. Higher = more tolerant."""
-        if self._shared_state:
-            # Normalize: implementation=1.0, analysis=2.08, porting=1.67, etc.
-            return self._shared_state.task_mode.plan_required_threshold / 12.0
         return 1.0
 
     @property
@@ -144,9 +141,6 @@ class PlanGuard(Guard):
             )
 
         if self._consecutive_reads >= self._plan_gate_independent_warn:
-            # v2: Use SharedState to suppress if another guard already warned about reads
-            if self._shared_state and not self._shared_state.issue_read_warning():
-                return None  # Another guard already warned this turn
             return GuardVerdict.inject(
                 f"\n[PLAN REMINDER] You've made {self._consecutive_reads} "
                 f"exploratory calls without a plan. Consider calling plan_create "
