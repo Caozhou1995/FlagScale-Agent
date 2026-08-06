@@ -91,6 +91,11 @@ from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
+from flagscale_agent.react.guard.budget import BudgetGuard
+from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
+from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
+from flagscale_agent.react.guard.output_quality import OutputQualityGuard
+from flagscale_agent.react.guard.env_compat import EnvCompatGuard
 from flagscale_agent.react.constraint.cache import ConstraintCache
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
