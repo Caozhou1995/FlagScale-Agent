@@ -103,10 +103,6 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         return url
     if tool_name == "load_skill":
         return arguments.get("name", "")
-    if tool_name == "workspace_experiment":
-        action = arguments.get("action", "")
-        name = arguments.get("name", "")
-        return f"{action} {name}" if name else action
     if tool_name == "memory_write":
         return arguments.get("key", "")
     if tool_name == "plan_create":

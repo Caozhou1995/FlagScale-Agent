@@ -21,10 +21,9 @@ from flagscale_agent.react.guard.safety import SafetyGuard
 from flagscale_agent.react.guard.progress import ProgressGuard
 from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
+from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.plan import PlanGuard
-from flagscale_agent.react.guard.training_runtime import TrainingRuntimeGuard
 from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
-from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
 from flagscale_agent.react.state_machine import AgentState
 from flagscale_agent.react.judge import Judge, JudgeBudget
 
@@ -297,61 +296,6 @@ class TestPlanGuard:
         assert result.action == "inject_msg"
 
 
-# ── TrainingRuntimeGuard ──────────────────────────────────────────────────
-
-
-class TestTrainingRuntimeGuard:
-    """v6: Simplified — monitor gate only, no heartbeat."""
-
-    def test_detects_training_launch(self):
-        g = TrainingRuntimeGuard()
-        ctx = _ctx("shell", {"command": "flagscale train qwen3_0_6b"})
-        g.check_post(ctx)
-        assert g._awaiting_monitor is True
-
-    def test_monitor_gate_injects_after_launch(self):
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        ctx = _ctx("shell", {"command": "pip install pkg"})
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
-
-    def test_monitor_clears_gate(self):
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        ctx = _ctx("flagscale_train_monitor", {"output_dir": "/tmp/train"})
-        result = g.check_pre(ctx)
-        assert result is None
-        assert g._awaiting_monitor is False
-
-    def test_read_only_diagnostic_allowed(self):
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        ctx = _ctx("shell", {"command": "nvidia-smi"})
-        result = g.check_pre(ctx)
-        assert result is None
-
-    def test_recording_tools_allowed(self):
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        ctx = _ctx("plan_update", {"action": "step_done", "step_id": 1})
-        result = g.check_pre(ctx)
-        assert result is None
-
-    def test_reset_new_turn_noop(self):
-        """v6: reset_new_turn does nothing (no heartbeat counters)."""
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        g.reset_new_turn()
-        assert g._awaiting_monitor is True  # State persists
-
-    def test_reset_state_clears(self):
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        g.reset_state()
-        assert g._awaiting_monitor is False
-
 
 # ── GuardRegistry ─────────────────────────────────────────────────────────
 
@@ -471,122 +415,33 @@ class TestIsFlagscaleLaunchCommand:
         assert _is_flagscale_launch_command("torchrun --nproc_per_node=8 train.py") is False
 
 
-# ── TrainingAttemptGuard ──────────────────────────────────────────────────
 
 
-class TestTrainingAttemptGuard:
-    """Tests for 2-Strike periodic block logic."""
 
-    def _make_guard(self):
-        return TrainingAttemptGuard()
+# ── TrainingMonitorGuard ──────────────────────────────────────────────────
 
-    def _launch_ctx(self):
-        return _ctx("shell", {"command": "flagscale train qwen3_0_6b"})
+class TestTrainingMonitorGuard:
 
-    def _experiment_ctx(self, action, **kwargs):
-        args = {"action": action, **kwargs}
-        return _ctx("workspace_experiment", args)
+    def test_no_launch_no_block(self):
+        g = TrainingMonitorGuard()
+        ctx = _ctx("shell", {"command": "ls"})
+        assert g.check_pre(ctx) is None
 
-    def test_no_block_without_experiment(self):
-        g = self._make_guard()
-        result = g.check_pre(self._launch_ctx())
-        assert result is None
+    def test_launch_detected_blocks_non_monitor(self):
+        g = TrainingMonitorGuard()
+        launch_ctx = _ctx("shell", {"command": "python3 run.py --config-path=conf --config-name=config action=run"})
+        g.check_post(launch_ctx)
+        next_ctx = _ctx("shell", {"command": "ls"})
+        verdict = g.check_pre(next_ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
 
-    def test_no_block_on_first_attempt(self):
-        g = self._make_guard()
-        # Create experiment
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        # Add first attempt
-        g.check_post(self._experiment_ctx("add_attempt"))
-        # Launch should pass (count=1, 1%2!=0)
-        result = g.check_pre(self._launch_ctx())
-        assert result is None
-
-    def test_blocks_on_second_attempt(self):
-        g = self._make_guard()
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        g.check_post(self._experiment_ctx("add_attempt"))  # count=1
-        g.check_post(self._experiment_ctx("add_attempt"))  # count=2
-        # Launch should be blocked (2%2==0)
-        result = g.check_pre(self._launch_ctx())
-        assert result is not None
-        assert result.action == "block"
-        assert "2strike" in result.reason
-
-    def test_no_block_on_third_attempt(self):
-        g = self._make_guard()
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        g.check_post(self._experiment_ctx("add_attempt"))  # count=1
-        g.check_post(self._experiment_ctx("add_attempt"))  # count=2
-        g.check_post(self._experiment_ctx("add_attempt"))  # count=3
-        # Launch should pass (3%2!=0)
-        result = g.check_pre(self._launch_ctx())
-        assert result is None
-
-    def test_blocks_on_fourth_attempt(self):
-        g = self._make_guard()
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        for _ in range(4):
-            g.check_post(self._experiment_ctx("add_attempt"))
-        # count=4, 4%2==0 → block
-        result = g.check_pre(self._launch_ctx())
-        assert result is not None
-        assert result.action == "block"
-
-    def test_finalize_resets(self):
-        g = self._make_guard()
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        g.check_post(self._experiment_ctx("add_attempt"))
-        g.check_post(self._experiment_ctx("add_attempt"))
-        # Finalize resets
-        g.check_post(self._experiment_ctx("finalize"))
-        # Launch should pass
-        result = g.check_pre(self._launch_ctx())
-        assert result is None
-        assert g._attempt_count == 0
-
-    def test_override_accepted_with_long_reason(self):
-        g = self._make_guard()
-        ctx = self._launch_ctx()
-        reason = "OOM 根因是 batch_size=64 过大，GPU 显存不够。修复：改为 batch_size=32"
-        assert g.accept_override(reason, ctx) is True
-
-    def test_override_rejected_short(self):
-        g = self._make_guard()
-        ctx = self._launch_ctx()
-        assert g.accept_override("try again", ctx) is False
-
-    def test_override_rejected_lazy(self):
-        g = self._make_guard()
-        ctx = self._launch_ctx()
-        assert g.accept_override("just do it", ctx) is False
-
-    def test_inject_warning_at_strike_point(self):
-        g = self._make_guard()
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        g.check_post(self._experiment_ctx("add_attempt"))  # count=1, no warning
-        result = g.check_post(self._experiment_ctx("add_attempt"))  # count=2, warning
-        assert result is not None
-        assert result.action == "inject_msg"
-        assert "2-Strike" in result.message
-
-    def test_only_blocks_launch_commands(self):
-        """Non-launch shell commands should not be blocked."""
-        g = self._make_guard()
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        g.check_post(self._experiment_ctx("add_attempt"))
-        g.check_post(self._experiment_ctx("add_attempt"))
-        # ls command should pass even at strike point
-        ctx = _ctx("shell", {"command": "ls -la"})
-        result = g.check_pre(ctx)
-        assert result is None
-
-    def test_non_shell_tools_not_blocked(self):
-        """read_file, write_file etc should never be blocked."""
-        g = self._make_guard()
-        g.check_post(self._experiment_ctx("create", name="exp1"))
-        g.check_post(self._experiment_ctx("add_attempt"))
-        g.check_post(self._experiment_ctx("add_attempt"))
-        ctx = _ctx("read_file", {"path": "/tmp/foo.py"})
-        result = g.check_pre(ctx)
-        assert result is None
+    def test_launch_then_monitor_clears(self):
+        g = TrainingMonitorGuard()
+        launch_ctx = _ctx("shell", {"command": "python3 run.py --config-path=conf --config-name=config action=run"})
+        g.check_post(launch_ctx)
+        monitor_ctx = _ctx("flagscale_train_monitor", {"output_dir": "/tmp"})
+        verdict = g.check_pre(monitor_ctx)
+        assert verdict is None
+        next_ctx = _ctx("shell", {"command": "ls"})
+        assert g.check_pre(next_ctx) is None

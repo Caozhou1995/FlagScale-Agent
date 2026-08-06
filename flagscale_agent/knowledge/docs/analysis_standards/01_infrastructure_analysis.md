@@ -201,7 +201,7 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 
 ## 六、示例产出指标
 
-基于知识库已有的 **83 篇文档**实践数据（覆盖 17 个知识组，总计 ~32,687 行）：
+基于知识库已有的 **83 篇文档**实践数据（覆盖 17 个知识组，总计 ~32,891 行）：
 
 ### know-megatron-model（7章，平均 ~561 行）
 
@@ -302,16 +302,16 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 | 04_ncu_kernel_profiling | Chapter 04: Nsight Compute (NCU) Kernel级Profiling 深度分析 | 269 |
 | 05_megatron_profiler_integration | Chapter 05: Megatron-LM-FL Profiler集成与分析 深度分析 | 242 |
 
-### know-flagscale（6章，平均 ~184 行）
+### know-flagscale（6章，平均 ~216 行）
 
 | 章节 | 主题 | 行数 |
 |------|------|------|
-| 01_repo_structure | FlagScale Repo 结构总览 | 180 |
-| 02_config_system | FlagScale Config 体系 | 219 |
-| 03_runner_execution | FlagScale Runner 执行链 | 151 |
-| 04_train_config | FlagScale 训练 Config 字段全表 | 208 |
-| 05_train_runner | FlagScale 训练 Runner 详解 | 165 |
-| 06_examples_convention | FlagScale Examples 目录规范 | 181 |
+| 01_repo_structure | FlagScale Repo 结构与架构 深度源码分析 | 212 |
+| 02_config_system | FlagScale Hydra 两级 Config 体系 深度源码分析 | 259 |
+| 03_runner_execution | FlagScale Runner 执行链路 深度源码分析 | 216 |
+| 04_train_config | FlagScale 训练 Config 字段全表 深度源码分析 | 202 |
+| 05_train_runner | FlagScale 训练 Runner 详解 深度源码分析 | 265 |
+| 06_examples_convention | FlagScale Examples 目录规范 深度源码分析 | 143 |
 
 ### 其他知识组汇总
 
@@ -323,11 +323,11 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 | Megatron训练循环 | 4 | ~488 | 379-598 |
 | NCCL运行时 | 4 | ~452 | 430-477 |
 | TransformerEngine FP8量化 | 3 | ~441 | 316-514 |
-| 分析标准方法论 | 4 | ~223 | 132-322 |
+| 分析标准方法论 | 4 | ~226 | 132-333 |
 
 ### 总结
 
-- 全库 83 篇文档，总计 **~32,687 行**
+- 全库 83 篇文档，总计 **~32,891 行**
 - 核心深度分析章节：平均 **512 行**
-- 专题分析：平均 **289 行**
+- 专题分析：平均 **293 行**
 - 推荐标准：核心模块 ≥ 450 行，专题/工具类 ≥ 250 行

@@ -234,7 +234,7 @@ class LoopDetectGuard(Guard):
             # Check for productive tools
             has_productive = any(
                 t in ("write_file", "edit_file", "plan_create",
-                      "plan_update", "workspace_experiment", "memory_write")
+                      "plan_update", "memory_write")
                 for t in window
             )
             if productive_shells_in_window > 0:

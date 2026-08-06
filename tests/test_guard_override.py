@@ -27,7 +27,6 @@ from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
 from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
-from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
 from flagscale_agent.react.guard.output_quality import OutputQualityGuard
 from flagscale_agent.react.state_machine import AgentState
 
@@ -67,10 +66,6 @@ class TestAllBlockingGuardsOverridable:
 
     def test_circuit_breaker_overridable(self):
         g = CircuitBreakerGuard()
-        assert g.overridable is True
-
-    def test_training_attempt_overridable(self):
-        g = TrainingAttemptGuard()
         assert g.overridable is True
 
     def test_output_quality_overridable(self):
@@ -117,11 +112,6 @@ class TestAcceptOverrideValid:
         assert g._circuit_state["general"] == g.HALF_OPEN
         assert g._open_block_count["general"] == 0
 
-    def test_training_attempt_accepts_reason(self):
-        g = TrainingAttemptGuard()
-        ctx = _ctx()
-        assert g.accept_override("Identified root cause: vocab_size mismatch in config", ctx) is True
-
     def test_output_quality_accepts_reason(self):
         g = OutputQualityGuard()
         g._consecutive_silent_failures = 5
@@ -161,10 +151,6 @@ class TestAcceptOverrideRejectsShort:
     def test_circuit_breaker_rejects_short(self):
         g = CircuitBreakerGuard()
         assert g.accept_override("retry please", _ctx()) is False
-
-    def test_training_attempt_rejects_short(self):
-        g = TrainingAttemptGuard()
-        assert g.accept_override("try again", _ctx()) is False
 
     def test_output_quality_rejects_empty(self):
         g = OutputQualityGuard()

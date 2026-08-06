@@ -91,7 +91,7 @@ class PlanGuard(Guard):
             return None
 
         # Plan-related tools are always allowed
-        if ctx.tool_name in ("plan_create", "memory_write", "workspace_experiment"):
+        if ctx.tool_name in ("plan_create", "memory_write"):
             return None
 
         # If a plan already exists, skip all plan-gate logic — the agent is

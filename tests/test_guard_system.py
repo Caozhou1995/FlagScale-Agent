@@ -17,7 +17,6 @@ import pytest
 from unittest.mock import MagicMock
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
-from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
 from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
@@ -36,60 +35,6 @@ def make_ctx(tool_name="", tool_args=None, tool_result=""):
     ctx.experiment_diff_fn = None
     return ctx
 
-
-class TestTrainingAttemptGuard:
-    """Test the 2-Strike rule — blocks after every 2 attempts without finalize."""
-
-    def test_initial_state_no_block(self):
-        guard = TrainingAttemptGuard()
-        ctx = make_ctx("shell", {"command": "python run.py --config-path conf --config-name t action=run"})
-        result = guard.check_pre(ctx)
-        assert result is None  # No block without experiment
-
-    def test_two_attempts_trigger_block(self):
-        guard = TrainingAttemptGuard()
-        # Create experiment
-        ctx_create = make_ctx("workspace_experiment", {"action": "create", "name": "test_exp"})
-        guard.check_post(ctx_create)
-        assert guard._current_experiment == "test_exp"
-
-        # Add 2 attempts
-        ctx_add = make_ctx("workspace_experiment", {"action": "add_attempt"})
-        guard.check_post(ctx_add)
-        assert guard._attempt_count == 1
-        result = guard.check_post(ctx_add)
-        assert guard._attempt_count == 2
-        # Warning inject at strike point
-        assert result is not None
-        assert result.action == "inject_msg"
-
-    def test_blocked_prevents_launch(self):
-        guard = TrainingAttemptGuard()
-        guard._current_experiment = "test_exp"
-        guard._attempt_count = 2  # At strike point
-        ctx = make_ctx("shell", {"command": "flagscale train qwen3"})
-        result = guard.check_pre(ctx)
-        assert result is not None
-        assert result.action == "block"
-
-    def test_finalize_resets_counter(self):
-        guard = TrainingAttemptGuard()
-        guard._current_experiment = "test_exp"
-        guard._attempt_count = 2
-
-        ctx = make_ctx("workspace_experiment", {"action": "finalize"})
-        guard.check_post(ctx)
-        assert guard._current_experiment == ""
-        assert guard._attempt_count == 0
-
-    def test_non_launch_not_blocked(self):
-        guard = TrainingAttemptGuard()
-        guard._current_experiment = "test_exp"
-        guard._attempt_count = 2
-        # Non-launch commands should pass
-        ctx = make_ctx("shell", {"command": "grep error stderr.log"})
-        result = guard.check_pre(ctx)
-        assert result is None
 
 
 class TestDebugDisciplineGuard:

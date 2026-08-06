@@ -27,7 +27,7 @@ READ_ONLY_TOOLS = {
 CORE_TOOLS = {
     "read_file", "write_file", "edit_file", "shell",
     "load_skill", "load_knowledge", "web_fetch", "memory_write", "memory_read",
-    "memory_list", "flagscale_train_monitor", "workspace_experiment",
+    "memory_list", "flagscale_train_monitor",
     "plan_create", "plan_update", "plan_status",
     "evict", "evict_list", "recall",
 }
@@ -35,14 +35,14 @@ CORE_TOOLS = {
 PHASE_TOOL_SETS = {
     "idle": {
         "read_file", "shell", "load_skill", "load_knowledge", "memory_read", "memory_list",
-        "web_fetch", "workspace_experiment", "flagscale_train_monitor",
+        "web_fetch", "flagscale_train_monitor",
         "plan_create", "plan_status", "memory_write", "write_file",
         "edit_file", "flagscale_train_monitor",
         "evict", "recall",
     },
     "analysis": {
         "read_file", "shell", "memory_read", "memory_list",
-        "web_fetch", "load_skill", "load_knowledge", "workspace_experiment",
+        "web_fetch", "load_skill", "load_knowledge",
         "flagscale_train_monitor", "memory_write",
         "plan_create", "plan_update", "plan_status",
         "write_file", "edit_file", "inspect_checkpoint",
@@ -51,7 +51,7 @@ PHASE_TOOL_SETS = {
     "implementation": {
         "read_file", "write_file", "edit_file", "shell",
         "load_skill", "load_knowledge", "memory_write", "memory_read",
-        "plan_update", "plan_status", "workspace_experiment",
+        "plan_update", "plan_status",
         "flagscale_train_monitor",
         "inspect_checkpoint",
         "evict", "recall",
@@ -59,7 +59,7 @@ PHASE_TOOL_SETS = {
     "verification": {
         "read_file", "shell", "write_file", "edit_file",
         "flagscale_train_monitor",
-        "memory_write", "memory_read", "workspace_experiment",
+        "memory_write", "memory_read",
         "plan_update", "plan_status", "load_skill", "load_knowledge",
         "inspect_checkpoint",
         "evict", "recall",

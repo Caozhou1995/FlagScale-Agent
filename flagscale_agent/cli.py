@@ -82,7 +82,6 @@ def main(
         skill_manager=agent_instance.skill_manager,
         session_memory=agent_instance.memory,
         task_plan=agent_instance.task_plan,
-        experiment_manager=agent_instance._experiment_manager,
         config=cfg,
     )
     agent_instance._orchestrator = orchestrator

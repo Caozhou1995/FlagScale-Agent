@@ -59,7 +59,6 @@ class MemoryDisciplineGuard(Guard):
     _MEMORY_TOOLS = frozenset((
         "memory_write", "memory_read", "memory_list",
         "plan_status", "plan_create", "plan_update",
-        "workspace_experiment",
     ))
 
     _MEMORY_READ_TOOLS = frozenset(("memory_read", "memory_list"))

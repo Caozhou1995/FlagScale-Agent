@@ -96,7 +96,7 @@ class TestPhaseDetection:
         agent = self._make_agent_stub()
         reg = ToolRegistry()
         for name in ["shell", "read_file", "flagscale_train_monitor", "write_file", "plan_create",
-                     "workspace_experiment"]:
+]:
             reg.register(DummyTool(name))
         agent.tool_registry = reg
         agent.provider = MagicMock()

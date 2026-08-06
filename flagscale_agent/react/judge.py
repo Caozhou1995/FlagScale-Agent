@@ -323,7 +323,7 @@ Identify issues and provide SHORT, actionable annotations. Consider:
 - Download failures: suggest resume with wget -c or curl -C -
 - PyTorch/CUDA incompatibility: suggest version check commands
 - Inefficient patterns (sleep+tail for monitoring): suggest flagscale_train_monitor or timeout+tail -f
-- Log searching with find/ls -R/ls -lt: suggest flagscale_train_monitor tool or workspace_experiment list
+- Log searching with find/ls -R/ls -lt: suggest flagscale_train_monitor tool
 - Training launch (flagscale/torchrun/deepspeed): remind to verify GPU utilization and logs
 - Package install success (pip/conda): remind to verify runtime compatibility
 - pip upgraded/downgraded a critical package (torch, numpy, etc.): WARN that this may break CUDA compatibility
@@ -336,7 +336,6 @@ Identify issues and provide SHORT, actionable annotations. Consider:
 - cp -r from another environment's site-packages: WARN: never copy packages between environments, use pip install
 - Checkpoint conversion output showing 'missed' or 'skipped' or 'unexpected' keys: WARN: audit the FULL list
 - Checkpoint saved to disk without a reload verification: WARN: verify saved checkpoint
-- Training log/output showing crash, error, or exitcode!=0: WARN: update the experiment via workspace_experiment
 - Training log showing successful completion: remind to update experiment entry with final metrics
 
 Reply with ONLY a JSON object:

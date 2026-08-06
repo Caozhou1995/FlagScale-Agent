@@ -8,7 +8,9 @@
 
 ## 2. 输出目录结构
 
-Runner 自动在 `experiment.exp_dir` 下构建以下目录树：
+Runner 自动在 `experiment.exp_dir` 下构建以下目录树。目录结构由两层协作生成：
+1. **FlagScale Runner** 构建到 `{timestamp}` 层并传给 torchrun 的 `--log-dir`
+2. **torchrun (Elastic Launch)** 在其下创建 `{rdzv_id}/attempt_{N}/{local_rank}/` 结构
 
 ```
 {exp_dir}/                                    ← experiment.exp_dir
@@ -16,22 +18,31 @@ Runner 自动在 `experiment.exp_dir` 下构建以下目录树：
 │   ├── iter_0001000/
 │   └── iter_0005000/
 ├── logs/                                     ← system.logging.log_dir
-│   ├── host_0_10.0.0.1.output                ← 主进程 stdout/stderr 汇总
+│   ├── host_0_10.0.0.1.output                ← 主进程 stdout/stderr 汇总（脚本重定向）
 │   ├── host_1_10.0.0.2.output                ← 第二节点汇总
 │   ├── details/                              ← system.logging.details_dir
-│   │   ├── host_0_10.0.0.1/                  ← torchrun --log-dir 指向此处
-│   │   │   └── 20250115_143022.123456/       ← 时间戳目录（每次启动唯一）
-│   │   │       ├── 0/                        ← local_rank 0
-│   │   │       │   ├── stdout.log
-│   │   │       │   └── stderr.log
-│   │   │       ├── 1/                        ← local_rank 1
-│   │   │       │   ├── stdout.log
-│   │   │       │   └── stderr.log
-│   │   │       └── ...                       ← 每 GPU 一个子目录
+│   │   ├── host_0_10.0.0.1/                  ← FlagScale 按 node_rank + IP 创建
+│   │   │   └── 20250115_143022.123456/       ← FlagScale 按时间戳创建（每次 launch 唯一）
+│   │   │       └── default/                  ← torchrun 按 rdzv_id 创建（默认 "default"）
+│   │   │           ├── attempt_0/            ← torchrun 容错：第一次启动
+│   │   │           │   ├── 0/                ← local_rank 0
+│   │   │           │   │   ├── stdout.log
+│   │   │           │   │   ├── stderr.log
+│   │   │           │   │   └── error.json
+│   │   │           │   ├── 1/                ← local_rank 1
+│   │   │           │   │   ├── stdout.log
+│   │   │           │   │   ├── stderr.log
+│   │   │           │   │   └── error.json
+│   │   │           │   └── .../              ← 每 GPU 一个子目录
+│   │   │           ├── attempt_1/            ← torchrun 容错：第一次自动重启
+│   │   │           │   └── .../
+│   │   │           └── attempt_2/            ← torchrun 容错：第二次自动重启
+│   │   │               └── .../
 │   │   └── host_1_10.0.0.2/
 │   │       └── 20250115_143022.789012/
-│   │           ├── 0/
-│   │           └── ...
+│   │           └── default/
+│   │               └── attempt_0/
+│   │                   └── .../
 │   ├── scripts/                              ← system.logging.scripts_dir
 │   │   ├── host_0_10.0.0.1_run.sh            ← 生成的启动脚本
 │   │   ├── host_0_10.0.0.1_stop.sh           ← 生成的停止脚本
@@ -48,9 +59,17 @@ Runner 自动在 `experiment.exp_dir` 下构建以下目录树：
 **关键细节**：
 - `host_{node_rank}_{ip}` 命名模式在有共享 FS 时使用（`no_shared_fs=false`）
 - 无共享 FS 时统一用 `host` 目录名（各节点本地存储）
-- `details/` 下的时间戳目录由 `datetime.now().strftime("%Y%m%d_%H%M%S.%f")` 生成
+- **时间戳层**（`20250115_143022.123456`）由 FlagScale Runner 生成，每次 launch 唯一
+- **rdzv_id 层**（默认 `"default"`）由 torchrun 创建，用于标识一次 elastic job
+- **attempt_N 层**由 torchrun 容错机制管理：`max_restarts` 控制最大重启次数，每次重启创建新的 `attempt_{N}` 目录
 - torchrun 的 `--redirects=3 --tee=3` 表示 stdout 和 stderr 都重定向到日志文件并同时输出到终端
-- 每个 local_rank 的日志独立存储（torchrun 自动管理）
+- 同一次 launch（同一时间戳）内的多次 torchrun attempt 是**容错自动重启**，不是用户手动重试
+
+**两种 "attempt" 的区别**：
+| 概念 | 粒度 | 产生方式 | 目录标识 |
+|------|------|----------|----------|
+| torchrun attempt | 同一 launch 内的容错重启 | 自动（Worker crash → Agent 重启） | `attempt_0`, `attempt_1` |
+| 实验 attempt（用户） | 不同次 launch（改了配置重跑） | 手动（用户修改 config 后重新启动） | 不同时间戳目录 |
 
 ## 3. 路径构建源码
 
@@ -83,7 +102,8 @@ def _update_config_train(config):
 ### 3.2 torchrun log-dir 构建 (`_get_runner_cmd_train`, L166-230)
 
 ```python
-# runner_train.py:183-188
+# runner_train.py:177-218 (关键逻辑)
+rdzv_id = runner_config.get("rdzv_id", "default")       # 默认 "default"
 log_dir = runner_config.get("log_dir", logging_config.details_dir)
 no_shared_fs = runner_config.get("no_shared_fs", False)
 if no_shared_fs:
@@ -91,8 +111,23 @@ if no_shared_fs:
 else:
     log_dir = os.path.join(log_dir, f"host_{node_rank}_{host}")
 log_dir = os.path.join(log_dir, datetime.now().strftime("%Y%m%d_%H%M%S.%f"))
-# 传给 torchrun: --log-dir <log_dir>
+# ...
+# 最终传给 torchrun:
+runner_args["log_dir"] = log_dir if backend == "torchrun" else os.path.join(log_dir, rdzv_id)
+# torchrun 内部再创建: {log_dir}/{rdzv_id}/attempt_{restart_count}/{local_rank}/
 ```
+
+**完整路径推导**：
+```
+FlagScale 构建:  {details_dir}/host_{node_rank}_{ip}/{timestamp}/
+torchrun 追加:   {rdzv_id}/attempt_{N}/{local_rank}/stdout.log
+最终完整路径:    {details_dir}/host_0_10.0.0.1/20250115_143022.123456/default/attempt_0/0/stdout.log
+```
+
+**torchrun 容错机制**（源码：`torch/distributed/elastic/multiprocessing/api.py:283-315`）：
+- `restart_count` 从环境变量 `TORCHELASTIC_RESTART_COUNT` 获取
+- 每次容错重启时 `shutil.rmtree(attempt_log_dir)` 后重建——即每个 attempt 目录是**覆盖写**
+- `max_restarts` 参数（runner config 中配置）控制最大容错重启次数
 
 ### 3.3 host_output 文件路径 (`_generate_run_script_train`, L240-255)
 

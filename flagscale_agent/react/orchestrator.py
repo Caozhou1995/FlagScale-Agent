@@ -494,7 +494,6 @@ class Orchestrator:
         skill_manager=None,
         session_memory=None,  # TODO: rename to 'memory' in next orchestrator refactor
         task_plan=None,
-        experiment_manager=None,
         judge=None,
         config: AgentConfig | None = None,
     ):
@@ -510,7 +509,6 @@ class Orchestrator:
         self.skill_manager = skill_manager
         self.session_memory = session_memory
         self.task_plan = task_plan
-        self.experiment_manager = experiment_manager
         self.judge = judge
         self.config = config or AgentConfig.auto_load()
 
@@ -995,7 +993,6 @@ class Orchestrator:
             _skill_manager=self.skill_manager,
             _memory=self.session_memory,
             _task_plan=self.task_plan,
-            _experiment_manager=self.experiment_manager,
             _constraint_cache=self._constraint_cache,
         )
 

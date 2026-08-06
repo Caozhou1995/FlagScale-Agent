@@ -49,7 +49,6 @@ from flagscale_agent.react.session import (
     find_resumable_sessions, list_sessions, get_session_dir,
     append_session_index, get_recent_sessions,
 )
-from flagscale_agent.react.experiment_manager import ExperimentManager
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.tools import ToolRegistry
 from flagscale_agent.react.tools.edit_file import EditFileTool
@@ -60,7 +59,7 @@ from flagscale_agent.react.tools.shell import ShellTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
 # find_log removed — merged into monitor
-from flagscale_agent.react.tools.workspace_experiment import WorkspaceExperimentTool
+
 from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
@@ -80,14 +79,8 @@ from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
 from flagscale_agent.react.guard.progress import ProgressGuard
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.plan import PlanGuard
-from flagscale_agent.react.guard.training_runtime import TrainingRuntimeGuard
+from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.constraint import ConstraintGuard
-from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
-from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
-from flagscale_agent.react.guard.budget import BudgetGuard
-from flagscale_agent.react.guard.env_compat import EnvCompatGuard
-from flagscale_agent.react.guard.output_quality import OutputQualityGuard
-from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
 from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
 from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
@@ -176,7 +169,7 @@ class WorkerAgent:
     def __init__(self, config: AgentConfig, scene: ScenePreset | None = None,
                  # ── Shared infrastructure (for Orchestrator injection) ──
                  _provider=None, _tool_registry=None, _skill_manager=None,
-                 _memory=None, _task_plan=None, _experiment_manager=None,
+                 _memory=None, _task_plan=None,
                  _constraint_cache=None):
         self.config = config
         self.scene = scene
@@ -197,8 +190,6 @@ class WorkerAgent:
         self._session_dir = session_dir
         self._sessions_root = sessions_root
 
-        experiments_dir = os.path.join(session_dir, "experiments")
-        self._experiment_manager = _experiment_manager or ExperimentManager(experiments_dir)
 
         # Swap store for context management V3 (evict/recall)
         from flagscale_agent.react.swap_store import SwapStore
@@ -226,7 +217,6 @@ class WorkerAgent:
 
         if not _tool_registry:
             self._register_tools()
-        if not _experiment_manager:
             self._load_plugin_tools()
         self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(MemoryReadTool(self.memory))
@@ -338,15 +328,11 @@ class WorkerAgent:
         ))
         guard_registry.register(PlanGuard(task_plan=self.task_plan))
 
-        # Plan and experiment enforcement guards (Phase 7)
+        # Plan enforcement guard
         from flagscale_agent.react.guard.plan_update import PlanUpdateGuard
-        from flagscale_agent.react.guard.experiment import ExperimentGuard
         guard_registry.register(PlanUpdateGuard(task_plan=self.task_plan))
-        guard_registry.register(ExperimentGuard(experiment_manager=self._experiment_manager))
-
         if "is_training" in constraints or "is_inference" in constraints or not constraints:
-            guard_registry.register(TrainingRuntimeGuard())
-            guard_registry.register(TrainingAttemptGuard())
+            guard_registry.register(TrainingMonitorGuard())
             guard_registry.register(OutputDirReuseGuard())
             guard_registry.register(MegatronPathGuard())
             guard_registry.register(PackageSearchGuard())
@@ -403,7 +389,6 @@ class WorkerAgent:
         self.tool_registry.register(LoadKnowledgeTool(self._knowledge_manager))
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
         self.tool_registry.register(FlagScaleTrainMonitorTool(classify_fn=self._judge_confirm))
-        self.tool_registry.register(WorkspaceExperimentTool(self._experiment_manager, task_plan=self.task_plan))
         self.tool_registry.register(InspectCheckpointTool())
         self.tool_registry.register(EvictTool())
         self.tool_registry.register(EvictListTool())
@@ -596,11 +581,7 @@ class WorkerAgent:
             evictable_indexes=self.history.get_evictable_indexes() if self.history else [],
             current_state=self._kernel.fsm.current_state,
             transitions_count=len(self._kernel.fsm.history),
-            classify_fn=self.judge.classify,
-            experiment_compare_fn=self._experiment_manager.compare if self._experiment_manager else None,
-            experiment_diff_fn=self._experiment_manager.diff_last_attempts if self._experiment_manager else None,
-            current_experiment_name=self._experiment_manager.get_current_experiment() if self._experiment_manager else "",
-            assistant_text=self._get_last_assistant_text(),
+            classify_fn=self.judge.classify,            assistant_text=self._get_last_assistant_text(),
         )
         # Attach history reference for auto-evict in ContextPressureGuard
         ctx._history = self.history
@@ -1387,12 +1368,6 @@ class WorkerAgent:
             artifacts["plan_id"] = active_plan.get("id", "")
             artifacts["plan_title"] = active_plan.get("title", "")
 
-        experiments = self._experiment_manager.list()
-        if experiments:
-            artifacts["experiments"] = json.dumps(
-                [{"name": e["name"], "status": e["status"]} for e in experiments[:5]]
-            )
-
         # Determine status — use full output, no truncation.
         # The summary is what downstream stages receive as context.
         clean_text = last_text.replace("[TASK_COMPLETE]", "").replace("[NEED_USER_INPUT]", "").strip()
@@ -1436,10 +1411,8 @@ class WorkerAgent:
         self._session_id = data.get("session_id", self._session_id)
         self._session_dir = session_dir
 
-        # Re-point plan and experiment manager to old session's dirs
+        # Re-point plan to old session's dirs
         self.task_plan._dir = os.path.join(session_dir, "plans")
-        self._experiment_manager._dir = os.path.join(session_dir, "experiments")
-
         # Re-point swap store to restored session's dir
         from flagscale_agent.react.swap_store import SwapStore
         from flagscale_agent.react.evict_summary import EvictSummaryStore
@@ -2191,7 +2164,7 @@ class WorkerAgent:
             return self._phase_override
         # If runtime is active (training running / inference serving), verification mode
         runtime_active = any(
-            isinstance(g, TrainingRuntimeGuard)
+            isinstance(g, TrainingMonitorGuard)
             for g in self._kernel.deps.guard_registry.guards
         )
         if runtime_active:
@@ -2905,7 +2878,6 @@ class WorkerAgent:
 
         # Rule 5: Current experiment/attempt status
         experiment_matches = re.findall(
-            r"workspace_experiment.*?name['\"]?\s*[:=]\s*['\"]?(\w+)", all_text
         )
         if experiment_matches:
             exp_name = experiment_matches[-1]
@@ -2965,7 +2937,6 @@ class WorkerAgent:
             # Boost: experiment state and decisions
             if re.search(r'HYPOTHESIS:|ROOT CAUSE:|DECISION:', content, re.IGNORECASE):
                 score = max(score, 10)
-            elif re.search(r'workspace_experiment.*add_attempt|workspace_experiment.*create', content):
                 score = max(score, 10)
 
             # Boost: error diagnosis and fixes

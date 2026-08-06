@@ -38,7 +38,6 @@ _META_TOOLS = frozenset((
     "evict", "evict_list", "recall",
     "plan_status", "plan_create", "plan_update",
     "memory_read", "memory_list", "memory_write",
-    "workspace_experiment",
 ))
 
 
