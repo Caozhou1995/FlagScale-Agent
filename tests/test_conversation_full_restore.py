@@ -165,3 +165,49 @@ class TestConversationFullRestore:
         # _full_log should now have 3 entries (2 seeded + 1 new)
         assert len(agent.history._full_log) == 3
         assert agent.history._full_log[-1]["content"] == "new_msg"
+
+    def test_restore_turn_count_from_saved_value(self, session_dir):
+        """turn_count should be restored from saved turn_count, not computed."""
+        from flagscale_agent.react.agent import WorkerAgent
+
+        conv_data = {
+            "session_id": "test123",
+            "messages": [
+                # All evicted — would produce turn_count=0 with old heuristic
+                {"role": "user", "content": "[evicted | index=1 | ...]"},
+                {"role": "user", "content": "[evicted | index=2 | ...]"},
+            ],
+            "loaded_skills": [],
+            "turn_count": 42,
+            "session_input_history": ["hello", "fix the bug"] + [f"input {i}" for i in range(40)],
+        }
+
+        agent = _make_agent_mock(session_dir)
+        agent.task_plan._dir = os.path.join(session_dir, "plans")
+
+        WorkerAgent._restore_session(agent, conv_data, session_dir)
+
+        assert agent.turn_count == 42
+        assert len(agent._session_input_history) == 42
+
+    def test_restore_turn_count_fallback_to_input_history_len(self, session_dir):
+        """If turn_count not saved, fall back to len(session_input_history)."""
+        from flagscale_agent.react.agent import WorkerAgent
+
+        conv_data = {
+            "session_id": "test123",
+            "messages": [
+                {"role": "user", "content": "[evicted | index=1 | ...]"},
+            ],
+            "loaded_skills": [],
+            # No turn_count field — old format
+            "session_input_history": ["hello", "world", "test"],
+        }
+
+        agent = _make_agent_mock(session_dir)
+        agent.task_plan._dir = os.path.join(session_dir, "plans")
+
+        WorkerAgent._restore_session(agent, conv_data, session_dir)
+
+        assert agent.turn_count == 3
+        assert agent._session_input_history == ["hello", "world", "test"]

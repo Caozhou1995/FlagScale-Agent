@@ -257,6 +257,7 @@ class WorkerAgent:
         """
         self._phase_override: str | None = None  # Only set for testing
         self.turn_count: int = 0
+        self._session_input_history: list[str] = []  # All user inputs in this session
         self._interrupted: bool = False
         self._last_tool_calls_deque = deque(maxlen=5)
         self._extra_tools_next_iter: set[str] = set()
@@ -612,6 +613,8 @@ class WorkerAgent:
             session_summary=session_summary,
             session_input_tokens=self._session_input_tokens,
             session_output_tokens=self._session_output_tokens,
+            turn_count=self.turn_count,
+            session_input_history=self._session_input_history,
         )
         # Save full (pre-eviction) conversation alongside
         self._save_conversation_full()
@@ -951,6 +954,7 @@ class WorkerAgent:
             self._inject_context(user_input)
             self._check_user_porting_confirmation(user_input)
             self._reset_guard_escalation()
+            self._session_input_history.append(user_input)
             self.history.append({"role": "user", "content": user_input})
             try:
                 self._react_loop()
@@ -1151,6 +1155,7 @@ class WorkerAgent:
                 return
 
             # Keep user input in main agent's history for context continuity
+            self._session_input_history.append(user_input)
             self.history.append({"role": "user", "content": user_input})
 
             print(f"\n[Orchestrator] Running {len(batch_tasks)} experiments in parallel:")
@@ -1187,6 +1192,7 @@ class WorkerAgent:
         self._auto_turn_count = 0
         self._inject_context(user_input)
         self._check_user_porting_confirmation(user_input)
+        self._session_input_history.append(user_input)
         self.history.append({"role": "user", "content": user_input})
         try:
             self._react_loop()
@@ -1456,12 +1462,9 @@ class WorkerAgent:
                 msg["_ext_idx"] = msg.get("_ext_idx", len(self.history._full_log))
             else:
                 self.history.append(msg)
-        # Restore turn count from message history
-        self.turn_count = sum(
-            1 for m in messages
-            if m.get("role") == "user" and isinstance(m.get("content", ""), str)
-            and not m.get("content", "").startswith("[") and not m.get("content", "").startswith("<")
-        )
+        # Restore turn count and session input history
+        self._session_input_history = data.get("session_input_history", [])
+        self.turn_count = data.get("turn_count", len(self._session_input_history))
         loaded = data.get("loaded_skills", [])
         # Restore session token counts for cumulative tracking across resume/reload
         self._session_input_tokens = data.get("session_input_tokens", 0)
