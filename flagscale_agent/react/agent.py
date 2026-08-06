@@ -74,7 +74,7 @@ from flagscale_agent.react.tools.evict import EvictTool
 from flagscale_agent.react.tools.evict_list import EvictListTool
 from flagscale_agent.react.tools.recall import RecallTool
 
-from flagscale_agent.react.guard.safety import SafetyGuard
+from flagscale_agent.react.guard.safety import ShellSafetyGuard
 from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
 from flagscale_agent.react.guard.progress import ProgressGuard
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
@@ -303,7 +303,7 @@ class WorkerAgent:
         constraints = self.scene.constraints if self.scene else set()
         # Arg type guard first — most fundamental, prevents crashes from malformed LLM args
         guard_registry.register(ArgTypeGuard(tool_registry=self.tool_registry))
-        guard_registry.register(SafetyGuard())
+        guard_registry.register(ShellSafetyGuard())
 
         # Reliability guards (P7)
         self._budget_guard = BudgetGuard(

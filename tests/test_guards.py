@@ -17,7 +17,7 @@
 from types import SimpleNamespace
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict, GuardRegistry
-from flagscale_agent.react.guard.safety import SafetyGuard
+from flagscale_agent.react.guard.safety import ShellSafetyGuard
 from flagscale_agent.react.guard.progress import ProgressGuard
 from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
@@ -53,23 +53,44 @@ def _ctx(tool_name="", tool_args=None, tool_result=None,
     )
 
 
-# ── SafetyGuard ──────────────────────────────────────────────────────────
+# ── ShellSafetyGuard ──────────────────────────────────────────────────────────
 
 
-class TestSafetyGuard:
+class TestShellSafetyGuard:
     def test_blocks_dangerous_command(self):
-        provider = MockProvider(responses=['{"real": true, "need_more": null}'])
+        # First response: is_fatal=false, second: is_dangerous=true
+        provider = MockProvider(responses=[
+            '{"real": false, "need_more": null}',
+            '{"real": true, "need_more": null}',
+        ])
         judge = Judge(provider)
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         ctx = _ctx("shell", {"command": "rm -rf /etc"}, classify_fn=judge.classify)
         result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
 
-    def test_allows_safe_command(self):
-        provider = MockProvider(responses=['{"real": false, "need_more": null}'])
+    def test_escalates_fatal_command(self):
+        # is_fatal=true → escalate (cannot override)
+        provider = MockProvider(responses=[
+            '{"real": true, "need_more": null}',
+        ])
         judge = Judge(provider)
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
+        ctx = _ctx("shell", {"command": "rm -rf /"}, classify_fn=judge.classify)
+        result = g.check_pre(ctx)
+        assert result is not None
+        assert result.action == "escalate"
+        assert "FATAL" in result.message
+
+    def test_allows_safe_command(self):
+        # is_fatal=false, is_dangerous=false
+        provider = MockProvider(responses=[
+            '{"real": false, "need_more": null}',
+            '{"real": false, "need_more": null}',
+        ])
+        judge = Judge(provider)
+        g = ShellSafetyGuard()
         ctx = _ctx("shell", {"command": "ls -la"}, classify_fn=judge.classify)
         result = g.check_pre(ctx)
         assert result is None
@@ -77,14 +98,14 @@ class TestSafetyGuard:
     def test_skips_non_shell_tools(self):
         provider = MockProvider(responses=[])
         judge = Judge(provider)
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         ctx = _ctx("read_file", {"path": "/tmp/test.py"}, classify_fn=judge.classify)
         result = g.check_pre(ctx)
         assert result is None
         assert len(provider.calls) == 0
 
     def test_blocks_when_no_classify(self):
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         ctx = _ctx("shell", {"command": "rm -rf /"})
         result = g.check_pre(ctx)
         assert result is not None
@@ -96,14 +117,14 @@ class TestSafetyGuard:
             '{"real": false, "need_more": null}',  # is_success
         ])
         judge = Judge(provider)
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         ctx = _ctx("shell", {"command": "python broken.py"},
                    "RuntimeError: something failed", classify_fn=judge.classify)
         g.check_post(ctx)
         assert g._consecutive_errors == 1
 
     def test_escalates_at_hard_threshold(self):
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         g._consecutive_errors = 4
         provider = MockProvider(responses=[
             '{"real": true, "need_more": null}',   # is_error
@@ -303,7 +324,7 @@ class TestPlanGuard:
 class TestGuardRegistry:
     def test_register_and_priority_order(self):
         reg = GuardRegistry()
-        g1 = SafetyGuard()  # priority 10
+        g1 = ShellSafetyGuard()  # priority 10
         g2 = ProgressGuard()  # priority 30
         reg.register(g2)
         reg.register(g1)
@@ -311,7 +332,7 @@ class TestGuardRegistry:
 
     def test_check_pre_first_verdict_wins(self):
         reg = GuardRegistry()
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         reg.register(g)
         # No classify_fn → blocks
         ctx = _ctx("shell", {"command": "rm -rf /"})

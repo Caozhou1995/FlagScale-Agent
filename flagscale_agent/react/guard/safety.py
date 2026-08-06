@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SafetyGuard — dangerous command detection, error escalation.
+"""ShellSafetyGuard — shell command safety (dual-level) + error escalation.
 
-Uses LLM classify() for all judgments — no regex/keyword matching.
+Two-level shell safety via LLM judge (no regex):
+  - is_fatal: irreversible catastrophic commands → escalate (cannot override)
+  - is_dangerous: risky but potentially valid commands → block (can override)
 
-When Judge is unavailable (provider None or budget exhausted), takes
-conservative action: block unverified shell commands, don't reset error
-counters on uncertain success checks.
+When Judge is unavailable, blocks all shell commands conservatively.
+Also tracks consecutive tool errors for escalation across all tools.
 """
 
 from __future__ import annotations
@@ -34,10 +35,13 @@ from flagscale_agent.react.guard.utils import (
 from flagscale_agent.react.state_machine import AgentState
 
 
-class SafetyGuard(Guard):
-    """Detects dangerous commands and escalating error patterns.
+class ShellSafetyGuard(Guard):
+    """Shell command safety (dual-level LLM judge) + error escalation.
 
-    Checked first (priority=10). Uses tool_name to scope checks.
+    Checked first (priority=10). Uses LLM judge for all safety decisions.
+    Two-level shell safety:
+      - is_fatal → escalate (cannot override, irreversible catastrophe)
+      - is_dangerous → block (can override with reason)
     """
 
     name = "safety"
@@ -68,18 +72,29 @@ class SafetyGuard(Guard):
                 reason="classify_fn not available for safety pre-check",
             )
 
-        is_dangerous, source = _get_judge_result(
-            classify, "is_dangerous", {"command": cmd}, default=False,
+        # Level 1: is_fatal — irreversible catastrophic commands (escalate, cannot override)
+        is_fatal, fatal_source = _get_judge_result(
+            classify, "is_fatal", {"command": cmd}, default=False,
         )
-
-        if source in (_SOURCE_DEFAULT, _SOURCE_UNAVAILABLE):
+        if fatal_source in (_SOURCE_DEFAULT, _SOURCE_UNAVAILABLE):
             return GuardVerdict.block(
                 "[Safety] Safety judge unavailable — blocking shell command. "
-                f"Judge returned default value (source={source}). "
+                f"Judge returned default value (source={fatal_source}). "
                 "Re-run with a working LLM provider.",
-                reason=f"safety classifier unavailable (source={source})",
+                reason=f"safety classifier unavailable (source={fatal_source})",
+            )
+        if is_fatal:
+            return GuardVerdict.escalate(
+                "[Safety] FATAL: This command would cause irreversible catastrophic damage "
+                "(e.g. destroy filesystems, wipe databases, brick systems). "
+                "This cannot be overridden. Use a safer, more targeted approach.",
+                reason="fatal command blocked by LLM judge — irreversible damage",
             )
 
+        # Level 2: is_dangerous — risky but potentially valid (block, can override)
+        is_dangerous, danger_source = _get_judge_result(
+            classify, "is_dangerous", {"command": cmd}, default=False,
+        )
         if is_dangerous:
             return GuardVerdict.block(
                 "[Safety] Dangerous command detected and blocked. "

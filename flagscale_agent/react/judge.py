@@ -61,6 +61,22 @@ Answer YES when the output shows the command completed normally.
 Answer NO when there are errors, failures, or unclear outcome.
 Reply ONLY: {"real": true/false, "need_more": null}""",
 
+    "is_fatal": """\
+Is this shell command FATALLY DESTRUCTIVE — causing IRREVERSIBLE catastrophic damage?
+
+Context: {context}
+
+Answer YES ONLY for commands that would:
+- Destroy entire filesystems (rm -rf /, rm -rf /*, rm -rf ~)
+- Format/overwrite disks (mkfs, dd if=/dev/zero of=/dev/sd*)
+- Fork bombs (:(){ :|:& };:)
+- Wipe all data on the system
+- Brick the operating system
+
+Answer NO for: targeted file deletion, package removal, process killing, git operations,
+permission changes — these are risky but NOT catastrophic.
+Reply ONLY: {"real": true/false, "need_more": null}""",
+
     "is_dangerous": """\
 Is this shell command DANGEROUS and should be BLOCKED?
 
@@ -783,7 +799,7 @@ class Judge:
 
         source is one of: SOURCE_FAST, SOURCE_LLM, SOURCE_CACHE, SOURCE_DEFAULT, SOURCE_UNAVAILABLE.
 
-        Safety-critical callers (SafetyGuard) should use this method and
+        Safety-critical callers (ShellSafetyGuard) should use this method and
         treat SOURCE_DEFAULT / SOURCE_UNAVAILABLE as "unknown → be conservative."
         """
         # Provider never initialized

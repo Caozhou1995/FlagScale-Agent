@@ -323,7 +323,7 @@ class TestJudgeProviderErrors:
 
 class TestClassifyPrompts:
     EXPECTED_CATEGORIES = {
-        "is_error", "is_success", "is_dangerous", "is_read_only_shell",
+        "is_error", "is_success", "is_fatal", "is_dangerous", "is_read_only_shell",
         "is_training_command", "is_kill_command", "is_training_failure",
         "is_zombie_gpu", "is_stuck_in_loop", "is_user_porting_confirm",
         "checklist_rule", "checklist_rule_batch", "extract_constraints",
