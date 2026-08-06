@@ -584,8 +584,6 @@ class WorkerAgent:
             recent_tool_names=list(self._last_tool_calls_deque)[-10:],
             context_pressure=self.history.get_context_pressure() if self.history else 0.0,
             evictable_indexes=self.history.get_evictable_indexes() if self.history else [],
-            current_state=self._kernel.fsm.current_state,
-            transitions_count=len(self._kernel.fsm.history),
             classify_fn=self.judge.classify,            assistant_text=self._get_last_assistant_text(),
         )
         # Attach history reference for auto-evict in ContextPressureGuard

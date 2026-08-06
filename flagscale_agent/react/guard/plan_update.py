@@ -15,7 +15,6 @@
 """PlanUpdateGuard — enforces plan updates after step completion."""
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
 
 
 class PlanUpdateGuard(Guard):
@@ -27,7 +26,7 @@ class PlanUpdateGuard(Guard):
 
     name = "plan_update"
     priority = 50  # Run after ConstraintGuard but before LoopDetectGuard
-    activate_on_states = {AgentState.EXECUTING}
+
 
     def __init__(self, task_plan):
         self._task_plan = task_plan

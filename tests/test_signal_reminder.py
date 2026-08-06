@@ -61,8 +61,6 @@ def _make_kernel_with_mock_llm(responses):
     kernel._mock_llm_call = mock_llm_call
 
     # Initialize state
-    from flagscale_agent.react.state_machine import StateMachine, AgentState
-    kernel.fsm = StateMachine(AgentState.IDLE)
     kernel._interrupted = False
     kernel._plan_auto_continue_count = 0
     kernel._signal_reminder_sent = False

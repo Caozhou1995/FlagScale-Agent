@@ -29,7 +29,6 @@ from typing import Optional
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.guard.utils import get_judge_result, is_trusted
-from flagscale_agent.react.state_machine import AgentState
 
 # Lightweight error indicators — gate to avoid calling LLM on every output.
 # Must be specific enough to avoid false positives on normal shell output.
@@ -61,7 +60,7 @@ class ErrorClassifierGuard(Guard):
 
     name = "error_classifier"
     priority = 25
-    activate_on_states = {AgentState.EXECUTING}
+
 
     # Escalation thresholds
     SUGGEST_THRESHOLD = 2   # inject "consider a different approach" hint

@@ -25,7 +25,6 @@ from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
 from flagscale_agent.react.guard.budget import BudgetGuard
 from flagscale_agent.react.plan import TaskPlan, StepCheckpoint
-from flagscale_agent.react.state_machine import AgentState
 
 
 def _make_ctx(tool_result: str = "", tool_name: str = "shell",
@@ -34,7 +33,6 @@ def _make_ctx(tool_result: str = "", tool_name: str = "shell",
         tool_name=tool_name,
         tool_args={},
         tool_result=tool_result,
-        current_state=AgentState.EXECUTING,
         classify_fn=classify_fn,
     )
 

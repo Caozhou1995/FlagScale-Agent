@@ -32,7 +32,6 @@ from collections import Counter
 from flagscale_agent.react import display
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.guard.utils import get_judge_result, is_trusted
-from flagscale_agent.react.state_machine import AgentState
 
 # Tools that only read state without modifying it
 _READ_ONLY_TOOL_NAMES = frozenset({
@@ -76,7 +75,7 @@ class LoopDetectGuard(Guard):
 
     name = "loop_detect"
     priority = 20
-    activate_on_states = {AgentState.EXECUTING}
+
     overridable = True
 
     _MAX_RECENT = 12

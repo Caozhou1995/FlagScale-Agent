@@ -23,7 +23,6 @@ from __future__ import annotations
 
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
 
 
 _INSTALL_INDICATORS = (
@@ -47,7 +46,7 @@ class EnvCompatGuard(Guard):
 
     name = "env_compat"
     priority = 15
-    activate_on_states = {AgentState.EXECUTING}
+
     activate_on_tools = {"shell"}
 
     def __init__(self):

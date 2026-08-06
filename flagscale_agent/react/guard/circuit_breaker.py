@@ -24,7 +24,6 @@ from __future__ import annotations
 from flagscale_agent.react import display
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.guard.utils import get_judge_result, is_trusted
-from flagscale_agent.react.state_machine import AgentState
 
 
 class CircuitBreakerGuard(Guard):
@@ -40,7 +39,7 @@ class CircuitBreakerGuard(Guard):
 
     name = "circuit_breaker"
     priority = 8  # high priority, before safety(10)
-    activate_on_states = {AgentState.EXECUTING}
+
     overridable = True
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:

@@ -33,7 +33,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from flagscale_agent.react.state_machine import AgentState, StateMachine
 from flagscale_agent.react.guard import GuardContext, GuardRegistry, GuardVerdict
 from flagscale_agent.react import display
 
@@ -71,7 +70,6 @@ class KernelResult:
     output_tokens: int = 0
     elapsed: float = 0.0
     interrupted: bool = False
-    final_state: AgentState = AgentState.COMPLETED
     stop_reason: str = ""
 
 
@@ -83,7 +81,6 @@ class AgentKernel:
 
     def __init__(self, deps: KernelDeps):
         self.deps = deps
-        self.fsm = StateMachine(AgentState.IDLE)
         self._interrupted = False
         self._plan_auto_continue_count = 0
 
@@ -100,7 +97,6 @@ class AgentKernel:
         self._interrupted = False
         self._plan_auto_continue_count = 0  # Reset per turn to avoid poisoning
         self._signal_reminder_sent = False  # Reset fallback signal reminder
-        self.fsm.transition(AgentState.EXECUTING, reason="new turn")
         d.judge.reset_turn()
         d.guard_registry.reset_new_turn()
 
@@ -397,12 +393,7 @@ class AgentKernel:
             signal.signal(signal.SIGINT, _prev_handler)
 
         result.interrupted = self._interrupted
-        result.final_state = self.fsm.current_state
         result.elapsed = time.time() - turn_start
-        if self._interrupted:
-            self.fsm.force_transition(AgentState.INTERRUPTED, reason="user interrupt")
-        else:
-            self.fsm.transition(AgentState.COMPLETED, reason=result.stop_reason or "done")
         return result
 
     # ── Internal helpers ─────────────────────────────────────────────────────
@@ -448,8 +439,6 @@ class AgentKernel:
             context_pressure=history.get_context_pressure() if history else 0.0,
             evictable_indexes=history.get_evictable_indexes() if history else [],
             messages=history.get_messages() if history else [],
-            current_state=self.fsm.current_state,
-            transitions_count=len(self.fsm.history),
             classify_fn=d.judge.classify,
             override_reason=override_reason,
             assistant_text=assistant_text,

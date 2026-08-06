@@ -27,7 +27,6 @@ ErrorClassifierGuard via LLM — no regex duplication here.
 from __future__ import annotations
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
 
 # Commands where empty output is normal
 _EMPTY_OK_COMMANDS = (
@@ -43,7 +42,7 @@ class OutputQualityGuard(Guard):
 
     name = "output_quality"
     priority = 30
-    activate_on_states = {AgentState.EXECUTING}
+
     overridable = True
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:

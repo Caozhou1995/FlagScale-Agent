@@ -22,7 +22,6 @@ from flagscale_agent.react.constraint import (
 from flagscale_agent.react.constraint.extractor import extract_constraints, _compile_one
 from flagscale_agent.react.guard.constraint import ConstraintGuard
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
 from flagscale_agent.react.judge import Judge
 
 
@@ -186,12 +185,11 @@ def _make_constraint(
 
 
 def _ctx(tool_name="", tool_args=None, tool_result=None,
-         classify_fn=None, state=AgentState.EXECUTING):
+         classify_fn=None, ):
     return GuardContext(
         tool_name=tool_name,
         tool_args=tool_args or {},
         tool_result=tool_result,
-        current_state=state,
         classify_fn=classify_fn,
     )
 

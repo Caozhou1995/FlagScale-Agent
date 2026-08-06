@@ -16,7 +16,6 @@
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
-from flagscale_agent.react.state_machine import AgentState
 
 
 def _ctx(tool_name="", tool_args=None, tool_result=None,
@@ -25,7 +24,6 @@ def _ctx(tool_name="", tool_args=None, tool_result=None,
         tool_name=tool_name,
         tool_args=tool_args or {},
         tool_result=tool_result,
-        current_state=AgentState.EXECUTING,
         assistant_text=assistant_text,
         **kwargs,
     )

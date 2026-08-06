@@ -21,7 +21,6 @@ import pytest
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.constraint import Constraint, ConstraintTrigger
 from flagscale_agent.react.guard import GuardContext
-from flagscale_agent.react.state_machine import AgentState
 
 
 # ── Test fixtures ─────────────────────────────────────────────────────────
@@ -466,7 +465,6 @@ class TestAgentSkillGuards:
         ctx = GuardContext(
             tool_name="write_file",
             tool_args={"path": "test.py", "content": "x = torch.rand(10)"},
-            current_state=AgentState.EXECUTING,
             classify_fn=lambda cat, ctx: True,  # Always violated
         )
         verdict = guard.check_pre(ctx)
@@ -530,7 +528,6 @@ class TestAgentSkillGuards:
         ctx = GuardContext(
             tool_name="write_file",
             tool_args={"path": "test.py", "content": "x = torch.rand(10)"},
-            current_state=AgentState.EXECUTING,
             classify_fn=lambda cat, ctx: True,
         )
         # Test constraint guard directly (avoids test pollution issues)

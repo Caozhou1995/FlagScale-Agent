@@ -32,7 +32,6 @@ from flagscale_agent.react.guard.utils import (
     SOURCE_DEFAULT as _SOURCE_DEFAULT,
     SOURCE_UNAVAILABLE as _SOURCE_UNAVAILABLE,
 )
-from flagscale_agent.react.state_machine import AgentState
 
 
 class ShellSafetyGuard(Guard):
@@ -46,7 +45,7 @@ class ShellSafetyGuard(Guard):
 
     name = "safety"
     priority = 10
-    activate_on_states = {AgentState.EXECUTING, AgentState.PLANNING, AgentState.REVIEWING}
+
 
     # Escalation thresholds
     _ERROR_ESCALATE_WARN = 3

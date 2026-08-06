@@ -7,7 +7,6 @@
 
 import pytest
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict, GuardRegistry
-from flagscale_agent.react.state_machine import AgentState
 
 
 # ─── Fixtures: minimal guards for testing each behavior ───
@@ -163,9 +162,8 @@ def _make_registry(guards):
 
 
 def _ctx(tool_name="shell", tool_args=None, tool_result=None,
-         override_reason="", state=AgentState.EXECUTING):
+         override_reason="", ):
     return GuardContext(
-        current_state=state,
         tool_name=tool_name,
         tool_args=tool_args or {},
         tool_result=tool_result,

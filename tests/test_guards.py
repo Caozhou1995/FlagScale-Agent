@@ -24,7 +24,6 @@ from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.plan import PlanGuard
 from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
-from flagscale_agent.react.state_machine import AgentState
 from flagscale_agent.react.judge import Judge, JudgeBudget
 
 
@@ -42,12 +41,11 @@ class MockProvider:
 
 
 def _ctx(tool_name="", tool_args=None, tool_result=None,
-         classify_fn=None, state=AgentState.EXECUTING, **kwargs):
+         classify_fn=None, **kwargs):
     return GuardContext(
         tool_name=tool_name,
         tool_args=tool_args or {},
         tool_result=tool_result,
-        current_state=state,
         classify_fn=classify_fn,
         **kwargs,
     )
@@ -351,19 +349,6 @@ class TestGuardRegistry:
 
 # ── GuardContext ──────────────────────────────────────────────────────────
 
-
-class TestGuardContextPhaseName:
-    def test_phase_name_from_executing(self):
-        ctx = GuardContext(current_state=AgentState.EXECUTING)
-        assert ctx.phase_name == "executing"
-
-    def test_phase_name_from_idle(self):
-        ctx = GuardContext(current_state=AgentState.IDLE)
-        assert ctx.phase_name == "idle"
-
-    def test_phase_name_from_planning(self):
-        ctx = GuardContext(current_state=AgentState.PLANNING)
-        assert ctx.phase_name == "planning"
 
 
 # ── _is_flagscale_launch_command ──────────────────────────────────────────

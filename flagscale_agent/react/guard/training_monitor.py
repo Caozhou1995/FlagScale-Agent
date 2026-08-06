@@ -20,7 +20,6 @@ No escalation, no whitelist complexity — just block once until monitor is call
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
-from flagscale_agent.react.state_machine import AgentState
 
 
 class TrainingMonitorGuard(Guard):
@@ -28,7 +27,7 @@ class TrainingMonitorGuard(Guard):
 
     name = "training_monitor"
     priority = 50
-    activate_on_states = {AgentState.EXECUTING}
+
     overridable = False  # Not monitoring = task will fail
 
     def __init__(self):

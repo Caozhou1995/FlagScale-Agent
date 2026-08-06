@@ -382,8 +382,6 @@ class ToolExecutor:
                 turn_count=agent.turn_count,
                 recent_tool_history=agent._recent_tool_history[-8:],
                 context_pressure=agent.history.get_context_pressure() if agent.history else 0.0,
-                current_state=agent._kernel.fsm.current_state,
-                transitions_count=len(agent._kernel.fsm.history),
                 classify_fn=agent.judge.classify,
             )
             verdict = agent._kernel.deps.guard_registry.check_pre(guard_ctx)

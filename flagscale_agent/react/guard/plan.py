@@ -25,7 +25,6 @@ exploratory calls before requiring a plan.
 from __future__ import annotations
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
 
 
 class PlanGuard(Guard):
@@ -37,7 +36,7 @@ class PlanGuard(Guard):
 
     name = "plan"
     priority = 35
-    activate_on_states = {AgentState.EXECUTING, AgentState.PLANNING, AgentState.REVIEWING}
+
     overridable = True
 
     # Base thresholds (multiplied by TaskMode.plan_required_threshold ratio)

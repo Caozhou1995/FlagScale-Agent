@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 from flagscale_agent.react import display
 from typing import Literal, Any
 
-from flagscale_agent.react.state_machine import AgentState
 
 
 
@@ -57,10 +56,6 @@ class GuardContext:
     # LLM response text (for guards that need to scan assistant replies)
     assistant_text: str = ""
 
-    # State machine context
-    current_state: AgentState = AgentState.IDLE
-    transitions_count: int = 0
-
     # LLM classify function
     classify_fn: Any = None  # (category: str, context: dict) -> Any
 
@@ -71,11 +66,6 @@ class GuardContext:
 
     # Override reason: LLM declares why a potentially-blocked call is justified
     override_reason: str = ""
-
-    @property
-    def phase_name(self) -> str:
-        """Derive phase name from current state for backward compatibility."""
-        return self.current_state.name.lower()
 
 
 @dataclass
@@ -119,7 +109,6 @@ class Guard(abc.ABC):
 
     name: str = "unnamed"
     priority: int = 50  # lower = higher priority
-    activate_on_states: set[AgentState] = set()
     activate_on_tools: set[str] | None = None  # None = all tools
 
     # Override mechanism: if True, LLM can bypass this guard's block by providing
@@ -165,9 +154,6 @@ class Guard(abc.ABC):
 
     def should_activate(self, ctx: GuardContext) -> bool:
         """Check if this guard should run for the current context."""
-        # Empty activate_on_states means "all states" (no filter)
-        if self.activate_on_states and ctx.current_state not in self.activate_on_states:
-            return False
         if self.activate_on_tools and ctx.tool_name not in self.activate_on_tools:
             return False
         return True

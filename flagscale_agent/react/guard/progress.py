@@ -21,7 +21,6 @@ Only fires when LoopDetect hasn't already warned about the same stall.
 from __future__ import annotations
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
 
 
 class ProgressGuard(Guard):
@@ -35,7 +34,7 @@ class ProgressGuard(Guard):
 
     name = "progress"
     priority = 30
-    activate_on_states = {AgentState.EXECUTING}
+
 
     # Base thresholds (multiplied by TaskMode.read_tolerance)
     _READ_ONLY_STREAK_WARN_BASE = 8    # Consecutive reads before warn

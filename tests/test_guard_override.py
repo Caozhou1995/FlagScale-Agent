@@ -28,7 +28,6 @@ from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
 from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
 from flagscale_agent.react.guard.output_quality import OutputQualityGuard
-from flagscale_agent.react.state_machine import AgentState
 
 
 def _ctx(tool_name="", tool_args=None, tool_result=None,
@@ -37,7 +36,6 @@ def _ctx(tool_name="", tool_args=None, tool_result=None,
         tool_name=tool_name,
         tool_args=tool_args or {},
         tool_result=tool_result,
-        current_state=AgentState.EXECUTING,
         assistant_text=assistant_text,
         override_reason=override_reason,
         **kwargs,
