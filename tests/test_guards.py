@@ -144,33 +144,32 @@ class TestContextPressureGuard:
     def test_no_action_below_threshold(self):
         g = ContextPressureGuard()
         ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.5)
-        result = g.check_post(ctx)
+        result = g.check_pre(ctx)
         assert result is None
 
     def test_inject_at_soft_threshold(self):
         g = ContextPressureGuard()
         ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.78)
-        result = g.check_post(ctx)
+        result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "inject"
 
-    def test_block_at_hard_threshold(self):
+    def test_block_at_hard_reset_threshold(self):
         g = ContextPressureGuard()
-        # v6: pressure > 85% AND evictable < 50 → sets hard_reset flag, injects warning
-        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.96,
+        # pressure >= 85% AND evictable < 50 → block non-save tools
+        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.88,
                    evictable_indexes=[1, 2, 3, 4, 5])
-        result = g.check_post(ctx)
+        result = g.check_pre(ctx)
         assert result is not None
-        assert result.action == "inject"  # post always injects
+        assert result.action == "block"
         assert "hard_reset" in (result.category or "")
-        assert g._hard_reset_needed is True
 
-        # check_pre then blocks non-save tools
-        ctx_pre = _ctx("shell", {"command": "echo hi"}, context_pressure=0.96,
-                       evictable_indexes=[1, 2, 3, 4, 5])
-        result_pre = g.check_pre(ctx_pre)
-        assert result_pre is not None
-        assert result_pre.action == "block"
+    def test_hard_reset_allows_save_tools(self):
+        g = ContextPressureGuard()
+        ctx = _ctx("memory_write", {"key": "x", "type": "fact", "content": "y"},
+                   context_pressure=0.88, evictable_indexes=[1, 2, 3])
+        result = g.check_pre(ctx)
+        assert result is None
 
 
 # ── PlanGuard ─────────────────────────────────────────────────────────────
