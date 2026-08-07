@@ -63,21 +63,21 @@ class GuardContext:
 class GuardVerdict:
     """What the guard wants the agent to do."""
 
-    action: Literal["allow", "block", "inject_msg", "escalate"]
-    message: str = ""
-    reason: str = ""
-    category: str = ""  # For inject deduplication
+    action: Literal["allow", "block", "inject", "escalate"]
+    message: str
+    reason: str
+    category: str  # For inject deduplication
 
     @classmethod
-    def block(cls, message: str, reason: str = "", category: str = "") -> GuardVerdict:
+    def block(cls, message: str, reason: str, category: str) -> GuardVerdict:
         return cls(action="block", message=message, reason=reason, category=category)
 
     @classmethod
-    def inject(cls, message: str, reason: str = "", category: str = "") -> GuardVerdict:
-        return cls(action="inject_msg", message=message, reason=reason, category=category)
+    def inject(cls, message: str, reason: str, category: str) -> GuardVerdict:
+        return cls(action="inject", message=message, reason=reason, category=category)
 
     @classmethod
-    def escalate(cls, message: str, reason: str = "", category: str = "") -> GuardVerdict:
+    def escalate(cls, message: str, reason: str, category: str) -> GuardVerdict:
         return cls(action="escalate", message=message, reason=reason, category=category)
 
 
@@ -157,7 +157,7 @@ class GuardRegistry:
                     verdict.message += _OVERRIDE_HINT
                 return verdict
 
-            if verdict.action == "inject_msg":
+            if verdict.action == "inject":
                 # Deduplicate by category
                 cat = verdict.category
                 if cat and cat in inject_categories_seen:
@@ -171,7 +171,8 @@ class GuardRegistry:
         if inject_messages:
             return GuardVerdict.inject(
                 "\n\n".join(inject_messages),
-                reason=first_reason or "multi_guard_inject"
+                reason=first_reason or "multi_guard_inject",
+                category="merged"
             )
         return None
 
@@ -198,7 +199,7 @@ class GuardRegistry:
                     verdict.message += _OVERRIDE_HINT
                 return verdict
 
-            if verdict.action == "inject_msg":
+            if verdict.action == "inject":
                 cat = verdict.category
                 if cat and cat in inject_categories_seen:
                     continue
@@ -211,7 +212,8 @@ class GuardRegistry:
         if inject_messages:
             return GuardVerdict.inject(
                 "\n\n".join(inject_messages),
-                reason=first_reason or "multi_guard_inject"
+                reason=first_reason or "multi_guard_inject",
+                category="merged"
             )
         return None
 

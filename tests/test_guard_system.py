@@ -70,7 +70,7 @@ class TestFileToolGuard:
         ctx = make_ctx("shell", {"command": "echo 10"}, tool_result="ok")
         result = guard.check_pre(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
         assert "10 tool calls" in result.message
         assert guard._calls_since_memory == 0  # Reset after firing
 
@@ -84,7 +84,7 @@ class TestFileToolGuard:
         ctx = make_ctx("shell", {"command": "echo again"}, tool_result="ok")
         result = guard.check_pre(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
 
         # memory_read resets counter
         ctx = make_ctx("memory_read", {"key": "test"}, tool_result="value")
@@ -101,7 +101,7 @@ class TestFileToolGuard:
                        tool_result="[finding] [global] Some old bug info that might be stale... " * 5)
         result = guard.check_post(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
         assert "stale" in result.message.lower() or "supersede" in result.message.lower()
 
     def test_memory_discipline_staleness_check_on_list(self):
@@ -112,7 +112,7 @@ class TestFileToolGuard:
                        tool_result="Showing 5/5 entries\n[finding] key1: some old content\n[finding] key2: more old content")
         result = guard.check_post(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
 
     def test_memory_discipline_no_staleness_on_empty_result(self):
         """No staleness reminder if memory_read returns nothing/error."""
@@ -290,7 +290,7 @@ class TestOverrideHint:
         class BlockingGuard(Guard):
             name = "blocker"
             def check_pre(self, ctx):
-                return GuardVerdict.block("[Blocked] reason")
+                return GuardVerdict.block("[Blocked] reason", reason="test", category="test")
 
         reg = GuardRegistry()
         reg.register(BlockingGuard())
@@ -306,7 +306,7 @@ class TestOverrideHint:
         class BlockingGuard(Guard):
             name = "blocker"
             def check_pre(self, ctx):
-                return GuardVerdict.block("[Blocked] still wrong")
+                return GuardVerdict.block("[Blocked] still wrong", reason="test", category="test")
             def accept_override(self, reason, ctx):
                 return False  # Always reject
 

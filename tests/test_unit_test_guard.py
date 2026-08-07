@@ -79,7 +79,7 @@ class TestUnitTestGuardBehavior:
         ctx2 = make_ctx("write_file", "flagscale_agent/react/display.py")
         verdict = guard.check_post(ctx2)
         assert verdict is not None
-        assert verdict.action == "inject_msg"
+        assert verdict.action == "inject"
         assert "unit test" in verdict.message.lower() or "UnitTest" in verdict.message
 
     def test_no_reminder_when_test_written(self, guard, make_ctx):

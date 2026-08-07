@@ -147,6 +147,7 @@ class LoopDetectGuard(Guard):
                         f"{self._exact_loop_inject_count} warnings. This call is blocked. "
                         "You already have this data. Produce output with what you have.",
                         reason=f"exact_loop_blocked: {ctx.tool_name}",
+                        category="loop_detect",
                     )
                 if self._exact_loop_inject_count >= 3:
                     return GuardVerdict.escalate(
@@ -155,6 +156,7 @@ class LoopDetectGuard(Guard):
                         "You're in a loop. The approach isn't working — repeating it won't help. "
                         "Diagnose why it's failing and propose a different strategy.",
                         reason=f"exact_loop_persistent: {ctx.tool_name}",
+                        category="loop_detect",
                     )
                 return GuardVerdict.inject(
                     f"[LoopDetect] Same tool call repeated {recent_same} times. "
@@ -162,6 +164,7 @@ class LoopDetectGuard(Guard):
                     "Do NOT switch to an alternative tool to get the same data. "
                     "Instead, act on the information you already have.",
                     reason=f"looping on {ctx.tool_name}",
+                    category="loop_detect",
                 )
 
         # ── Detection 1B: Same tool dominance (with argument diversity check) ──
@@ -191,6 +194,7 @@ class LoopDetectGuard(Guard):
                         f"The tool is working fine — your calls succeeded. "
                         f"You have enough information. Act on it instead of reading more.",
                         reason=f"same_tool_dominance: {ctx.tool_name}",
+                        category="loop_detect",
                     )
 
         # ── Detection 2: Semantic loop (read-only dominance) ──
@@ -248,6 +252,7 @@ class LoopDetectGuard(Guard):
                                 f"after {self._semantic_warn_count} warnings. "
                                 "Produce output with the information you have. This call is blocked.",
                                 reason=f"semantic_read_blocked: {effective_read_count}/{len(window)}",
+                                category="loop_detect",
                             )
 
                         if self._semantic_warn_count >= 2:
@@ -256,6 +261,7 @@ class LoopDetectGuard(Guard):
                                 f"{effective_read_count}/{len(window)} calls (diversity={diversity:.2f}). "
                                 "State your findings so far and what's blocking you from acting.",
                                 reason=f"semantic_read_persistent: {effective_read_count}/{len(window)}",
+                                category="loop_detect",
                             )
 
                         return GuardVerdict.inject(
@@ -265,6 +271,7 @@ class LoopDetectGuard(Guard):
                                 "Time to act: write code, edit a file, or produce output. "
                                 "Do NOT re-read the same information with a different tool.",
                                 reason=f"semantic_read_only: {effective_read_count}/{len(window)}",
+                                category="loop_detect",
                             )
 
         # ── Detection 3: Retry pattern (kill→launch without diagnosis) ──
@@ -327,6 +334,7 @@ class LoopDetectGuard(Guard):
                 "Before retrying, diagnose what went wrong: check logs, GPU state, "
                 "or error output from the previous run.",
                 reason="retry_without_diagnosis",
+                category="loop_detect",
             )
 
         return None

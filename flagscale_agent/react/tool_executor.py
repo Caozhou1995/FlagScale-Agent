@@ -407,7 +407,7 @@ class ToolExecutor:
                 # tool_use/tool_result pairing. The escalation message is already
                 # embedded in the tool result string above.
                 break
-            elif verdict and verdict.action == "inject_msg":
+            elif verdict and verdict.action == "inject":
                 # Inject: tool still executes, but append advisory AFTER tool_results
                 # are in history. We collect them here and append to results later.
                 # Do NOT call inject_message_fn here — that would insert a user message

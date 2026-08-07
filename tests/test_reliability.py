@@ -72,7 +72,7 @@ class TestErrorClassifier:
         result = guard.check_post(ctx)
         # First occurrence: inject with category based on tool_name
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
         assert "shell_error" in result.reason
 
     def test_no_classify_fn_returns_none(self):

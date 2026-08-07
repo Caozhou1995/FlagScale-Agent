@@ -75,17 +75,17 @@ class TestGuardContext:
 
 class TestGuardVerdict:
     def test_block_factory(self):
-        v = GuardVerdict.block("stop!", reason="dangerous")
+        v = GuardVerdict.block("stop!", reason="dangerous", category="test")
         assert v.action == "block"
         assert v.message == "stop!"
         assert v.reason == "dangerous"
 
     def test_inject_factory(self):
-        v = GuardVerdict.inject("reminder")
-        assert v.action == "inject_msg"
+        v = GuardVerdict.inject("reminder", reason="test", category="test")
+        assert v.action == "inject"
 
     def test_escalate_factory(self):
-        v = GuardVerdict.escalate("review needed")
+        v = GuardVerdict.escalate("review needed", reason="test", category="test")
         assert v.action == "escalate"
 
 class TestGuardRegistry:
@@ -103,9 +103,9 @@ class TestGuardRegistry:
     def test_check_pre_block_wins_with_inject_prepended(self):
         """Block verdict takes precedence; inject messages are NOT prepended (clean signal)."""
         reg = GuardRegistry()
-        g1 = ConcreteGuard(verdict=GuardVerdict.block("blocked by g1"))
+        g1 = ConcreteGuard(verdict=GuardVerdict.block("blocked by g1", reason="test", category="test"))
         g1.priority = 10
-        g2 = ConcreteGuard(verdict=GuardVerdict.inject("injected by g2"))
+        g2 = ConcreteGuard(verdict=GuardVerdict.inject("injected by g2", reason="test", category="test"))
         g2.priority = 20
         reg.register(g1)
         reg.register(g2)
@@ -120,7 +120,7 @@ class TestGuardRegistry:
     def test_check_pre_block_only_no_inject(self):
         """Block verdict alone — no inject merging."""
         reg = GuardRegistry()
-        g1 = ConcreteGuard(verdict=GuardVerdict.block("blocked"))
+        g1 = ConcreteGuard(verdict=GuardVerdict.block("blocked", reason="test", category="test"))
         g1.priority = 10
         g2 = ConcreteGuard(verdict=None)
         g2.priority = 20

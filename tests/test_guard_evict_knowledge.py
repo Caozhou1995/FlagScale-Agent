@@ -178,4 +178,4 @@ class TestKnowledgeFirstGuard:
             ctx = _make_ctx(tool_name="shell")
             verdict = guard.check_pre(ctx)
             if verdict is not None:
-                assert verdict.action == "inject_msg"
+                assert verdict.action == "inject"

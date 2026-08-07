@@ -83,6 +83,7 @@ class PackageSearchGuard(Guard):
                         "'Which conda environment has X installed?' "
                         "Only proceed after the user provides the path.",
                         reason="blind_package_search",
+                        category="package_search",
                     )
                 return None
 

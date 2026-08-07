@@ -12,7 +12,7 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict, Guard
 # ─── Fixtures: minimal guards for testing each behavior ───
 
 class SoftReminderGuard(Guard):
-    """Fires inject_msg every 3 calls."""
+    """Fires inject every 3 calls."""
     name = "soft_reminder"
     priority = 90
     decay_after_idle = 5
@@ -48,6 +48,7 @@ class HardBlockGuard(Guard):
             return GuardVerdict.block(
                 "BLOCKED: dangerous_tool is not allowed.",
                 reason="safety",
+                category="test_block",
             )
         return None
 
@@ -138,7 +139,7 @@ def _ctx(tool_name="shell", tool_args=None, tool_result=None,
 
 class TestSoftInject:
     def test_inject_fires_on_threshold(self):
-        """Guard fires inject_msg after 3 calls."""
+        """Guard fires inject after 3 calls."""
         reg = _make_registry([SoftReminderGuard()])
         ctx = _ctx("shell")
 
@@ -149,7 +150,7 @@ class TestSoftInject:
         # Call 3: inject fires
         v = reg.check_pre(ctx)
         assert v is not None
-        assert v.action == "inject_msg"
+        assert v.action == "inject"
         assert "Reminder" in v.message
 
     def test_inject_repeats_cyclically(self):
@@ -170,13 +171,13 @@ class TestSoftInject:
         assert v2 is not None
 
     def test_inject_does_not_block(self):
-        """inject_msg verdict should not prevent tool execution (action != block)."""
+        """inject verdict should not prevent tool execution (action != block)."""
         g = SoftReminderGuard()
         g._call_count = 2
         ctx = _ctx("shell")
         v = g.check_pre(ctx)
-        assert v.action == "inject_msg"
-        # In kernel, inject_msg → _apply_verdict returns False (not blocked)
+        assert v.action == "inject"
+        # In kernel, inject → _apply_verdict returns False (not blocked)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -272,7 +273,7 @@ class TestMemoryDisciplineE2E:
         # 10th: reminder
         v = g.check_pre(ctx)
         assert v is not None
-        assert v.action == "inject_msg"
+        assert v.action == "inject"
         assert "10 tool calls" in v.message
 
         # Counter reset after firing — next 9 no reminder
@@ -347,7 +348,7 @@ class TestMultiGuardInteraction:
         ctx = _ctx("shell")
         v = reg.check_pre(ctx)
         assert v is not None
-        assert v.action == "inject_msg"
+        assert v.action == "inject"
         # Both messages present
         assert "Reminder" in v.message
         assert "fix_tool" in v.message
@@ -449,8 +450,8 @@ class TestEscalationChain:
             v = reg.check_pre(pre_ctx)
             assert v is not None
             # Should still be inject, not escalate
-            assert v.action == "inject_msg", \
-                f"Expected inject_msg after reset, got {v.action}"
+            assert v.action == "inject", \
+                f"Expected inject after reset, got {v.action}"
             post_ctx = _ctx("shell")
             reg.check_post(post_ctx)
 

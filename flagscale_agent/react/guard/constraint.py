@@ -185,6 +185,7 @@ class ConstraintGuard(Guard):
             f"Required action: {constraint.correction}\n"
             f"[To override: add \"_override_reason\" field to tool_args with justification.]",
             reason=f"Constraint [{constraint.id}]: {reason}",
+            category="constraint",
         )
 
     def _process_advisory(

@@ -271,7 +271,7 @@ class AgentKernel:
                     # Collect verdicts and apply them AFTER tool_results are in history.
                     blocked_indices = set()
                     _pre_guard_verdicts = []  # (verdict, blocked) pairs to apply after tool_results
-                    _seen_inject_msgs = set()  # Deduplicate inject across multiple tool_calls
+                    _seen_injects = set()  # Deduplicate inject across multiple tool_calls
                     for i, tc in enumerate(tool_calls):
                         ctx = self._build_ctx(
                             tool_name=tc["name"],
@@ -284,16 +284,16 @@ class AgentKernel:
                                 blocked_indices.add(i)
                                 # Deduplicate block/escalate across tool_calls
                                 msg_key = verdict.message[:120]
-                                if msg_key not in _seen_inject_msgs:
-                                    _seen_inject_msgs.add(msg_key)
+                                if msg_key not in _seen_injects:
+                                    _seen_injects.add(msg_key)
                                     _pre_guard_verdicts.append(verdict)
                                 # Display is handled later in _apply_verdict — don't display here
-                            elif verdict.action == "inject_msg":
+                            elif verdict.action == "inject":
                                 # Soft advisory — defer until after tool_results are appended
                                 # Deduplicate: same message from same guard across tool_calls
                                 msg_key = verdict.message[:120]
-                                if msg_key not in _seen_inject_msgs:
-                                    _seen_inject_msgs.add(msg_key)
+                                if msg_key not in _seen_injects:
+                                    _seen_injects.add(msg_key)
                                     _pre_guard_verdicts.append(verdict)
 
                     # Execute tools (skip blocked ones)
@@ -332,7 +332,7 @@ class AgentKernel:
 
                 # ── Post-guard checks (per tool) ──
                 post_verdicts = []
-                _seen_post_inject_msgs = set()  # Deduplicate inject across tool_calls
+                _seen_post_injects = set()  # Deduplicate inject across tool_calls
                 for tc, tool_result in zip(tool_calls, results):
                     ctx = self._build_ctx(
                         tool_name=tc["name"],
@@ -343,9 +343,9 @@ class AgentKernel:
                     if verdict is not None:
                         # Deduplicate all verdict types across multiple tool_calls
                         msg_key = verdict.message[:120]
-                        if msg_key in _seen_post_inject_msgs:
+                        if msg_key in _seen_post_injects:
                             continue
-                        _seen_post_inject_msgs.add(msg_key)
+                        _seen_post_injects.add(msg_key)
                         post_verdicts.append(verdict)
 
                 tool_results = [
@@ -447,7 +447,7 @@ class AgentKernel:
         """Apply a guard verdict. Returns True if this tool call should be blocked.
 
         v6 semantics (escalation chain: inject → block → escalate):
-        - inject_msg: soft advisory appended to tool_result, turn continues
+        - inject: soft advisory appended to tool_result, turn continues
         - block: prevent tool execution, LLM can override with reason
         - escalate: prevent tool execution + independent message, NOT overridable
         """
@@ -461,7 +461,7 @@ class AgentKernel:
             d.inject_message_fn(verdict.message)
             display.guard_escalate(verdict.message)
             return True
-        elif verdict.action == "inject_msg":
+        elif verdict.action == "inject":
             # v4: Soft advisory — append to last tool_result instead of
             # creating a new user message. This avoids conversation pollution.
             if d.append_advisory_fn:

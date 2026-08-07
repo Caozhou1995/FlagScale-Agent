@@ -150,7 +150,7 @@ class TestLoopDetectGuard:
         ctx = _ctx("read_file", {"path": "/tmp/same.py"})
         result = g.check_pre(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
 
     def test_no_loop_with_different_calls(self):
         g = LoopDetectGuard()
@@ -175,7 +175,7 @@ class TestContextPressureGuard:
         ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.78)
         result = g.check_post(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
 
     def test_block_at_hard_threshold(self):
         g = ContextPressureGuard()
@@ -184,7 +184,7 @@ class TestContextPressureGuard:
                    evictable_indexes=[1, 2, 3, 4, 5])
         result = g.check_post(ctx)
         assert result is not None
-        assert result.action == "inject_msg"  # post always injects
+        assert result.action == "inject"  # post always injects
         assert "hard_reset" in (result.category or "")
         assert g._hard_reset_needed is True
 
@@ -271,7 +271,7 @@ class TestPlanGuard:
                    )
         result = g.check_pre(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
 
 
 

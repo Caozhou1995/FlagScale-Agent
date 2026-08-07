@@ -55,6 +55,7 @@ class TrainingMonitorGuard(Guard):
             "[TrainingMonitor] Training launched. Must call "
             "flagscale_train_monitor(output_dir='...') immediately to observe progress.",
             reason="must_monitor_after_launch",
+            category="training_monitor",
         )
 
     def reset_turn(self):

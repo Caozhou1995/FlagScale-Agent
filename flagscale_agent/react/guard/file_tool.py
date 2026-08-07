@@ -61,6 +61,7 @@ class FileToolGuard(Guard):
                     f"the full document in one shot. "
                     f"(Truncation count this session: {self._truncation_count})",
                     reason="truncation_detected_no_path",
+                    category="file_tool",
                 )
 
             # Only warn for initial writes (not appends) with large content
@@ -76,6 +77,7 @@ class FileToolGuard(Guard):
                         f"Split at natural boundaries (## headers, function defs). "
                         f"(Truncation count this session: {self._truncation_count})",
                         reason="possible_truncation",
+                        category="file_tool",
                     )
 
         return None
@@ -93,6 +95,7 @@ class FileToolGuard(Guard):
                         f"  - To find specific functions: grep -n 'def function_name' {path}\n"
                         f"  - To read a specific range: read_file(path, start_line=X, end_line=Y)",
                         reason="large_file_efficiency",
+                        category="file_tool",
                     )
 
         # Check if write_file had a path-missing error (output truncation)
@@ -109,6 +112,7 @@ class FileToolGuard(Guard):
                     f"  4. Never put more than ~2500 chars of content in a single write_file call\n"
                     f"(Total truncation failures this session: {self._truncation_count})",
                     reason="truncation_recovery_guidance",
+                    category="file_tool",
                 )
 
             # Check if write_file produced a file smaller than expected
@@ -126,6 +130,7 @@ class FileToolGuard(Guard):
                             f"bytes but file is {actual_size} bytes. Use read_file to verify "
                             f"the file end, then append missing content with mode='append'.",
                             reason="write_possibly_incomplete",
+                            category="file_tool",
                         )
 
         return None

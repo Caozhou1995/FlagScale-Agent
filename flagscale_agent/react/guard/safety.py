@@ -69,6 +69,7 @@ class ShellSafetyGuard(Guard):
                 "[Safety] Safety classifier unavailable — blocking shell command. "
                 "Re-run with a working LLM provider, or use /mode confirm to manually approve.",
                 reason="classify_fn not available for safety pre-check",
+                category="safety",
             )
 
         # Level 1: is_fatal — irreversible catastrophic commands (escalate, cannot override)
@@ -81,6 +82,7 @@ class ShellSafetyGuard(Guard):
                 f"Judge returned default value (source={fatal_source}). "
                 "Re-run with a working LLM provider.",
                 reason=f"safety classifier unavailable (source={fatal_source})",
+                category="safety",
             )
         if is_fatal:
             return GuardVerdict.escalate(
@@ -88,6 +90,7 @@ class ShellSafetyGuard(Guard):
                 "(e.g. destroy filesystems, wipe databases, brick systems). "
                 "This cannot be overridden. Use a safer, more targeted approach.",
                 reason="fatal command blocked by LLM judge — irreversible damage",
+                category="safety",
             )
 
         # Level 2: is_dangerous — risky but potentially valid (block, can override)
@@ -100,6 +103,7 @@ class ShellSafetyGuard(Guard):
                 "If this is intentional, explain why and use a "
                 "more targeted approach.",
                 reason="dangerous command blocked by LLM judge",
+                category="safety",
             )
 
         return None
@@ -135,6 +139,7 @@ class ShellSafetyGuard(Guard):
                     "The current approach is not working. Stop, diagnose the root "
                     "cause, and reformulate your strategy before continuing.",
                     reason=f"hard escalation: {self._consecutive_errors} errors",
+                    category="safety",
                 )
 
             if self._consecutive_errors >= self._ERROR_ESCALATE_WARN:
@@ -144,6 +149,7 @@ class ShellSafetyGuard(Guard):
                         "without recording root cause. Use memory_write to document "
                         "what's failing and why before retrying.",
                         reason="error escalation warn: no root cause recorded",
+                        category="safety",
                     )
         else:
             if error_trustworthy:

@@ -140,6 +140,7 @@ class ContextPressureGuard(Guard):
                         f"wrap up this step, and let the next turn start with clean context\n"
                         f"4. Continue work if critical task is incomplete — the last 4 messages are sufficient "
                         f"for focused execution. Don't abandon work due to context pressure.",
+                        reason="context_pressure",
                         category="context_pressure_fully_evicted",
                     )
                 # Don't block if nothing can be evicted — that creates a deadlock
@@ -160,9 +161,9 @@ class ContextPressureGuard(Guard):
             )
 
             if self._hard_remind_count >= self.INJECT_LIMIT:
-                return GuardVerdict.block(msg, category="context_pressure")
+                return GuardVerdict.block(msg, reason="context_pressure", category="context_pressure")
             else:
-                return GuardVerdict.inject(msg, category="context_pressure")
+                return GuardVerdict.inject(msg, reason="context_pressure", category="context_pressure")
 
         # Soft limit — first advisory
         if pressure >= SOFT_LIMIT_RATIO and not self._soft_warned:
@@ -179,6 +180,7 @@ class ContextPressureGuard(Guard):
                 f"You can evict ANY message except index 0 and the last 4."
                 f"{idx_hint}"
                 f" Reminder: if you need previously-seen content, use recall(index=N) instead of re-reading files.",
+                reason="context_pressure",
                 category="context_pressure",
             )
 

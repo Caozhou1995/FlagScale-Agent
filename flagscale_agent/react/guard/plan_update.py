@@ -70,7 +70,8 @@ class PlanUpdateGuard(Guard):
                         f"Mark it done/skipped, or add notes (decisions, attempts, key values) "
                         f"to preserve context."
                     ),
-                    reason="plan_not_updated"
+                    reason="plan_not_updated",
+                    category="plan_update",
                 )
 
         return None

@@ -325,7 +325,7 @@ class TestContextPressureGuard:
         ctx = MockGuardContext(0.76)
         result = self.guard.check_post(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
         assert "76%" in result.message
         assert "evict" in result.message.lower()
 
@@ -333,7 +333,7 @@ class TestContextPressureGuard:
         """Soft warning fires only once until pressure drops."""
         ctx = MockGuardContext(0.76)
         result1 = self.guard.check_post(ctx)
-        assert result1 is not None and result1.action == "inject_msg"
+        assert result1 is not None and result1.action == "inject"
 
         # Second call at same pressure — no repeat
         result2 = self.guard.check_post(ctx)
@@ -350,7 +350,7 @@ class TestContextPressureGuard:
 
         # Should fire again on next rise
         result = self.guard.check_post(ctx_high)
-        assert result is not None and result.action == "inject_msg"
+        assert result is not None and result.action == "inject"
 
     def test_hard_limit_blocks(self):
         """After INJECT_LIMIT reminders at hard limit, blocks."""
@@ -359,7 +359,7 @@ class TestContextPressureGuard:
         for _ in range(self.guard.INJECT_LIMIT - 1):
             result = self.guard.check_post(ctx)
             assert result is not None
-            assert result.action == "inject_msg"
+            assert result.action == "inject"
         # INJECT_LIMIT-th call should block
         result = self.guard.check_post(ctx)
         assert result is not None
@@ -379,7 +379,7 @@ class TestContextPressureGuard:
         ctx_lower = MockGuardContext(0.80)
         result = self.guard.check_post(ctx_lower)
         # Should be soft inject (first time at soft level after hard)
-        assert result is None or result.action == "inject_msg"
+        assert result is None or result.action == "inject"
 
         # Below hysteresis (< 0.675) — fully resets
         ctx_freed = MockGuardContext(0.62)
@@ -423,7 +423,7 @@ class TestContextPressureGuard:
         ctx_post = MockGuardContext(0.88, evictable_count=10)
         result = self.guard.check_post(ctx_post)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
         assert "hard_reset" in (result.category or "")
         assert self.guard._hard_reset_needed is True
 
@@ -827,7 +827,7 @@ class TestEdgeCases:
         # First call at 90% injects (not immediate block)
         result = guard.check_post(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
+        assert result.action == "inject"
         # After enough calls, blocks
         for _ in range(guard.INJECT_LIMIT - 1):
             result = guard.check_post(ctx)

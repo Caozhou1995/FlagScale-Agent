@@ -2048,7 +2048,7 @@ class WorkerAgent:
         """Inject a guard block/escalate message into conversation history.
 
         v4: This is now ONLY called for block/escalate verdicts.
-        Soft inject_msg goes through _append_advisory instead.
+        Soft inject goes through _append_advisory instead.
         """
         self.history.append({"role": "user", "content": msg})
 
