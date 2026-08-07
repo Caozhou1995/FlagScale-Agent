@@ -88,6 +88,12 @@ _OVERRIDE_HINT = (
     "DON'T: explain in text. Only _override_reason in tool_args works."
 )
 
+_ESCALATE_HINT = (
+    "\n\n🚫 ESCALATED: This tool call is blocked and cannot be overridden.\n"
+    "DO NOT retry the same tool call — it will be blocked again.\n"
+    "Choose a different approach. If you must proceed this way, stop and ask the user."
+)
+
 
 class Guard(abc.ABC):
     """Base class for all guards.
@@ -152,9 +158,11 @@ class GuardRegistry:
                 ):
                     display.guard_overridden(guard.name, ctx.override_reason)
                     continue
-                # Add override hint for blocks
+                # Add appropriate hint
                 if verdict.action == "block" and not ctx.override_reason:
                     verdict.message += _OVERRIDE_HINT
+                elif verdict.action == "escalate":
+                    verdict.message += _ESCALATE_HINT
                 return verdict
 
             if verdict.action == "inject":

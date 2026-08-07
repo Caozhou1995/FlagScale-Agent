@@ -317,6 +317,40 @@ class TestOverrideHint:
         # Override was attempted but rejected — hint should not be re-added
         assert "OVERRIDE REQUIRED" not in result.message
 
+    def test_escalate_hint_added(self):
+        """Escalate verdicts get escalate hint telling LLM not to retry."""
+        from flagscale_agent.react.guard import GuardRegistry, Guard, GuardVerdict, GuardContext
+
+        class EscalatingGuard(Guard):
+            name = "escalator"
+            def check_pre(self, ctx):
+                return GuardVerdict.escalate("[Escalated] forbidden", reason="test", category="test")
+
+        reg = GuardRegistry()
+        reg.register(EscalatingGuard())
+        ctx = GuardContext(tool_name="shell", override_reason="")
+        result = reg.check_pre(ctx)
+        assert "ESCALATED" in result.message
+        assert "DO NOT retry" in result.message
+        assert "OVERRIDE REQUIRED" not in result.message
+
+    def test_escalate_cannot_be_overridden(self):
+        """Escalate ignores override_reason."""
+        from flagscale_agent.react.guard import GuardRegistry, Guard, GuardVerdict, GuardContext
+
+        class EscalatingGuard(Guard):
+            name = "escalator"
+            def check_pre(self, ctx):
+                return GuardVerdict.escalate("[Escalated] forbidden", reason="test", category="test")
+
+        reg = GuardRegistry()
+        reg.register(EscalatingGuard())
+        ctx = GuardContext(tool_name="shell", override_reason="I have a good reason")
+        result = reg.check_pre(ctx)
+        # Still escalated — override_reason is ignored
+        assert result is not None
+        assert "ESCALATED" in result.message
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
