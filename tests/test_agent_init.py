@@ -15,7 +15,6 @@ def test_agent_import():
 def test_guard_registry_complete():
     """All guards imported in agent.py can be instantiated."""
     from flagscale_agent.react.guard.safety import ShellSafetyGuard
-    from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
     from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
     from flagscale_agent.react.guard.plan import PlanGuard
     from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
@@ -31,7 +30,6 @@ def test_guard_registry_complete():
 
     # All must instantiate without error (no missing deps)
     ShellSafetyGuard()
-    LoopDetectGuard()
     ContextPressureGuard()
     PlanGuard()
     TrainingMonitorGuard()

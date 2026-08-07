@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict, GuardRegistry
 from flagscale_agent.react.guard.safety import ShellSafetyGuard
-from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
+
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.plan import PlanGuard
@@ -135,29 +135,6 @@ class TestShellSafetyGuard:
         assert result.action == "escalate"
         assert g._consecutive_errors == 5
 
-
-
-# ── LoopDetectGuard ───────────────────────────────────────────────────────
-
-
-class TestLoopDetectGuard:
-    def test_detects_repeated_calls(self):
-        g = LoopDetectGuard()
-        for _ in range(3):
-            ctx = _ctx("read_file", {"path": "/tmp/same.py"})
-            g.check_pre(ctx)
-        # After 3 identical calls, should detect loop
-        ctx = _ctx("read_file", {"path": "/tmp/same.py"})
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject"
-
-    def test_no_loop_with_different_calls(self):
-        g = LoopDetectGuard()
-        for i in range(5):
-            ctx = _ctx("read_file", {"path": f"/tmp/file_{i}.py"})
-            result = g.check_pre(ctx)
-        assert result is None
 
 
 # ── ContextPressureGuard ──────────────────────────────────────────────────
@@ -282,7 +259,7 @@ class TestGuardRegistry:
     def test_register_and_priority_order(self):
         reg = GuardRegistry()
         g1 = ShellSafetyGuard()  # priority 10
-        g2 = LoopDetectGuard()  # priority 30
+        g2 = ContextPressureGuard()  # priority 60
         reg.register(g2)
         reg.register(g1)
         assert reg.guards[0].priority <= reg.guards[1].priority
@@ -299,11 +276,10 @@ class TestGuardRegistry:
 
     def test_reset_turn(self):
         reg = GuardRegistry()
-        g = LoopDetectGuard()
+        g = ContextPressureGuard()
         reg.register(g)
-        g._tool_call_cache[("read_file", "path=/tmp/x")] = "content"
         reg.reset_turn()
-        assert len(g._tool_call_cache) == 0
+        # Should not raise — guards can be reset without error
 
 
 # ── GuardContext ──────────────────────────────────────────────────────────

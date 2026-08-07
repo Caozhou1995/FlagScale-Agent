@@ -25,7 +25,7 @@ class PlanUpdateGuard(Guard):
     """
 
     name = "plan_update"
-    priority = 50  # Run after ConstraintGuard but before LoopDetectGuard
+    priority = 50
 
 
     def __init__(self, task_plan):

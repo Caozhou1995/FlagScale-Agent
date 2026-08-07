@@ -75,7 +75,7 @@ from flagscale_agent.react.tools.evict_list import EvictListTool
 from flagscale_agent.react.tools.recall import RecallTool
 
 from flagscale_agent.react.guard.safety import ShellSafetyGuard
-from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
+
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.plan import PlanGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
@@ -299,7 +299,6 @@ class WorkerAgent:
         guard_registry.register(ShellSafetyGuard())
 
         # Reliability guards (P7)
-        guard_registry.register(LoopDetectGuard())
         guard_registry.register(ErrorClassifierGuard())
 
         # Create ConstraintGuard (will be populated with Skill constraints later)
