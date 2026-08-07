@@ -76,14 +76,12 @@ from flagscale_agent.react.tools.recall import RecallTool
 
 from flagscale_agent.react.guard.safety import ShellSafetyGuard
 from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
-from flagscale_agent.react.guard.progress import ProgressGuard
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.plan import PlanGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.constraint import ConstraintGuard
-from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
+
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
-from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
@@ -311,7 +309,6 @@ class WorkerAgent:
         # Build and register dynamic constraints (e.g., shared storage)
         self._build_dynamic_constraints()
 
-        guard_registry.register(ProgressGuard())
         guard_registry.register(ContextPressureGuard(
             working_window_tokens=self.history.working_window if self.history else 0
         ))
@@ -322,11 +319,7 @@ class WorkerAgent:
         guard_registry.register(PlanUpdateGuard(task_plan=self.task_plan))
         if "is_training" in constraints or "is_inference" in constraints or not constraints:
             guard_registry.register(TrainingMonitorGuard())
-            guard_registry.register(OutputDirReuseGuard())
             guard_registry.register(PackageSearchGuard())
-            guard_registry.register(DebugDisciplineGuard())
-            from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
-            guard_registry.register(ComprehensionGateGuard())
 
         # File tool guard (always active)
         guard_registry.register(FileToolGuard())
@@ -1331,11 +1324,6 @@ class WorkerAgent:
         self._original_user_task = task
         self.history.append({"role": "user", "content": task})
 
-        # Fix 5: Enable worker mode on ProgressGuard for tighter thresholds
-        for g in self._kernel.deps.guard_registry.guards:
-            if isinstance(g, ProgressGuard):
-                g.is_worker_mode = True
-                break
 
         # ── Run loop with error guard ──
         loop_error: str | None = None
@@ -2966,3 +2954,4 @@ class WorkerAgent:
     @staticmethod
     def _is_quick_test_command(cmd: str) -> bool:
         return bool(re.search(r'--train-iters\s+', cmd))
+

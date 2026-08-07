@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict, GuardRegistry
 from flagscale_agent.react.guard.safety import ShellSafetyGuard
-from flagscale_agent.react.guard.progress import ProgressGuard
 from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
@@ -136,46 +135,6 @@ class TestShellSafetyGuard:
         assert result.action == "escalate"
         assert g._consecutive_errors == 5
 
-
-# ── ProgressGuard ─────────────────────────────────────────────────────────
-
-
-class TestProgressGuard:
-    def test_tracks_reads(self):
-        g = ProgressGuard()
-        # Without SharedState, ProgressGuard uses ctx.recent_tool_names fallback
-        for i in range(5):
-            ctx = _ctx("read_file", {"path": f"/tmp/file_{i}.py"}, "content",
-                       )
-            ctx.recent_tool_names = ["read_file"] * (i + 1)
-            g.check_post(ctx)
-        # Track unique files read
-        assert len(g._read_files) == 5
-
-    def test_resets_on_productive_tool(self):
-        g = ProgressGuard()
-        g._read_files = {"/tmp/a.py", "/tmp/b.py"}
-        g._reread_count = 3
-        ctx = _ctx("write_file", {"path": "/tmp/test.py", "content": "x=1"},
-                   "File written",
-                   )
-        g.check_post(ctx)
-        assert len(g._read_files) == 0
-        assert g._reread_count == 0
-
-    def test_stale_threshold_triggers_inject(self):
-        g = ProgressGuard()
-        # Pre-populate: file already seen, so re-reads trigger
-        g._read_files.add("/tmp/same.py")
-        # Need to re-read enough times to hit threshold
-        for i in range(4):
-            ctx = _ctx("read_file", {"path": "/tmp/same.py"}, "content",
-                       )
-            ctx.recent_tool_names = ["read_file"] * (i + 6)  # simulate streak
-            result = g.check_post(ctx)
-        # After multiple re-reads, should trigger inject
-        assert result is not None
-        assert result.action == "inject_msg"
 
 
 # ── LoopDetectGuard ───────────────────────────────────────────────────────
@@ -323,7 +282,7 @@ class TestGuardRegistry:
     def test_register_and_priority_order(self):
         reg = GuardRegistry()
         g1 = ShellSafetyGuard()  # priority 10
-        g2 = ProgressGuard()  # priority 30
+        g2 = LoopDetectGuard()  # priority 30
         reg.register(g2)
         reg.register(g1)
         assert reg.guards[0].priority <= reg.guards[1].priority

@@ -23,9 +23,7 @@ Verifies:
 """
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
-from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
-from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
 
 
 def _ctx(tool_name="", tool_args=None, tool_result=None,
@@ -48,16 +46,8 @@ def _ctx(tool_name="", tool_args=None, tool_result=None,
 class TestAllBlockingGuardsOverridable:
     """Every guard that can block/inject must be overridable."""
 
-    def test_debug_discipline_overridable(self):
-        g = DebugDisciplineGuard()
-        assert g.overridable is True
-
     def test_memory_discipline_overridable(self):
         g = MemoryDisciplineGuard()
-        assert g.overridable is True
-
-    def test_comprehension_gate_overridable(self):
-        g = ComprehensionGateGuard()
         assert g.overridable is True
 
 
@@ -70,25 +60,12 @@ class TestAllBlockingGuardsOverridable:
 class TestAcceptOverrideValid:
     """Guards accept override with substantive reasons."""
 
-    def test_debug_discipline_accepts_reason(self):
-        g = DebugDisciplineGuard()
-        ctx = _ctx()
-        assert g.accept_override("The failure is in unrelated test code, not training", ctx) is True
-        # Also verifies side effect
-        assert g._hypothesis_declared is True
-        assert g._edits_since_failure == 0
-
     def test_memory_discipline_accepts_reason(self):
         g = MemoryDisciplineGuard()
         g._calls_since_memory = 15
         ctx = _ctx()
         assert g.accept_override("Already checked memory, no relevant entries exist", ctx) is True
         assert g._calls_since_memory == 0
-
-    def test_comprehension_gate_accepts_reason(self):
-        g = ComprehensionGateGuard()
-        ctx = _ctx()
-        assert g.accept_override("I already read all relevant source files in this session", ctx) is True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -99,14 +76,6 @@ class TestAcceptOverrideValid:
 class TestAcceptOverrideRejectsShort:
     """Guards reject empty or too-short override reasons."""
 
-    def test_debug_discipline_rejects_empty(self):
-        g = DebugDisciplineGuard()
-        assert g.accept_override("", _ctx()) is False
-
-    def test_debug_discipline_rejects_short(self):
-        g = DebugDisciplineGuard()
-        assert g.accept_override("ok", _ctx()) is False
-
     def test_memory_discipline_rejects_empty(self):
         g = MemoryDisciplineGuard()
         assert g.accept_override("", _ctx()) is False
@@ -114,10 +83,6 @@ class TestAcceptOverrideRejectsShort:
     def test_memory_discipline_rejects_short(self):
         g = MemoryDisciplineGuard()
         assert g.accept_override("skip", _ctx()) is False
-
-    def test_comprehension_gate_rejects_short(self):
-        g = ComprehensionGateGuard()
-        assert g.accept_override("just do it", _ctx()) is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -149,54 +114,10 @@ class TestResetTurnPreventsDeadLoop:
         g.reset_new_turn()
         assert g._calls_since_memory == 8
 
-    def test_comprehension_gate_reset(self):
-        g = ComprehensionGateGuard()
-        g._edits_to_complex_files = 5
-        g.reset_turn()
-        assert g._edits_to_complex_files == 0
-
-    def test_debug_discipline_reset(self):
-        g = DebugDisciplineGuard()
-        g._failure_observed = True
-        g._hypothesis_declared = False
-        g._edits_since_failure = 3
-        g.reset_new_turn()
-        assert g._failure_observed is False
-        assert g._hypothesis_declared is False
-        assert g._edits_since_failure == 0
-
 
 
 class TestEndToEndOverrideFlow:
     """Simulate the full cycle: trigger → block → override → continue."""
-
-    def test_debug_discipline_full_cycle(self):
-        """failure → 2 edits → blocked → override → allowed."""
-        g = DebugDisciplineGuard()
-
-        # Trigger failure via check_post
-        post_ctx = _ctx("flagscale_train_monitor", tool_result="Traceback (most recent call last):\n  RuntimeError: CUDA OOM")
-        g.check_post(post_ctx)
-        assert g._failure_observed is True
-
-        # First edit passes
-        ctx1 = _ctx("write_file", {"path": "/tmp/fix.py"}, assistant_text="trying fix")
-        r1 = g.check_pre(ctx1)
-        assert r1 is None
-
-        # Second edit blocked
-        ctx2 = _ctx("edit_file", {"path": "/tmp/fix2.py"}, assistant_text="another try")
-        r2 = g.check_pre(ctx2)
-        assert r2 is not None
-        assert r2.action == "inject_msg"
-
-        # Override with reason
-        assert g.accept_override("Root cause: batch size exceeds GPU memory, reducing from 64 to 32", _ctx()) is True
-
-        # Now edit passes
-        ctx3 = _ctx("write_file", {"path": "/tmp/fix3.py"}, assistant_text="applying fix")
-        r3 = g.check_pre(ctx3)
-        assert r3 is None
 
     def test_memory_discipline_override_clears_block(self):
         """Simulate accumulated calls, override clears counter."""
@@ -207,3 +128,4 @@ class TestEndToEndOverrideFlow:
         result = g.accept_override("Already checked memory, working on unrelated code generation task", _ctx())
         assert result is True
         assert g._calls_since_memory == 0
+

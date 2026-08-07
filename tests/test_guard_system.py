@@ -17,8 +17,6 @@ import pytest
 from unittest.mock import MagicMock
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
-from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
-from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 
@@ -34,38 +32,6 @@ def make_ctx(tool_name="", tool_args=None, tool_result=""):
     ctx.experiment_diff_fn = None
     return ctx
 
-
-
-class TestDebugDisciplineGuard:
-    """Test hypothesis enforcement."""
-
-    def test_no_warning_without_failure(self):
-        guard = DebugDisciplineGuard()
-        ctx = make_ctx("edit_file", {"path": "model.py", "new_string": "fix"})
-        result = guard.check_pre(ctx)
-        assert result is None
-
-    def test_warns_after_failure_without_hypothesis(self):
-        guard = DebugDisciplineGuard()
-
-        # Observe failure
-        ctx_fail = make_ctx("flagscale_train_monitor", tool_result="TRAINING CRASHED\nRuntimeError: bad")
-        guard.check_post(ctx_fail)
-
-        # First edit is fine
-        ctx_edit1 = make_ctx("edit_file", {"path": "model.py", "new_string": "fix1"})
-        guard.check_pre(ctx_edit1)
-
-        # Second edit triggers warning
-        ctx_edit2 = make_ctx("edit_file", {"path": "model.py", "new_string": "fix2"})
-        result = guard.check_pre(ctx_edit2)
-        assert result is not None
-
-    def test_debug_print_reminder(self):
-        guard = DebugDisciplineGuard()
-        ctx = make_ctx("edit_file", {"path": "model.py", "new_string": 'print(f"[DBG] value={x}")'})
-        result = guard.check_post(ctx)
-        assert result is not None  # Should get maximization reminder
 
 
 class TestFileToolGuard:
@@ -226,37 +192,6 @@ class TestFileToolGuard:
         ctx = make_ctx("shell", {"command": "ls"}, tool_result="lots of output " * 100)
         result = guard.check_post(ctx)
         assert result is None
-
-    def test_debug_residue_llm_detection(self):
-        """LLM can detect non-obvious debug prints."""
-        guard = DebugDisciplineGuard()
-        guard._modified_files.add("/tmp/test_debug_llm.py")
-
-        # Write a file with ambiguous print statement
-        import tempfile, os
-        test_file = "/tmp/test_debug_llm.py"
-        with open(test_file, "w") as f:
-            f.write("""\
-import torch
-
-def forward(self, x):
-    out = self.attn(x)
-    print(f"shape after attn: {out.shape}")  # This is debug!
-    return self.mlp(out)
-""")
-
-        def mock_classify(category, context, default=None):
-            if category == "is_debug_residue":
-                return {"is_residue": True, "reason": "Temporary shape print for debugging"}
-            return default
-
-        guard._modified_files = {test_file}
-        residues = guard.check_clean_diff(classify_fn=mock_classify)
-        assert len(residues) >= 1
-        assert "LLM" in residues[0] or "shape after attn" in residues[0]
-
-        # Cleanup
-        os.unlink(test_file)
 
 
 class TestMemoryEvolution:

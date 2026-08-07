@@ -16,14 +16,11 @@ def test_guard_registry_complete():
     """All guards imported in agent.py can be instantiated."""
     from flagscale_agent.react.guard.safety import ShellSafetyGuard
     from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
-    from flagscale_agent.react.guard.progress import ProgressGuard
     from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
     from flagscale_agent.react.guard.plan import PlanGuard
     from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
     from flagscale_agent.react.guard.constraint import ConstraintGuard
-    from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
     from flagscale_agent.react.guard.package_search import PackageSearchGuard
-    from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
     from flagscale_agent.react.guard.file_tool import FileToolGuard
     from flagscale_agent.react.guard.unit_test import UnitTestGuard
     from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
@@ -35,14 +32,11 @@ def test_guard_registry_complete():
     # All must instantiate without error (no missing deps)
     ShellSafetyGuard()
     LoopDetectGuard()
-    ProgressGuard()
     ContextPressureGuard()
     PlanGuard()
     TrainingMonitorGuard()
     ConstraintGuard()
-    OutputDirReuseGuard()
     PackageSearchGuard()
-    DebugDisciplineGuard()
     FileToolGuard()
     UnitTestGuard()
     MemoryDisciplineGuard()

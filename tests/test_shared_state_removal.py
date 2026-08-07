@@ -18,13 +18,6 @@ def test_loop_detect_guard_no_shared_state():
     assert not hasattr(guard, '_task_mode_multiplier')
 
 
-def test_progress_guard_no_shared_state():
-    """ProgressGuard has no set_shared_state method."""
-    from flagscale_agent.react.guard.progress import ProgressGuard
-    guard = ProgressGuard()
-    assert not hasattr(guard, 'set_shared_state')
-
-
 def test_plan_guard_no_shared_state():
     """PlanGuard has no set_shared_state method."""
     from flagscale_agent.react.guard.plan import PlanGuard
