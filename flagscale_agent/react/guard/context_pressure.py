@@ -60,6 +60,12 @@ class ContextPressureGuard(Guard):
         return self._working_window_tokens or 120_000
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Skip the pre-LLM-call check (tool_name=""). We only gate actual tool
+        # executions — blocking before the LLM call would prevent the LLM from
+        # ever invoking evict/hard_reset, creating an infinite block loop.
+        if not ctx.tool_name:
+            return None
+
         pressure = ctx.context_pressure
         if pressure <= 0:
             return None
