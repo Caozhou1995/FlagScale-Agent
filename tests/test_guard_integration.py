@@ -456,40 +456,21 @@ class TestEscalationChain:
             reg.check_post(post_ctx)
 
     def test_memory_discipline_escalation(self):
-        """MemoryDiscipline guard escalates after repeated ignoring.
-        
-        inject → inject ignored × escalate_after → block (but block no longer
-        terminates the turn — it's injected as a strong advisory).
-        """
+        """MemoryDiscipline guard blocks after 30 calls without memory ops."""
         from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 
         guard = MemoryDisciplineGuard()
         reg = _make_registry([guard])
 
-        # Simulate 10 non-memory tool calls to trigger first inject
-        for _ in range(10):
+        # Simulate 30 non-memory tool calls
+        for i in range(30):
             pre_ctx = _ctx("shell")
-            reg.check_pre(pre_ctx)
-
-        # Should have injected
-        pre_ctx = _ctx("shell")
-        v = reg.check_pre(pre_ctx)
-        # After 10 calls, the guard should fire (threshold is 10)
-        # It may have already fired on the 10th call above; just verify mechanism works
-
-        # Now simulate repeated cycles of inject + ignore
-        for cycle in range(4):
-            # Force counter back to trigger threshold
-            guard._calls_since_memory = 10
-            pre_ctx = _ctx("read_file")
-            pre_ctx.turn_count = cycle + 1
             v = reg.check_pre(pre_ctx)
-            if v is None:
-                continue  # guard may have internal suppression
 
-            # Post: agent used read_file, not memory
-            post_ctx = _ctx("read_file")
-            reg.check_post(post_ctx)
-
-        # shared_state removed — just verify escalation happened without crash
-        # The test above already confirms inject/escalate verdicts were issued
+        # The 30th call should have triggered a block
+        # Counter resets after block, so let's verify by doing another 30
+        guard._calls_since_memory = 29
+        pre_ctx = _ctx("read_file")
+        v = reg.check_pre(pre_ctx)
+        assert v is not None
+        assert v.action == "block"
