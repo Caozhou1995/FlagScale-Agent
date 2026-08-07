@@ -167,7 +167,7 @@ class ShellSafetyGuard(Guard):
     def reset_turn(self):
         pass  # Error state accumulates within a turn
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         """Decay consecutive errors on new user message.
         
         Halve the counter so cross-turn patterns still accumulate

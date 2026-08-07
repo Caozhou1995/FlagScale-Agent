@@ -76,7 +76,6 @@ class LoopDetectGuard(Guard):
     name = "loop_detect"
     priority = 20
 
-    overridable = True
 
     _MAX_RECENT = 12
 
@@ -339,43 +338,12 @@ class LoopDetectGuard(Guard):
         cmd_part = args_str.replace("command=", "", 1).strip().lower()
         return any(cmd_part.startswith(prefix.lower()) for prefix in _READ_ONLY_SHELL_PREFIXES)
 
-    def notify_blocked(self, ctx: GuardContext):
-        """Undo tracking when a tool call is externally blocked."""
-        if not ctx.tool_name:
-            return
-        key_args = self._extract_key_args(ctx.tool_args)
-        entry = (ctx.tool_name, key_args)
-        if self._recent_tool_calls and self._recent_tool_calls[-1] == entry:
-            self._recent_tool_calls.pop()
-        if self._tool_name_history and self._tool_name_history[-1] == ctx.tool_name:
-            self._tool_name_history.pop()
-            self._total_tool_calls = max(0, self._total_tool_calls - 1)
-        if ctx.tool_name == "shell" and self._shell_cmd_history:
-            self._shell_cmd_history.pop()
-
     def reset_turn(self):
-        # Clear per-iteration dedup cache, but keep history for cross-iteration detection
-        self._tool_call_cache.clear()
-
-    def reset_new_turn(self):
         """Reset all state at the start of a new user turn.
 
         A new user message is a fresh context — previous tool call patterns
         should not trigger loop detection in the new turn.
         """
-        self._recent_tool_calls.clear()
-        self._tool_name_history.clear()
-        self._shell_cmd_history.clear()
-        self._total_tool_calls = 0
-        self._tool_call_cache.clear()
-        self._exact_loop_inject_count = 0
-        self._semantic_warned = False
-        self._semantic_warn_at = 0
-        self._semantic_warn_count = 0
-
-    def reset_state(self):
-        """v3: Full state reset — called on decay or override acceptance."""
-        super().reset_state()
         self._recent_tool_calls.clear()
         self._tool_name_history.clear()
         self._shell_cmd_history.clear()

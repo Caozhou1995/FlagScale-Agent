@@ -39,24 +39,6 @@ def make_ctx():
     return _make
 
 
-class TestUnitTestGuardActivation:
-    def test_activates_on_write_file(self, guard, make_ctx):
-        ctx = make_ctx("write_file", "flagscale_agent/react/kernel.py")
-        assert guard.should_activate(ctx)
-
-    def test_activates_on_edit_file(self, guard, make_ctx):
-        ctx = make_ctx("edit_file", "flagscale_agent/react/agent.py")
-        assert guard.should_activate(ctx)
-
-    def test_does_not_activate_on_shell(self, guard, make_ctx):
-        ctx = make_ctx("shell", "flagscale_agent/react/agent.py")
-        assert not guard.should_activate(ctx)
-
-    def test_does_not_activate_on_read_file(self, guard, make_ctx):
-        ctx = make_ctx("read_file", "flagscale_agent/react/agent.py")
-        assert not guard.should_activate(ctx)
-
-
 class TestUnitTestGuardSourceDetection:
     def test_agent_source_detected(self):
         assert UnitTestGuard._is_agent_source("flagscale_agent/react/kernel.py")
@@ -122,16 +104,6 @@ class TestUnitTestGuardBehavior:
         ctx2 = make_ctx("write_file", "/workspace/some_other/file.py")
         verdict = guard.check_post(ctx2)
         assert verdict is None
-
-    def test_satisfied_after_test_written(self, guard, make_ctx):
-        """Guard reports satisfied when test file has been written."""
-        ctx1 = make_ctx("edit_file", "flagscale_agent/react/kernel.py")
-        guard.check_post(ctx1)
-        assert not guard.is_satisfied(make_ctx())
-
-        ctx_test = make_ctx("write_file", "tests/test_new.py")
-        guard.check_post(ctx_test)
-        assert guard.is_satisfied(make_ctx())
 
     def test_reset_turn_clears_test_flag(self, guard, make_ctx):
         """reset_turn clears the test-written flag but keeps pending sources."""

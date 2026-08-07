@@ -26,9 +26,6 @@ class UnitTestGuard(Guard):
 
     name = "unit_test_reminder"
     priority = 70  # Low priority — advisory, not blocking
-    activate_on_tools = {"write_file", "edit_file"}
-    overridable = True
-    escalate_after = 5  # Allow several writes before escalating
 
     # Paths that should trigger the reminder
     SOURCE_MARKERS = ("flagscale_agent/",)
@@ -36,7 +33,6 @@ class UnitTestGuard(Guard):
     TEST_MARKERS = ("tests/", "test_", "/test_")
 
     def __init__(self):
-        super().__init__()
         self._pending_sources: set[str] = set()  # Source files modified without tests
         self._test_written_this_turn = False
 
@@ -69,10 +65,6 @@ class UnitTestGuard(Guard):
                 )
 
         return None
-
-    def is_satisfied(self, ctx: GuardContext) -> bool:
-        """Satisfied when test files have been written."""
-        return self._test_written_this_turn or not self._pending_sources
 
     def reset_turn(self):
         """Reset per-turn state but preserve pending sources across turns."""

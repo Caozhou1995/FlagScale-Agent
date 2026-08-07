@@ -177,7 +177,7 @@ class TestFileToolGuard:
         guard.check_post(ctx)
 
         # New turn
-        guard.reset_new_turn()
+        guard.reset_turn()
 
         # Read again → fires (fresh turn)
         ctx = make_ctx("memory_read", {"key": "key2"},
@@ -259,17 +259,6 @@ class TestMemoryEvolution:
         result2 = guard.check_pre(ctx)
         assert result2 is None
 
-    def test_evolution_state_resets_with_reset_state(self):
-        """reset_state clears evolution tracking."""
-        guard = MemoryDisciplineGuard()
-        guard._evolution_reminded = True
-        guard._has_memory_review = True
-
-        guard.reset_state()
-
-        assert guard._evolution_reminded is False
-        assert guard._has_memory_review is False
-
     def test_memory_read_also_counts_as_review(self):
         """memory_read should also mark _has_memory_review."""
         guard = MemoryDisciplineGuard()
@@ -294,51 +283,39 @@ class TestOverrideHint:
         assert "_override_reason" in _OVERRIDE_HINT
         assert "OVERRIDE REQUIRED" in _OVERRIDE_HINT
 
-    def test_hint_added_to_overridable_block(self):
-        """Block verdicts from overridable guards get override hint appended."""
-        from flagscale_agent.react.guard import _maybe_add_override_hint, GuardVerdict, Guard, GuardContext
-        
-        class FakeGuard(Guard):
-            name = "fake"
-            overridable = True
-        
-        verdict = GuardVerdict(action="block", message="[Blocked] reason")
-        ctx = MagicMock(spec=GuardContext)
-        ctx.override_reason = ""
-        
-        result = _maybe_add_override_hint(verdict, FakeGuard(), ctx)
-        assert "_override_reason" in result
-        assert "OVERRIDE REQUIRED" in result
+    def test_hint_added_to_block(self):
+        """Block verdicts get override hint appended by registry."""
+        from flagscale_agent.react.guard import GuardRegistry, Guard, GuardVerdict, GuardContext
 
-    def test_hint_not_added_when_not_overridable(self):
-        """Non-overridable guards don't get override hint."""
-        from flagscale_agent.react.guard import _maybe_add_override_hint, GuardVerdict, Guard, GuardContext
-        
-        class StrictGuard(Guard):
-            name = "strict"
-            overridable = False
-        
-        verdict = GuardVerdict(action="block", message="[Blocked] strict")
-        ctx = MagicMock(spec=GuardContext)
-        ctx.override_reason = ""
-        
-        result = _maybe_add_override_hint(verdict, StrictGuard(), ctx)
-        assert "_override_reason" not in result
+        class BlockingGuard(Guard):
+            name = "blocker"
+            def check_pre(self, ctx):
+                return GuardVerdict.block("[Blocked] reason")
+
+        reg = GuardRegistry()
+        reg.register(BlockingGuard())
+        ctx = GuardContext(tool_name="shell", override_reason="")
+        result = reg.check_pre(ctx)
+        assert "_override_reason" in result.message
+        assert "OVERRIDE REQUIRED" in result.message
 
     def test_hint_not_re_added_after_rejected_override(self):
-        """If override was already attempted and rejected, no re-hint."""
-        from flagscale_agent.react.guard import _maybe_add_override_hint, GuardVerdict, Guard, GuardContext
-        
-        class FakeGuard(Guard):
-            name = "fake"
-            overridable = True
-        
-        verdict = GuardVerdict(action="block", message="[Blocked] still wrong")
-        ctx = MagicMock(spec=GuardContext)
-        ctx.override_reason = "I already tried"
-        
-        result = _maybe_add_override_hint(verdict, FakeGuard(), ctx)
-        assert "_override_reason" not in result
+        """If override was attempted and rejected, no re-hint."""
+        from flagscale_agent.react.guard import GuardRegistry, Guard, GuardVerdict, GuardContext
+
+        class BlockingGuard(Guard):
+            name = "blocker"
+            def check_pre(self, ctx):
+                return GuardVerdict.block("[Blocked] still wrong")
+            def accept_override(self, reason, ctx):
+                return False  # Always reject
+
+        reg = GuardRegistry()
+        reg.register(BlockingGuard())
+        ctx = GuardContext(tool_name="shell", override_reason="I already tried")
+        result = reg.check_pre(ctx)
+        # Override was attempted but rejected — hint should not be re-added
+        assert "OVERRIDE REQUIRED" not in result.message
 
 
 if __name__ == "__main__":

@@ -37,7 +37,6 @@ class PlanGuard(Guard):
     name = "plan"
     priority = 35
 
-    overridable = True
 
     # Base thresholds
     _PLAN_GATE_MAX_EXPLORATORY_BASE = 6
@@ -162,24 +161,12 @@ class PlanGuard(Guard):
         # It is reset by productive tool calls in check_pre, not here.
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         """Reset all counters at the start of a new user turn.
 
         This prevents state leaking between user messages — a fresh question
         should start with a clean slate for plan-gate detection.
         """
-        self._pre_plan_tool_calls = 0
-        self._consecutive_reads = 0
-        self._block_count = 0
-        self._complex_task_no_plan = False
-
-    def reset_state(self):
-        """v3: Full state reset — called on decay or override acceptance.
-
-        Must reset all PlanGuard-specific counters so that an accepted override
-        actually allows the LLM to proceed without being immediately re-blocked.
-        """
-        super().reset_state()
         self._pre_plan_tool_calls = 0
         self._consecutive_reads = 0
         self._block_count = 0

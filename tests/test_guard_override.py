@@ -15,7 +15,7 @@
 """Tests for guard override mechanisms — ensures no guard can cause dead loops.
 
 Verifies:
-1. All blocking guards have overridable=True
+1. All blocking guards support accept_override
 2. accept_override works with valid reasons
 3. accept_override rejects trivial reasons
 4. reset_turn prevents cross-session state persistence
@@ -39,23 +39,11 @@ def _ctx(tool_name="", tool_args=None, tool_result=None,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# All guards overridable
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 class TestAllBlockingGuardsOverridable:
     """Every guard that can block/inject must be overridable."""
-
-    def test_memory_discipline_overridable(self):
-        g = MemoryDisciplineGuard()
-        assert g.overridable is True
-
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# accept_override — valid reasons accepted
-# ══════════════════════════════════════════════════════════════════════════════
-
 
 class TestAcceptOverrideValid:
     """Guards accept override with substantive reasons."""
@@ -100,18 +88,11 @@ class TestResetTurnPreventsDeadLoop:
         g.reset_turn()
         assert g._calls_since_memory == 7
 
-    def test_memory_discipline_reset_state(self):
-        """reset_state (full reset via decay/override) clears counter."""
-        g = MemoryDisciplineGuard()
-        g._calls_since_memory = 20
-        g.reset_state()
-        assert g._calls_since_memory == 0
-
     def test_memory_discipline_preserves_knowledge(self):
-        """reset_new_turn doesn't reset counter — memory gap persists across turns."""
+        """reset_turn doesn't reset counter — memory gap persists across turns."""
         g = MemoryDisciplineGuard()
         g._calls_since_memory = 8
-        g.reset_new_turn()
+        g.reset_turn()
         assert g._calls_since_memory == 8
 
 

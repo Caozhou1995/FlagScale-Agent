@@ -88,37 +88,6 @@ class TestGuardVerdict:
         v = GuardVerdict.escalate("review needed")
         assert v.action == "escalate"
 
-    def test_redirect_factory(self):
-        v = GuardVerdict.redirect("re-plan", metadata={"key": "val"})
-        assert v.action == "redirect"
-        assert v.metadata == {"key": "val"}
-
-
-class TestGuard:
-    def test_should_activate_default(self):
-        g = ConcreteGuard()
-        ctx = GuardContext()
-        assert g.should_activate(ctx)
-
-    def test_should_activate_no_tool_filter(self):
-        g = ConcreteGuard()
-        ctx = GuardContext()
-        # Without tool filter, always activates
-        assert g.should_activate(ctx)
-
-    def test_should_not_activate_wrong_tool(self):
-        g = ConcreteGuard()
-        g.activate_on_tools = {"shell"}
-        ctx = GuardContext(tool_name="read_file")
-        assert not g.should_activate(ctx)
-
-    def test_should_activate_matching_tool(self):
-        g = ConcreteGuard()
-        g.activate_on_tools = {"shell"}
-        ctx = GuardContext(tool_name="shell")
-        assert g.should_activate(ctx)
-
-
 class TestGuardRegistry:
     def test_register_and_priority_order(self):
         reg = GuardRegistry()
@@ -160,7 +129,7 @@ class TestGuardRegistry:
         ctx = GuardContext()
         verdict = reg.check_pre(ctx)
         assert verdict.action == "block"
-        # v3: override hint appended since overridable=True by default
+        # Block verdicts get override hint
         assert "blocked" in verdict.message
 
     def test_check_pre_returns_none_when_all_allow(self):
@@ -177,7 +146,7 @@ class TestGuardRegistry:
         g2 = MagicMock(spec=Guard)
         g2.priority = 20
         reg._guards = [g1, g2]
-        reg.reset_iteration()
+        reg.reset_turn()
         g1.reset_turn.assert_called_once()
         g2.reset_turn.assert_called_once()
 

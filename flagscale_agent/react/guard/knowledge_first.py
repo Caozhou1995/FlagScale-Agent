@@ -51,11 +51,8 @@ class KnowledgeFirstGuard(Guard):
 
     name = "knowledge_first"
     priority = 85  # Low priority — advisory
-    overridable = True
-    escalate_after = 0  # Never escalate — inject-only by design
 
     def __init__(self):
-        super().__init__()
         self._calls_since_knowledge = 0
         self._total_reminders = 0
 
@@ -95,15 +92,10 @@ class KnowledgeFirstGuard(Guard):
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         return None
 
-    def reset_state(self):
-        super().reset_state()
-        self._calls_since_knowledge = 0
-        self._total_reminders = 0
-
     def reset_turn(self):
         """Don't reset per-turn — the reminder interval spans turns."""
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         """New user message — don't reset, knowledge need persists."""
         pass

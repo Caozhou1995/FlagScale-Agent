@@ -39,8 +39,6 @@ class ContextPressureGuard(Guard):
 
     name = "context_pressure"
     priority = 10  # High priority
-    overridable = False
-    escalate_after = 5  # After 5 blocks, escalate
 
     # How many inject reminders before switching to block
     INJECT_LIMIT = 5
@@ -54,7 +52,6 @@ class ContextPressureGuard(Guard):
     })
 
     def __init__(self, working_window_tokens: int = 0):
-        super().__init__()
         self._soft_warned = False
         self._hard_remind_count = 0
         self._working_window_tokens = working_window_tokens

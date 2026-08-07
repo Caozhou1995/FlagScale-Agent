@@ -36,7 +36,6 @@ class ConstraintGuard(Guard):
 
     name = "constraint"
     priority = 15  # High priority — runs before most guards
-    overridable = True  # Agent can override with reason
 
     def __init__(self, constraints: list[Constraint] | None = None):
         self._constraints: list[Constraint] = constraints or []
@@ -278,14 +277,7 @@ class ConstraintGuard(Guard):
         """Violations persist across iterations (working on same tool call)."""
         pass
 
-    def reset_state(self):
-        """Full state reset — called on decay or override acceptance."""
-        super().reset_state()
-        self._clear_queue()
-        self._consecutive_fails.clear()
-        self._degraded.clear()
-
-    def reset_new_turn(self):
+    def reset_turn(self):
         """New user message — clear queue (new context, constraints re-evaluated fresh)."""
         self._clear_queue()
         self._consecutive_fails.clear()

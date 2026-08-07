@@ -272,10 +272,6 @@ class TestArgTypeGuardMetadata:
         guard = ArgTypeGuard()
         assert guard.name == "arg_type"
 
-    def test_not_overridable(self):
-        guard = ArgTypeGuard()
-        assert guard.overridable is False
-
     def test_verdict_category(self):
         registry = make_registry({
             "test_tool": {"properties": {"x": {"type": "integer"}}}

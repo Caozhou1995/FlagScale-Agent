@@ -46,10 +46,8 @@ class PostEvictRecoveryGuard(Guard):
 
     name = "post_evict_recovery"
     priority = 15  # High priority — context loss is critical
-    overridable = True
 
     def __init__(self):
-        super().__init__()
         self._evicted_count = 0
         self._needs_recovery = False
         self._reminded = False
@@ -114,16 +112,10 @@ class PostEvictRecoveryGuard(Guard):
             category="post_evict_recovery",
         )
 
-    def reset_state(self):
-        super().reset_state()
-        self._evicted_count = 0
-        self._needs_recovery = False
-        self._reminded = False
-
     def reset_turn(self):
         """Don't reset across turns — eviction impact persists."""
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         """On new user message, if recovery was already reminded, allow continuation."""
         self._reminded = False

@@ -28,10 +28,8 @@ class TrainingMonitorGuard(Guard):
     name = "training_monitor"
     priority = 50
 
-    overridable = False  # Not monitoring = task will fail
 
     def __init__(self):
-        super().__init__()
         self._launch_detected: bool = False
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
@@ -59,11 +57,6 @@ class TrainingMonitorGuard(Guard):
             reason="must_monitor_after_launch",
         )
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         """State persists across turns."""
         pass
-
-    def reset_state(self):
-        """Full reset."""
-        super().reset_state()
-        self._launch_detected = False

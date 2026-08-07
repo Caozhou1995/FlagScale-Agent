@@ -98,7 +98,7 @@ class AgentKernel:
         self._plan_auto_continue_count = 0  # Reset per turn to avoid poisoning
         self._signal_reminder_sent = False  # Reset fallback signal reminder
         d.judge.reset_turn()
-        d.guard_registry.reset_new_turn()
+        d.guard_registry.reset_turn()
 
         _prev_handler = signal.getsignal(signal.SIGINT)
 
@@ -116,8 +116,7 @@ class AgentKernel:
                 if self._interrupted:
                     break
 
-                # Reset guards for this iteration (called once per LLM+tool loop)
-                d.guard_registry.reset_iteration()
+                # Guard reset happens per-turn (at line 101), not per-iteration
                 d.judge.reset_turn()
 
                 schemas = d.get_schemas_fn()

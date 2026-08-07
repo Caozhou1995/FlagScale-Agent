@@ -44,13 +44,11 @@ class MemoryDisciplineGuard(Guard):
 
     name = "memory_discipline"
     priority = 90  # Low priority — advisory only
-    overridable = True
 
     # How many tool calls without memory ops before reminding
     reminder_threshold = 10
 
     def __init__(self):
-        super().__init__()
         self._calls_since_memory = 0
         self._staleness_reminded = False
         self._evolution_reminded = False
@@ -136,27 +134,12 @@ class MemoryDisciplineGuard(Guard):
             category="memory_staleness_reminder",
         )
 
-    def was_inject_effective(self, ctx: GuardContext) -> bool | None:
-        if ctx.tool_name in self._MEMORY_TOOLS:
-            return True
-        return False
-
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
         if reason and len(reason.strip()) > 5:
             self._calls_since_memory = 0
             return True
         return False
 
-    def reset_state(self):
-        super().reset_state()
-        self._calls_since_memory = 0
-        self._staleness_reminded = False
-        self._evolution_reminded = False
-        self._has_memory_review = False
-
     def reset_turn(self):
-        pass
-
-    def reset_new_turn(self):
         """New user message — reset staleness flag so next read batch gets reminder."""
         self._staleness_reminded = False

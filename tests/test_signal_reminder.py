@@ -39,7 +39,7 @@ def _make_kernel_with_mock_llm(responses):
     # Guard registry mock
     deps.guard_registry.check_pre.return_value = None
     deps.guard_registry.check_post.return_value = None
-    deps.guard_registry.reset_new_turn = MagicMock()
+    deps.guard_registry.reset_turn = MagicMock()
 
     # Display mock
     deps.display.thinking = MagicMock(return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()))
