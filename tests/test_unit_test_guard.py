@@ -42,7 +42,7 @@ def make_ctx():
 class TestUnitTestGuardSourceDetection:
     def test_agent_source_detected(self):
         assert UnitTestGuard._is_agent_source("flagscale_agent/react/kernel.py")
-        assert UnitTestGuard._is_agent_source("/workspace/FlagScale-Agent/flagscale_agent/react/guard/file_tool.py")
+        assert UnitTestGuard._is_agent_source("/workspace/FlagScale-Agent/flagscale_agent/react/guard/safety.py")
 
     def test_non_agent_paths_not_detected(self):
         assert not UnitTestGuard._is_agent_source("/workspace/documents/readme.md")

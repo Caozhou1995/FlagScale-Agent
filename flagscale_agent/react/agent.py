@@ -82,7 +82,7 @@ from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.constraint import ConstraintGuard
 
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
-from flagscale_agent.react.guard.file_tool import FileToolGuard
+
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
@@ -320,8 +320,6 @@ class WorkerAgent:
             guard_registry.register(TrainingMonitorGuard())
             guard_registry.register(PackageSearchGuard())
 
-        # File tool guard (always active)
-        guard_registry.register(FileToolGuard())
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())

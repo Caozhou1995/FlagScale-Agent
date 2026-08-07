@@ -17,7 +17,6 @@ import pytest
 from unittest.mock import MagicMock
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict
-from flagscale_agent.react.guard.file_tool import FileToolGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 
 
@@ -32,28 +31,6 @@ def make_ctx(tool_name="", tool_args=None, tool_result=""):
     ctx.experiment_diff_fn = None
     return ctx
 
-
-
-class TestFileToolGuard:
-    """Test file truncation detection."""
-
-    def test_detects_truncated_content(self):
-        guard = FileToolGuard()
-        # Content with unbalanced brackets (looks truncated)
-        content = "def foo():\n" + "    x = {\n" * 10 + "    'key': 'value',\n" * 200
-        ctx = make_ctx("write_file", {"path": "test.py", "content": content, "mode": "write"})
-        result = guard.check_pre(ctx)
-        # Should detect unbalanced brackets
-        if len(content) > 4000:
-            assert result is not None
-
-    def test_no_warning_for_balanced_content(self):
-        guard = FileToolGuard()
-        content = "x = 1\ny = 2\n" * 400  # Long but balanced
-        ctx = make_ctx("write_file", {"path": "test.py", "content": content, "mode": "write"})
-        result = guard.check_pre(ctx)
-        # Balanced content shouldn't trigger truncation warning
-        assert result is None
 
 
     def test_memory_discipline_reminder_threshold(self):
