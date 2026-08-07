@@ -169,76 +169,56 @@ class TestContextPressureGuard:
 class TestPlanGuard:
     def test_allows_plan_tools(self):
         g = PlanGuard()
-        g._complex_task_no_plan = True
         ctx = _ctx("plan_create", {})
         result = g.check_pre(ctx)
         assert result is None
 
-    def test_blocks_after_threshold_when_complex(self):
-        g = PlanGuard()
-        g._complex_task_no_plan = True
-        for i in range(7):
-            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       )
-            g.check_pre(ctx)
-        ctx = _ctx("read_file", {"path": "/tmp/extra.py"},
-                   )
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "block"
-
-    def test_resets_on_plan_create(self):
-        g = PlanGuard()
-        g._complex_task_no_plan = True
-        g._pre_plan_tool_calls = 5
-        g._consecutive_reads = 9
-        g._block_count = 1
-        ctx = _ctx("plan_create", {})
-        g.check_post(ctx)
-        assert g._complex_task_no_plan is False
-        assert g._pre_plan_tool_calls == 0
-        assert g._consecutive_reads == 0
-        assert g._block_count == 0
-
-    def test_does_not_block_when_plan_exists(self):
-        """Regression: once a plan exists, PlanGuard must not block reads."""
-        from unittest.mock import MagicMock
-        task_plan = MagicMock()
-        task_plan.get_active.return_value = {"title": "test", "steps": []}
-
-        g = PlanGuard(task_plan=task_plan)
-        g._complex_task_no_plan = True
-        # Simulate many consecutive reads — should NOT block because plan exists
-        for i in range(20):
-            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       )
-            result = g.check_pre(ctx)
-            assert result is None, f"Should not block at call {i+1} when plan exists"
-
-    def test_independent_mode_does_not_block_when_plan_exists(self):
-        """Regression: independent mode (no mark_complex_task) also respects existing plan."""
-        from unittest.mock import MagicMock
-        task_plan = MagicMock()
-        task_plan.get_active.return_value = {"title": "docs plan", "steps": [{"status": "doing"}]}
-
-        g = PlanGuard(task_plan=task_plan)
-        # Do NOT call mark_complex_task — this tests independent mode
-        for i in range(15):
-            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       )
-            result = g.check_pre(ctx)
-            assert result is None, f"Independent mode should not block at call {i+1} when plan exists"
-
-    def test_independent_warn_still_fires_without_plan(self):
-        """Without active plan, independent-mode warn still triggers at threshold."""
+    def test_reminds_at_threshold(self):
         g = PlanGuard(task_plan=None)
-        # Use the dynamic property that accounts for TaskMode multiplier
-        g._consecutive_reads = g._plan_gate_independent_warn - 1
-        ctx = _ctx("read_file", {"path": "/tmp/warn.py"},
-                   )
+        for i in range(14):
+            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"})
+            result = g.check_pre(ctx)
+            assert result is None
+        # 15th call triggers
+        ctx = _ctx("shell", {"command": "ls"})
         result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "inject"
+
+    def test_reminds_periodically(self):
+        g = PlanGuard(task_plan=None)
+        for i in range(30):
+            ctx = _ctx("shell", {"command": f"cmd{i}"})
+            g.check_pre(ctx)
+        # 30th call should also trigger (second reminder)
+        assert g._calls_without_plan == 30
+        ctx = _ctx("shell", {"command": "extra"})
+        result = g.check_pre(ctx)
+        # 31st call, not multiple of 15 -> no inject
+        assert result is None
+
+    def test_resets_on_plan_create(self):
+        g = PlanGuard(task_plan=None)
+        g._calls_without_plan = 20
+        ctx = _ctx("plan_create", {})
+        g.check_post(ctx)
+        assert g._calls_without_plan == 0
+
+    def test_does_not_remind_when_plan_exists(self):
+        from unittest.mock import MagicMock
+        task_plan = MagicMock()
+        task_plan.get_active.return_value = {"title": "test", "steps": []}
+        g = PlanGuard(task_plan=task_plan)
+        for i in range(30):
+            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"})
+            result = g.check_pre(ctx)
+            assert result is None
+
+    def test_reset_turn(self):
+        g = PlanGuard(task_plan=None)
+        g._calls_without_plan = 20
+        g.reset_turn()
+        assert g._calls_without_plan == 0
 
 
 
