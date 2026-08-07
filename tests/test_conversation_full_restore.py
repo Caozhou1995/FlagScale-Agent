@@ -29,6 +29,7 @@ def _make_agent_mock(session_dir):
     agent._session_input_tokens = 0
     agent._session_output_tokens = 0
     agent.turn_count = 0
+    agent._session_input_history = []
     agent.task_plan = MagicMock()
     agent.skill_manager = MagicMock()
     return agent
@@ -59,6 +60,27 @@ class TestConversationFullRestore:
         assert data["index_offset"] == 42
         assert data["reset_count"] == 2
         assert len(data["messages"]) == 2
+
+    def test_save_includes_turn_count_and_input_history(self, session_dir):
+        """_save_conversation_full should save turn_count and session_input_history."""
+        from flagscale_agent.react.agent import WorkerAgent
+
+        agent = _make_agent_mock(session_dir)
+        agent.history._full_log = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+        agent.turn_count = 3
+        agent._session_input_history = ["hello", "world", "test"]
+
+        WorkerAgent._save_conversation_full(agent)
+
+        path = os.path.join(session_dir, "conversation_full.json")
+        assert os.path.isfile(path)
+        with open(path) as f:
+            data = json.load(f)
+        assert data["turn_count"] == 3
+        assert data["session_input_history"] == ["hello", "world", "test"]
 
     def test_restore_seeds_full_log_from_file(self, session_dir):
         """_restore_session should seed _full_log from conversation_full.json."""

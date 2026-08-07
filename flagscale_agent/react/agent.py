@@ -635,6 +635,8 @@ class WorkerAgent:
             "messages": full_log,
             "index_offset": self.history._index_offset,
             "reset_count": self.history._reset_count,
+            "turn_count": self.turn_count,
+            "session_input_history": self._session_input_history,
         }
         # Atomic write
         try:
