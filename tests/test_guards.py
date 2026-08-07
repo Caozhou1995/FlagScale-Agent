@@ -147,12 +147,20 @@ class TestContextPressureGuard:
         result = g.check_pre(ctx)
         assert result is None
 
-    def test_inject_at_soft_threshold(self):
+    def test_no_action_at_78_percent(self):
         g = ContextPressureGuard()
         ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.78)
         result = g.check_pre(ctx)
+        assert result is None  # below 80% threshold
+
+    def test_block_at_80_percent_with_evictable(self):
+        g = ContextPressureGuard()
+        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.82,
+                   evictable_indexes=list(range(80)))
+        result = g.check_pre(ctx)
         assert result is not None
-        assert result.action == "inject"
+        assert result.action == "block"
+        assert result.category == "context_pressure_evict"
 
     def test_block_at_hard_reset_threshold(self):
         g = ContextPressureGuard()
