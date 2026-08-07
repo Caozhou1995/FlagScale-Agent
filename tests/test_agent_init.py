@@ -23,7 +23,7 @@ def test_guard_registry_complete():
     from flagscale_agent.react.guard.unit_test import UnitTestGuard
     from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
     from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
-    from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
+    from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
     from flagscale_agent.react.guard.arg_type import ArgTypeGuard
     from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 
@@ -37,7 +37,7 @@ def test_guard_registry_complete():
     UnitTestGuard()
     MemoryDisciplineGuard()
     PostEvictRecoveryGuard()
-    KnowledgeFirstGuard()
+    KnowledgeSkillGuard()
     ErrorClassifierGuard()
 
 

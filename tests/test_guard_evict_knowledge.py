@@ -1,10 +1,10 @@
-"""Tests for PostEvictRecoveryGuard and KnowledgeFirstGuard."""
+"""Tests for PostEvictRecoveryGuard and KnowledgeSkillGuard."""
 
 import pytest
 from unittest.mock import MagicMock
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard, EVICT_THRESHOLD
-from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard, REMINDER_INTERVAL
+from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 
 
 def _make_ctx(tool_name=None, tool_result=None, assistant_text=None):
@@ -99,31 +99,46 @@ class TestPostEvictRecoveryGuard:
         assert guard.check_pre(ctx3) is None
 
 
-# ── KnowledgeFirstGuard ──
+# ── KnowledgeSkillGuard ──
 
-class TestKnowledgeFirstGuard:
+class TestKnowledgeSkillGuard:
     def test_no_reminder_initially(self):
-        guard = KnowledgeFirstGuard()
+        guard = KnowledgeSkillGuard()
         ctx = _make_ctx(tool_name="shell")
         assert guard.check_pre(ctx) is None
 
-    def test_reminder_after_interval(self):
-        guard = KnowledgeFirstGuard()
-        # Make REMINDER_INTERVAL calls without knowledge loading
-        for i in range(REMINDER_INTERVAL - 1):
+    def test_inject_after_threshold(self):
+        guard = KnowledgeSkillGuard()
+        # Make INJECT_THRESHOLD calls without knowledge loading
+        for i in range(guard.INJECT_THRESHOLD - 1):
             ctx = _make_ctx(tool_name="shell")
             guard.check_pre(ctx)
         
-        # The Nth call should trigger
+        # The Nth call should trigger inject
         ctx = _make_ctx(tool_name="read_file")
         verdict = guard.check_pre(ctx)
         assert verdict is not None
+        assert verdict.action == "inject"
         assert "knowledge" in verdict.message.lower()
 
+    def test_block_after_threshold(self):
+        guard = KnowledgeSkillGuard()
+        # Make BLOCK_THRESHOLD calls
+        for i in range(guard.BLOCK_THRESHOLD - 1):
+            ctx = _make_ctx(tool_name="shell")
+            guard.check_pre(ctx)
+        
+        # The BLOCK_THRESHOLD-th call should block
+        ctx = _make_ctx(tool_name="shell")
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert "override" in verdict.message.lower()
+
     def test_load_knowledge_resets(self):
-        guard = KnowledgeFirstGuard()
+        guard = KnowledgeSkillGuard()
         # Accumulate some calls
-        for i in range(REMINDER_INTERVAL - 2):
+        for i in range(guard.INJECT_THRESHOLD - 2):
             ctx = _make_ctx(tool_name="shell")
             guard.check_pre(ctx)
         
@@ -131,14 +146,14 @@ class TestKnowledgeFirstGuard:
         ctx = _make_ctx(tool_name="load_knowledge")
         guard.check_pre(ctx)
         
-        # Now need another full interval before reminder
-        for i in range(REMINDER_INTERVAL - 1):
+        # Now need another full threshold before reminder
+        for i in range(guard.INJECT_THRESHOLD - 1):
             ctx = _make_ctx(tool_name="shell")
             assert guard.check_pre(ctx) is None
 
     def test_load_skill_resets(self):
-        guard = KnowledgeFirstGuard()
-        for i in range(REMINDER_INTERVAL - 2):
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
             ctx = _make_ctx(tool_name="shell")
             guard.check_pre(ctx)
         
@@ -150,32 +165,37 @@ class TestKnowledgeFirstGuard:
         assert guard.check_pre(ctx) is None
 
     def test_meta_tools_dont_count(self):
-        guard = KnowledgeFirstGuard()
+        guard = KnowledgeSkillGuard()
         # Only meta tools — should never trigger
-        for i in range(20):
+        for i in range(50):
             ctx = _make_ctx(tool_name="memory_read")
             guard.check_pre(ctx)
         
         ctx = _make_ctx(tool_name="plan_status")
         assert guard.check_pre(ctx) is None
 
-    def test_repeating_reminders(self):
-        guard = KnowledgeFirstGuard()
-        reminders = 0
-        for i in range(REMINDER_INTERVAL * 3):
-            ctx = _make_ctx(tool_name="shell")
-            verdict = guard.check_pre(ctx)
-            if verdict is not None:
-                reminders += 1
-        
-        # Should have reminded 3 times
-        assert reminders == 3
+    def test_accept_override_with_reason(self):
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(tool_name="shell")
+        # Should accept override with sufficient reason
+        assert guard.accept_override("This task is simple file editing, no domain knowledge needed", ctx)
+        # Counter should be reset after override
+        assert guard._calls_since_knowledge == 0
 
-    def test_never_blocks(self):
-        guard = KnowledgeFirstGuard()
-        # Even after many reminders, should only inject
-        for i in range(100):
+    def test_reject_override_without_reason(self):
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(tool_name="shell")
+        assert not guard.accept_override("", ctx)
+        assert not guard.accept_override("ok", ctx)
+
+    def test_reset_turn_does_nothing(self):
+        guard = KnowledgeSkillGuard()
+        # Accumulate calls
+        for i in range(5):
             ctx = _make_ctx(tool_name="shell")
-            verdict = guard.check_pre(ctx)
-            if verdict is not None:
-                assert verdict.action == "inject"
+            guard.check_pre(ctx)
+        assert guard._calls_since_knowledge == 5
+        
+        # reset_turn should NOT reset the counter
+        guard.reset_turn()
+        assert guard._calls_since_knowledge == 5

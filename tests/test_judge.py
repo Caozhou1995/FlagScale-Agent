@@ -328,9 +328,9 @@ class TestClassifyPrompts:
         "is_zombie_gpu", "is_stuck_in_loop", "is_user_porting_confirm",
         "checklist_rule", "checklist_rule_batch", "extract_constraints",
         "route_intent", "is_constraint_violated", "skill_suggest",
-        "skill_suggest_by_context", "is_continuation", "is_warning_triggered",
-        "task_mode", "training_error_category", "is_important_discovery",
-        "is_debug_residue",
+        "skill_suggest_by_context", "knowledge_suggest", "is_continuation",
+        "is_warning_triggered", "task_mode", "training_error_category",
+        "is_important_discovery", "is_debug_residue",
     }
 
     def test_all_categories_present(self):
@@ -345,7 +345,7 @@ class TestClassifyPrompts:
         boolean_categories = self.EXPECTED_CATEGORIES - {
             "is_user_porting_confirm", "checklist_rule", "checklist_rule_batch",
             "extract_constraints", "route_intent", "skill_suggest",
-            "skill_suggest_by_context", "task_mode"}
+            "skill_suggest_by_context", "knowledge_suggest", "task_mode"}
         for category in boolean_categories:
             prompt = _CLASSIFY_PROMPTS[category]
             assert "need_more" in prompt.lower(), (

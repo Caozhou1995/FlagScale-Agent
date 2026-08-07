@@ -86,7 +86,7 @@ from flagscale_agent.react.guard.package_search import PackageSearchGuard
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
-from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
+from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
 from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 from flagscale_agent.react.constraint.cache import ConstraintCache
@@ -326,7 +326,7 @@ class WorkerAgent:
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
-        guard_registry.register(KnowledgeFirstGuard())
+        guard_registry.register(KnowledgeSkillGuard())
 
         deps = KernelDeps(
             provider=self.provider,
@@ -929,6 +929,7 @@ class WorkerAgent:
 
             if self.config.auto_skill:
                 self._auto_load_skills(user_input)
+                self._auto_load_knowledge(user_input)
 
             self._auto_turn_count = 0
             self._inject_context(user_input)
@@ -1168,7 +1169,7 @@ class WorkerAgent:
 
         if self.config.auto_skill:
             self._auto_load_skills(user_input)
-
+            self._auto_load_knowledge(user_input)
         self._auto_turn_count = 0
         self._inject_context(user_input)
         self._check_user_porting_confirmation(user_input)
@@ -1294,6 +1295,7 @@ class WorkerAgent:
             self.scene = ScenePreset.auto_detect(user_input=query)
         if self.config.auto_skill:
             self._auto_load_skills(query)
+            self._auto_load_knowledge(query)
         self._inject_context(query)
         self.history.append({"role": "user", "content": query})
         try:
@@ -1316,6 +1318,7 @@ class WorkerAgent:
             self.scene = ScenePreset.auto_detect(user_input=task)
         if self.config.auto_skill:
             self._auto_load_skills(task)
+            self._auto_load_knowledge(task)
 
         self._inject_context(task)
         self._original_user_task = task
@@ -1790,6 +1793,38 @@ class WorkerAgent:
         if loaded:
             skill_map = {n: self._active_skill_content.get(n, "") for n in loaded}
             self._batch_extract_and_rebuild(skill_map)
+
+    def _auto_load_knowledge(self, user_input: str):
+        """Load knowledge groups based on semantic judgment.
+
+        Uses Judge.suggest_knowledge() for semantic matching. Only loads indexes
+        (not full content) to keep context manageable.
+        """
+        all_groups = self._knowledge_manager.list_groups()
+        loaded_names = getattr(self, "_loaded_knowledge", set())
+        available = [g for g in all_groups if g["name"] not in loaded_names]
+        if not available:
+            return
+
+        if not (self.judge and self.judge.provider is not None):
+            return  # No fallback — knowledge suggestion requires semantic judgment
+
+        suggested = self.judge.suggest_knowledge(user_input, available)
+        if not suggested:
+            return
+
+        if not hasattr(self, "_loaded_knowledge"):
+            self._loaded_knowledge = set()
+
+        for name in suggested[:2]:
+            try:
+                index_content = self._knowledge_manager.get_index(name)
+                if index_content:
+                    self._loaded_knowledge.add(name)
+                    from flagscale_agent.react import display
+                    display.info(f"[KnowledgeAutoLoad] Loaded index for: {name}")
+            except Exception:
+                pass
 
     def _apply_skill_effects(self, skill_name: str, _depth: int = 0):
         """Apply effects declared in skill frontmatter — no hardcoded skill names.

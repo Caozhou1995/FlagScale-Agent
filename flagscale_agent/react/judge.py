@@ -543,6 +543,22 @@ Rules:
 
 # ── Constraint violation judgment (Phase 3) ──────────────────────────────────
 
+_CLASSIFY_PROMPTS["knowledge_suggest"] = """\
+Given the user request, decide which knowledge groups (if any) should be loaded.
+
+User request: {user_input}
+
+Available knowledge groups (not yet loaded):
+{available_groups}
+
+Rules:
+- ONLY suggest groups that are DIRECTLY relevant to the current task.
+- Be CONSERVATIVE: max 2 groups. When in doubt, do NOT suggest.
+- For simple operations (file edits, status checks, git commands), return empty list.
+- Knowledge is expensive to load — only suggest when domain expertise is clearly needed.
+- Return ONLY a JSON array of group names, e.g. ["know-megatron-parallel"] or [].
+"""
+
 _CLASSIFY_PROMPTS["is_constraint_violated"] = """\
 Determine if this tool call violates the given constraint.
 
@@ -1197,6 +1213,33 @@ class Judge:
         valid_names = {s["name"] for s in available_skills}
         return [n for n in value[:1] if isinstance(n, str) and n in valid_names]
 
+    def suggest_knowledge(self, user_input: str, available_groups: list[dict]) -> list[str]:
+        """Suggest which knowledge groups to load based on semantic understanding.
+
+        Args:
+            user_input: The user's request text.
+            available_groups: List of {"name": ..., "description": ...} for unloaded groups.
+
+        Returns:
+            List of knowledge group names to load (may be empty).
+        """
+        if not available_groups:
+            return []
+
+        groups_str = "\n".join(
+            f"- {g['name']}: {g.get('description', '')}" for g in available_groups
+        )
+        context = {
+            "user_input": user_input,
+            "available_groups": groups_str,
+        }
+        value, source = self.classify_traced("knowledge_suggest", context, default=[])
+        if not isinstance(value, list):
+            return []
+        # Validate: only return names that exist in available_groups
+        valid_names = {g["name"] for g in available_groups}
+        return [n for n in value if isinstance(n, str) and n in valid_names][:2]
+
     def is_continuation(self, user_input: str, previous_summary: str) -> bool:
         """Determine if user_input is a follow-up to the previous turn.
 
@@ -1301,7 +1344,7 @@ class Judge:
             if isinstance(data, dict):
                 return data
             return default if default is not None else {"mode": "single"}
-        if category in ("skill_suggest", "skill_suggest_by_context"):
+        if category in ("skill_suggest", "skill_suggest_by_context", "knowledge_suggest"):
             # LLM should return a JSON array of skill names
             if isinstance(data, list):
                 return data
