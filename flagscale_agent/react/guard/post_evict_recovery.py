@@ -82,6 +82,9 @@ class PostEvictRecoveryGuard(Guard):
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         """Before non-recovery tool calls, remind to restore context."""
+        if not ctx.tool_name:
+            return None
+
         if not self._needs_recovery:
             return None
 
@@ -113,9 +116,5 @@ class PostEvictRecoveryGuard(Guard):
         )
 
     def reset_turn(self):
-        """Don't reset across turns — eviction impact persists."""
-        pass
-
-    def reset_turn(self):
-        """On new user message, if recovery was already reminded, allow continuation."""
+        """On new user message, allow re-reminding if still not recovered."""
         self._reminded = False

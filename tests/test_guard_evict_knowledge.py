@@ -98,6 +98,20 @@ class TestPostEvictRecoveryGuard:
         ctx3 = _make_ctx(tool_name="read_file")
         assert guard.check_pre(ctx3) is None
 
+    def test_empty_tool_name_safe(self):
+        guard = PostEvictRecoveryGuard()
+        # Trigger recovery state
+        ctx = _make_ctx(tool_name="evict", tool_result="Evicted 20 message(s), freed ~8000 tokens.")
+        guard.check_post(ctx)
+        
+        # Pre-LLM check with empty tool_name should not trigger
+        ctx2 = _make_ctx(tool_name="")
+        assert guard.check_pre(ctx2) is None
+        
+        # None tool_name should also be safe
+        ctx3 = _make_ctx(tool_name=None)
+        assert guard.check_pre(ctx3) is None
+
 
 # ── KnowledgeSkillGuard ──
 
