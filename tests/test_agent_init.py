@@ -31,10 +31,8 @@ def test_guard_registry_complete():
     from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
     from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
     from flagscale_agent.react.guard.arg_type import ArgTypeGuard
-    from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
     from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
     from flagscale_agent.react.guard.output_quality import OutputQualityGuard
-    from flagscale_agent.react.guard.env_compat import EnvCompatGuard
 
     # All must instantiate without error (no missing deps)
     ShellSafetyGuard()
@@ -53,10 +51,8 @@ def test_guard_registry_complete():
     MemoryDisciplineGuard()
     PostEvictRecoveryGuard()
     KnowledgeFirstGuard()
-    CircuitBreakerGuard(trip_threshold=4, cooldown_iters=3)
     ErrorClassifierGuard()
     OutputQualityGuard()
-    EnvCompatGuard()
 
 
 def test_tool_registry_complete():

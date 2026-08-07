@@ -94,8 +94,6 @@ class AgentConfig:
     poll_interval: int = 15
     poll_max_duration: int = 300
     max_auto_turns: int = 20
-    circuit_breaker_threshold: int = 4
-    circuit_breaker_cooldown: int = 3
     _config_path: Optional[str] = field(default=None, repr=False)
 
     def __post_init__(self):

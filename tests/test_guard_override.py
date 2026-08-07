@@ -26,7 +26,6 @@ from flagscale_agent.react.guard import GuardContext, GuardVerdict
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
-from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
 from flagscale_agent.react.guard.output_quality import OutputQualityGuard
 
 
@@ -62,9 +61,6 @@ class TestAllBlockingGuardsOverridable:
         g = ComprehensionGateGuard()
         assert g.overridable is True
 
-    def test_circuit_breaker_overridable(self):
-        g = CircuitBreakerGuard()
-        assert g.overridable is True
 
     def test_output_quality_overridable(self):
         g = OutputQualityGuard()
@@ -99,16 +95,6 @@ class TestAcceptOverrideValid:
         ctx = _ctx()
         assert g.accept_override("I already read all relevant source files in this session", ctx) is True
 
-    def test_circuit_breaker_accepts_reason(self):
-        g = CircuitBreakerGuard()
-        # Set up OPEN circuit
-        g._circuit_state["general"] = g.OPEN
-        g._open_block_count["general"] = 3
-        ctx = _ctx()
-        assert g.accept_override("Root cause identified: wrong env variable, now fixed", ctx) is True
-        # Verify circuit transitions to HALF_OPEN
-        assert g._circuit_state["general"] == g.HALF_OPEN
-        assert g._open_block_count["general"] == 0
 
     def test_output_quality_accepts_reason(self):
         g = OutputQualityGuard()
@@ -145,10 +131,6 @@ class TestAcceptOverrideRejectsShort:
     def test_comprehension_gate_rejects_short(self):
         g = ComprehensionGateGuard()
         assert g.accept_override("just do it", _ctx()) is False
-
-    def test_circuit_breaker_rejects_short(self):
-        g = CircuitBreakerGuard()
-        assert g.accept_override("retry please", _ctx()) is False
 
     def test_output_quality_rejects_empty(self):
         g = OutputQualityGuard()
@@ -200,17 +182,6 @@ class TestResetTurnPreventsDeadLoop:
         assert g._hypothesis_declared is False
         assert g._edits_since_failure == 0
 
-    def test_circuit_breaker_increments_iteration(self):
-        """Circuit breaker uses iteration counter for cooldown — reset_turn increments it."""
-        g = CircuitBreakerGuard()
-        old_iter = g._current_iteration
-        g.reset_turn()
-        assert g._current_iteration == old_iter + 1
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# End-to-end: block → override → unblock
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 class TestEndToEndOverrideFlow:
@@ -244,26 +215,8 @@ class TestEndToEndOverrideFlow:
         r3 = g.check_pre(ctx3)
         assert r3 is None
 
-    def test_circuit_breaker_full_cycle(self):
-        """Multiple errors → circuit open → block → override → half-open."""
-        g = CircuitBreakerGuard(trip_threshold=2, cooldown_iters=5)
-
-        # Trigger errors to trip circuit
-        for _ in range(2):
-            ctx = _ctx("shell", {"command": "python train.py"},
-                       tool_result="RuntimeError: CUDA out of memory")
-            g.check_post(ctx)
-
-        # Circuit should be open for 'resource' category
-        assert g._circuit_state.get("resource") == g.OPEN
-
-        # Override
-        result = g.accept_override("Root cause found: leaked tensor in dataloader, fixed in commit abc123", _ctx())
-        assert result is True
-        assert g._circuit_state["resource"] == g.HALF_OPEN
-
     def test_memory_discipline_override_clears_block(self):
-        """Simulate accumulated calls → override clears counter."""
+        """Simulate accumulated calls, override clears counter."""
         g = MemoryDisciplineGuard()
         g._calls_since_memory = 15
 

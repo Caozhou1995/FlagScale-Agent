@@ -61,7 +61,7 @@ class DebugDisciplineGuard(Guard):
     """Enforce hypothesis-driven debugging and clean diffs."""
 
     name = "debug_discipline"
-    priority = 22  # Between TrainingAttempt (15) and CircuitBreaker (25)
+    priority = 22  # After ErrorClassifier (25)
     overridable = True
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:

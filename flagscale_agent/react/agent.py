@@ -91,10 +91,8 @@ from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
-from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
 from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 from flagscale_agent.react.guard.output_quality import OutputQualityGuard
-from flagscale_agent.react.guard.env_compat import EnvCompatGuard
 from flagscale_agent.react.constraint.cache import ConstraintCache
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
@@ -148,7 +146,6 @@ class _ModeFlags:
 
     # Scenario-agnostic workflow state
     runtime_started: bool = False       # training started / inference serving started
-    env_compat_analyzed: bool = False
     path_confirmed: bool = False        # user confirmed approach (porting path, deploy path, etc.)
     confirmed_path: str | None = None   # which approach was confirmed
 
@@ -306,14 +303,9 @@ class WorkerAgent:
         guard_registry.register(ShellSafetyGuard())
 
         # Reliability guards (P7)
-        guard_registry.register(CircuitBreakerGuard(
-            trip_threshold=self.config.circuit_breaker_threshold,
-            cooldown_iters=self.config.circuit_breaker_cooldown,
-        ))
         guard_registry.register(LoopDetectGuard())
         guard_registry.register(ErrorClassifierGuard())
         guard_registry.register(OutputQualityGuard())
-        guard_registry.register(EnvCompatGuard())
 
         # Create ConstraintGuard (will be populated with Skill constraints later)
         self._constraint_guard = ConstraintGuard()

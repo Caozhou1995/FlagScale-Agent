@@ -60,22 +60,6 @@ class TestShellDictCommandFix:
         assert isinstance(raw_args["command"], str)
         assert "description" in raw_args["command"]
 
-    def test_env_compat_guard_handles_dict_command(self):
-        """EnvCompatGuard.check_pre doesn't crash on dict commands."""
-        from flagscale_agent.react.guard.env_compat import EnvCompatGuard
-        from flagscale_agent.react.guard import GuardContext
-        guard = EnvCompatGuard()
-        ctx = GuardContext(
-            tool_name="shell",
-            tool_args={"command": {"type": "string", "value": "echo hello"}},
-            
-        )
-        # Should NOT raise 'dict' object has no attribute 'lower'
-        # The key test: no exception is thrown
-        result = guard.check_pre(ctx)
-        # Result is None (no guard action needed for a simple echo)
-        assert result is None
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
