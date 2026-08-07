@@ -108,32 +108,15 @@ class TestShellSafetyGuard:
         assert result is not None
         assert result.action == "block"
 
-    def test_error_increments_counter(self):
-        provider = MockProvider(responses=[
-            '{"real": true, "need_more": null}',   # is_error
-            '{"real": false, "need_more": null}',  # is_success
-        ])
-        judge = Judge(provider)
+    def test_check_post_returns_none(self):
+        """After refactor, safety check_post does nothing."""
         g = ShellSafetyGuard()
+        provider = MockProvider(responses=[])
+        judge = Judge(provider)
         ctx = _ctx("shell", {"command": "python broken.py"},
                    "RuntimeError: something failed", classify_fn=judge.classify)
-        g.check_post(ctx)
-        assert g._consecutive_errors == 1
-
-    def test_escalates_at_hard_threshold(self):
-        g = ShellSafetyGuard()
-        g._consecutive_errors = 4
-        provider = MockProvider(responses=[
-            '{"real": true, "need_more": null}',   # is_error
-            '{"real": false, "need_more": null}',  # is_success
-        ])
-        judge = Judge(provider)
-        ctx = _ctx("shell", {"command": "fail"}, "RuntimeError",
-                   classify_fn=judge.classify)
         result = g.check_post(ctx)
-        assert result is not None
-        assert result.action == "escalate"
-        assert g._consecutive_errors == 5
+        assert result is None
 
 
 

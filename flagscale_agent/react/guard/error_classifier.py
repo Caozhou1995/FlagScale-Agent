@@ -69,10 +69,16 @@ class ErrorClassifierGuard(Guard):
     def __init__(self):
         self._last_category: str | None = None
         self._consecutive_same: int = 0
+        self._root_cause_recorded: bool = False
 
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_result:
+            return None
+
+        # Track memory_write as root-cause documentation during error streaks
+        if ctx.tool_name == "memory_write" and self._consecutive_same > 0:
+            self._root_cause_recorded = True
             return None
 
         # Skip read-only tools — their output is source code / file content,
@@ -154,10 +160,16 @@ class ErrorClassifierGuard(Guard):
         parts = []
 
         if self._consecutive_same >= self.ESCALATE_THRESHOLD:
-            parts.append(
-                f"⚠️ Same error type '{category}' hit {self._consecutive_same} times. "
-                f"Stop and diagnose the root cause — don't retry the same approach."
-            )
+            if not self._root_cause_recorded:
+                parts.append(
+                    f"⚠️ Same error type '{category}' hit {self._consecutive_same} times. "
+                    f"Stop and diagnose the root cause — don't retry the same approach."
+                )
+            else:
+                parts.append(
+                    f"Error '{category}' repeated {self._consecutive_same} times "
+                    f"(root cause noted). Consider a fundamentally different approach."
+                )
         elif self._consecutive_same >= self.SUGGEST_THRESHOLD:
             parts.append(
                 f"Error '{category}' repeated {self._consecutive_same} times. "
@@ -174,6 +186,7 @@ class ErrorClassifierGuard(Guard):
         if self._last_category:
             self._consecutive_same = 0
             self._last_category = None
+            self._root_cause_recorded = False
 
     @staticmethod
     def _looks_like_error(text_lower: str) -> bool:
