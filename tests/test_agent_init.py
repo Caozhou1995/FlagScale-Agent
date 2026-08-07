@@ -22,7 +22,6 @@ def test_guard_registry_complete():
     from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
     from flagscale_agent.react.guard.constraint import ConstraintGuard
     from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
-    from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
     from flagscale_agent.react.guard.package_search import PackageSearchGuard
     from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
     from flagscale_agent.react.guard.file_tool import FileToolGuard
@@ -43,7 +42,6 @@ def test_guard_registry_complete():
     TrainingMonitorGuard()
     ConstraintGuard()
     OutputDirReuseGuard()
-    MegatronPathGuard()
     PackageSearchGuard()
     DebugDisciplineGuard()
     FileToolGuard()

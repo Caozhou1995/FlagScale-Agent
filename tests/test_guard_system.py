@@ -20,7 +20,6 @@ from flagscale_agent.react.guard import GuardContext, GuardVerdict
 from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.file_tool import FileToolGuard
-from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 
 
