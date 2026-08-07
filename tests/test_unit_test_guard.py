@@ -105,6 +105,16 @@ class TestUnitTestGuardBehavior:
         verdict = guard.check_post(ctx2)
         assert verdict is None
 
+    def test_ignores_non_write_tools(self, guard, make_ctx):
+        """read_file, shell, etc. should never trigger even with agent paths."""
+        ctx1 = make_ctx("read_file", "flagscale_agent/react/kernel.py")
+        guard.check_post(ctx1)
+        ctx2 = make_ctx("shell", "flagscale_agent/react/display.py")
+        verdict = guard.check_post(ctx2)
+        assert verdict is None
+        # Pending sources should be empty — non-write tools don't track
+        assert len(guard._pending_sources) == 0
+
     def test_reset_turn_clears_test_flag(self, guard, make_ctx):
         """reset_turn clears the test-written flag but keeps pending sources."""
         ctx1 = make_ctx("edit_file", "flagscale_agent/react/kernel.py")

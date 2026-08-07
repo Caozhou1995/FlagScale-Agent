@@ -39,7 +39,14 @@ class UnitTestGuard(Guard):
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         return None  # No pre-check needed
 
+    # Only these tools actually modify files
+    WRITE_TOOLS = ("write_file", "edit_file")
+
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Only trigger on file-writing operations
+        if ctx.tool_name not in self.WRITE_TOOLS:
+            return None
+
         path = ctx.tool_args.get("path", "") or ""
 
         # Track if a test file was written
