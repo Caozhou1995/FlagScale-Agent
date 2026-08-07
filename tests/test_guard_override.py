@@ -26,7 +26,6 @@ from flagscale_agent.react.guard import GuardContext, GuardVerdict
 from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
-from flagscale_agent.react.guard.output_quality import OutputQualityGuard
 
 
 def _ctx(tool_name="", tool_args=None, tool_result=None,
@@ -62,10 +61,6 @@ class TestAllBlockingGuardsOverridable:
         assert g.overridable is True
 
 
-    def test_output_quality_overridable(self):
-        g = OutputQualityGuard()
-        assert g.overridable is True
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # accept_override — valid reasons accepted
@@ -96,14 +91,6 @@ class TestAcceptOverrideValid:
         assert g.accept_override("I already read all relevant source files in this session", ctx) is True
 
 
-    def test_output_quality_accepts_reason(self):
-        g = OutputQualityGuard()
-        g._consecutive_silent_failures = 5
-        ctx = _ctx()
-        assert g.accept_override("File changed externally, will re-read", ctx) is True
-        assert g._consecutive_silent_failures == 0
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # accept_override — trivial reasons rejected
 # ══════════════════════════════════════════════════════════════════════════════
@@ -131,10 +118,6 @@ class TestAcceptOverrideRejectsShort:
     def test_comprehension_gate_rejects_short(self):
         g = ComprehensionGateGuard()
         assert g.accept_override("just do it", _ctx()) is False
-
-    def test_output_quality_rejects_empty(self):
-        g = OutputQualityGuard()
-        assert g.accept_override("", _ctx()) is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════

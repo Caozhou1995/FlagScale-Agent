@@ -91,7 +91,6 @@ from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGua
 from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
 from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
-from flagscale_agent.react.guard.output_quality import OutputQualityGuard
 from flagscale_agent.react.constraint.cache import ConstraintCache
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
@@ -304,7 +303,6 @@ class WorkerAgent:
         # Reliability guards (P7)
         guard_registry.register(LoopDetectGuard())
         guard_registry.register(ErrorClassifierGuard())
-        guard_registry.register(OutputQualityGuard())
 
         # Create ConstraintGuard (will be populated with Skill constraints later)
         self._constraint_guard = ConstraintGuard()
