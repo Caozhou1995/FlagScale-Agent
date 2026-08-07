@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for P7 reliability guards: ErrorClassifier, StepCheckpoint."""
+"""Tests for P7 reliability: StepCheckpoint."""
 
 import time
 import tempfile
@@ -20,115 +20,7 @@ import os
 
 import pytest
 
-from flagscale_agent.react.guard import GuardContext, GuardVerdict
-from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 from flagscale_agent.react.plan import TaskPlan, StepCheckpoint
-
-
-def _make_ctx(tool_result: str = "", tool_name: str = "shell",
-              classify_fn=None) -> GuardContext:
-    return GuardContext(
-        tool_name=tool_name,
-        tool_args={},
-        tool_result=tool_result,
-        classify_fn=classify_fn,
-    )
-
-
-# ── ErrorClassifierGuard Tests ──────────────────────────────────────────────
-
-
-def _mock_classify_error(category="env_missing"):
-    """Create a classify_fn that returns 'yes' for is_error and a category."""
-    def classify(cat, context, **kwargs):
-        if cat == "is_error":
-            return "yes", "fast"
-        return category, "fast"
-    return classify
-
-
-def _mock_classify_no_error():
-    """Classify_fn that returns 'no' for is_error."""
-    def classify(cat, context, **kwargs):
-        return "no", "fast"
-    return classify
-
-
-class TestErrorClassifier:
-    def test_no_error_returns_none(self):
-        """Non-error output should not trigger (keyword gate)."""
-        guard = ErrorClassifierGuard()
-        ctx = _make_ctx("Success: file written to /tmp/out.txt")
-        assert guard.check_post(ctx) is None
-
-    def test_keyword_gate_triggers_on_error_text(self):
-        """Error keywords should pass the gate and call classify_fn."""
-        guard = ErrorClassifierGuard()
-        classify_fn = _mock_classify_error("env_missing")
-        ctx = _make_ctx(
-            "Error: ModuleNotFoundError: No module named 'torch'",
-            classify_fn=classify_fn,
-        )
-        result = guard.check_post(ctx)
-        # First occurrence: inject with category based on tool_name
-        assert result is not None
-        assert result.action == "inject"
-        assert "shell_error" in result.reason
-
-    def test_no_classify_fn_returns_none(self):
-        """Without classify_fn, guard can't classify — returns None."""
-        guard = ErrorClassifierGuard()
-        ctx = _make_ctx("Error: something failed", classify_fn=None)
-        assert guard.check_post(ctx) is None
-
-    def test_llm_says_not_error_returns_none(self):
-        """If LLM says it's not an error, guard passes."""
-        guard = ErrorClassifierGuard()
-        classify_fn = _mock_classify_no_error()
-        ctx = _make_ctx("Error in log: this is expected", classify_fn=classify_fn)
-        assert guard.check_post(ctx) is None
-
-    def test_escalation_on_consecutive_same_errors(self):
-        """2+ consecutive same-category errors trigger escalation messages."""
-        guard = ErrorClassifierGuard()
-        classify_fn = _mock_classify_error("permission")
-        ctx = _make_ctx("Error: Permission denied", classify_fn=classify_fn)
-
-        r1 = guard.check_post(ctx)
-        assert r1 is not None  # first hit
-        assert guard._consecutive_same == 1
-
-        r2 = guard.check_post(ctx)
-        assert r2 is not None
-        assert "repeated" in r2.message.lower() or "consider" in r2.message.lower()
-
-    def test_strong_escalation_at_threshold(self):
-        """3+ consecutive same-category errors trigger strong warning."""
-        guard = ErrorClassifierGuard()
-        classify_fn = _mock_classify_error("network")
-        ctx = _make_ctx("Error: Connection refused", classify_fn=classify_fn)
-
-        guard.check_post(ctx)
-        guard.check_post(ctx)
-        r3 = guard.check_post(ctx)
-        assert r3 is not None
-        assert "stop" in r3.message.lower() or "root cause" in r3.message.lower()
-
-    def test_success_resets_streak(self):
-        """Non-error output resets the consecutive counter."""
-        guard = ErrorClassifierGuard()
-        classify_fn = _mock_classify_error("resource")
-        err_ctx = _make_ctx("Error: CUDA out of memory", classify_fn=classify_fn)
-        guard.check_post(err_ctx)
-        assert guard._consecutive_same == 1
-
-        ok_ctx = _make_ctx("File written successfully.")
-        guard.check_post(ok_ctx)
-        assert guard._consecutive_same == 0
-
-        # After reset, hitting same error starts from 1 again
-        guard.check_post(err_ctx)
-        assert guard._consecutive_same == 1
 
 
 # ── StepCheckpoint Tests ────────────────────────────────────────────────────

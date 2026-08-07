@@ -25,7 +25,6 @@ def test_guard_registry_complete():
     from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
     from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
     from flagscale_agent.react.guard.arg_type import ArgTypeGuard
-    from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
 
     # All must instantiate without error (no missing deps)
     ShellSafetyGuard()
@@ -38,7 +37,6 @@ def test_guard_registry_complete():
     MemoryDisciplineGuard()
     PostEvictRecoveryGuard()
     KnowledgeSkillGuard()
-    ErrorClassifierGuard()
 
 
 def test_tool_registry_complete():
