@@ -28,17 +28,14 @@ class PlanUpdateGuard(Guard):
     priority = 50
 
 
+    REMIND_THRESHOLD = 20  # turns without plan_update before injecting reminder
+
     def __init__(self, task_plan):
         self._task_plan = task_plan
-        self._last_update_turn = -1
-        self._turns_since_update = 0
+        self._last_update_turn = 0
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         """Check if plan needs updating after tool execution."""
-        # Only enforce if a plan exists with active steps
-        if not self._task_plan:
-            return None
-
         active_plan = self._task_plan.get_active()
         if not active_plan:
             return None
@@ -47,28 +44,25 @@ class PlanUpdateGuard(Guard):
         if not steps:
             return None
 
-        # Track plan_update calls
-        if ctx.tool_name == "plan_update":
+        # Track plan_update/plan_create calls as "plan touched"
+        if ctx.tool_name in ("plan_update", "plan_create"):
             self._last_update_turn = ctx.turn_count
-            self._turns_since_update = 0
             return None
 
-        # Count actual turns (not tool calls) since last update
-        if ctx.turn_count > self._last_update_turn:
-            turns_elapsed = ctx.turn_count - self._last_update_turn
-        else:
-            turns_elapsed = self._turns_since_update
+        # Skip plan-related reads
+        if ctx.tool_name == "plan_status":
+            return None
 
-        # Inject reminder if plan hasn't been updated in 3+ actual turns
-        if turns_elapsed >= 3 and ctx.tool_name not in ("plan_status", "plan_create"):
+        turns_elapsed = ctx.turn_count - self._last_update_turn
+
+        if turns_elapsed >= self.REMIND_THRESHOLD:
             doing_steps = [s for s in steps if s.get("status") == "doing"]
             if doing_steps:
                 step_id = doing_steps[0].get("id")
                 return GuardVerdict.inject(
                     message=(
                         f"[PlanUpdate] Active step {step_id} not updated in {turns_elapsed} turns. "
-                        f"Mark it done/skipped, or add notes (decisions, attempts, key values) "
-                        f"to preserve context."
+                        f"Mark it done/skipped, or add notes to preserve context."
                     ),
                     reason="plan_not_updated",
                     category="plan_update",

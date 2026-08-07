@@ -156,12 +156,6 @@ class PlanGuard(Guard):
         return None
 
     def reset_turn(self):
-        # Per-iteration reset: only reset consecutive reads dedup within iteration
-        # _consecutive_reads tracks patterns across iterations within a turn.
-        # It is reset by productive tool calls in check_pre, not here.
-        pass
-
-    def reset_turn(self):
         """Reset all counters at the start of a new user turn.
 
         This prevents state leaking between user messages — a fresh question
