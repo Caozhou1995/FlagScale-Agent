@@ -135,19 +135,7 @@ class WorkerAgent:
         self._sessions_root = sessions_root
 
 
-        # Swap store for context management V3 (evict/recall)
-        from flagscale_agent.react.swap_store import SwapStore
-        from flagscale_agent.react.evict_summary import EvictSummaryStore
-        swap_store_dir = os.path.join(session_dir, "swap_store")
-        self._swap_store = SwapStore(swap_store_dir)
-        self._evict_summary = EvictSummaryStore(session_dir)
-
-        memory_dir = get_memory_dir()
-        self.memory = _memory or Memory(memory_dir)
-
-        plan_dir = os.path.join(session_dir, "plans")
-        self.task_plan = _task_plan or TaskPlan(plan_dir)
-
+        # Provider and history must be created before ContextManager
         if not config.api_key:
             raise ValueError(
                 "API key not found. Set ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, or OPENAI_API_KEY."
@@ -158,6 +146,26 @@ class WorkerAgent:
         )
 
         self.history = HistoryManager(max_context_tokens=config.max_context_tokens)
+
+        # Swap store for context management V3 (evict/recall)
+        from flagscale_agent.react.swap_store import SwapStore
+        from flagscale_agent.react.evict_summary import EvictSummaryStore
+        from flagscale_agent.react.context_manager import ContextManager
+        swap_store_dir = os.path.join(session_dir, "swap_store")
+        self._swap_store = SwapStore(swap_store_dir)
+        self._evict_summary = EvictSummaryStore(session_dir)
+        self.context_manager = ContextManager(
+            history=self.history,
+            swap_store=self._swap_store,
+            evict_summary=self._evict_summary,
+            provider=self.provider,
+        )
+
+        memory_dir = get_memory_dir()
+        self.memory = _memory or Memory(memory_dir)
+
+        plan_dir = os.path.join(session_dir, "plans")
+        self.task_plan = _task_plan or TaskPlan(plan_dir)
 
         if not _tool_registry:
             self._register_tools()
@@ -467,34 +475,6 @@ class WorkerAgent:
             plan_context=plan_context,
             tool_names=tool_names,
         )
-
-    # ── GuardContext builder ────────────────────────────────────────────────
-
-    def _build_obs(
-        self,
-        tool_name: str = "",
-        tool_args: dict | None = None,
-        tool_result: str | None = None,
-    ) -> "GuardContext":
-        from flagscale_agent.react.guard import GuardContext
-        try:
-            tool = self.tool_registry.get(tool_name)
-        except (KeyError, AttributeError):
-            pass
-        ctx = GuardContext(
-            tool_name=tool_name,
-            tool_args=tool_args or {},
-            tool_result=tool_result,
-            
-            turn_count=self.turn_count,
-            recent_tool_names=list(self._last_tool_calls_deque)[-10:],
-            context_pressure=self.history.get_context_pressure() if self.history else 0.0,
-            evictable_indexes=self.history.get_evictable_indexes() if self.history else [],
-            classify_fn=self.judge.classify,            assistant_text=self._get_last_assistant_text(),
-        )
-        # Attach history reference for auto-evict in ContextPressureGuard
-        ctx._history = self.history
-        return ctx
 
     # ── Health judge (delegates to unified Judge) ───────────────────────────
 
@@ -894,8 +874,15 @@ class WorkerAgent:
         # Re-point swap store to restored session's dir
         from flagscale_agent.react.swap_store import SwapStore
         from flagscale_agent.react.evict_summary import EvictSummaryStore
+        from flagscale_agent.react.context_manager import ContextManager
         self._swap_store = SwapStore(os.path.join(session_dir, "swap_store"))
         self._evict_summary = EvictSummaryStore(session_dir)
+        self.context_manager = ContextManager(
+            history=self.history,
+            swap_store=self._swap_store,
+            evict_summary=self._evict_summary,
+            provider=self.provider,
+        )
 
         # Clean up the empty new session dir if it's different
         if old_session_dir != session_dir:
@@ -1494,20 +1481,10 @@ class WorkerAgent:
 
         # Context pressure warning is handled by ContextPressureGuard — no duplicate check here
 
-        # Auto-memory-write: capture critical training state from monitor results
-        self._auto_memorize_training_state(tool_calls, results)
-
         self._tool_call_cache = {}
         print()
 
-    def _auto_memorize_training_state(self, tool_calls: list, results: list):
-        """Auto-memorize training state is disabled in the new memory system.
-        
-        The redesigned memory only stores entries that pass the three-category
-        test (fact/pitfall/insight). Temporary session state like log paths
-        should be tracked via plan or conversation context, not memory.
-        """
-        pass
+
 
     def _inject_message(self, msg: str):
         """Inject a guard block/escalate message into conversation history.
@@ -1602,46 +1579,9 @@ class WorkerAgent:
         usage = {}
         self._streaming_in_code_block = False
 
-        def _handle_context_overflow() -> bool:
-            """Evict old messages on context overflow. Returns True if retry is safe."""
-            try:
-                hm = self.history
-
-                # Check if we should do a full hard reset instead of normal eviction
-                if hm.should_hard_reset():
-                    self._hard_reset_context()
-                    nonlocal messages
-                    messages = hm.get_messages()
-                    return True
-
-                evictable = hm.get_evictable_indexes()
-                if not evictable:
-                    # No evictable messages and hard reset not triggered — try hard reset as last resort
-                    self._hard_reset_context()
-                    messages = hm.get_messages()
-                    return True
-
-                # Evict at least 30% of evictable messages (oldest first)
-                count = max(1, len(evictable) * 30 // 100)
-                to_evict = evictable[:count]
-                evicted_any = False
-                for idx in to_evict:
-                    result = hm.evict_message(idx)
-                    if result is not None:
-                        # Store to swap if available
-                        if hasattr(self, '_swap_store') and self._swap_store:
-                            self._swap_store.save(idx, result)
-                        evicted_any = True
-                if evicted_any:
-                    messages = hm.get_messages()
-                return evicted_any
-            except Exception:
-                return False
-
         stream = retry_with_backoff(
             lambda: self.provider.chat_stream(messages, schemas),
             max_retries=3,
-            on_context_overflow=_handle_context_overflow,
         )
 
         thinking_cleared = False
@@ -1740,17 +1680,6 @@ class WorkerAgent:
                 if content_parts or tool_calls:
                     stream_truncated = True
                     break
-                if _is_context_limit_error(e):
-                    display.warn("Context too large, compacting...")
-                    if _handle_context_overflow():
-                        stream = retry_with_backoff(
-                            lambda: self.provider.chat_stream(messages, schemas),
-                            max_retries=3,
-                            on_context_overflow=_handle_context_overflow,
-                        )
-                        continue
-                    else:
-                        raise
                 # Non-retryable 400 errors (e.g., tool_use/tool_result pairing)
                 # should not be retried — they are permanent request errors.
                 from flagscale_agent.react.retry import _extract_status
@@ -1764,7 +1693,6 @@ class WorkerAgent:
                     stream = retry_with_backoff(
                         lambda: self.provider.chat_stream(messages, schemas),
                         max_retries=3,
-                        on_context_overflow=_handle_context_overflow,
                     )
                     continue
                 raise
@@ -1802,11 +1730,11 @@ class WorkerAgent:
 
         for i, tc in enumerate(tool_calls):
             if tc["name"] == "evict":
-                special_results[i] = self._handle_evict(tc.get("arguments", {}))
+                special_results[i] = self.context_manager.handle_evict(tc.get("arguments", {}))
             elif tc["name"] == "recall":
-                special_results[i] = self._handle_recall(tc.get("arguments", {}))
+                special_results[i] = self.context_manager.handle_recall(tc.get("arguments", {}))
             elif tc["name"] == "evict_list":
-                special_results[i] = self._handle_evict_list(tc.get("arguments", {}))
+                special_results[i] = self.context_manager.handle_evict_list(tc.get("arguments", {}))
             else:
                 normal_calls.append((i, tc))
 
@@ -1827,328 +1755,6 @@ class WorkerAgent:
 
         # Reassemble in original order
         return [special_results[i] for i in range(len(tool_calls))]
-
-    def _handle_evict(self, arguments: dict) -> str:
-        """Process an evict tool call against the message history."""
-        indexes = arguments.get("indexes", []) if arguments else []
-        # Display start
-        if indexes:
-            display.tool_start("evict", f"indexes={indexes[:10]}{'...' if len(indexes) > 10 else ''}")
-        else:
-            display.tool_start("evict", "")
-        t0 = time.time()
-
-        if not arguments:
-            result_msg = "ERROR: 'indexes' parameter is required and must be a non-empty list."
-            display.tool_done("evict", time.time() - t0, detail="missing indexes", error=True)
-            return result_msg
-
-        if not indexes:
-            result_msg = "ERROR: 'indexes' parameter is required and must be a non-empty list."
-            display.tool_done("evict", time.time() - t0, detail="empty indexes", error=True)
-            return result_msg
-
-        if not isinstance(indexes, list):
-            if isinstance(indexes, (int, float)):
-                indexes = [int(indexes)]
-            else:
-                result_msg = "ERROR: 'indexes' must be a list of integers."
-                display.tool_done("evict", time.time() - t0, detail="invalid type", error=True)
-                return result_msg
-
-        evicted_count = 0
-        freed_tokens = 0
-        errors = []
-        # Collect messages for batch summary before evicting
-        messages_for_summary = []  # [(index, role, tool_name, content)]
-
-        for idx in indexes:
-            if isinstance(idx, float) and idx == int(idx):
-                idx = int(idx)
-            if not isinstance(idx, int):
-                errors.append(f"index {idx}: not an integer")
-                continue
-
-            # Skip if already summarized (idempotent)
-            if self._evict_summary.has(idx):
-                # Already evicted and summarized previously, just skip
-                result = self.history.evict_message(idx)
-                if result:
-                    content = result["content"]
-                    if not isinstance(content, str):
-                        content = json.dumps(content, ensure_ascii=False)
-                    self._swap_store.save(idx, content, result.get("metadata"))
-                    evicted_count += 1
-                    freed_tokens += result.get("metadata", {}).get("tokens", 0)
-                continue
-
-            # Get message content BEFORE evicting (for summary generation)
-            msg = self.history.get_message_at(idx)
-            if msg is None:
-                errors.append(f"index {idx}: out of range")
-                continue
-
-            # Extract info for summary
-            role = msg.get("role", "unknown")
-            tool_name = None
-            content_for_summary = ""
-
-            if role == "tool":
-                # Tool result message
-                tool_name = msg.get("name") or msg.get("tool_name", "unknown")
-                content_for_summary = msg.get("content", "")
-                if isinstance(content_for_summary, list):
-                    content_for_summary = json.dumps(content_for_summary, ensure_ascii=False)
-            elif role == "assistant":
-                content_for_summary = msg.get("content", "")
-                if isinstance(content_for_summary, list):
-                    # Extract text blocks and tool_use names
-                    parts = []
-                    for block in content_for_summary:
-                        if isinstance(block, dict):
-                            if block.get("type") == "text":
-                                parts.append(block.get("text", ""))
-                            elif block.get("type") == "tool_use":
-                                tool_name = block.get("name", "")
-                                parts.append(f"[tool_use: {tool_name}({json.dumps(block.get('input', {}), ensure_ascii=False)})]")
-                    content_for_summary = "\n".join(parts)
-            elif role == "user":
-                content_for_summary = msg.get("content", "")
-                if isinstance(content_for_summary, list):
-                    parts = []
-                    for block in content_for_summary:
-                        if isinstance(block, dict):
-                            if block.get("type") == "text":
-                                parts.append(block.get("text", ""))
-                            elif block.get("type") == "tool_result":
-                                parts.append(f"[tool_result: {block.get('content', '')}]")
-                    content_for_summary = "\n".join(parts)
-
-            messages_for_summary.append((idx, role, tool_name, content_for_summary))
-
-            # Now evict
-            result = self.history.evict_message(idx)
-            if result is None:
-                errors.append(f"index {idx}: not evictable (already evicted, system prompt, protected tail)")
-                # Remove from summary list
-                messages_for_summary.pop()
-                continue
-
-            content = result["content"]
-            if not isinstance(content, str):
-                content = json.dumps(content, ensure_ascii=False)
-            self._swap_store.save(idx, content, result.get("metadata"))
-            evicted_count += 1
-            freed_tokens += result.get("metadata", {}).get("tokens", 0)
-
-            # Handle paired eviction (tool_use + tool_result must stay paired)
-            paired = result.get("paired_evict")
-            if paired:
-                paired_idx = paired["index"]
-                paired_content = paired["content"]
-                paired_content_str = paired_content
-                if not isinstance(paired_content_str, str):
-                    paired_content_str = json.dumps(paired_content, ensure_ascii=False)
-                paired_meta = {
-                    "role": "user",
-                    "tokens": paired["tokens"],
-                    "paired_with": idx,  # Link back so recall can restore both
-                }
-                self._swap_store.save(paired_idx, paired_content_str, paired_meta)
-                evicted_count += 1
-                freed_tokens += paired["tokens"]
-                # Save primary's metadata with paired_idx so recall can restore both
-                primary_meta = result.get("metadata", {})
-                primary_meta["paired_with"] = paired_idx
-                self._swap_store.save(idx, content, primary_meta)
-                # Add paired to summary with actual content
-                paired_summary_content = paired_content_str if paired_content_str else f"[tool_result paired with index {idx}]"
-                messages_for_summary.append((paired_idx, "user", None, paired_summary_content))
-
-        # Generate summaries via LLM for newly evicted messages
-        if messages_for_summary:
-            self._generate_evict_summaries(messages_for_summary)
-
-        # Display result
-        result_msg = f"Evicted {evicted_count} message(s), freed ~{freed_tokens} tokens."
-        if errors:
-            result_msg += f" Skipped: {'; '.join(errors[:5])}"
-        elapsed = time.time() - t0
-        display.tool_done("evict", elapsed, detail=f"{evicted_count} evicted, ~{freed_tokens} tokens freed")
-
-        return result_msg
-
-    def _generate_evict_summaries(self, messages: list):
-        """Generate LLM summaries for evicted messages and store them.
-
-        Each message gets its own LLM call for precise summary.
-        Uses ThreadPoolExecutor for concurrent API calls.
-        Short messages (≤150 chars) are used directly as their own summary
-        without wasting an LLM call.
-
-        Args:
-            messages: List of (index, role, tool_name, content_str) tuples.
-        """
-        if not messages:
-            return
-
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        # Threshold: messages shorter than this don't need LLM summarization
-        SHORT_THRESHOLD = 150
-
-        # Separate short vs long messages
-        needs_llm = []
-        results = {}
-
-        for idx, role, tool_name, content in messages:
-            content_clean = (content or "").strip()
-            if len(content_clean) <= SHORT_THRESHOLD:
-                # Short enough to be its own summary — no LLM needed
-                summary = content_clean.replace("\n", " ") if content_clean else f"[{role}] {tool_name or 'empty message'}"
-                results[idx] = summary
-            else:
-                needs_llm.append((idx, role, tool_name, content))
-
-        def _summarize_one(idx: int, role: str, tool_name: str, content: str) -> tuple:
-            """Call LLM to generate one-line summary. Returns (index, summary)."""
-            prompt = (
-                "Summarize this evicted conversation message in ONE concise line (max 120 chars). "
-                "State the concrete action or content factually. Do NOT infer intent or add interpretation.\n\n"
-                f"[role={role}"
-            )
-            if tool_name:
-                prompt += f", tool={tool_name}"
-            prompt += f"]\n{content}"
-
-            try:
-                response = self.provider.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    tools=[],
-                )
-                summary = ""
-                if isinstance(response, dict):
-                    resp_content = response.get("content", "")
-                    if isinstance(resp_content, list):
-                        for block in resp_content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                summary += block.get("text", "")
-                    elif isinstance(resp_content, str):
-                        summary = resp_content
-                    if not summary:
-                        msg = response.get("message", {})
-                        summary = msg.get("content", "") if isinstance(msg, dict) else ""
-                return (idx, summary.strip().split("\n")[0][:200])  # First line, max 200 chars
-            except Exception as e:
-                fallback = content.replace("\n", " ") if content else f"[{role}]"
-                return (idx, f"[no-llm] {fallback}")
-
-        # Concurrent LLM calls only for long messages
-        if needs_llm:
-            max_workers = min(len(needs_llm), 10)
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {
-                    executor.submit(_summarize_one, idx, role, tool_name, content): idx
-                    for idx, role, tool_name, content in needs_llm
-                }
-                for future in as_completed(futures):
-                    try:
-                        idx, summary = future.result(timeout=30)
-                        results[idx] = summary
-                    except Exception:
-                        idx = futures[future]
-                        results[idx] = "[timeout] summary generation failed"
-
-        # Store all summaries and update placeholders in history
-        for idx, role, tool_name, _ in messages:
-            summary = results.get(idx, f"[{role}] {tool_name or 'message'}")
-            self._evict_summary.add(idx, role, summary, tool_name)
-            self.history.update_evict_placeholder(idx, summary)
-
-    def _handle_recall(self, arguments: dict) -> str:
-        """Process a recall tool call — retrieve evicted content from swap store."""
-        index = arguments.get("index") if arguments else None
-        display.tool_start("recall", f"index={index}")
-        t0 = time.time()
-
-        if not arguments:
-            display.tool_done("recall", time.time() - t0, detail="missing index", error=True)
-            return "ERROR: 'index' parameter is required."
-
-        if index is None:
-            display.tool_done("recall", time.time() - t0, detail="missing index", error=True)
-            return "ERROR: 'index' parameter is required."
-        if isinstance(index, float) and index == int(index):
-            index = int(index)
-        if not isinstance(index, int):
-            display.tool_done("recall", time.time() - t0, detail="invalid type", error=True)
-            return "ERROR: 'index' must be an integer."
-
-        content = self._swap_store.load(index)
-        if content is None:
-            # Fallback: try recall from full_log (handles pre-reset or non-evicted messages)
-            content = self.history.recall_from_full_log(index)
-            if content is None:
-                display.tool_done("recall", time.time() - t0, detail=f"index {index} not found", error=True)
-                return f"ERROR: No evicted content found at index {index}."
-            # full_log recall — no in-place restoration (message not in current _messages)
-            elapsed = time.time() - t0
-            display.tool_done("recall", elapsed, detail=f"index={index} from full_log")
-            return content
-
-        # Restore the original content back into history so subsequent LLM calls
-        # see it in-place (not just as this turn's tool_result).
-        restored = self.history.recall_message(index, content)
-
-        # Also restore paired message to maintain tool_use/tool_result pairing
-        metadata = self._swap_store.load_metadata(index)
-        paired_idx = metadata.get("paired_with") if metadata else None
-        if paired_idx is not None:
-            paired_content = self._swap_store.load(paired_idx)
-            if paired_content is not None:
-                self.history.recall_message(paired_idx, paired_content)
-
-        summary_entry = self._evict_summary.get(index)
-        summary_hint = summary_entry.get("summary", "") if summary_entry else ""
-        restore_status = "restored" if restored else "returned"
-        elapsed = time.time() - t0
-        display.tool_done("recall", elapsed, detail=f"index={index} {restore_status} | {summary_hint}")
-
-        return content
-
-    def _handle_evict_list(self, arguments: dict) -> str:
-        """List all evicted message summaries for recall navigation."""
-        keyword = arguments.get("keyword", "") if arguments else ""
-        display.tool_start("evict_list", f"keyword='{keyword}'" if keyword else "")
-        t0 = time.time()
-
-        entries = self._evict_summary.list_all()
-        if not entries:
-            display.tool_done("evict_list", time.time() - t0, detail="0 entries")
-            return "No evicted messages with summaries found."
-
-        # Optional filter by keyword
-        kw_lower = keyword.lower()
-
-        lines = []
-        for e in entries:
-            if kw_lower and kw_lower not in e.get("summary", "").lower() and kw_lower not in (e.get("tool_name") or "").lower():
-                continue
-            tool_part = f" [{e['tool_name']}]" if e.get("tool_name") else ""
-            lines.append(f"  {e['index']:>5}: ({e['role']}{tool_part}) {e['summary']}")
-
-        if not lines:
-            display.tool_done("evict_list", time.time() - t0, detail=f"0 matching '{keyword}'")
-            return f"No evicted messages matching '{keyword}'."
-
-        header = f"Evicted messages ({len(lines)} entries):"
-        if keyword:
-            header = f"Evicted messages matching '{keyword}' ({len(lines)} entries):"
-
-        result = header + "\n" + "\n".join(lines)
-        elapsed = time.time() - t0
-        display.tool_done("evict_list", elapsed, detail=f"{len(lines)} entries")
-        return result
 
     def _execute_tool(self, tool_call, skip_confirm=False):
         return self._tool_executor.execute_single(tool_call, skip_confirm=skip_confirm)
@@ -2182,196 +1788,11 @@ class WorkerAgent:
     def _is_context_limit_error(e) -> bool:
         return _is_context_limit_error(e)
 
-    # ── Compaction helpers ─────────────────────────────────────────────────
+    # ── File content helpers ────────────────────────────────────────────────
 
-    def _extract_memories_before_compaction(self, to_drop: list[dict]):
-        """Auto-extract key findings from messages about to be dropped.
 
-        Rules (no LLM call, pure heuristics to keep it fast):
-        1. Error + fix pattern → finding
-        2. Path discoveries (checkpoint, env, config) → context
-        3. Numerical results (loss, throughput) → finding
-        """
-        import hashlib
 
-        extracted = []
-        all_text = ""
 
-        for msg in to_drop:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        parts.append(block.get("content", "") or block.get("text", ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                content = "\n".join(parts)
-            if not isinstance(content, str):
-                continue
-            all_text += content + "\n"
-
-        # Rule 1: Error + resolution patterns
-        error_fix_patterns = [
-            # "Error: X ... fixed by Y" or "solved by"
-            (r'(?:Error|ERROR|Exception|OOM|NCCL|CUDA).*?[:]\s*(.{20,200})',
-             r'(?:fix|solve|resolv|workaround|solution).*?[:]\s*(.{20,200})'),
-        ]
-        errors_found = re.findall(
-            r'(?:Error|ERROR|Exception|Traceback|OOM|NCCL error|CUDA error)[^\n]{10,200}',
-            all_text
-        )
-        fixes_found = re.findall(
-            r'(?:fixed|solved|resolved|workaround|the fix|solution)[^\n]{10,200}',
-            all_text, re.IGNORECASE
-        )
-        if errors_found and fixes_found:
-            error_summary = errors_found[0]
-            fix_summary = fixes_found[0]
-            key = "auto_fix_" + hashlib.md5(error_summary.encode()).hexdigest()[:8]
-            extracted.append({
-                "key": key,
-                "type": "finding",
-                "content": f"Error: {error_summary}\nFix: {fix_summary}",
-            })
-
-        # Rule 2: Important path discoveries
-        path_patterns = [
-            (r'(?:checkpoint|ckpt|model|weight)s?\s*(?:path|dir|at|in)?[:\s]+(/\S{10,200})', "checkpoint_path"),
-            (r'(?:conda|env|environment)\s*(?:path|prefix|at|in)?[:\s]+(/\S{10,200})', "env_path"),
-            (r'(?:config|yaml|conf)\s*(?:path|file|at|in)?[:\s]+(/\S{10,200})', "config_path"),
-        ]
-        for pattern, label in path_patterns:
-            matches = re.findall(pattern, all_text, re.IGNORECASE)
-            if matches:
-                path_val = matches[-1].rstrip(".,;:\"')")  # last mention is most recent
-                key = f"auto_path_{label}_{hashlib.md5(path_val.encode()).hexdigest()[:6]}"
-                extracted.append({
-                    "key": key,
-                    "type": "context",
-                    "content": f"{label}: {path_val}",
-                })
-
-        # Rule 3: Numerical results (loss, throughput, tokens-per-sec)
-        metric_patterns = [
-            (r'(?:loss|lm.loss)\s*[:=]\s*([\d.]+(?:e[+-]?\d+)?)', "loss"),
-            (r'(?:throughput|tokens.per.sec|tps|samples.per.sec)\s*[:=]\s*([\d.]+)', "throughput"),
-            (r'(?:elapsed.time.per.iteration|iter.time)\s*[:=]\s*([\d.]+)', "iter_time"),
-        ]
-        metrics_found = []
-        for pat, label in metric_patterns:
-            matches = re.findall(pat, all_text, re.IGNORECASE)
-            if matches:
-                metrics_found.append(f"{label}={matches[-1]}")
-        if metrics_found:
-            key = "auto_metrics_" + hashlib.md5(
-                "\n".join(metrics_found).encode()
-            ).hexdigest()[:8]
-            extracted.append({
-                "key": key,
-                "type": "finding",
-                "content": "Training metrics observed: " + "; ".join(metrics_found[:5]),
-            })
-
-        # Rule 4: Current hypothesis / root cause analysis (critical for continuity)
-        hypothesis_matches = re.findall(
-            r'HYPOTHESIS:\s*(.{20,300})', all_text, re.IGNORECASE
-        )
-        if hypothesis_matches:
-            latest = hypothesis_matches[-1]
-            key = "auto_hypothesis_" + hashlib.md5(latest.encode()).hexdigest()[:6]
-            extracted.append({
-                "key": key,
-                "type": "context",
-                "content": f"Active hypothesis before compaction: {latest}",
-            })
-
-        # Rule 5: Current experiment/attempt status
-        experiment_matches = re.findall(
-        )
-        if experiment_matches:
-            exp_name = experiment_matches[-1]
-            # Extract last attempt result if available
-            result_matches = re.findall(
-                r"result['\"]?\s*[:=]\s*['\"]([^'\"]{10,200})", all_text
-            )
-            result_info = f", last result: {result_matches[-1]}" if result_matches else ""
-            key = f"auto_experiment_state_{exp_name}"
-            extracted.append({
-                "key": key,
-                "type": "context",
-                "content": f"Active experiment '{exp_name}'{result_info}",
-            })
-
-        # Write extracted memories (max 5 per compaction to avoid noise)
-        # NOTE: Auto-extraction is disabled in the redesigned memory system.
-        # The new memory only accepts fact/pitfall/insight with proper key format.
-        # Auto-extracted compaction state doesn't fit these categories.
-        pass
-
-    def _summarize_for_compaction(self, text: str) -> str:
-        response = self.provider.chat(
-            [{"role": "user", "content": f"Summarize this conversation segment for an AI agent that will continue working on the same task. Keep under 1500 tokens. Include: file paths, error messages, decisions, current approach.\n\n{text}"}],
-            tools=[]
-        )
-        return response.get("content", "")
-
-    def _score_messages_for_compaction(self, messages: list[dict]) -> list[int]:
-        """Score messages for compaction priority. Higher = more important to keep.
-        
-        Priority tiers:
-        - 10: Messages with experiment state, hypothesis, active decisions
-        - 8: Messages with error diagnosis, root cause analysis
-        - 7: Messages with training metrics, checkpoint info
-        - 5: Normal messages (default)
-        - 3: Verbose tool output (long file reads, pip install logs)
-        - 2: Repeated monitoring checks with no new info
-        """
-        scores = []
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        parts.append(block.get("content", "") or block.get("text", ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                content = "\n".join(parts)
-            if not isinstance(content, str):
-                scores.append(5)
-                continue
-
-            score = 5  # default
-
-            # Boost: experiment state and decisions
-            if re.search(r'HYPOTHESIS:|ROOT CAUSE:|DECISION:', content, re.IGNORECASE):
-                score = max(score, 10)
-                score = max(score, 10)
-
-            # Boost: error diagnosis and fixes
-            elif re.search(r'(?:root cause|diagnosed|the actual problem|fix(?:ed)? by)', content, re.IGNORECASE):
-                score = max(score, 8)
-            elif re.search(r'2-Strike|same category.*fail|strike.*block', content, re.IGNORECASE):
-                score = max(score, 8)
-
-            # Boost: training metrics and results
-            elif re.search(r'iteration\s+\d+.*loss|lm loss.*\d+\.\d+|throughput', content, re.IGNORECASE):
-                score = max(score, 7)
-
-            # Penalize: verbose tool output
-            elif len(content) > 3000 and re.search(
-                r'pip install|Collecting |Building wheel|Successfully installed', content):
-                score = min(score, 3)
-            elif len(content) > 5000 and msg.get("role") == "tool":
-                score = min(score, 3)
-
-            # Penalize: repeated "no new content" monitoring
-            elif re.search(r'No new content|Still running.*no new metrics', content, re.IGNORECASE):
-                score = min(score, 2)
-
-            scores.append(score)
-        return scores
 
     def _summarize_file_content(self, content: str, path: str) -> str:
         lines = content.splitlines()
@@ -2383,7 +1804,5 @@ class WorkerAgent:
         return f"{head}\n\n[... {len(lines) - 60} lines omitted from {path} ...]\n\n{mid}\n\n[...]\n\n{tail}"
 
 
-    @staticmethod
-    def _is_quick_test_command(cmd: str) -> bool:
-        return bool(re.search(r'--train-iters\s+', cmd))
+
 
