@@ -28,10 +28,10 @@ import pytest
 
 
 class TestResumeSummaryGeneration:
-    """Verify that session summary generation uses provider.chat() correctly."""
+    """Verify that session summary generation uses simple text format (no LLM)."""
 
     def test_agent_generate_missing_summaries(self, tmp_path):
-        """_generate_missing_summaries should call provider.chat and save summary."""
+        """_generate_missing_summaries should generate simple text summary without LLM."""
         from flagscale_agent.react.agent import WorkerAgent
 
         # Create a fake conversation.json
@@ -51,11 +51,6 @@ class TestResumeSummaryGeneration:
         # Create a minimal agent mock
         agent = MagicMock(spec=WorkerAgent)
         agent._sessions_root = str(tmp_path)
-        agent.provider = MagicMock()
-        agent.provider.chat.return_value = {
-            "content": "主要在分析代码\n进展到文档完善阶段\n无下一步待做",
-            "tool_calls": None,
-        }
 
         # Bind the real method
         import types
@@ -66,29 +61,22 @@ class TestResumeSummaryGeneration:
         sessions = [{"session_dir": session_dir, "session_summary": ""}]
         agent._generate_missing_summaries(sessions)
 
-        # Verify provider.chat was called (not chat_stream)
-        agent.provider.chat.assert_called_once()
-        call_args = agent.provider.chat.call_args
-        messages = call_args[0][0]
-        assert messages[0]["role"] == "user"
-        assert "摘要" in messages[0]["content"]
-
-        # Verify summary was saved to conversation.json
-        with open(conv_path, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-        assert "session_summary" in saved
-        assert "分析代码" in saved["session_summary"]
-
-        # Verify in-memory session dict was updated
-        assert "分析代码" in sessions[0]["session_summary"]
+        # Verify simple text summary was generated (no LLM call)
+        # Format: [1] <first message>\n[2] <second message>
+        assert sessions[0]["session_summary"]
+        summary = sessions[0]["session_summary"]
+        assert "[1]" in summary
+        assert "[2]" in summary
+        assert "帮我分析代码" in summary
+        assert "继续完善文档" in summary
 
     def test_agent_handles_list_content_response(self, tmp_path):
-        """provider.chat may return content as list of blocks."""
+        """Handle messages with list-based content (tool_result format)."""
         from flagscale_agent.react.agent import WorkerAgent
 
         conv_data = {
             "messages": [
-                {"role": "user", "content": "训练模型"},
+                {"role": "user", "content": [{"type": "text", "text": "训练模型"}]},
             ]
         }
         session_dir = str(tmp_path / "session2")
@@ -98,12 +86,6 @@ class TestResumeSummaryGeneration:
             json.dump(conv_data, f, ensure_ascii=False)
 
         agent = MagicMock(spec=WorkerAgent)
-        agent.provider = MagicMock()
-        # Return content as list (Anthropic format)
-        agent.provider.chat.return_value = {
-            "content": [{"type": "text", "text": "训练大模型\n已完成\n无"}],
-            "tool_calls": None,
-        }
 
         import types
         agent._generate_missing_summaries = types.MethodType(
@@ -113,22 +95,20 @@ class TestResumeSummaryGeneration:
         sessions = [{"session_dir": session_dir, "session_summary": ""}]
         agent._generate_missing_summaries(sessions)
 
-        assert "训练大模型" in sessions[0]["session_summary"]
+        assert "训练模型" in sessions[0]["session_summary"]
 
-    def test_agent_handles_provider_error_gracefully(self, tmp_path):
-        """If provider.chat raises, session is skipped without crashing."""
+    def test_agent_handles_error_gracefully(self, tmp_path):
+        """If JSON parsing fails, session is skipped without crashing."""
         from flagscale_agent.react.agent import WorkerAgent
 
-        conv_data = {"messages": [{"role": "user", "content": "test"}]}
         session_dir = str(tmp_path / "session3")
         os.makedirs(session_dir)
         conv_path = os.path.join(session_dir, "conversation.json")
+        # Write invalid JSON
         with open(conv_path, "w", encoding="utf-8") as f:
-            json.dump(conv_data, f, ensure_ascii=False)
+            f.write("invalid json{")
 
         agent = MagicMock(spec=WorkerAgent)
-        agent.provider = MagicMock()
-        agent.provider.chat.side_effect = RuntimeError("API error")
 
         import types
         agent._generate_missing_summaries = types.MethodType(
@@ -138,7 +118,7 @@ class TestResumeSummaryGeneration:
         sessions = [{"session_dir": session_dir, "session_summary": ""}]
         # Should not raise
         agent._generate_missing_summaries(sessions)
-        # Summary remains empty (not updated)
+        # Summary remains empty (not updated due to JSON error)
         assert sessions[0]["session_summary"] == ""
 
 

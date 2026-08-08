@@ -532,6 +532,9 @@ class WorkerAgent:
 
         Returns empty string on failure (fallback to programmatic summary).
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
             # Use current messages as context for the summary
             # Strip internal fields (like _ext_idx) that APIs do not accept
@@ -548,8 +551,8 @@ class WorkerAgent:
                 status = pm.get_status()
                 if status:
                     plan_info = f"\nCurrent plan:\n{status}"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[Hard Reset Summary] Plan fetch failed: {e}")
 
             prompt_msgs = [
                 {"role": "user", "content": (
@@ -571,7 +574,18 @@ class WorkerAgent:
 
             # Prepend the current conversation as context
             context_msgs = list(messages) + prompt_msgs
-            stream, _ = self.provider.chat_stream(context_msgs, [])
+            
+            # Call LLM with error handling
+            stream_result = self.provider.chat_stream(context_msgs, [])
+            if stream_result is None:
+                logger.warning("[Hard Reset Summary] chat_stream returned None")
+                return ""
+            
+            stream, _ = stream_result
+            if stream is None:
+                logger.warning("[Hard Reset Summary] stream is None")
+                return ""
+            
             result_text = ""
             for event in stream:
                 if isinstance(event, dict):
@@ -582,8 +596,17 @@ class WorkerAgent:
                         delta = getattr(event, "delta", None)
                         if delta and hasattr(delta, "text"):
                             result_text += delta.text
-            return result_text.strip()
-        except Exception:
+            
+            result_text = result_text.strip()
+            if not result_text:
+                logger.warning("[Hard Reset Summary] LLM returned empty result")
+            return result_text
+            
+        except TypeError as e:
+            logger.warning(f"[Hard Reset Summary] Type error (likely None stream): {e}")
+            return ""
+        except Exception as e:
+            logger.warning(f"[Hard Reset Summary] Unexpected error: {type(e).__name__}: {e}")
             return ""
 
     def _build_programmatic_summary(self) -> str:
@@ -879,68 +902,76 @@ class WorkerAgent:
         print(display.dim("Type: resume <number> or resume <session_id>"))
 
     def _generate_missing_summaries(self, sessions: list):
-        """Generate summaries for sessions that do not have one, using LLM batch."""
+        """Generate simple summaries for sessions without one, from conversation file.
+        
+        Uses the same format as _generate_session_summary: first 2 + ... + last 2 user messages.
+        No LLM calls.
+        """
         import json as _json
+        import logging
+        logger = logging.getLogger(__name__)
+        
         for s in sessions:
             session_dir = s.get("session_dir", "")
             if not session_dir:
                 continue
+            
+            # Check if summary already exists
+            if s.get("session_summary"):
+                continue
+            
             conv_path = os.path.join(session_dir, "conversation.json")
             if not os.path.isfile(conv_path):
                 continue
+            
             try:
                 with open(conv_path, "r", encoding="utf-8") as f:
                     conv_data = _json.load(f)
+                
                 messages = conv_data.get("messages", [])
-                # Extract user messages for context
                 user_msgs = [m for m in messages if m.get("role") == "user"]
-                recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
-                snippets = []
-                for m in recent:
-                    content = m.get("content", "")
+                
+                if not user_msgs:
+                    continue
+                
+                # Use same truncation logic as _generate_session_summary
+                def truncate_message(msg, max_len=80):
+                    content = msg.get("content", "")
                     if isinstance(content, str):
-                        snippets.append(content)
+                        text = content
                     elif isinstance(content, list):
+                        text_parts = []
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "text":
-                                snippets.append(block.get("text", ""))
-                                break
-                context_text = "\n".join(snippets)
-                if not context_text.strip():
-                    continue
-
-                prompt_msgs = [
-                    {"role": "user", "content": (
-                        "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
-                        "第1行：这个会话主要在做什么（一句话）\n"
-                        "第2行：当前进展到哪里了（一句话）\n"
-                        "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
-                        f"最近的用户消息:\n{context_text}\n\n"
-                        "直接输出3行摘要，不要任何前缀或解释。"
-                    )}
-                ]
-                response = self.provider.chat(prompt_msgs, [])
-                summary = ""
-                if isinstance(response, dict):
-                    resp_content = response.get("content", "")
-                    if isinstance(resp_content, list):
-                        for block in resp_content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                summary += block.get("text", "")
-                    elif isinstance(resp_content, str):
-                        summary = resp_content
-                summary = summary.strip()
-                if summary:
-                    # Save back to conversation.json
-                    conv_data["session_summary"] = summary
-                    import tempfile
-                    fd, tmp = tempfile.mkstemp(dir=session_dir, prefix=".tmp_conv_", suffix=".json")
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        _json.dump(conv_data, f, ensure_ascii=False, indent=2)
-                    os.replace(tmp, conv_path)
-                    # Update the in-memory session dict
-                    s["session_summary"] = summary
-            except Exception:
+                                text_parts.append(block.get("text", ""))
+                        text = " ".join(text_parts)
+                    else:
+                        text = str(content)
+                    
+                    if len(text) > max_len:
+                        return text[:max_len] + "..."
+                    return text
+                
+                lines = []
+                total = len(user_msgs)
+                
+                if total <= 4:
+                    for i, msg in enumerate(user_msgs, 1):
+                        lines.append(f"[{i}] {truncate_message(msg)}")
+                else:
+                    # First 2
+                    for i in range(2):
+                        lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+                    lines.append("...")
+                    # Last 2
+                    for i in range(total-2, total):
+                        lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+                
+                summary = "\n".join(lines)
+                s["session_summary"] = summary
+                
+            except Exception as e:
+                logger.warning(f"[Missing Summary] Failed for {session_dir}: {e}")
                 continue
 
     def _auto_resume(self, session_id: str):
