@@ -31,24 +31,14 @@ from flagscale_agent.react.prompt import (
 
 if TYPE_CHECKING:
     from flagscale_agent.react.skills import SkillManager
-    from flagscale_agent.react.scene import ScenePreset
 
 
 class PromptBuilder:
     """Assembles the system prompt from static template + optional sections + dashboard."""
 
-    def __init__(self, skill_manager: "SkillManager", scene: "ScenePreset | None"):
+    def __init__(self, skill_manager: "SkillManager"):
         self._skill_manager = skill_manager
-        self._scene = scene
         self._turn_count = 0
-
-    @property
-    def scene(self) -> "ScenePreset | None":
-        return self._scene
-
-    @scene.setter
-    def scene(self, value: "ScenePreset | None"):
-        self._scene = value
 
     def refresh(
         self,
@@ -122,23 +112,8 @@ class PromptBuilder:
         history.set_system_prompt(core)
 
     def _build_optional_sections(self, plan_context: str) -> str:
-        """Select optional sections based on scene constraints."""
+        """Select optional sections."""
         optional_parts = []
-
-        # Scene-driven sections
-        scene_constraints = (
-            (self._scene.constraints or set()) if self._scene else set()
-        )
-
-        CONSTRAINT_TO_SECTION = {
-            "is_inference": "inference",
-            "is_serving": "serving",
-        }
-        for constraint, section_key in CONSTRAINT_TO_SECTION.items():
-            if constraint in scene_constraints:
-                section = SYSTEM_PROMPT_OPTIONAL.get(section_key, "")
-                if section:
-                    optional_parts.append(section)
 
         # Planning section — always inject (includes "when to create" guidance)
         planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")

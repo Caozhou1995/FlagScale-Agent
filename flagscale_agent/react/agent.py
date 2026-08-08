@@ -94,7 +94,7 @@ from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
 
 from flagscale_agent.react.judge import Judge, JudgeBudget
-from flagscale_agent.react.scene import ScenePreset, PRESETS
+
 from flagscale_agent.react.profile import WorkerProfile, PROFILES
 from flagscale_agent.react.constants import (
     READ_ONLY_TOOLS,
@@ -163,13 +163,12 @@ class WorkerAgent:
     by Guard instances. All infrastructure is composed via __init__.
     """
 
-    def __init__(self, config: AgentConfig, scene: ScenePreset | None = None,
+    def __init__(self, config: AgentConfig,
                  # ── Shared infrastructure (for Orchestrator injection) ──
                  _provider=None, _tool_registry=None, _skill_manager=None,
                  _memory=None, _task_plan=None,
                  _constraint_cache=None):
         self.config = config
-        self.scene = scene
 
         # ── Infrastructure ──
         self.skill_manager = _skill_manager or SkillManager(config.skill_dirs)
@@ -229,7 +228,7 @@ class WorkerAgent:
         self._command_handler = CommandHandler(self)
 
         # ── Prompt builder ──
-        self._prompt_builder = PromptBuilder(self.skill_manager, self.scene)
+        self._prompt_builder = PromptBuilder(self.skill_manager)
 
         # ── Tool executor ──
         self._tool_executor = ToolExecutor(self)
@@ -292,9 +291,7 @@ class WorkerAgent:
         from flagscale_agent.react.guard import GuardRegistry
 
         guard_registry = GuardRegistry()
-        # Register native guards
-        constraints = self.scene.constraints if self.scene else set()
-        # Arg type guard first — most fundamental, prevents crashes from malformed LLM args
+        # Register native guards — all guards registered unconditionally
         guard_registry.register(ArgTypeGuard(tool_registry=self.tool_registry))
         guard_registry.register(ShellSafetyGuard())
 
@@ -316,9 +313,8 @@ class WorkerAgent:
         # Plan enforcement guard
         from flagscale_agent.react.guard.plan_update import PlanUpdateGuard
         guard_registry.register(PlanUpdateGuard(task_plan=self.task_plan))
-        if "is_training" in constraints or "is_inference" in constraints or not constraints:
-            guard_registry.register(TrainingMonitorGuard())
-            guard_registry.register(PackageSearchGuard())
+        guard_registry.register(TrainingMonitorGuard())
+        guard_registry.register(PackageSearchGuard())
 
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
@@ -923,10 +919,6 @@ class WorkerAgent:
                 self._run_orchestrated(user_input)
                 continue
 
-            # Detect scene
-            if self.scene is None:
-                self.scene = ScenePreset.auto_detect(user_input=user_input)
-
             if self.config.auto_skill:
                 self._auto_load_skills(user_input)
                 self._auto_load_knowledge(user_input)
@@ -1164,9 +1156,6 @@ class WorkerAgent:
 
     def _run_single_mode(self, user_input: str):
         """Execute user input in single ReAct mode (no subtask/batch routing)."""
-        if self.scene is None:
-            self.scene = ScenePreset.auto_detect(user_input=user_input)
-
         if self.config.auto_skill:
             self._auto_load_skills(user_input)
             self._auto_load_knowledge(user_input)
@@ -1291,8 +1280,6 @@ class WorkerAgent:
         })
 
     def _run_single_shot(self, query: str):
-        if self.scene is None:
-            self.scene = ScenePreset.auto_detect(user_input=query)
         if self.config.auto_skill:
             self._auto_load_skills(query)
             self._auto_load_knowledge(query)
@@ -1314,8 +1301,6 @@ class WorkerAgent:
         """
         t0 = time.time()
 
-        if self.scene is None:
-            self.scene = ScenePreset.auto_detect(user_input=task)
         if self.config.auto_skill:
             self._auto_load_skills(task)
             self._auto_load_knowledge(task)

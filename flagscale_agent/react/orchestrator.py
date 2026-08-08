@@ -38,7 +38,6 @@ import yaml
 
 from .config import AgentConfig
 from .profile import PROFILES, WorkerProfile
-from .scene import PRESETS, ScenePreset
 from .agent import WorkerAgent, WorkerResult
 from .constraint.cache import ConstraintCache
 from .judge import Judge
@@ -498,10 +497,8 @@ class Orchestrator:
         config: AgentConfig | None = None,
     ):
         self.profiles: dict[str, WorkerProfile] = PROFILES
-        self.presets: dict[str, ScenePreset] = PRESETS
         self.subtask_runner = SubtaskRunner(skill_manager=skill_manager)
         self.batch_runner = BatchRunner()
-        self.scene: ScenePreset | None = None
 
         # Shared infrastructure
         self.provider = provider
@@ -519,9 +516,6 @@ class Orchestrator:
 
     def handle(self, user_input: str) -> str:
         """Handle a user request. Route via LLM (primary) or keywords (fallback)."""
-        # 1. Detect scene (env-based, no LLM needed)
-        self.scene = self._refine_scene(user_input)
-
         # 2. Try LLM-based routing first
         route = self._route_via_llm(user_input)
         if route is not None:
@@ -544,9 +538,6 @@ class Orchestrator:
             history_context: Summary of completed stages from conversation history.
                 Passed to Judge to prevent re-routing to subtask mode when work is done.
         """
-        # 1. Detect scene (env-based, no LLM needed)
-        self.scene = self._refine_scene(user_input)
-
         # 2. Try LLM-based routing first
         route = self._route_via_llm(user_input, history_context=history_context)
         if route is not None:
@@ -957,10 +948,6 @@ class Orchestrator:
 
     # ── Scene detection ───────────────────────────────────────────────────
 
-    def _refine_scene(self, user_input: str) -> ScenePreset:
-        """Auto-detect scene from environment (no regex)."""
-        return ScenePreset.from_env_and_input(user_input=user_input)
-
     def _create_worker(self, profile_name: str) -> WorkerAgent:
         """Create a fresh WorkerAgent with shared infrastructure.
 
@@ -969,25 +956,8 @@ class Orchestrator:
         """
         profile = self.profiles[profile_name]
 
-        constraints = set(profile.scene_constraints)
-        if self.scene:
-            constraints |= self.scene.constraints
-
-        worker_scene = ScenePreset(
-            name=profile.name,
-            mode="training",
-            chip_type=self.scene.chip_type if self.scene else "nvidia",
-            chip_vendor_sdk=self.scene.chip_vendor_sdk if self.scene else "cuda",
-            target_framework="megatron-core",
-            source_framework="",
-            default_precision="bf16",
-            network_topology="single_node",
-            constraints=constraints,
-        )
-
         worker = WorkerAgent(
             config=self.config,
-            scene=worker_scene,
             _provider=self.provider,
             _tool_registry=self.tool_registry,
             _skill_manager=self.skill_manager,

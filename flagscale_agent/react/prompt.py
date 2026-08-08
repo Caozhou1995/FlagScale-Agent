@@ -155,7 +155,7 @@ If write_file fails with "path parameter is required but was empty or missing" �
 {optional_sections}
 {skill_context}"""
 
-# Optional sections injected based on scene/state
+# Optional sections injected based on state
 SYSTEM_PROMPT_OPTIONAL = {
     "planning": """## Plan — Your Task Operating System
 
@@ -242,24 +242,6 @@ No test coverage = not complete. Tests are not optional — they protect other u
     "user_commands": """## User Commands
 
 `/mode auto|confirm`, `/memory list|clear|delete`, `/skill <name>`, `/plan`, `/plan abandon`, `/save`, `/resume`, `/compact`, `/reset`, `/reload`, `/quit`""",
-
-    "inference": """## Inference Workflow
-
-FlagScale inference uses vLLM as primary backend. Config structure:
-- Top-level: `experiment.task.type: inference`, `experiment.task.backend: vllm`
-- Model config: `llm.model`, `llm.tensor_parallel_size`, `llm.gpu_memory_utilization`
-- Generation: `generate.prompts`, `generate.sampling.max_tokens`, `generate.sampling.temperature`
-
-Flow: prepare config → validate model path → launch via `flagscale run` → check output.""",
-
-    "serving": """## Serving Workflow
-
-FlagScale serving deploys models as API endpoints (OpenAI-compatible). Config structure:
-- Top-level: `experiment.task.type: serve`, `experiment.task.backend: vllm`
-- Engine args: `engine_args.model`, `engine_args.tensor_parallel_size`, `engine_args.max_model_len`, `engine_args.port`
-- Advanced: disaggregated prefill/decode, multi-model routing, auto-tuning.
-
-Flow: prepare config → validate GPU resources → launch serve → health check endpoint → benchmark.""",
 }
 
 # Dashboard template — appended at the very end of system prompt (recency bias)
