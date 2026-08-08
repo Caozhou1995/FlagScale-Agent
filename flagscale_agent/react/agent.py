@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FlagScale Agent — ReAct loop with composable Guard/Judge architecture.
+"""FlagScale Agent - ReAct loop with composable Guard/Judge architecture.
 
 No Mixin inheritance. State is owned by Guard instances.
 Scene + Profile parameterize behavior without subclassing.
@@ -58,7 +58,7 @@ from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.shell import ShellTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
-# find_log removed — merged into monitor
+# find_log removed - merged into monitor
 
 from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
@@ -151,13 +151,10 @@ class WorkerAgent:
         from flagscale_agent.react.swap_store import SwapStore
         from flagscale_agent.react.evict_summary import EvictSummaryStore
         from flagscale_agent.react.context_manager import ContextManager
-        swap_store_dir = os.path.join(session_dir, "swap_store")
-        self._swap_store = SwapStore(swap_store_dir)
-        self._evict_summary = EvictSummaryStore(session_dir)
         self.context_manager = ContextManager(
             history=self.history,
-            swap_store=self._swap_store,
-            evict_summary=self._evict_summary,
+            swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
+            evict_summary=EvictSummaryStore(session_dir),
             provider=self.provider,
         )
 
@@ -169,12 +166,6 @@ class WorkerAgent:
 
         if not _tool_registry:
             self._register_tools()
-        self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
-        self.tool_registry.register(MemoryReadTool(self.memory))
-        self.tool_registry.register(MemoryListTool(self.memory))
-        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
-        self.tool_registry.register(PlanUpdateTool(self.task_plan))
-        self.tool_registry.register(PlanStatusTool(self.task_plan))
 
         # ── Command handler ──
         self._command_handler = CommandHandler(self)
@@ -236,7 +227,7 @@ class WorkerAgent:
         from flagscale_agent.react.guard import GuardRegistry
 
         guard_registry = GuardRegistry()
-        # Register native guards — all guards registered unconditionally
+        # Register native guards - all guards registered unconditionally
         guard_registry.register(ArgTypeGuard(tool_registry=self.tool_registry))
         guard_registry.register(ShellSafetyGuard())
 
@@ -246,9 +237,6 @@ class WorkerAgent:
         # Create ConstraintGuard (will be populated with Skill constraints later)
         self._constraint_guard = ConstraintGuard()
         guard_registry.register(self._constraint_guard)
-
-        # Build and register dynamic constraints (e.g., shared storage)
-        self._build_dynamic_constraints()
 
         guard_registry.register(ContextPressureGuard(
             working_window_tokens=self.history.working_window if self.history else 0
@@ -294,6 +282,7 @@ class WorkerAgent:
     # ── Initialization helpers ───────────────────────────────────────────────
 
     def _register_tools(self):
+        # Core file and shell tools
         self.tool_registry.register(ReadFileTool())
         self.tool_registry.register(WriteFileTool())
         self.tool_registry.register(EditFileTool())
@@ -304,53 +293,38 @@ class WorkerAgent:
                 health_judge_fn=self._health_judge,
             )
         )
+        
+        # Knowledge and skill tools
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
         self.tool_registry.register(LoadKnowledgeTool(self._knowledge_manager))
+        
+        # Memory and plan tools
+        from flagscale_agent.react.tools.memory_write import MemoryWriteTool
+        from flagscale_agent.react.tools.memory_read import MemoryReadTool
+        from flagscale_agent.react.tools.memory_list import MemoryListTool
+        from flagscale_agent.react.tools.plan_create import PlanCreateTool
+        from flagscale_agent.react.tools.plan_update import PlanUpdateTool
+        from flagscale_agent.react.tools.plan_status import PlanStatusTool
+        self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
+        self.tool_registry.register(MemoryReadTool(self.memory))
+        self.tool_registry.register(MemoryListTool(self.memory))
+        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
+        self.tool_registry.register(PlanUpdateTool(self.task_plan))
+        self.tool_registry.register(PlanStatusTool(self.task_plan))
+        
+        # Web and infrastructure tools
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
         self.tool_registry.register(FlagScaleTrainMonitorTool(classify_fn=self._judge_confirm))
         self.tool_registry.register(InspectCheckpointTool())
+        
+        # Context management tools
         self.tool_registry.register(EvictTool())
         self.tool_registry.register(EvictListTool())
         self.tool_registry.register(RecallTool())
 
-        # Hard reset — LLM-initiated full context reset
+        # Hard reset - LLM-initiated full context reset
         from flagscale_agent.react.tools.hard_reset import HardResetTool
         self.tool_registry.register(HardResetTool(self))
-
-    def _build_dynamic_constraints(self):
-        """Build runtime-detected constraints and register with ConstraintGuard.
-
-        Detects shared storage and other runtime conditions, then creates
-        Constraint objects and injects them into the unified ConstraintGuard.
-        """
-        from flagscale_agent.react.constraint import Constraint, ConstraintTrigger
-
-        shared_paths = self._detect_shared_storage()
-        self._shared_storage_paths = shared_paths
-
-        if shared_paths:
-            path_list = ", ".join(shared_paths)
-            constraint = Constraint(
-                id="env_shared_storage",
-                description=f"Shared storage detected at {path_list}. Conda envs must use --prefix on shared storage.",
-                trigger=ConstraintTrigger(
-                    tool_names={"shell"},
-                    keywords=["conda create"],
-                ),
-                prompt=(
-                    f"SCOPE: shell command creates a conda environment using -n/--name "
-                    f"(local node storage) instead of --prefix on shared storage. "
-                    f"CHECK: 'conda create' with -n or --name flag, WITHOUT a --prefix "
-                    f"pointing to the shared storage ({path_list})."
-                ),
-                correction=(
-                    f"Shared storage detected at: {path_list}. "
-                    f"Use --prefix on shared storage instead of -n/--name "
-                    f"(e.g. --prefix {shared_paths[0]}/envs/<name>). "
-                    f"This ensures multi-node training can access the same environment."
-                ),
-            )
-            self._constraint_guard.add_constraints([constraint])
 
     def _register_llm_constraints(self, skill_name: str):
         """Register LLM-extracted constraints from cache into ConstraintGuard."""
@@ -393,52 +367,6 @@ class WorkerAgent:
         for skill_name in skill_map:
             self._register_llm_constraints(skill_name)
         self._refresh_system_prompt()
-
-    @staticmethod
-    def _detect_shared_storage() -> list[str]:
-        """Detect shared/network filesystem mount points.
-
-        Checks common mount points and the current working directory.
-        Returns a (possibly empty) list of shared filesystem paths.
-        """
-        candidates = [
-            "/share", "/mnt/share", "/mnt/cfs", "/mnt/dfs",
-            "/mnt/nfs", "/mnt/lustre", "/data/shared", "/shared",
-        ]
-        shared = []
-        for path in candidates:
-            if os.path.ismount(path):
-                shared.append(path)
-
-        # Also check if cwd is under a shared FS
-        cwd = os.getcwd()
-        # Look for FUSE, NFS, CIFS, Lustre, GPFS in mount info
-        try:
-            with open("/proc/mounts") as f:
-                mounts = f.read()
-            for line in mounts.splitlines():
-                parts = line.split()
-                if len(parts) < 2:
-                    continue
-                mount_point = parts[0]
-                mount_path = parts[1]
-                fs_type = parts[2] if len(parts) > 2 else ""
-                # Network/shared filesystem types
-                if fs_type in ("fuse", "nfs", "nfs4", "cifs", "lustre", "gpfs",
-                               "glusterfs", "ceph", "pvfs2", "afs", "beegfs"):
-                    if mount_path not in shared:
-                        shared.append(mount_path)
-                # Check if cwd or its parents match a mount
-                if mount_path != "/" and cwd.startswith(mount_path + "/"):
-                    if mount_path not in shared:
-                        shared.append(mount_path)
-        except Exception:
-            pass
-
-        # Sort by path length (shorter = more general) so the most general
-        # shared path comes first for --prefix suggestions
-        shared.sort(key=len)
-        return shared
 
 
 
@@ -533,7 +461,7 @@ class WorkerAgent:
     def _auto_save(self):
         """Auto-save conversation after each completed turn.
 
-        Silent — no user-facing output. Failures are swallowed to avoid
+        Silent - no user-facing output. Failures are swallowed to avoid
         disrupting the interactive flow.
         """
         try:
@@ -542,63 +470,56 @@ class WorkerAgent:
             pass
 
     def _generate_session_summary(self) -> str:
-        """Call LLM to generate a 3-line session summary for resume display.
-
-        Format: 主要内容 / 当前进展 / 下一步待做
+        """Generate session summary by showing first 2 and last 2 user messages.
+        
+        Format:
+        [1] <first message, truncated to 80 chars>
+        [2] <second message, truncated to 80 chars>
+        ...
+        [N-1] <second-to-last message, truncated to 80 chars>
+        [N] <last message, truncated to 80 chars>
         """
         try:
-            # Collect last N user messages as context
             user_msgs = [m for m in self.history.messages if m.get("role") == "user"]
-            recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
-            context_snippets = []
-            for m in recent:
-                content = m.get("content", "")
+            if not user_msgs:
+                return "无用户输入"
+            
+            def truncate_message(msg, max_len=80):
+                # Extract text from message and truncate with ...
+                content = msg.get("content", "")
                 if isinstance(content, str):
-                    context_snippets.append(content)
+                    text = content
                 elif isinstance(content, list):
+                    text_parts = []
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "text":
-                            context_snippets.append(block.get("text", ""))
-                            break
-            context_text = "\n".join(context_snippets)
-
-            # Also include plan status if available
-            plan_info = ""
-            try:
-                from flagscale_agent.react.tools.plan import PlanManager
-                pm = PlanManager()
-                status = pm.get_status()
-                if status:
-                    plan_info = f"\n当前计划:\n{status}"
-            except Exception:
-                pass
-
-            prompt_msgs = [
-                {"role": "user", "content": (
-                    "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
-                    "第1行：这个会话主要在做什么（一句话）\n"
-                    "第2行：当前进展到哪里了（一句话）\n"
-                    "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
-                    f"最近的用户消息:\n{context_text}\n{plan_info}\n\n"
-                    "直接输出3行摘要，不要任何前缀或解释。"
-                )}
-            ]
-            # Use provider directly for a quick non-streaming call
-            stream, _ = self.provider.chat_stream(prompt_msgs, [])
-            result_text = ""
-            for event in stream:
-                if hasattr(event, "type"):
-                    if event.type == "content_block_delta":
-                        delta = getattr(event, "delta", None)
-                        if delta and hasattr(delta, "text"):
-                            result_text += delta.text
-                elif isinstance(event, dict):
-                    result_text += event.get("text", "")
-            return result_text.strip()
+                            text_parts.append(block.get("text", ""))
+                    text = " ".join(text_parts)
+                else:
+                    text = str(content)
+                
+                if len(text) > max_len:
+                    return text[:max_len] + "..."
+                return text
+            
+            lines = []
+            total = len(user_msgs)
+            
+            if total <= 4:
+                for i, msg in enumerate(user_msgs, 1):
+                    lines.append(f"[{i}] {truncate_message(msg)}")
+            else:
+                for i in range(2):
+                    lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+                lines.append("...")
+                for i in range(total-2, total):
+                    lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+            
+            return "\n".join(lines)
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning(f"[Hard Reset] Summary generation failed: {e}")
-            return ""
+            logging.getLogger(__name__).warning(f"[Session Summary] Failed: {e}")
+            return "摘要生成失败"
 
     def _generate_hard_reset_summary(self) -> str:
         """Call LLM to generate a work-state summary for hard reset continuation.
@@ -613,7 +534,7 @@ class WorkerAgent:
         """
         try:
             # Use current messages as context for the summary
-            # Strip internal fields (like _ext_idx) that APIs don't accept
+            # Strip internal fields (like _ext_idx) that APIs do not accept
             messages = []
             for msg in self.history.messages:
                 clean = {k: v for k, v in msg.items() if not k.startswith("_")}
@@ -667,7 +588,7 @@ class WorkerAgent:
 
     def _build_programmatic_summary(self) -> str:
         """Build a programmatic fallback summary when LLM call fails."""
-        parts = ["[Context Hard Reset — conversation auto-compacted]"]
+        parts = ["[Context Hard Reset - conversation auto-compacted]"]
 
         # Plan status
         try:
@@ -693,7 +614,7 @@ class WorkerAgent:
         total_messages = len(self.history._full_log)
 
         header = (
-            f"[Context Hard Reset #{reset_count} — conversation auto-compacted]\n"
+            f"[Context Hard Reset #{reset_count} - conversation auto-compacted]\n"
             f"Previous conversation: {total_messages} messages total, "
             f"saved in conversation_full.json.\n"
             f"Session: {self._session_dir}\n"
@@ -768,7 +689,7 @@ class WorkerAgent:
         self._check_proxy()
 
         if auto_resume_id:
-            # Auto-resume after /reload — find and restore the session
+            # Auto-resume after /reload - find and restore the session
             self._auto_resume(auto_resume_id)
         else:
             self._check_resume()
@@ -778,7 +699,7 @@ class WorkerAgent:
         os.makedirs(os.path.dirname(history_file), exist_ok=True)
         completer = WordCompleter(
             ["/quit", "/reload", "/skill", "/save", "/memory",
-             "/mode", "/plan", "/resume", "/compact", "/reset", "/session"],
+             "/plan", "/resume", "/reset", "/session"],
             sentence=True,
         )
         # Key bindings: Enter submits, but pasted newlines are preserved
@@ -822,8 +743,7 @@ class WorkerAgent:
                 self._auto_load_skills(user_input)
                 self._auto_load_knowledge(user_input)
 
-            self._inject_context(user_input)
-            self._reset_guard_escalation()
+            self._inject_context()
             self._session_input_history.append(user_input)
             self.history.append({"role": "user", "content": user_input})
             try:
@@ -842,7 +762,7 @@ class WorkerAgent:
         if self.config.auto_skill:
             self._auto_load_skills(query)
             self._auto_load_knowledge(query)
-        self._inject_context(query)
+        self._inject_context()
         self.history.append({"role": "user", "content": query})
         try:
             self._react_loop()
@@ -850,7 +770,7 @@ class WorkerAgent:
             display.warn("WorkerAgent._run_single_shot() react loop failed")
 
     def _restore_session(self, data: dict, session_dir: str):
-        """Restore a previous session — take over its session_id and dir."""
+        """Restore a previous session - take over its session_id and dir."""
         # Take over the old session identity
         old_session_dir = self._session_dir
         self._session_id = data.get("session_id", self._session_id)
@@ -862,12 +782,10 @@ class WorkerAgent:
         from flagscale_agent.react.swap_store import SwapStore
         from flagscale_agent.react.evict_summary import EvictSummaryStore
         from flagscale_agent.react.context_manager import ContextManager
-        self._swap_store = SwapStore(os.path.join(session_dir, "swap_store"))
-        self._evict_summary = EvictSummaryStore(session_dir)
         self.context_manager = ContextManager(
             history=self.history,
-            swap_store=self._swap_store,
-            evict_summary=self._evict_summary,
+            swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
+            evict_summary=EvictSummaryStore(session_dir),
             provider=self.provider,
         )
 
@@ -900,7 +818,7 @@ class WorkerAgent:
                 pass
 
         messages = data.get("messages", [])
-        # Skip the old system prompt — we already have a fresh one from __init__
+        # Skip the old system prompt - we already have a fresh one from __init__
         for msg in messages:
             if msg.get("role") == "system":
                 continue
@@ -961,7 +879,7 @@ class WorkerAgent:
         print(display.dim("Type: resume <number> or resume <session_id>"))
 
     def _generate_missing_summaries(self, sessions: list):
-        """Generate summaries for sessions that don't have one, using LLM batch."""
+        """Generate summaries for sessions that do not have one, using LLM batch."""
         import json as _json
         for s in sessions:
             session_dir = s.get("session_dir", "")
@@ -1061,16 +979,7 @@ class WorkerAgent:
 
     # ── Context injection ───────────────────────────────────────────────────
 
-    def _reset_guard_escalation(self):
-        """Reset guard escalation state on new user input — prevents stale escalations."""
-        for guard in self._kernel.deps.guard_registry.guards:
-            if hasattr(guard, 'reset_escalation'):
-                guard.reset_escalation()
-            # Also reset loop detection history for fresh user intent
-            if hasattr(guard, '_exact_repeat_count'):
-                guard._exact_repeat_count = {}
-
-    def _inject_context(self, user_input: str):
+    def _inject_context(self):
         # Memory is no longer injected into system prompt (accessed via tools).
         # Plan context is only used for the dashboard line at the end.
         plan_context = self._build_plan_context()
@@ -1110,7 +1019,7 @@ class WorkerAgent:
         hints = []
         sessions = find_resumable_sessions(self._sessions_root)
         if sessions:
-            hints.append(f"{len(sessions)} resumable session(s) — use /resume to restore")
+            hints.append(f"{len(sessions)} resumable session(s) - use /resume to restore")
         return hints
 
     def _check_proxy(self):
@@ -1139,7 +1048,7 @@ class WorkerAgent:
         Called after a skill is loaded. Extracts structured constraints
         from the Skill's YAML frontmatter and registers them with the Guard system.
         Also registers any LLM-extracted constraints from the cache.
-        Idempotent — skips if already registered.
+        Idempotent - skips if already registered.
         """
         if skill_name in self._skill_guards_registered:
             return
@@ -1211,7 +1120,7 @@ class WorkerAgent:
             return
 
         if not (self.judge and self.judge.provider is not None):
-            return  # No fallback — knowledge suggestion requires semantic judgment
+            return  # No fallback - knowledge suggestion requires semantic judgment
 
         suggested = self.judge.suggest_knowledge(user_input, available)
         if not suggested:
@@ -1231,7 +1140,7 @@ class WorkerAgent:
                 pass
 
     def _apply_skill_effects(self, skill_name: str, _depth: int = 0):
-        """Apply effects declared in skill frontmatter — no hardcoded skill names.
+        """Apply effects declared in skill frontmatter - no hardcoded skill names.
 
         _depth prevents recursive companion loading from cascading indefinitely.
         """
@@ -1247,7 +1156,7 @@ class WorkerAgent:
 
     def _auto_load_companion_skills(self, skill_names: list[str], _depth: int = 0):
         # Cap companion loading to prevent cascading skill explosion
-        # Only load companions that aren't already loaded, max 2 at a time
+        # Only load companions that are not already loaded, max 2 at a time
         needs_refresh = False
         loaded_count = 0
         _MAX_COMPANIONS = 2
@@ -1287,7 +1196,7 @@ class WorkerAgent:
 
         Called from _on_kernel_tool_results every _SKILL_CHECK_INTERVAL iterations.
         Uses Judge LLM to decide if the agent's recent activity warrants loading
-        a new skill that wasn't obvious at turn start.
+        a new skill that was not obvious at turn start.
         """
         if self._total_iterations % self._SKILL_CHECK_INTERVAL != 0:
             return
@@ -1345,10 +1254,10 @@ class WorkerAgent:
                 pass
 
     def _unload_stale_skills(self):
-        """Unload skills that haven't been relevant for many iterations.
+        """Unload skills that have not been relevant for many iterations.
 
         Frees context window space by removing skill content that the agent
-        hasn't needed. The skill can always be re-loaded later.
+        has not needed. The skill can always be re-loaded later.
         """
         if self._total_iterations < self._SKILL_STALE_THRESHOLD:
             return
@@ -1359,14 +1268,14 @@ class WorkerAgent:
             if age >= self._SKILL_STALE_THRESHOLD and name in self._active_skill_content:
                 # Check if skill was recently referenced (tool calls matching keywords)
                 if name in self._recently_referenced_skills:
-                    # Reset — it's still relevant
+                    # Reset - it's still relevant
                     self._skill_load_iterations[name] = self._total_iterations
                     continue
                 stale.append(name)
 
         for name in stale:
             # Remove from active content (frees context), but keep in _loaded_skills
-            # so it won't be re-suggested immediately. It can be re-loaded via load_skill.
+            # so it will not be re-suggested immediately. It can be re-loaded via load_skill.
             del self._active_skill_content[name]
             del self._skill_load_iterations[name]
             self._loaded_skills.discard(name)
@@ -1441,7 +1350,7 @@ class WorkerAgent:
                     f"Skipped: {self.judge.budget.skipped_detail}"
                 ))
 
-        # Context pressure warning is handled by ContextPressureGuard — no duplicate check here
+        # Context pressure warning is handled by ContextPressureGuard - no duplicate check here
 
         self._tool_call_cache = {}
         print()
@@ -1470,13 +1379,13 @@ class WorkerAgent:
         Anthropic format (role=user, content=[{type: tool_result, ...}]).
         Falls back to a lightweight user message if no tool_result exists.
         """
-        # NOTE: Do NOT call display.guard_inject(msg) here — the caller
+        # NOTE: Do NOT call display.guard_inject(msg) here - the caller
         # (kernel.py _handle_guard_verdict) already displays it. Calling here
         # would produce duplicate display on terminal.
         
         advisory_suffix = (
             f"\n\n---\n"
-            f"[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
+            f"[Guard Advisory - note but do not respond to this, prioritize tool results and user requests]\n"
             f"{msg}"
         )
         messages = self.history.get_messages()
@@ -1511,17 +1420,17 @@ class WorkerAgent:
                 # If this user message has no tool_result blocks, keep searching
                 continue
 
-            # Stop searching if we hit an assistant message (don't go past the
+            # Stop searching if we hit an assistant message (do not go past the
             # current turn boundary)
             if m.get("role") == "assistant":
                 break
 
         # Fallback: no tool_result found (e.g., pre-guard at turn start).
-        # Use a lightweight system-scoped message that won't be confused with
+        # Use a lightweight system-scoped message that will not be confused with
         # user instructions.
         self.history.append({
             "role": "user",
-            "content": f"[GUARD ADVISORY — note but do not respond to this, "
+            "content": f"[GUARD ADVISORY - note but do not respond to this, "
                        f"prioritize tool results and user requests]\n{msg}",
         })
 
@@ -1643,7 +1552,7 @@ class WorkerAgent:
                     stream_truncated = True
                     break
                 # Non-retryable 400 errors (e.g., tool_use/tool_result pairing)
-                # should not be retried — they are permanent request errors.
+                # should not be retried - they are permanent request errors.
                 from flagscale_agent.react.retry import _extract_status
                 _status = _extract_status(e)
                 if _status == 400:
@@ -1674,7 +1583,7 @@ class WorkerAgent:
                 try:
                     arguments = json.loads(tc["arguments_json"]) if tc["arguments_json"] else {}
                 except json.JSONDecodeError:
-                    # Incomplete JSON from truncated stream — skip this tool call
+                    # Incomplete JSON from truncated stream - skip this tool call
                     continue
                 parsed_tool_calls.append({"id": tc["id"], "name": tc["name"], "arguments": arguments})
             if not parsed_tool_calls:
