@@ -91,3 +91,53 @@ def test_plan_guard_no_shared_state():
     from flagscale_agent.react.guard.plan import PlanGuard
     guard = PlanGuard()
     assert not hasattr(guard, 'set_shared_state')
+
+
+def test_agent_construction_smoke(tmp_path, monkeypatch):
+    """Agent can be constructed with minimal config - catches __init__ order bugs.
+    
+    This test actually instantiates WorkerAgent, exercising the full __init__ path.
+    Without this, initialization order bugs (e.g., using self.X before it's created)
+    would only be caught at runtime, not in tests.
+    """
+    from unittest.mock import Mock
+    from flagscale_agent.react.agent import WorkerAgent
+    from flagscale_agent.react.config import AgentConfig
+    from flagscale_agent.react.memory import Memory
+    from flagscale_agent.react.plan import TaskPlan
+    
+    # Mock provider to avoid real API calls
+    mock_provider = Mock()
+    mock_provider.count_tokens.return_value = 100
+    
+    # Mock memory and task_plan to avoid filesystem setup
+    mock_memory = Mock(spec=Memory)
+    mock_task_plan = Mock(spec=TaskPlan)
+    
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-12345")
+    
+    config = AgentConfig(
+        session_dir=str(tmp_path / "test_session"),
+        api_key="test-key-12345",
+        provider="anthropic",
+        max_context_tokens=50000,
+    )
+    
+    # Actually instantiate the agent - this runs __init__ completely
+    agent = WorkerAgent(
+        config,
+        _provider=mock_provider,
+        _memory=mock_memory,
+        _task_plan=mock_task_plan,
+    )
+    
+    # Verify critical components are initialized in correct order
+    assert agent.provider is not None, "provider should be created"
+    assert agent.history is not None, "history should be created"
+    assert agent.context_manager is not None, "context_manager should be created"
+    assert agent.memory is not None, "memory should be injected"
+    assert agent.task_plan is not None, "task_plan should be injected"
+    
+    # Verify context_manager has access to its dependencies
+    assert agent.context_manager.history is agent.history
+    assert agent.context_manager.provider is agent.provider
