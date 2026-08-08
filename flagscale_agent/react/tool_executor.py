@@ -306,9 +306,6 @@ class ToolExecutor:
             path = arguments.get("path", "")
             if path:
                 agent._files_read_this_session.add(path)
-                threshold = READ_FILE_SUMMARY_THRESHOLD
-                if len(result) > threshold:
-                    result = agent._summarize_file_content(result, path)
 
         # Track writes
         if tool_name in ("write_file", "edit_file") and not error:

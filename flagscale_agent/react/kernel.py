@@ -148,16 +148,12 @@ class AgentKernel:
                     self._interrupted = True
                     break
                 except Exception as e:
-                    if d.is_context_limit_error_fn(e):
-                        response, usage = self._recover_context_overflow(e, schemas)
-                        if response is None:
-                            result.stop_reason = "context_overflow_unrecoverable"
-                            break
-                    else:
-                        d.display.thinking_clear()
-                        display.warn(f"LLM call failed: {e}")
-                        result.stop_reason = f"llm_error: {e}"
-                        break
+                    # Context overflow should be prevented by ContextPressureGuard
+                    # which prompts LLM to call evict/hard_reset before reaching this point
+                    d.display.thinking_clear()
+                    display.warn(f"LLM call failed: {e}")
+                    result.stop_reason = f"llm_error: {e}"
+                    break
 
                 elapsed = time.time() - getattr(self, "_t0", time.time())
                 in_tok = usage.get("input_tokens") or 0
@@ -462,36 +458,6 @@ class AgentKernel:
             display.guard_inject(verdict.message)
         return False
 
-    def _recover_context_overflow(self, exc, schemas):
-        """Evict old messages on context overflow, then retry LLM call once."""
-        d = self.deps
-
-        # Save recovery state to plan before eviction
-        self._save_recovery_state()
-
-        d.display.thinking_clear()
-        display.warn("Context overflow, evicting old messages...")
-
-        evictable = d.history.get_evictable_indexes()
-        if not evictable:
-            display.warn("No evictable messages — cannot recover.")
-            return None, {}
-
-        # Evict 50% of evictable messages (aggressive, single pass)
-        count = max(1, len(evictable) * 50 // 100)
-        for idx in evictable[:count]:
-            d.history.evict_message(idx)
-
-        messages = d.history.get_messages()
-        _call = d.call_llm_fn or (lambda m, s: d.provider.chat_stream(m, s))
-        try:
-            d.display.thinking()
-            return _call(messages, schemas)
-        except Exception as e2:
-            d.display.thinking_clear()
-            display.warn(f"LLM call failed after eviction: {e2}")
-            return None, {}
-
     def _detect_self_modification(self, tool_calls: list) -> bool:
         """Check if any tool call modified flagscale_agent/ source files.
         
@@ -518,49 +484,6 @@ class AgentKernel:
             if any(seg in path for seg in SELF_PATHS):
                 return True
         return False
-
-    def _save_recovery_state(self):
-        """Save current progress to plan notes before compaction.
-
-        This ensures the agent can recover its working state after context
-        is compacted, preventing the post-compaction death loop.
-        """
-        d = self.deps
-        task_plan = getattr(d, "task_plan", None)
-        if not task_plan:
-            return
-
-        active = task_plan.get_active()
-        if not active:
-            return
-
-        # Find current "doing" step
-        steps = active.get("steps", [])
-        doing_steps = [s for s in steps if s.get("status") == "doing"]
-        if not doing_steps:
-            return
-
-        step = doing_steps[0]
-        step_id = step.get("id")
-
-        # Build recovery context from recent history
-        recent_msgs = d.history.get_messages()[-6:]  # Last 3 exchanges
-        recovery_lines = []
-        for msg in recent_msgs:
-            if msg.get("role") == "assistant":
-                content = msg.get("content", "")
-                if isinstance(content, str) and content.strip():
-                    for line in content.split("\n"):
-                        if line.strip() and not line.startswith("["):
-                            recovery_lines.append(line.strip()[:200])
-                            break
-
-        if recovery_lines:
-            recovery_note = "RECOVERY: " + " | ".join(recovery_lines[-3:])
-            try:
-                task_plan.update_step(step_id, "doing", recovery_note)
-            except Exception:
-                pass
 
     def _get_last_assistant_text(self) -> str:
         """Get the text content of the last assistant message."""

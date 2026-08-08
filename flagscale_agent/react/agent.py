@@ -169,7 +169,6 @@ class WorkerAgent:
 
         if not _tool_registry:
             self._register_tools()
-            self._load_plugin_tools()
         self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(MemoryReadTool(self.memory))
         self.tool_registry.register(MemoryListTool(self.memory))
@@ -441,19 +440,7 @@ class WorkerAgent:
         shared.sort(key=len)
         return shared
 
-    def _load_plugin_tools(self):
-        for tool_dir in self.config.plugin_tool_dirs:
-            if not os.path.isdir(tool_dir):
-                continue
-            for entry in os.listdir(tool_dir):
-                if not entry.endswith(".py") or entry.startswith("_"):
-                    continue
-                path = os.path.join(tool_dir, entry)
-                try:
-                    with open(path) as f:
-                        exec(f.read(), {"__file__": path})
-                except Exception:
-                    display.warn(f"Failed to load plugin tool {entry}: {sys.exc_info()[1]}")
+
 
     def _build_proxies(self) -> dict[str, str]:
         proxies = {}
@@ -1073,31 +1060,6 @@ class WorkerAgent:
         print(display.dim("All code changes are now active.\n"))
 
     # ── Context injection ───────────────────────────────────────────────────
-
-    def _build_memory_context(self) -> str:
-        """Build a lightweight memory summary — content is on-demand via tools.
-
-        Only tells the LLM how many entries exist per type, so it knows
-        to call memory_list/memory_read when needed. No content injection.
-        """
-        all_entries = self.memory.list_entries()
-        if not all_entries:
-            return ""
-
-        # Count by type
-        counts = {"fact": 0, "pitfall": 0, "insight": 0}
-        for e in all_entries:
-            t = e.get("type", "")
-            if t in counts:
-                counts[t] += 1
-
-        parts = [f"{v} {k}" for k, v in counts.items() if v > 0]
-        total = sum(counts.values())
-        summary = ", ".join(parts)
-        return (
-            f"<context-memory>{total} entries ({summary}). "
-            f"Use memory_list/memory_read to access.</context-memory>"
-        )
 
     def _reset_guard_escalation(self):
         """Reset guard escalation state on new user input — prevents stale escalations."""
@@ -1794,14 +1756,7 @@ class WorkerAgent:
 
 
 
-    def _summarize_file_content(self, content: str, path: str) -> str:
-        lines = content.splitlines()
-        if len(lines) <= 100:
-            return content
-        head = "\n".join(lines[:30])
-        mid = "\n".join(lines[len(lines)//2 - 10:len(lines)//2 + 20])
-        tail = "\n".join(lines[-30:])
-        return f"{head}\n\n[... {len(lines) - 60} lines omitted from {path} ...]\n\n{mid}\n\n[...]\n\n{tail}"
+
 
 
 
