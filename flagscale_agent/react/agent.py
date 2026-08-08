@@ -482,7 +482,7 @@ class WorkerAgent:
         try:
             user_msgs = [m for m in self.history.messages if m.get("role") == "user"]
             if not user_msgs:
-                return "无用户输入"
+                return "(no user input)"
             
             def truncate_message(msg, max_len=80):
                 # Extract text from message and truncate with ...
@@ -902,10 +902,10 @@ class WorkerAgent:
         print(display.dim("Type: resume <number> or resume <session_id>"))
 
     def _generate_missing_summaries(self, sessions: list):
-        """Generate simple summaries for sessions without one, from conversation file.
+        """Generate simple summaries for sessions, reading fresh from conversation file each time.
         
-        Uses the same format as _generate_session_summary: first 2 + ... + last 2 user messages.
-        No LLM calls.
+        This method is called on every resume/reload to generate real-time summaries.
+        Uses first 2 + ... + last 2 user messages. No LLM calls, no caching.
         """
         import json as _json
         import logging
@@ -916,10 +916,7 @@ class WorkerAgent:
             if not session_dir:
                 continue
             
-            # Check if summary already exists
-            if s.get("session_summary"):
-                continue
-            
+            # Always regenerate from file (real-time refresh, no cache)
             conv_path = os.path.join(session_dir, "conversation.json")
             if not os.path.isfile(conv_path):
                 continue
@@ -932,6 +929,7 @@ class WorkerAgent:
                 user_msgs = [m for m in messages if m.get("role") == "user"]
                 
                 if not user_msgs:
+                    s["session_summary"] = "(no user input)"
                     continue
                 
                 # Use same truncation logic as _generate_session_summary
