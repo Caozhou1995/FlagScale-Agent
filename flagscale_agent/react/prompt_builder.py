@@ -44,7 +44,6 @@ class PromptBuilder:
         self,
         history,
         active_skill_content: dict[str, str],
-        current_stage_id: str | None,
         shared_storage_paths: list[str],
         tool_names: list[str] | None = None,
         # Legacy params — accepted but ignored (removed from prompt injection)
@@ -56,7 +55,6 @@ class PromptBuilder:
         Args:
             history: HistoryManager instance to set prompt on
             active_skill_content: {skill_name: content} for loaded skills
-            current_stage_id: Current workflow stage ID (for focused skill context)
             shared_storage_paths: Detected shared filesystem paths
             tool_names: List of available tool names
             memory_context: IGNORED (kept for backward compat, not injected)
@@ -84,7 +82,7 @@ class PromptBuilder:
 
         # ── Skill context (full or abbreviated based on turn count) ──
         skill_context = self._build_skill_context(
-            active_skill_content, current_stage_id
+            active_skill_content
         )
 
         # ── Critical rules extracted from skills ──
@@ -131,12 +129,11 @@ class PromptBuilder:
         return "\n\n".join(p for p in optional_parts if p)
 
     def _build_skill_context(
-        self, active_skill_content: Dict[str, str], current_stage_id: str | None
+        self, active_skill_content: Dict[str, str]
     ) -> str:
         """Build skill context block.
 
         Strategy:
-        - Use focused context if skill has context_injection rules (stage-aware)
         - First 5 turns after loading: full skill content
         - After 5 turns: header only (critical rules extracted separately)
         """
@@ -146,13 +143,8 @@ class PromptBuilder:
         skill_bodies = []
         for name, content in active_skill_content.items():
             if self._turn_count <= 5:
-                # Early turns: full content (focused or raw)
-                focused = self._skill_manager.get_focused_context(
-                    name, stage_id=current_stage_id, tool_name=None
-                )
-                # get_focused_context returns full body when no injection rules,
-                # which is fine for early turns
-                skill_bodies.append(focused if focused else content)
+                # Early turns: full content
+                skill_bodies.append(content)
             else:
                 # After turn 5: compact header only
                 # Critical rules are already extracted separately

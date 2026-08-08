@@ -406,73 +406,6 @@ A task does NOT need planning when:
 Reply with ONLY a JSON object:
   {{"needs_plan": true/false, "reason": "one-line explanation"}}"""
 
-
-_ROUTE_INTENT_PROMPT = """\
-You are routing a user request to the right execution mode.
-
-User request: {user_input}
-
-{history_context}
-
-Determine the execution mode:
-
-- "single": Simple task that one worker can handle directly.
-  Examples: "read this file", "run this command", "explain this code",
-  "fix this bug", "configure this parameter", "check GPU status",
-  "what version is installed", "how do I..."
-  IMPORTANT: Also use "single" when the task's pipeline stages have ALREADY been completed
-  (indicated by prior stage results in history). Do NOT re-run a completed pipeline.
-
-- "subtask": Multi-stage task that needs a serial pipeline with DAG stages.
-  Examples: "set up environment AND reproduce training", "migrate model from HF to Megatron",
-  "download source code AND configure AND train", "build env, download data, run training"
-  ONLY use this when the work has NOT been done yet. If prior results already exist, use "single".
-
-- "batch": Comparing multiple independent variants.
-  Examples: "compare training with tp=2 vs tp=4", "run experiment A and experiment B",
-  "which config is better: X or Y", "try both approaches and compare"
-
-Available profiles: {profiles}
-
-Choose the profile that best matches the task domain. Use "general" for simple shell operations,
-file inspection, cleanup, or Q&A that don't need domain-specific skills.
-
-Reference subtask templates (you may reuse or ignore these): {templates}
-
-Reply with ONLY a JSON object:
-{{"mode": "single"|"subtask"|"batch", "profile": "<profile_name>", "reason": "<1-sentence explanation of why this mode>"}}
-
-For "subtask" mode — choose one of two approaches:
-
-  A) Reuse an existing template:
-     {{
-       "mode": "subtask",
-       "profile": "<profile_name>",
-       "template": "<template_name>"
-     }}
-
-  B) Generate custom stages when no template fits:
-     {{
-       "mode": "subtask",
-       "profile": "<default_profile_name>",
-       "template": "",
-       "dynamic_stages": [
-         {{"id": "stage_1", "description": "what to do", "profile": "train-env-setup", "depends_on": []}},
-         {{"id": "stage_2", "description": "what to do next", "profile": "training-reproduce", "depends_on": ["stage_1"]}},
-         {{"id": "stage_3", "description": "what to do last", "profile": "training-reproduce", "depends_on": ["stage_2"]}}
-       ]
-     }}
-     Each stage needs: id (unique), description (1 sentence), profile (from available profiles),
-     depends_on (list of stage ids that must complete first, empty list for first stage).
-
-For "batch" mode, also include:
-  "batch_tasks": ["<task1 description>", "<task2 description>"]
-
-For "single" mode, omit template, dynamic_stages, and batch_tasks."""
-
-# Register route_intent in the classify prompts dict (must be after the prompt definition)
-_CLASSIFY_PROMPTS["route_intent"] = _ROUTE_INTENT_PROMPT
-
 # ── Continuation detection (skip re-routing for follow-ups) ────────────────
 
 _CLASSIFY_PROMPTS["is_continuation"] = """\
@@ -794,7 +727,7 @@ class Judge:
         category: one of "is_error", "is_success", "is_dangerous", "is_read_only_shell",
                   "is_training_command", "is_kill_command", "is_training_failure",
                   "is_zombie_gpu", "is_user_porting_confirm", "task_mode",
-                  "checklist_rule", "checklist_rule_batch", "route_intent"
+                  "checklist_rule", "checklist_rule_batch"
 
         context: dict with relevant fields. LLM can request more in multi-round mode.
 
@@ -1113,36 +1046,6 @@ class Judge:
 
     # ── Route intent (replaces Orchestrator regex routing) ─────────────────
 
-    def route(self, user_input: str, profiles: str, templates: str,
-              history_context: str = "") -> tuple[dict, str]:
-        """Route a user request to the right execution mode via LLM.
-
-        Returns ((mode_dict, source)), where source is SOURCE_LLM / SOURCE_UNAVAILABLE.
-        mode_dict always contains at least {"mode": "single"}.
-
-        Callers should check source: if SOURCE_UNAVAILABLE, fall back to regex routing.
-        This does NOT consume budget — routing happens once per user request,
-        before the agent loop starts.
-
-        Args:
-            history_context: Optional summary of completed stages from prior runs.
-                If non-empty, signals the LLM that prior work exists.
-        """
-        if self.provider is None:
-            return ({"mode": "single"}, SOURCE_UNAVAILABLE)
-
-        context = {
-            "user_input": user_input,
-            "profiles": profiles,
-            "templates": templates,
-            "history_context": history_context or "",
-        }
-        value, source = self.classify_traced("route_intent", context,
-            default={"mode": "single"})
-        if not isinstance(value, dict):
-            value = {"mode": "single"}
-        return (value, source)
-
     def suggest_skills(self, user_input: str, available_skills: list[dict]) -> list[str]:
         """Suggest which skills to load based on semantic understanding.
 
@@ -1339,11 +1242,6 @@ class Judge:
                 if isinstance(constraints, list):
                     return constraints
             return []
-        if category == "route_intent":
-            # Return the full dict: {mode, profile, template, batch_tasks, dynamic_stages}
-            if isinstance(data, dict):
-                return data
-            return default if default is not None else {"mode": "single"}
         if category in ("skill_suggest", "skill_suggest_by_context", "knowledge_suggest"):
             # LLM should return a JSON array of skill names
             if isinstance(data, list):

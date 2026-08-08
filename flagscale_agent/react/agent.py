@@ -95,7 +95,6 @@ from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summa
 
 from flagscale_agent.react.judge import Judge, JudgeBudget
 
-from flagscale_agent.react.profile import WorkerProfile, PROFILES
 from flagscale_agent.react.constants import (
     READ_ONLY_TOOLS,
     CORE_TOOLS,
@@ -104,28 +103,6 @@ from flagscale_agent.react.constants import (
     READ_FILE_SUMMARY_THRESHOLD_PORTING,
 )
 from flagscale_agent.react.commands import CommandHandler
-
-
-# ── WorkerResult ───────────────────────────────────────────────────────────────
-
-@dataclass
-class WorkerResult:
-    """Structured result from WorkerAgent.execute().
-
-    Used by Orchestrator to compose multi-stage pipeline results.
-    status: "success" | "failed" | "partial"
-    """
-
-    status: str  # "success", "failed", "partial", "interrupted"
-    summary: str = ""
-    artifacts: dict = field(default_factory=dict)
-    files_read: list[str] = field(default_factory=list)
-    files_written: list[str] = field(default_factory=list)
-    turn_count: int = 0
-    session_input_tokens: int = 0
-    session_output_tokens: int = 0
-    elapsed_seconds: float = 0.0
-    interrupted: bool = False
 
 
 # ── _ModeFlags ─────────────────────────────────────────────────────────────────
@@ -221,9 +198,6 @@ class WorkerAgent:
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
 
-        # ── Orchestrator (set by run_agent_orchestrated) ──
-        self._orchestrator = None
-
         # ── Command handler ──
         self._command_handler = CommandHandler(self)
 
@@ -277,7 +251,6 @@ class WorkerAgent:
         self._streaming_in_code_block: bool = False
         self._last_compaction_count: int = 0
         self._recent_iters: list[dict] = []
-        self._current_stage_id: str | None = None  # For focused context injection
         self._skill_guards_registered: set[str] = set()  # Track registered skill guards
 
         self._refresh_system_prompt()
@@ -524,7 +497,6 @@ class WorkerAgent:
         self._prompt_builder.refresh(
             history=self.history,
             active_skill_content=self._active_skill_content,
-            current_stage_id=self._current_stage_id,
             shared_storage_paths=getattr(self, "_shared_storage_paths", []),
             memory_context=memory_context,
             plan_context=plan_context,
@@ -914,11 +886,6 @@ class WorkerAgent:
             if self._command_handler.handle_slash_command(user_input):
                 continue
 
-            # ── Orchestrator routing ──
-            if self._orchestrator is not None:
-                self._run_orchestrated(user_input)
-                continue
-
             if self.config.auto_skill:
                 self._auto_load_skills(user_input)
                 self._auto_load_knowledge(user_input)
@@ -961,197 +928,6 @@ class WorkerAgent:
                 ))
                 self._auto_turn_count = 0
 
-    def _run_orchestrated(self, user_input: str):
-        """Route user input via Orchestrator and dispatch to execution mode.
-
-        Called from run() when self._orchestrator is set.
-        Displays stage progress for subtask mode, handles Ctrl+C for cancellation.
-
-        Continuation detection: if the user input is a follow-up/confirmation
-        to the previous turn, skip re-routing and continue in single mode.
-        """
-        o = self._orchestrator
-
-        # ── Continuation detection: skip re-routing for follow-ups ──
-        if self.history.messages and self._is_continuation_input(user_input):
-            print(display.dim("\n[Orchestrator] Continuation detected, skipping re-route"))
-            self._run_single_mode(user_input)
-            return
-
-        # Build history context for routing — summarize completed stages
-        history_context = self._build_stage_history_context()
-
-        print(display.dim("\n[Orchestrator] Routing..."))
-        route = o.route(user_input, history_context=history_context)
-
-        mode = route.get("mode", "single")
-        template = route.get("template", "")
-        dynamic_stages = route.get("dynamic_stages", [])
-        reason = route.get("reason", "")
-
-        # ── Routing display ──
-        source_parts = []
-        if template:
-            source_parts.append(f"template={template}")
-        if dynamic_stages:
-            source_parts.append("stages=dynamic")
-        if not source_parts:
-            source_parts.append("default")
-        source_str = ", ".join(source_parts)
-        print(display.dim(f"[Orchestrator] mode={mode}, {source_str}"))
-        if reason:
-            print(display.dim(f"[Orchestrator] reason: {reason}"))
-        else:
-            # Fallback reason when LLM didn't provide one
-            fallback_reasons = {
-                "single": "task can be handled by a single worker sequentially",
-                "subtask": "task requires multiple stages with dependencies",
-                "batch": "task compares independent variants in parallel",
-            }
-            print(display.dim(f"[Orchestrator] reason: {fallback_reasons.get(mode, mode)}"))
-
-        # ── Subtask mode: show stage overview, then serial execution ──
-        if mode == "subtask":
-            # Check if all stages are already completed in history
-            completed = o.check_stages_completed_in_history(
-                route, user_input, self.history.messages
-            )
-            if completed:
-                # All stages already done — downgrade to single mode with context
-                stage_summary = "\n".join(
-                    f"  - {sid}: {summary}" for sid, summary in completed.items()
-                )
-                print(display.dim(
-                    f"[Orchestrator] All stages already completed in history. "
-                    f"Routing to single worker with existing results."
-                ))
-                # Inject context and run as single worker
-                context_msg = (
-                    f"The following precision alignment stages have already been completed "
-                    f"with existing data. Use these results directly — do NOT re-execute "
-                    f"the pipeline:\n{stage_summary}\n\n"
-                    f"User request: {user_input}"
-                )
-                self._run_single_mode(context_msg)
-                return
-
-            subtasks = o._build_subtask_definitions(route, user_input)
-            if not subtasks:
-                print(display.red("\nNo stages to execute for this task."))
-                return
-
-            total = len(subtasks)
-            print(f"\n[Orchestrator] Task will be split into {total} stage{'s' if total > 1 else ''}:")
-            for i, sub in enumerate(subtasks, 1):
-                print(f"  Stage {i}/{total}: {sub.id} — {sub.description}")
-            print()
-
-            upstream: dict[str, str] = {}
-            batches = o.subtask_runner._topological_batches(subtasks)
-            stage_idx = 0
-
-            try:
-                for batch in batches:
-                    for sub in batch:
-                        stage_idx += 1
-                        self._current_stage_id = sub.id
-                        self._refresh_system_prompt()
-                        print(f"[Stage {stage_idx}/{total}] Running: {sub.id}...")
-                        context = o.subtask_runner._build_upstream_summary(
-                            sub.upstream_keys, upstream
-                        )
-
-                        worker = o._create_worker(sub.profile_name)
-                        task = o.subtask_runner._build_task(
-                            sub.description, user_input, context
-                        )
-
-                        result = worker.execute(task)
-                        if result.interrupted:
-                            print(display.yellow(
-                                f"\n  ⚠ Stage {stage_idx}/{total} ({sub.id}) interrupted by user."
-                            ))
-                            print(display.yellow("  Progress saved. Continue later with /plan resume."))
-                            self._inject_subtask_result_to_history(
-                                f"[Stage {stage_idx}/{total}] {sub.id}: INTERRUPTED"
-                            )
-                            upstream.update(result.artifacts)
-                            upstream[sub.id] = result.summary
-                            self._current_stage_id = None
-                            return
-                        if result.status == "failed":
-                            print(display.red(
-                                f"  ✗ {sub.id} failed: {result.summary}"
-                            ))
-                            self._inject_subtask_result_to_history(
-                                f"[Stage {stage_idx}/{total}] {sub.id}: FAILED — {result.summary}"
-                            )
-                            upstream.update(result.artifacts)
-                            upstream[sub.id] = result.summary
-                            self._current_stage_id = None
-                            return
-
-                        upstream.update(result.artifacts)
-                        upstream[sub.id] = result.summary
-                        art_str = ", ".join(
-                            f"{k}={str(v)}" for k, v in result.artifacts.items()
-                        ) if result.artifacts else "none"
-                        print(f"  ✓ {sub.id} complete. Artifacts: {art_str}")
-
-                        # Inject stage summary into main agent's history
-                        self._inject_subtask_result_to_history(
-                            f"[Stage {stage_idx}/{total}] {sub.id}: OK — {result.summary}"
-                        )
-
-            except KeyboardInterrupt:
-                interrupted_name = subtasks[stage_idx - 1].id if 0 < stage_idx <= len(subtasks) else "?"
-                print(display.yellow(
-                    f"\n  ⚠ Stage {stage_idx}/{total} ({interrupted_name}) interrupted by user."
-                ))
-                print(display.yellow("  Progress saved. Continue later with /plan resume."))
-                self._current_stage_id = None
-                return
-
-            # Final summary
-            final_summary = f"All {total} stages completed."
-            self._inject_subtask_result_to_history(
-                f"[Orchestrator] {final_summary} Artifacts: {json.dumps({k: str(v) for k, v in upstream.items()}, ensure_ascii=False)}"
-            )
-            self._current_stage_id = None
-            return
-
-        # ── Batch mode: parallel execution ──
-        if mode == "batch":
-            batch_tasks = route.get("batch_tasks", [])
-            if len(batch_tasks) < 2:
-                print(display.red("\n[Orchestrator] Batch mode requires at least 2 tasks."))
-                return
-
-            # Keep user input in main agent's history for context continuity
-            self._session_input_history.append(user_input)
-            self.history.append({"role": "user", "content": user_input})
-
-            print(f"\n[Orchestrator] Running {len(batch_tasks)} experiments in parallel:")
-            for i, t in enumerate(batch_tasks, 1):
-                print(f"  Run {i}: {t}")
-
-            results = o.run_batch_interactive(route, user_input)
-
-            print()
-            for i, r in enumerate(results, 1):
-                icon = "✓" if r.status == "success" else "✗"
-                print(f"[Run {i}] {icon} {r.status}: {r.summary}")
-
-            # Inject summary into main agent's history
-            summary_lines = ["[Batch comparison results]"]
-            for i, r in enumerate(results, 1):
-                summary_lines.append(
-                    f"  Run {i}: {r.status} — {r.summary}"
-                )
-            self._inject_subtask_result_to_history("\n".join(summary_lines))
-            return
-
-        # ── Single mode: use existing ReAct loop ──
         self._run_single_mode(user_input)
 
     def _run_single_mode(self, user_input: str):
@@ -1196,88 +972,7 @@ class WorkerAgent:
             ))
             self._auto_turn_count = 0
 
-    def _is_continuation_input(self, user_input: str) -> bool:
-        """Determine if user_input is a follow-up to the previous turn.
 
-        Uses Judge.is_continuation() which has a fast heuristic path
-        for common confirmations and an LLM fallback for ambiguous cases.
-        """
-        # Need at least one previous assistant message to be a "continuation"
-        prev_summary = self._get_last_assistant_summary()
-        if not prev_summary:
-            return False
-
-        judge = getattr(self, "judge", None)
-        if judge is None:
-            # No judge available — use simple heuristic only
-            stripped = user_input.strip().lower()
-            _FAST = {"确认", "好的", "可以", "是的", "对", "行", "嗯", "ok",
-                     "yes", "y", "go", "sure", "继续", "好", "是", "对的",
-                     "没问题", "确定", "同意", "proceed", "continue"}
-            return stripped in _FAST
-
-        try:
-            return judge.is_continuation(user_input, prev_summary)
-        except Exception:
-            return False
-
-    def _get_last_assistant_summary(self) -> str:
-        """Get a brief summary of the last assistant turn for continuation detection."""
-        for msg in reversed(self.history.messages):
-            if msg.get("role") == "assistant":
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    # Extract text blocks
-                    texts = []
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            texts.append(block.get("text", ""))
-                    return " ".join(texts)
-        return ""
-
-    def _build_stage_history_context(self) -> str:
-        """Build a summary of completed stages from conversation history.
-
-        Scans for [system: task stage result] markers and returns a concise
-        summary for the routing LLM, so it knows prior work exists.
-        """
-        import re
-        stage_pattern = re.compile(
-            r"\[Stage\s+(\d+)/(\d+)\]\s+(\w+):\s+(OK|FAILED|INTERRUPTED)\s*[—–-]?\s*(.*)"
-        )
-        completed = []
-        for msg in self.history.messages:
-            content = msg.get("content", "")
-            if not isinstance(content, str):
-                continue
-            if "[system: task stage result]" not in content:
-                continue
-            match = stage_pattern.search(content)
-            if match:
-                stage_id = match.group(3)
-                status = match.group(4)
-                completed.append(f"{stage_id}:{status}")
-
-        if not completed:
-            return ""
-
-        return (
-            f"PRIOR COMPLETED STAGES in this conversation: [{', '.join(completed)}]. "
-            f"These stages have already been executed. Do NOT re-run them as subtask mode."
-        )
-
-    def _inject_subtask_result_to_history(self, summary: str):
-        """Inject a structured subtask/batch result into the main agent's history.
-
-        Injected as a user message prefixed with [system: task stage result] marker
-        so the LLM sees upstream results while keeping turn semantics correct.
-        """
-        self.history.append({
-            "role": "user",
-            "content": f"[system: task stage result]\n{summary}"
-        })
 
     def _run_single_shot(self, query: str):
         if self.config.auto_skill:
@@ -1289,86 +984,6 @@ class WorkerAgent:
             self._react_loop()
         except Exception:
             display.warn("WorkerAgent._run_single_shot() react loop failed")
-
-    def execute(self, task: str) -> WorkerResult:
-        """Non-interactive entry point for programmatic (Orchestrator) use.
-
-        Runs the full ReAct loop for a single task and returns structured results.
-        No PromptSession, no CLI interaction, no sys.exit() — safe for Embedder
-        or BatchRunner to call.
-
-        Returns WorkerResult with status, summary, artifacts, and token stats.
-        """
-        t0 = time.time()
-
-        if self.config.auto_skill:
-            self._auto_load_skills(task)
-            self._auto_load_knowledge(task)
-
-        self._inject_context(task)
-        self._original_user_task = task
-        self.history.append({"role": "user", "content": task})
-
-
-        # ── Run loop with error guard ──
-        loop_error: str | None = None
-        try:
-            self._react_loop()
-        except Exception as e:
-            display.warn(f"WorkerAgent.execute() react loop failed: {e}")
-            loop_error = str(e)
-
-        # ── Determine outcome ──
-        last_text = self._get_last_assistant_text()
-        task_complete = "[TASK_COMPLETE]" in last_text
-        needs_user = "[NEED_USER_INPUT]" in last_text
-
-        # Collect artifacts from session
-        artifacts: dict[str, str] = {}
-        active_plan = self.task_plan.get_active()
-        if active_plan:
-            done = sum(1 for s in active_plan.get("steps", [])
-                       if s.get("status") in ("done", "skipped"))
-            total = len(active_plan.get("steps", []))
-            artifacts["plan_progress"] = f"{done}/{total}"
-            artifacts["plan_id"] = active_plan.get("id", "")
-            artifacts["plan_title"] = active_plan.get("title", "")
-
-        # Determine status — use full output, no truncation.
-        # The summary is what downstream stages receive as context.
-        clean_text = last_text.replace("[TASK_COMPLETE]", "").replace("[NEED_USER_INPUT]", "").strip()
-        if loop_error:
-            status = "failed"
-            summary = f"ReAct loop crashed: {loop_error}"
-        elif task_complete:
-            status = "success"
-            summary = clean_text or "Task completed."
-        elif needs_user:
-            status = "partial"
-            summary = clean_text or "Waiting for user input."
-        elif not self.history.messages:
-            status = "failed"
-            summary = "No messages in history — provider or config issue."
-        else:
-            status = "partial"
-            summary = clean_text or "No final response."
-
-        elapsed = time.time() - t0
-
-        return WorkerResult(
-            status=status,
-            summary=summary,
-            artifacts=artifacts,
-            files_read=list(self._files_read_this_session),
-            files_written=list(self._files_written_this_session),
-            turn_count=self.turn_count,
-            session_input_tokens=self._session_input_tokens,
-            session_output_tokens=self._session_output_tokens,
-            elapsed_seconds=elapsed,
-            interrupted=self._interrupted,
-        )
-
-    # ── Session management ─────────────────────────────────────────────────
 
     def _restore_session(self, data: dict, session_dir: str):
         """Restore a previous session — take over its session_id and dir."""

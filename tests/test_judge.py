@@ -327,7 +327,7 @@ class TestClassifyPrompts:
         "is_training_command", "is_kill_command", "is_training_failure",
         "is_zombie_gpu", "is_stuck_in_loop", "is_user_porting_confirm",
         "checklist_rule", "checklist_rule_batch", "extract_constraints",
-        "route_intent", "is_constraint_violated", "skill_suggest",
+        "is_constraint_violated", "skill_suggest",
         "skill_suggest_by_context", "knowledge_suggest", "is_continuation",
         "is_warning_triggered", "task_mode", "training_error_category",
         "is_important_discovery", "is_debug_residue",
@@ -344,7 +344,7 @@ class TestClassifyPrompts:
         """All boolean classify prompts should support multi-round via need_more."""
         boolean_categories = self.EXPECTED_CATEGORIES - {
             "is_user_porting_confirm", "checklist_rule", "checklist_rule_batch",
-            "extract_constraints", "route_intent", "skill_suggest",
+            "extract_constraints", "skill_suggest",
             "skill_suggest_by_context", "knowledge_suggest", "task_mode"}
         for category in boolean_categories:
             prompt = _CLASSIFY_PROMPTS[category]
