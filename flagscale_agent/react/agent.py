@@ -1658,15 +1658,3 @@ class WorkerAgent:
     @staticmethod
     def _is_context_limit_error(e) -> bool:
         return _is_context_limit_error(e)
-
-    # ── File content helpers ────────────────────────────────────────────────
-
-
-
-
-
-
-
-
-
-

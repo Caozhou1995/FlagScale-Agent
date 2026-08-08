@@ -56,7 +56,6 @@ def retry_with_backoff(
     fn,
     max_retries=3,
     base_delay=1.0,
-    on_context_overflow: Optional[Callable[[], bool]] = None,
 ):
     """Call fn(), retrying on transient API errors with exponential backoff.
 
@@ -64,12 +63,8 @@ def retry_with_backoff(
         fn: The function to call.
         max_retries: Maximum number of retries.
         base_delay: Base delay in seconds for exponential backoff.
-        on_context_overflow: Callback for 400 context-limit errors. Called with
-            no arguments; should compact the context and return True if retry
-            is safe, False otherwise. Only invoked once per call.
     """
     last_exc = None
-    context_recovery_attempted = False
     for attempt in range(max_retries + 1):
         try:
             return fn()
@@ -79,15 +74,6 @@ def retry_with_backoff(
                 raise
 
             status = _extract_status(e)
-
-            if (status == 400 and not context_recovery_attempted
-                    and on_context_overflow and _is_context_limit_error(e)):
-                context_recovery_attempted = True
-                try:
-                    if on_context_overflow():
-                        continue
-                except Exception:
-                    raise e
 
             if status and status in RETRYABLE_STATUS_CODES:
                 delay = base_delay * (2 ** attempt)

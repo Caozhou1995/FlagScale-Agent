@@ -172,8 +172,8 @@ class TestEvictSummaryShortMessageSkip:
     """Fix 2: Short/empty messages skip LLM summarization."""
 
     @pytest.fixture
-    def agent_with_mock(self):
-        """Create a minimal agent mock with _generate_evict_summaries accessible."""
+    def context_mgr_with_mock(self):
+        """Create a ContextManager with mocked dependencies."""
         with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
             mock_client = MagicMock()
             mock_mod.Anthropic.return_value = mock_client
@@ -181,83 +181,79 @@ class TestEvictSummaryShortMessageSkip:
             provider = AnthropicProvider(model="claude-test", api_key="test-key")
             provider._mock_client = mock_client
 
-            # Create a minimal agent-like object with the method
-            class FakeAgent:
-                pass
-            agent = FakeAgent()
-            agent.provider = provider
-            agent._evict_summary = MagicMock()
-            agent.history = MagicMock()
-
-            # Bind the method
-            from flagscale_agent.react.agent import WorkerAgent
-            import types
-            agent._generate_evict_summaries = types.MethodType(
-                WorkerAgent._generate_evict_summaries, agent
+            from flagscale_agent.react.context_manager import ContextManager
+            history = MagicMock()
+            evict_summary = MagicMock()
+            cm = ContextManager(
+                history=history,
+                swap_store=MagicMock(),
+                evict_summary=evict_summary,
+                provider=provider,
             )
-            return agent
+            cm._mock_client = mock_client
+            return cm
 
-    def test_short_message_no_llm_call(self, agent_with_mock):
+    def test_short_message_no_llm_call(self, context_mgr_with_mock):
         """Messages ≤150 chars should NOT trigger LLM calls."""
-        agent = agent_with_mock
+        cm = context_mgr_with_mock
         messages = [
             (10, "user", None, "继续完善09"),
             (11, "assistant", "read_file", "Read a file."),
             (12, "user", None, ""),  # empty
         ]
-        agent._generate_evict_summaries(messages)
+        cm._generate_summaries(messages)
 
         # No LLM call should have been made
-        agent.provider._mock_client.messages.create.assert_not_called()
+        cm._mock_client.messages.create.assert_not_called()
 
         # But summaries should still be stored
-        assert agent._evict_summary.add.call_count == 3
-        assert agent.history.update_evict_placeholder.call_count == 3
+        assert cm.evict_summary.add.call_count == 3
+        assert cm.history.update_evict_placeholder.call_count == 3
 
-    def test_long_message_triggers_llm(self, agent_with_mock):
+    def test_long_message_triggers_llm(self, context_mgr_with_mock):
         """Messages >150 chars should trigger LLM summarization."""
-        agent = agent_with_mock
+        cm = context_mgr_with_mock
         long_content = "x" * 200  # Over 150 char threshold
 
         # Mock LLM response
-        agent.provider._mock_client.messages.create.return_value = MagicMock(
+        cm._mock_client.messages.create.return_value = MagicMock(
             content=[MagicMock(type="text", text="Summary of long content")]
         )
 
         messages = [(20, "user", None, long_content)]
-        agent._generate_evict_summaries(messages)
+        cm._generate_summaries(messages)
 
         # LLM should have been called
-        agent.provider._mock_client.messages.create.assert_called_once()
+        cm._mock_client.messages.create.assert_called_once()
 
-    def test_mixed_short_and_long(self, agent_with_mock):
+    def test_mixed_short_and_long(self, context_mgr_with_mock):
         """Mix of short and long: only long ones trigger LLM."""
-        agent = agent_with_mock
+        cm = context_mgr_with_mock
         messages = [
             (5, "user", None, "short msg"),           # short, no LLM
             (6, "assistant", "shell", "a" * 200),     # long, needs LLM
             (7, "user", None, "another short one"),   # short, no LLM
         ]
 
-        agent.provider._mock_client.messages.create.return_value = MagicMock(
+        cm._mock_client.messages.create.return_value = MagicMock(
             content=[MagicMock(type="text", text="Summary")]
         )
 
-        agent._generate_evict_summaries(messages)
+        cm._generate_summaries(messages)
 
         # Only 1 LLM call (for index 6)
-        assert agent.provider._mock_client.messages.create.call_count == 1
+        assert cm._mock_client.messages.create.call_count == 1
         # All 3 summaries stored
-        assert agent._evict_summary.add.call_count == 3
+        assert cm.evict_summary.add.call_count == 3
 
-    def test_empty_content_gets_role_fallback(self, agent_with_mock):
+    def test_empty_content_gets_role_fallback(self, context_mgr_with_mock):
         """Empty content uses role+tool_name as summary."""
-        agent = agent_with_mock
+        cm = context_mgr_with_mock
         messages = [(99, "assistant", "write_file", "")]
-        agent._generate_evict_summaries(messages)
+        cm._generate_summaries(messages)
 
         # Check the summary stored
-        call_args = agent._evict_summary.add.call_args
+        call_args = cm.evict_summary.add.call_args
         summary = call_args[0][2]  # 3rd positional arg is summary
         assert "assistant" in summary or "write_file" in summary
 
@@ -268,8 +264,8 @@ class TestEvictSummaryPromptQuality:
     def test_prompt_contains_factual_instruction(self):
         """Verify the summary prompt tells LLM to be factual, not interpretive."""
         import inspect
-        from flagscale_agent.react.agent import WorkerAgent
-        source = inspect.getsource(WorkerAgent._generate_evict_summaries)
+        from flagscale_agent.react.context_manager import ContextManager
+        source = inspect.getsource(ContextManager._generate_summaries)
         # New prompt should contain factual instruction
         assert "factually" in source
         assert "Do NOT infer intent" in source
