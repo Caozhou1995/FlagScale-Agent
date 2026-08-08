@@ -24,51 +24,6 @@ READ_ONLY_TOOLS = {
     "memory_read", "memory_list", "plan_status", "web_fetch",
 }
 
-CORE_TOOLS = {
-    "read_file", "write_file", "edit_file", "shell",
-    "load_skill", "load_knowledge", "web_fetch", "memory_write", "memory_read",
-    "memory_list", "flagscale_train_monitor",
-    "plan_create", "plan_update", "plan_status",
-    "evict", "evict_list", "recall",
-}
-
-PHASE_TOOL_SETS = {
-    "idle": {
-        "read_file", "shell", "load_skill", "load_knowledge", "memory_read", "memory_list",
-        "web_fetch", "flagscale_train_monitor",
-        "plan_create", "plan_status", "memory_write", "write_file",
-        "edit_file", "flagscale_train_monitor",
-        "evict", "recall",
-    },
-    "analysis": {
-        "read_file", "shell", "memory_read", "memory_list",
-        "web_fetch", "load_skill", "load_knowledge",
-        "flagscale_train_monitor", "memory_write",
-        "plan_create", "plan_update", "plan_status",
-        "write_file", "edit_file", "inspect_checkpoint",
-        "evict", "recall",
-    },
-    "implementation": {
-        "read_file", "write_file", "edit_file", "shell",
-        "load_skill", "load_knowledge", "memory_write", "memory_read",
-        "plan_update", "plan_status",
-        "flagscale_train_monitor",
-        "inspect_checkpoint",
-        "evict", "recall",
-    },
-    "verification": {
-        "read_file", "shell", "write_file", "edit_file",
-        "flagscale_train_monitor",
-        "memory_write", "memory_read",
-        "plan_update", "plan_status", "load_skill", "load_knowledge",
-        "inspect_checkpoint",
-        "evict", "recall",
-    },
-}
-
 # ── Tool Behavior Configuration ───────────────────────────────────────────────
 
 READ_FILE_SUMMARY_THRESHOLD = 8000
-READ_FILE_SUMMARY_THRESHOLD_LARGE = 15000
-# Backward compat alias
-READ_FILE_SUMMARY_THRESHOLD_PORTING = READ_FILE_SUMMARY_THRESHOLD_LARGE

@@ -112,7 +112,7 @@ class TestNonEmptyToolStillBlocked:
             assert result is None, f"{tool} should be allowed through"
 
     def test_hard_reset_path_blocks_non_save_tools(self):
-        """When _need_hard_reset=True, non-save tools are blocked."""
+        """When _need_hard_reset=True AND conditions still bad, non-save tools are blocked."""
         guard = ContextPressureGuard()
         # Trigger hard_reset path
         ctx1 = _make_ctx(0.90, evictable_count=10, tool_name="shell")
@@ -120,12 +120,26 @@ class TestNonEmptyToolStillBlocked:
         assert r is not None
         assert guard._need_hard_reset is True
 
-        # Non-save tool still blocked
-        ctx2 = _make_ctx(0.50, evictable_count=10, tool_name="write_file")
+        # Non-save tool still blocked (conditions still bad: pressure >= 80% AND evictable < 60)
+        ctx2 = _make_ctx(0.85, evictable_count=10, tool_name="write_file")
         result = guard.check_pre(ctx2)
         assert result is not None
         assert result.action == "block"
         assert result.category == "context_pressure_hard_reset"
+
+    def test_hard_reset_lock_releases_when_pressure_drops(self):
+        """When pressure drops below BLOCK_RATIO, lock auto-releases."""
+        guard = ContextPressureGuard()
+        # Trigger hard_reset path
+        ctx1 = _make_ctx(0.90, evictable_count=10, tool_name="shell")
+        guard.check_pre(ctx1)
+        assert guard._need_hard_reset is True
+
+        # Pressure dropped below 80% → lock releases, no block
+        ctx2 = _make_ctx(0.50, evictable_count=10, tool_name="write_file")
+        result = guard.check_pre(ctx2)
+        assert result is None
+        assert guard._need_hard_reset is False
 
     def test_hard_reset_clears_flag(self):
         """After hard_reset executes, _need_hard_reset clears."""

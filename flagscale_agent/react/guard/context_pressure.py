@@ -73,21 +73,27 @@ class ContextPressureGuard(Guard):
         evictable = ctx.evictable_indexes
         pct = int(pressure * 100)
 
-        # Hard reset path — once set, stays until hard_reset is called
+        # Hard reset path — auto-release if conditions have recovered
         if self._need_hard_reset:
-            if ctx.tool_name in self._SAVE_TOOLS:
-                return None
-            return GuardVerdict.block(
-                f"[Context pressure {pct}% with only "
-                f"{len(evictable)} evictable messages] "
-                f"Eviction cannot free enough space. Execute in order:\n"
-                f"1. memory_write() — save key findings\n"
-                f"2. plan_update(notes='...') — record current state\n"
-                f"3. hard_reset(reason='...') — reset context\n"
-                f"Allowed tools: {', '.join(sorted(self._SAVE_TOOLS))}",
-                reason="hard_reset_required",
-                category="context_pressure_hard_reset",
-            )
+            # Recovery check: if evictable grew back above threshold OR
+            # pressure dropped below block ratio, release the lock
+            if len(evictable) >= EVICTABLE_THRESHOLD or pressure < BLOCK_RATIO:
+                self._need_hard_reset = False
+                # Fall through to normal threshold check below
+            else:
+                if ctx.tool_name in self._SAVE_TOOLS:
+                    return None
+                return GuardVerdict.block(
+                    f"[Context pressure {pct}% with only "
+                    f"{len(evictable)} evictable messages] "
+                    f"Eviction cannot free enough space. Execute in order:\n"
+                    f"1. memory_write() — save key findings\n"
+                    f"2. plan_update(notes='...') — record current state\n"
+                    f"3. hard_reset(reason='...') — reset context\n"
+                    f"Allowed tools: {', '.join(sorted(self._SAVE_TOOLS))}",
+                    reason="hard_reset_required",
+                    category="context_pressure_hard_reset",
+                )
 
         # Below block threshold — pass
         if pressure < BLOCK_RATIO:
@@ -128,10 +134,29 @@ class ContextPressureGuard(Guard):
             )
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        """Reset _need_hard_reset after hard_reset is successfully called."""
-        if self._need_hard_reset and ctx.tool_name == "hard_reset":
-            self._need_hard_reset = False
+        """Reset _need_hard_reset after hard_reset or successful eviction."""
+        if self._need_hard_reset:
+            if ctx.tool_name == "hard_reset":
+                self._need_hard_reset = False
+            elif ctx.tool_name == "evict":
+                # After eviction, re-check if conditions improved
+                pressure = ctx.context_pressure
+                evictable = ctx.evictable_indexes
+                if len(evictable) >= EVICTABLE_THRESHOLD or pressure < BLOCK_RATIO:
+                    self._need_hard_reset = False
         return None
+
+    def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        """Accept override and clear the block state.
+
+        When an override is accepted, clear _need_hard_reset so subsequent
+        tool calls aren't blocked again. Without this, the LLM would need
+        to override every single call — the override doesn't "stick".
+        """
+        accepted = bool(reason and len(reason.strip()) > 5)
+        if accepted:
+            self._need_hard_reset = False
+        return accepted
 
     def reset_turn(self):
         pass

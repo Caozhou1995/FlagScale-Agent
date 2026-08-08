@@ -97,38 +97,9 @@ from flagscale_agent.react.judge import Judge, JudgeBudget
 
 from flagscale_agent.react.constants import (
     READ_ONLY_TOOLS,
-    CORE_TOOLS,
-    PHASE_TOOL_SETS,
     READ_FILE_SUMMARY_THRESHOLD,
-    READ_FILE_SUMMARY_THRESHOLD_PORTING,
 )
 from flagscale_agent.react.commands import CommandHandler
-
-
-# ── _ModeFlags ─────────────────────────────────────────────────────────────────
-
-@dataclass
-class _ModeFlags:
-    """Dynamic mode flags — set by skill effects, not hardcoded.
-
-    _active_modes: arbitrary mode strings set by skill frontmatter effects.
-    Workflow state fields are scenario-agnostic (work for training and inference).
-    """
-
-    _active_modes: set = field(default_factory=set)
-
-    # Scenario-agnostic workflow state
-    runtime_started: bool = False       # training started / inference serving started
-    path_confirmed: bool = False        # user confirmed approach (porting path, deploy path, etc.)
-    confirmed_path: str | None = None   # which approach was confirmed
-
-    def has(self, mode: str) -> bool:
-        """Check if a mode is active."""
-        return mode in self._active_modes
-
-    def set(self, mode: str):
-        """Activate a mode."""
-        self._active_modes.add(mode)
 
 
 # ── WorkerAgent ──────────────────────────────────────────────────────────────
@@ -221,27 +192,21 @@ class WorkerAgent:
         Extracted to keep __init__ focused on dependency wiring.
         Can be re-called for tests or worker resets.
         """
-        self._phase_override: str | None = None  # Only set for testing
         self.turn_count: int = 0
         self._session_input_history: list[str] = []  # All user inputs in this session
         self._interrupted: bool = False
         self._last_tool_calls_deque = deque(maxlen=5)
-        self._extra_tools_next_iter: set[str] = set()
         self._turn_iteration_count: int = 0
         self._consecutive_single_tool_calls: int = 0
         self._active_skill_content: dict[str, str] = {}
         self._skill_load_iterations: dict[str, int] = {}
         self._total_iterations: int = 0
         self._recently_referenced_skills: set[str] = set()
-        self.modes = _ModeFlags()
-        self._mode_phase_map: dict[str, str] = {}  # mode → initial phase, built from skill effects
         self._original_user_task: str = ""
         self._session_start: float = time.time()
         self._session_input_tokens: int = 0
         self._session_output_tokens: int = 0
-        self._auto_turn_count: int = 0
         self._last_write_turn: int = 0
-        self._code_written: bool = False
         self._files_read_this_session: set[str] = set()
         self._files_written_this_session: set[str] = set()
         self._last_checkpoint_tokens: int = 0
@@ -305,7 +270,7 @@ class WorkerAgent:
             guard_registry=guard_registry,
             config=self.config,
             display=display,
-            get_schemas_fn=lambda: self._get_filtered_schemas(self.phase),
+            get_schemas_fn=self._get_all_schemas,
             inject_message_fn=self._inject_message,
             append_advisory_fn=self._append_advisory,
             append_tool_results_fn=self._append_tool_results,
@@ -831,7 +796,7 @@ class WorkerAgent:
                 break
 
         extra = self._startup_hints()
-        display.banner(self.config.provider, self.config.model, mode=self.config.mode,
+        display.banner(self.config.provider, self.config.model,
                        context_window=self.config.max_context_tokens, extra_lines=extra)
         self._check_proxy()
 
@@ -890,9 +855,7 @@ class WorkerAgent:
                 self._auto_load_skills(user_input)
                 self._auto_load_knowledge(user_input)
 
-            self._auto_turn_count = 0
             self._inject_context(user_input)
-            self._check_user_porting_confirmation(user_input)
             self._reset_guard_escalation()
             self._session_input_history.append(user_input)
             self.history.append({"role": "user", "content": user_input})
@@ -904,74 +867,8 @@ class WorkerAgent:
                 self._auto_save()
                 continue
 
-            while self.config.mode == "auto" and self._should_auto_continue():
-                self._auto_turn_count += 1
-                continuation = self._generate_continuation_prompt()
-                print(display.yellow(
-                    f"\n[Auto turn {self._auto_turn_count}/{self.config.max_auto_turns}] Continuing...\n"
-                ))
-                self.history.append({"role": "user", "content": continuation})
-                try:
-                    self._react_loop()
-                except KeyboardInterrupt:
-                    display.interrupted()
-                    print(display.yellow("\n[Auto mode] Interrupted by user.\n"))
-                    self._auto_save()
-                    break
-
-            # Auto-save after each complete user turn (including all auto-continuations)
+            # Auto-save after each complete user turn
             self._auto_save()
-
-            if self._auto_turn_count > 0:
-                print(display.yellow(
-                    f"\n[Auto mode] Stopped after {self._auto_turn_count} auto turns.\n"
-                ))
-                self._auto_turn_count = 0
-
-        self._run_single_mode(user_input)
-
-    def _run_single_mode(self, user_input: str):
-        """Execute user input in single ReAct mode (no subtask/batch routing)."""
-        if self.config.auto_skill:
-            self._auto_load_skills(user_input)
-            self._auto_load_knowledge(user_input)
-        self._auto_turn_count = 0
-        self._inject_context(user_input)
-        self._check_user_porting_confirmation(user_input)
-        self._session_input_history.append(user_input)
-        self.history.append({"role": "user", "content": user_input})
-        try:
-            self._react_loop()
-        except KeyboardInterrupt:
-            display.interrupted()
-            self._interrupted = True
-            self._auto_save()
-            return
-
-        while self.config.mode == "auto" and self._should_auto_continue():
-            self._auto_turn_count += 1
-            continuation = self._generate_continuation_prompt()
-            print(display.yellow(
-                f"\n[Auto turn {self._auto_turn_count}/{self.config.max_auto_turns}] Continuing...\n"
-            ))
-            self.history.append({"role": "user", "content": continuation})
-            try:
-                self._react_loop()
-            except KeyboardInterrupt:
-                display.interrupted()
-                print(display.yellow("\n[Auto mode] Interrupted by user.\n"))
-                self._auto_save()
-                break
-
-        # Auto-save after each complete user turn
-        self._auto_save()
-
-        if self._auto_turn_count > 0:
-            print(display.yellow(
-                f"\n[Auto mode] Stopped after {self._auto_turn_count} auto turns.\n"
-            ))
-            self._auto_turn_count = 0
-
 
 
     def _run_single_shot(self, query: str):
@@ -1274,38 +1171,6 @@ class WorkerAgent:
 
     # ── Auto-continue ──────────────────────────────────────────────────────
 
-    def _should_auto_continue(self) -> bool:
-        if self._auto_turn_count >= self.config.max_auto_turns:
-            return False
-        if self._interrupted:
-            return False
-        last_text = self._get_last_assistant_text()
-        if "[TASK_COMPLETE]" in last_text or "[NEED_USER_INPUT]" in last_text:
-            return False
-        # Fallback: if response is extremely short (< 10 chars) and has no tool calls,
-        # it means the LLM was truncated or confused — force continue
-        if len(last_text.strip()) < 10:
-            # Check if there were tool calls in the last assistant message
-            has_tool_use = False
-            for msg in reversed(self.history.messages):
-                if msg.get("role") == "assistant":
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        has_tool_use = any(
-                            b.get("type") == "tool_use"
-                            for b in content
-                            if isinstance(b, dict)
-                        )
-                    break
-            if not has_tool_use:
-                # Extremely short response with no tool calls — auto continue
-                return True
-        active_plan = self.task_plan.get_active()
-        result = self.judge.complexity(last_text, has_plan=active_plan is not None)
-        if result.get("needs_plan"):
-            return False
-        return True
-
     def _get_last_assistant_text(self) -> str:
         for msg in reversed(self.history.messages):
             if msg.get("role") == "assistant":
@@ -1316,16 +1181,6 @@ class WorkerAgent:
                     texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
                     return "".join(texts)
         return ""
-
-    def _generate_continuation_prompt(self) -> str:
-        plan_context = self._build_plan_context()
-        base = (
-            "[SYSTEM] Continue working on the task. If you've completed the task, "
-            "respond with [TASK_COMPLETE]. If you need user input, respond with [NEED_USER_INPUT]."
-        )
-        if plan_context:
-            return base + f"\n\nCurrent plan:\n{plan_context}"
-        return base
 
     # ── Auto-skill loading ─────────────────────────────────────────────────
 
@@ -1436,14 +1291,6 @@ class WorkerAgent:
         effects = self.skill_manager.get_effects(skill_name)
         if not effects:
             return
-        # Set mode flag
-        mode = effects.get("mode")
-        if mode:
-            self.modes.set(mode)
-        # Record initial_phase mapping
-        initial_phase = effects.get("initial_phase")
-        if mode and initial_phase:
-            self._mode_phase_map[mode] = initial_phase
         # Auto-load companion skills
         companions = effects.get("companion_skills")
         if companions and isinstance(companions, list):
@@ -1584,17 +1431,6 @@ class WorkerAgent:
 
     # ── User path confirmation ────────────────────────────────────────────
 
-    def _check_user_porting_confirmation(self, user_input: str):
-        if self.modes.path_confirmed:
-            return
-        result = self.judge.classify("is_user_porting_confirm", {"user_input": user_input}, default="")
-        if result == "mode_b":
-            self.modes.path_confirmed = True
-            self.modes.confirmed_path = "mode_b"
-        elif result == "mode_c":
-            self.modes.path_confirmed = True
-            self.modes.confirmed_path = "mode_c"
-
     # ── React loop ──────────────────────────────────────────────────────────
 
     def _react_loop(self):
@@ -1621,12 +1457,9 @@ class WorkerAgent:
 
     def _on_kernel_tool_results(self, tool_calls: list, results: list):
         """Called by Kernel after tool execution and guard checks."""
-        # Track tool calls for phase management
+        # Track tool calls
         for tc in tool_calls:
             self._last_tool_calls_deque.append(tc["name"])
-            phase_tools = PHASE_TOOL_SETS.get(self.phase)
-            if phase_tools is not None and tc["name"] not in (phase_tools | CORE_TOOLS):
-                self._extra_tools_next_iter.add(tc["name"])
         self._total_iterations += 1
 
         # Refresh system prompt if skill/plan tools were used
@@ -1753,43 +1586,10 @@ class WorkerAgent:
                        f"prioritize tool results and user requests]\n{msg}",
         })
 
-    # ── Phase tracking ─────────────────────────────────────────────────────
+    def _get_all_schemas(self) -> list[dict]:
+        """Return all tool schemas (no phase filtering)."""
+        return self.tool_registry.to_schemas(self.provider.schema_format)
 
-    @property
-    def phase(self) -> str:
-        """Derive tool-availability phase from runtime context.
-
-        Replaces the old mutable self.phase string. Phase determines which
-        tools are available via PHASE_TOOL_SETS.
-        """
-        if self._phase_override:
-            return self._phase_override
-        # If runtime is active (training running / inference serving), verification mode
-        runtime_active = any(
-            isinstance(g, TrainingMonitorGuard)
-            for g in self._kernel.deps.guard_registry.guards
-        )
-        if runtime_active:
-            return "verification"
-        if self._code_written:
-            return "implementation"
-        # Check mode→phase mapping from loaded skill effects
-        for mode, phase in self._mode_phase_map.items():
-            if self.modes.has(mode):
-                return phase
-        return "idle"
-
-    @phase.setter
-    def phase(self, value: str):
-        """Allow explicit phase override (for tests and backward compat)."""
-        self._phase_override = value if value != "idle" else None
-
-    def _get_filtered_schemas(self, phase: str) -> list[dict]:
-        phase_tools = PHASE_TOOL_SETS.get(phase, set())
-        tool_names = CORE_TOOLS | phase_tools | self._extra_tools_next_iter
-        return self.tool_registry.to_schemas_filtered(
-            self.provider.schema_format, tool_names
-        )
 
     # ── LLM streaming ──────────────────────────────────────────────────────
 

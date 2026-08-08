@@ -37,7 +37,6 @@ from flagscale_agent.react import display
 from flagscale_agent.react.constants import (
     READ_ONLY_TOOLS,
     READ_FILE_SUMMARY_THRESHOLD,
-    READ_FILE_SUMMARY_THRESHOLD_PORTING,
 )
 
 if TYPE_CHECKING:
@@ -307,14 +306,13 @@ class ToolExecutor:
             path = arguments.get("path", "")
             if path:
                 agent._files_read_this_session.add(path)
-                threshold = READ_FILE_SUMMARY_THRESHOLD_PORTING if agent.modes.has("porting") else READ_FILE_SUMMARY_THRESHOLD
+                threshold = READ_FILE_SUMMARY_THRESHOLD
                 if len(result) > threshold:
                     result = agent._summarize_file_content(result, path)
 
         # Track writes
         if tool_name in ("write_file", "edit_file") and not error:
             agent._last_write_turn = agent.turn_count
-            agent._code_written = True
             path = arguments.get("path", "") or arguments.get("file_path", "")
             if path:
                 agent._files_written_this_session.add(path)

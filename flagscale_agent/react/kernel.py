@@ -82,7 +82,7 @@ class AgentKernel:
     def __init__(self, deps: KernelDeps):
         self.deps = deps
         self._interrupted = False
-        self._plan_auto_continue_count = 0
+        self._continuation_count = 0
 
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
@@ -95,8 +95,7 @@ class AgentKernel:
         turn_start = time.time()
 
         self._interrupted = False
-        self._plan_auto_continue_count = 0  # Reset per turn to avoid poisoning
-        self._signal_reminder_sent = False  # Reset fallback signal reminder
+        self._continuation_count = 0  # Reset per turn
         d.judge.reset_turn()
         d.guard_registry.reset_turn()
 
@@ -219,45 +218,37 @@ class AgentKernel:
                     if "[TASK_COMPLETE]" in assistant_text or "[NEED_USER_INPUT]" in assistant_text:
                         result.stop_reason = "explicit_signal"
                         break
-                    if not self._should_auto_continue_plan():
-                        # Defense: if last turn had tool calls (still working) and this turn
-                        # is trivially short (<10 chars), auto-continue instead of stopping
-                        if (len(assistant_text.strip()) < 10 and iteration > 0
-                                and getattr(self, "_last_turn_had_tools", False)):
-                            short_retries = getattr(self, "_short_output_retries", 0)
-                            if short_retries < 2:
-                                self._short_output_retries = short_retries + 1
-                                d.display.warn(f"Short output without tools after active turn, auto-continuing...")
-                                d.history.append({"role": "user", "content": "[system: please continue your work]"})
-                                continue
-                            else:
-                                self._short_output_retries = 0
-                        # Fallback: give LLM one chance to add the missing signal
-                        if not getattr(self, "_signal_reminder_sent", False):
-                            self._signal_reminder_sent = True
-                            d.history.append({"role": "user", "content": (
-                                "[system] 你刚才的回复没有包含 [TASK_COMPLETE] 或 [NEED_USER_INPUT]。"
-                                "如果当前指令已响应完成且不需要用户输入，请回复 [TASK_COMPLETE]。"
-                                "如果需要用户确认或提供信息，请回复 [NEED_USER_INPUT]。"
-                            )})
+
+                    # ── Continuation: LLM didn't stop, keep going ──
+                    # Short output retry (truncated/confused)
+                    if (len(assistant_text.strip()) < 10 and iteration > 0
+                            and getattr(self, "_last_turn_had_tools", False)):
+                        short_retries = getattr(self, "_short_output_retries", 0)
+                        if short_retries < 2:
+                            self._short_output_retries = short_retries + 1
+                            d.display.warn(f"Short output without tools after active turn, auto-continuing...")
+                            d.history.append({"role": "user", "content": "[system: please continue your work]"})
                             continue
-                        self._signal_reminder_sent = False
-                        result.stop_reason = "no_tool_calls"
-                        break
-                    # Plan auto-continue — check context pressure first
+                        else:
+                            self._short_output_retries = 0
+
+                    # Context pressure check
                     pressure = d.history.get_context_pressure() if hasattr(d.history, 'get_context_pressure') else 0
                     if pressure >= 0.85:
                         result.stop_reason = "context_pressure"
                         break
-                    self._plan_auto_continue_count += 1
-                    if self._plan_auto_continue_count > 10:
-                        result.stop_reason = "plan_auto_continue_limit"
+
+                    # Continuation count limit (hard ceiling)
+                    self._continuation_count += 1
+                    if self._continuation_count > d.config.max_continuations:
+                        result.stop_reason = "max_continuations"
                         break
+
                     continuation = self._generate_continuation()
                     d.history.append({"role": "user", "content": continuation})
                     continue
 
-                self._plan_auto_continue_count = 0
+                self._continuation_count = 0
 
                 # ── Execute tools ──
                 _pre_guard_verdicts = []
@@ -571,32 +562,6 @@ class AgentKernel:
             except Exception:
                 pass
 
-    def _should_auto_continue_plan(self) -> bool:
-        """Check if there's an active plan with pending steps.
-        
-        Also checks if the assistant's last response is asking the user a question
-        (waiting for user input). If so, do NOT auto-continue — let the user respond.
-        """
-        task_plan = getattr(self.deps, "task_plan", None)
-        if task_plan is None:
-            return False
-        active = task_plan.get_active()
-        if not active:
-            return False
-        has_pending = any(
-            s.get("status") not in ("done", "skipped")
-            for s in active.get("steps", [])
-        )
-        if not has_pending:
-            return False
-        
-        # Check if assistant is waiting for user input (asking a question)
-        last_text = self._get_last_assistant_text()
-        if last_text and self._is_asking_user(last_text):
-            return False
-        
-        return True
-
     def _get_last_assistant_text(self) -> str:
         """Get the text content of the last assistant message."""
         d = self.deps
@@ -610,41 +575,6 @@ class AgentKernel:
                              if isinstance(b, dict) and b.get("type") == "text"]
                     return "".join(texts)
         return ""
-
-    def _is_asking_user(self, text: str) -> bool:
-        """Detect if the assistant text is asking the user a question / waiting for input.
-        
-        Heuristic: check if the last meaningful line ends with a question mark or
-        contains explicit "waiting for user" patterns.
-        """
-        # Get the last few non-empty lines
-        lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
-        if not lines:
-            return False
-        
-        last_line = lines[-1]
-        
-        # Explicit signal
-        if "[NEED_USER_INPUT]" in text:
-            return True
-        
-        # Ends with question mark (supports Chinese and English)
-        if last_line.endswith("?") or last_line.endswith("？"):
-            return True
-        
-        # Common patterns for asking user (Chinese + English)
-        asking_patterns = [
-            "你选", "你觉得", "你希望", "你要", "要我",
-            "which do you", "what do you", "do you want", "shall i",
-            "should i", "would you", "let me know", "your choice",
-            "选哪个", "怎么处理", "如何处理",
-        ]
-        last_lower = last_line.lower()
-        for pattern in asking_patterns:
-            if pattern in last_lower:
-                return True
-        
-        return False
 
     def _generate_continuation(self) -> str:
         task_plan = getattr(self.deps, "task_plan", None)

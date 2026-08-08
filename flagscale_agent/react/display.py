@@ -314,7 +314,7 @@ def pasted_input(text: str):
 
 # ── Banner ──────────────────────────────────────────────────────────────
 
-def banner(provider, model, mode=None, context_window=None, extra_lines=None):
+def banner(provider, model, context_window=None, extra_lines=None):
     from flagscale_agent import __version__
 
     # ASCII logo
@@ -331,10 +331,9 @@ def banner(provider, model, mode=None, context_window=None, extra_lines=None):
     _print()
 
     title = f"FlagScale Agent v{__version__}"
-    mode_str = f" | Mode: {mode}" if mode else ""
     ctx_str = f" | Context: {context_window // 1000}k" if context_window else ""
-    info = f"Provider: {provider} | Model: {model}{mode_str}{ctx_str}"
-    cmds = "Commands: /skill  /plan  /save  /resume  /memory  /mode  /compact  /reset  /reload  /quit"
+    info = f"Provider: {provider} | Model: {model}{ctx_str}"
+    cmds = "Commands: /skill  /plan  /save  /resume  /memory  /compact  /reset  /reload  /quit"
     lines = [info, cmds]
     if extra_lines:
         lines.extend(extra_lines)

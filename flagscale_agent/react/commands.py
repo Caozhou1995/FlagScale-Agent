@@ -156,9 +156,6 @@ class CommandHandler:
         elif cmd == "/memory":
             self._handle_memory(user_input)
             return True
-        elif cmd == "/mode":
-            self._handle_mode(user_input)
-            return True
         elif cmd == "/plan":
             self._handle_plan(user_input)
             return True
@@ -229,32 +226,6 @@ class CommandHandler:
                 print(f"  [{mem_type}] {key}: {content}")
         else:
             print(f"Unknown /memory subcommand: {sub}")
-
-    def _handle_mode(self, user_input: str):
-        """Handle /mode command - switch between confirm/auto mode."""
-        parts = user_input.split()
-        if len(parts) < 2:
-            print(f"Current mode: {self.agent.config.mode}")
-            print("Available modes: confirm, auto")
-            return
-        mode = parts[1]
-        if mode in ("confirm", "auto"):
-            self.agent.config.mode = mode
-            if mode == "auto":
-                self.agent.config.confirm_commands = False
-                self.agent.config.max_iterations = 2**31 - 1
-                # Re-register shell tool (auto-mode has no behavioral difference now)
-                self.agent.tool_registry._tools.pop("shell", None)
-                self.agent.tool_registry.register(
-                    ShellTool(
-                        remind_interval=self.agent.config.shell_remind_interval,
-                        env=self.agent.config.shell_env,
-                        health_judge_fn=self.agent._health_judge,
-                    )
-                )
-            print(f"Mode set to: {mode}")
-        else:
-            print(f"Unknown mode: {mode}")
 
     def _handle_plan(self, user_input: str):
         """Handle /plan command - show active plan."""
