@@ -366,10 +366,16 @@ class ToolExecutor:
             except (KeyError, AttributeError):
                 pass
             raw_args = tc.get("arguments", {})
+            # Extract override_reason from tool_args (same as kernel._build_ctx)
+            override_reason = ""
+            if raw_args and "_override_reason" in raw_args:
+                override_reason = raw_args["_override_reason"]
+                raw_args = {k: v for k, v in raw_args.items() if k != "_override_reason"}
+                tc["arguments"] = raw_args  # Strip _override_reason from actual execution args
             guard_ctx = GuardContext(
                 tool_name=tc["name"],
                 tool_args=raw_args,
-                
+                override_reason=override_reason,
                 turn_count=agent.turn_count,
                 recent_tool_history=agent._recent_tool_history[-8:],
                 context_pressure=agent.history.get_context_pressure() if agent.history else 0.0,
