@@ -470,56 +470,45 @@ class WorkerAgent:
             pass
 
     def _generate_session_summary(self) -> str:
-        """Generate session summary by showing first 2 and last 2 user messages.
+        """Generate session summary by showing first 2 and last 2 user inputs.
+        
+        Uses _session_input_history (pure user inputs, no system injections).
         
         Format:
-        [1] <first message, truncated to 80 chars>
-        [2] <second message, truncated to 80 chars>
+        [1] <first input, truncated to 80 chars>
+        [2] <second input, truncated to 80 chars>
         ...
-        [N-1] <second-to-last message, truncated to 80 chars>
-        [N] <last message, truncated to 80 chars>
+        [N-1] <second-to-last input, truncated to 80 chars>
+        [N] <last input, truncated to 80 chars>
         """
         try:
-            user_msgs = [m for m in self.history.messages if m.get("role") == "user"]
-            if not user_msgs:
+            user_inputs = self._session_input_history
+            if not user_inputs:
                 return "(no user input)"
             
-            def truncate_message(msg, max_len=80):
-                # Extract text from message and truncate with ...
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    text = content
-                elif isinstance(content, list):
-                    text_parts = []
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-                    text = " ".join(text_parts)
-                else:
-                    text = str(content)
-                
+            def truncate_text(text: str, max_len=80):
                 if len(text) > max_len:
                     return text[:max_len] + "..."
                 return text
             
             lines = []
-            total = len(user_msgs)
+            total = len(user_inputs)
             
             if total <= 4:
-                for i, msg in enumerate(user_msgs, 1):
-                    lines.append(f"[{i}] {truncate_message(msg)}")
+                for i, text in enumerate(user_inputs, 1):
+                    lines.append(f"[{i}] {truncate_text(text)}")
             else:
                 for i in range(2):
-                    lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+                    lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
                 lines.append("...")
                 for i in range(total-2, total):
-                    lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+                    lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
             
             return "\n".join(lines)
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"[Session Summary] Failed: {e}")
-            return "摘要生成失败"
+            return "(summary generation failed)"
 
     def _generate_hard_reset_summary(self) -> str:
         """Call LLM to generate a work-state summary for hard reset continuation.
@@ -925,45 +914,32 @@ class WorkerAgent:
                 with open(conv_path, "r", encoding="utf-8") as f:
                     conv_data = _json.load(f)
                 
-                messages = conv_data.get("messages", [])
-                user_msgs = [m for m in messages if m.get("role") == "user"]
+                user_inputs = conv_data.get("session_input_history", [])
                 
-                if not user_msgs:
+                if not user_inputs:
                     s["session_summary"] = "(no user input)"
                     continue
                 
                 # Use same truncation logic as _generate_session_summary
-                def truncate_message(msg, max_len=80):
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        text = content
-                    elif isinstance(content, list):
-                        text_parts = []
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                text_parts.append(block.get("text", ""))
-                        text = " ".join(text_parts)
-                    else:
-                        text = str(content)
-                    
+                def truncate_text(text: str, max_len=80):
                     if len(text) > max_len:
                         return text[:max_len] + "..."
                     return text
                 
                 lines = []
-                total = len(user_msgs)
+                total = len(user_inputs)
                 
                 if total <= 4:
-                    for i, msg in enumerate(user_msgs, 1):
-                        lines.append(f"[{i}] {truncate_message(msg)}")
+                    for i, text in enumerate(user_inputs, 1):
+                        lines.append(f"[{i}] {truncate_text(text)}")
                 else:
                     # First 2
                     for i in range(2):
-                        lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+                        lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
                     lines.append("...")
                     # Last 2
                     for i in range(total-2, total):
-                        lines.append(f"[{i+1}] {truncate_message(user_msgs[i])}")
+                        lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
                 
                 summary = "\n".join(lines)
                 s["session_summary"] = summary

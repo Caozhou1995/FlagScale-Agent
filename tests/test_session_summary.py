@@ -199,6 +199,7 @@ class TestCheckResumeStartup:
         save_conversation(
             session_dir, "nosummary-1234", messages,
             completed=False,
+            session_input_history=["帮我优化训练性能"],
         )
 
         from flagscale_agent.react.agent import WorkerAgent
@@ -225,6 +226,7 @@ class TestCheckResumeStartup:
         save_conversation(
             session_dir, "failsess-1234", messages,
             completed=False,
+            session_input_history=["test"],
         )
 
         from flagscale_agent.react.agent import WorkerAgent

@@ -34,13 +34,14 @@ class TestResumeSummaryGeneration:
         """_generate_missing_summaries should generate simple text summary without LLM."""
         from flagscale_agent.react.agent import WorkerAgent
 
-        # Create a fake conversation.json
+        # Create a fake conversation.json with session_input_history
         conv_data = {
             "messages": [
                 {"role": "user", "content": "帮我分析代码"},
                 {"role": "assistant", "content": [{"type": "text", "text": "好的"}]},
                 {"role": "user", "content": "继续完善文档"},
-            ]
+            ],
+            "session_input_history": ["帮我分析代码", "继续完善文档"],
         }
         session_dir = str(tmp_path / "session1")
         os.makedirs(session_dir)
@@ -77,7 +78,8 @@ class TestResumeSummaryGeneration:
         conv_data = {
             "messages": [
                 {"role": "user", "content": [{"type": "text", "text": "训练模型"}]},
-            ]
+            ],
+            "session_input_history": ["训练模型"],
         }
         session_dir = str(tmp_path / "session2")
         os.makedirs(session_dir)
