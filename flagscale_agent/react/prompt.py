@@ -239,9 +239,6 @@ When modifying FlagScale-Agent source code (flagscale_agent/**), you MUST write 
 
 No test coverage = not complete. Tests are not optional — they protect other users of this codebase.""",
 
-    "user_commands": """## User Commands
-
-`/resume`, `/reload`, `/session`, `/quit`""",
 }
 
 # Dashboard template — appended at the very end of system prompt (recency bias)

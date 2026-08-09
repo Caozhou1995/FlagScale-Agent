@@ -46,22 +46,23 @@ class PromptBuilder:
         self,
         history,
         active_skill_content: dict[str, str],
-        shared_storage_paths: list[str],
         tool_names: list[str] | None = None,
         # Legacy params — accepted but ignored (removed from prompt injection)
         memory_context: str = "",
         plan_context: str = "",
         session_dir: str = "",
+        # Deprecated — accepted but ignored
+        shared_storage_paths: list[str] | None = None,
     ):
         """Build and set the system prompt on the history manager.
 
         Args:
             history: HistoryManager instance to set prompt on
             active_skill_content: IGNORED (kept for backward compat, skill content no longer injected)
-            shared_storage_paths: Detected shared filesystem paths
             tool_names: List of available tool names
             memory_context: IGNORED (kept for backward compat, not injected)
             plan_context: IGNORED for prompt injection (used only for dashboard)
+            session_dir: Session directory path, injected into dashboard
         """
         self._turn_count += 1
 
@@ -80,11 +81,8 @@ class PromptBuilder:
         # ── Knowledge summary for header ──
         knowledge_summary = self._build_knowledge_summary()
 
-        # ── Optional sections based on scene constraints ──
+        # ── Optional sections ──
         optional_sections = self._build_optional_sections(plan_context)
-
-        # ── Shared storage note ──
-        shared_storage_note = self._build_shared_storage_note(shared_storage_paths)
 
         # ── Assemble static block ──
         core = SYSTEM_PROMPT_STATIC.format(
@@ -92,7 +90,7 @@ class PromptBuilder:
             tools=tools_str,
             skills=skills_summary,
             knowledge=knowledge_summary,
-            optional_sections=optional_sections + shared_storage_note,
+            optional_sections=optional_sections,
         )
 
         # ── Append dashboard at the very end ──
@@ -114,10 +112,6 @@ class PromptBuilder:
         # Always include these
         optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("memory_rules", ""))
         optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("decision", ""))
-
-        # User commands only on first 3 turns
-        if self._turn_count <= 3:
-            optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("user_commands", ""))
 
         return "\n\n".join(p for p in optional_parts if p)
 
@@ -208,16 +202,4 @@ class PromptBuilder:
         except Exception:
             return ""
 
-    def _build_shared_storage_note(self, shared_storage_paths: list[str]) -> str:
-        """Build a note about shared storage paths for conda environments."""
-        if not shared_storage_paths:
-            return ""
-        return (
-            "\n\n## Shared Storage\n\nAvailable shared storage paths:\n"
-            + "\n".join(f"- `{p}`" for p in shared_storage_paths)
-            + "\n\nWhen creating conda environments, use `--prefix` targeting "
-            "one of these paths instead of `-n <name>`.\n"
-        )
 
-    # Keep old name for backward compatibility
-    build_shared_storage_note = _build_shared_storage_note
