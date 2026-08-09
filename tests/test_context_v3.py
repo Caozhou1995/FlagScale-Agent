@@ -818,19 +818,19 @@ class TestPromptIntegrity:
         # No Chinese characters in static prompt
         assert not re.search(r'[\u4e00-\u9fff]', SYSTEM_PROMPT_STATIC)
 
-    def test_optional_sections_have_required_keys(self):
-        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
-        assert "planning" in SYSTEM_PROMPT_OPTIONAL
-        assert "memory_rules" in SYSTEM_PROMPT_OPTIONAL
+    def test_static_prompt_contains_planning_section(self):
+        """Static prompt should contain planning guidance."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "## Plan" in SYSTEM_PROMPT_STATIC
+        assert "plan_create" in SYSTEM_PROMPT_STATIC
+        assert "Step Notes" in SYSTEM_PROMPT_STATIC
 
-    def test_planning_always_injected(self):
-        """prompt_builder should inject planning even without active plan."""
-        from flagscale_agent.react.prompt_builder import PromptBuilder
-        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
-        # planning section exists and has content about plan_create
-        planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
-        assert "plan_create" in planning
-        assert "Step Notes" in planning
+    def test_static_prompt_contains_memory_section(self):
+        """Static prompt should contain memory rules."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "## Memory" in SYSTEM_PROMPT_STATIC
+        assert "memory_write" in SYSTEM_PROMPT_STATIC
+        assert "cross-session knowledge" in SYSTEM_PROMPT_STATIC
 
 
 class TestNoUnnecessaryTruncation:

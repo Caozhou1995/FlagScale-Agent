@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Dict
 
 from flagscale_agent.react.prompt import (
     SYSTEM_PROMPT_STATIC,
-    SYSTEM_PROMPT_OPTIONAL,
     DASHBOARD_TEMPLATE,
 )
 from flagscale_agent.react.memory import Memory
@@ -81,16 +80,12 @@ class PromptBuilder:
         # ── Knowledge summary for header ──
         knowledge_summary = self._build_knowledge_summary()
 
-        # ── Optional sections ──
-        optional_sections = self._build_optional_sections(plan_context)
-
         # ── Assemble static block ──
         core = SYSTEM_PROMPT_STATIC.format(
             cwd=os.getcwd(),
             tools=tools_str,
             skills=skills_summary,
             knowledge=knowledge_summary,
-            optional_sections=optional_sections,
         )
 
         # ── Append dashboard at the very end ──
@@ -99,21 +94,6 @@ class PromptBuilder:
             core += DASHBOARD_TEMPLATE.format(dashboard_content=dashboard)
 
         history.set_system_prompt(core)
-
-    def _build_optional_sections(self, plan_context: str) -> str:
-        """Select optional sections."""
-        optional_parts = []
-
-        # Planning section — always inject (includes "when to create" guidance)
-        planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
-        if planning:
-            optional_parts.append(planning)
-
-        # Always include these
-        optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("memory_rules", ""))
-        optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("decision", ""))
-
-        return "\n\n".join(p for p in optional_parts if p)
 
     def _build_skills_summary(self) -> str:
         """Build compact summary of all available skills for the header line."""
