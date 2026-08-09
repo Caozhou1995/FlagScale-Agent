@@ -186,15 +186,14 @@ class WorkerAgent:
         self._interrupted: bool = False
         self._last_tool_calls_deque = deque(maxlen=5)
         self._turn_iteration_count: int = 0
-        self._consecutive_single_tool_calls: int = 0
+
         self._total_iterations: int = 0
         self._original_user_task: str = ""
         self._session_start: float = time.time()
         self._session_input_tokens: int = 0
         self._session_output_tokens: int = 0
-        self._last_write_turn: int = 0
-        self._files_read_this_session: set[str] = set()
-        self._files_written_this_session: set[str] = set()
+
+
         self._last_checkpoint_tokens: int = 0
         self._last_tool_call: tuple | None = None
         self._tool_call_cache: dict[tuple, str] = {}
@@ -1275,8 +1274,8 @@ class WorkerAgent:
         # Reassemble in original order
         return [special_results[i] for i in range(len(tool_calls))]
 
-    def _execute_tool(self, tool_call, skip_confirm=False):
-        return self._tool_executor.execute_single(tool_call, skip_confirm=skip_confirm)
+    def _execute_tool(self, tool_call):
+        return self._tool_executor.execute_single(tool_call)
 
     def _append_tool_results(self, tool_results: list[dict]):
         """Append tool results, merging them into a single user message.

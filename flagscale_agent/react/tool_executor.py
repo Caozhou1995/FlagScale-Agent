@@ -34,10 +34,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 from flagscale_agent.react import display
-READ_ONLY_TOOLS = {
-    "read_file", "grep", "find", "ls", "list_files",
-    "memory_read", "memory_list", "plan_status", "web_fetch",
-}
 
 if TYPE_CHECKING:
     from flagscale_agent.react.agent import WorkerAgent
@@ -146,51 +142,6 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
     return ""
 
 
-def shell_display_summary(cmd: str, max_len: int = 90) -> str:
-    """Short shell command display summary."""
-    s = cmd.replace("\n", " ").replace("\r", "").strip()
-    if len(s) > max_len:
-        s = s[:max_len - 3] + "..."
-    return s
-
-
-# Keywords that indicate low-value verbose output (install/build logs)
-_LOW_VALUE_KEYWORDS = (
-    "installing", "collecting", "downloading", "successfully installed",
-    "requirement already", "building wheel", "running setup", "compiling",
-    "cloning into", "resolving deltas", "receiving objects",
-)
-
-
-def _compress_shell_result(result: str) -> str:
-    """Compress large shell output at return time to save tokens.
-
-    Only compresses clearly low-value output (install/build logs).
-    Error output and code/config content are never compressed.
-    """
-    lines = result.splitlines()
-    num_lines = len(lines)
-
-    # Never compress if output has errors
-    if any(kw in result for kw in ("Error", "ERROR", "Traceback", "FAILED", "Exception")):
-        return result
-
-    # Compress install/build/clone logs: keep command + outcome
-    lower_head = result.lower()
-    if any(kw in lower_head for kw in _LOW_VALUE_KEYWORDS):
-        head = "\n".join(lines[:3])
-        tail = "\n".join(lines[-5:])
-        return f"{head}\n[... {num_lines - 8} lines of output compressed ...]\n{tail}"
-
-    # For other long output (>100 lines), keep head + tail
-    if num_lines > 100:
-        head = "\n".join(lines[:15])
-        tail = "\n".join(lines[-15:])
-        return f"{head}\n[... {num_lines - 30} lines omitted ({len(result)} chars total) ...]\n{tail}"
-
-    return result
-
-
 class ToolExecutor:
     """Executes tools with batching, dedup, guards, and parallel dispatch.
 
@@ -198,39 +149,24 @@ class ToolExecutor:
     1. Pre-checks (guards, confirmation)
     2. Deduplication and batch capping
     3. Parallel execution with display
-    4. Post-execution tracking (files, skills, cache)
+    4. Post-execution tracking (skills, cache)
     """
 
     def __init__(self, agent: "WorkerAgent"):
         self._agent = agent
 
     def execute_batch(self, tool_calls: list[dict]) -> list[str]:
-        """Execute a batch of tool calls with full pre-check pipeline.
+        """Execute a batch of tool calls.
 
-        Single-call batches get efficiency reminders if read-only.
-        Multi-call batches get dedup, guard checks, and parallel execution.
+        Single-call batches execute directly.
+        Multi-call batches get dedup, batch capping, and parallel execution.
         """
-        agent = self._agent
-
         if len(tool_calls) == 1:
-            result = self.execute_single(tool_calls[0])
-            tool_name = tool_calls[0]["name"]
-            if tool_name in READ_ONLY_TOOLS:
-                agent._consecutive_single_tool_calls += 1
-                if 2 <= agent._consecutive_single_tool_calls <= 4:
-                    result += (
-                        "\n\n[EFFICIENCY REMINDER: You have made "
-                        f"{agent._consecutive_single_tool_calls} consecutive single-tool responses. "
-                        "Batch independent tool calls in ONE response to reduce round-trips.]"
-                    )
-            else:
-                agent._consecutive_single_tool_calls = 0
-            return [result]
+            return [self.execute_single(tool_calls[0])]
 
-        agent._consecutive_single_tool_calls = 0
         return self._execute_parallel(tool_calls)
 
-    def execute_single(self, tool_call: dict, skip_confirm: bool = False) -> str:
+    def execute_single(self, tool_call: dict) -> str:
         """Execute a single tool call with display, caching, and tracking."""
         agent = self._agent
         tool_name = tool_call["name"]
@@ -245,10 +181,7 @@ class ToolExecutor:
         display.tool_start(tool_name, detail)
         t0 = time.time()
         try:
-            if skip_confirm and tool_name == "shell":
-                result = agent.tool_registry.execute(tool_name, _quiet=True, **arguments)
-            else:
-                result = agent.tool_registry.execute(tool_name, **arguments)
+            result = agent.tool_registry.execute(tool_name, **arguments)
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
@@ -276,22 +209,7 @@ class ToolExecutor:
         """Handle post-execution side effects (tracking, skill loading, etc.)."""
         agent = self._agent
 
-        # Immediate compression for large shell output (saves tokens before entering history)
-        if tool_name == "shell" and not error and len(result) > 3000:
-            result = _compress_shell_result(result)
 
-        # Track file reads
-        if tool_name == "read_file" and not error:
-            path = arguments.get("path", "")
-            if path:
-                agent._files_read_this_session.add(path)
-
-        # Track writes
-        if tool_name in ("write_file", "edit_file") and not error:
-            agent._last_write_turn = agent.turn_count
-            path = arguments.get("path", "") or arguments.get("file_path", "")
-            if path:
-                agent._files_written_this_session.add(path)
 
         # Track load_skill side effects
         if tool_name == "load_skill" and not error:
