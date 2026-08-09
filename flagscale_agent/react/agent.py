@@ -326,6 +326,7 @@ class WorkerAgent:
             memory_context=memory_context,
             plan_context=plan_context,
             tool_names=tool_names,
+            session_dir=self._session_dir,
         )
 
     # ── Health judge (delegates to unified Judge) ───────────────────────────

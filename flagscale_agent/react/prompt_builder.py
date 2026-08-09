@@ -49,6 +49,7 @@ class PromptBuilder:
         # Legacy params — accepted but ignored (removed from prompt injection)
         memory_context: str = "",
         plan_context: str = "",
+        session_dir: str = "",
     ):
         """Build and set the system prompt on the history manager.
 
@@ -93,7 +94,7 @@ class PromptBuilder:
         )
 
         # ── Append dashboard at the very end ──
-        dashboard = self._build_dashboard(plan_context)
+        dashboard = self._build_dashboard(plan_context, session_dir)
         if dashboard:
             core += DASHBOARD_TEMPLATE.format(dashboard_content=dashboard)
 
@@ -146,11 +147,12 @@ class PromptBuilder:
         except Exception:
             return "(knowledge not available)"
 
-    def _build_dashboard(self, plan_context: str) -> str:
+    def _build_dashboard(self, plan_context: str, session_dir: str = "") -> str:
         """Build the dashboard line for the end of the prompt.
 
         Extracts plan title/step from plan_context if available.
         Format: "Task: <title> | Step: N/M | Turn: <n>"
+        Appends session paths so the agent can access conversation logs directly.
         """
         import re
         parts = []
@@ -177,6 +179,15 @@ class PromptBuilder:
                 parts.append(f"Step: {current}/{total}")
 
         parts.append(f"Turn: {self._turn_count}")
+
+        # Session paths — injected so agent can read logs without shell(find ...)
+        if session_dir:
+            parts.append(
+                f"Session: {session_dir}"
+                f" | conversation.json: {session_dir}/conversation.json"
+                f" | conversation_full.json: {session_dir}/conversation_full.json"
+            )
+
         return " | ".join(parts)
 
     def _build_shared_storage_note(self, shared_storage_paths: list[str]) -> str:
