@@ -133,6 +133,7 @@ class GuardRegistry:
 
     def __init__(self):
         self._guards: list[Guard] = []
+        self._overridden_this_turn: set[str] = set()  # Track guards that showed override display this turn
 
     def register(self, guard: Guard):
         self._guards.append(guard)
@@ -156,7 +157,10 @@ class GuardRegistry:
                     and ctx.override_reason
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
-                    display.guard_overridden(guard.name, ctx.override_reason)
+                    # Display override only once per guard per turn
+                    if guard.name not in self._overridden_this_turn:
+                        display.guard_overridden(guard.name, ctx.override_reason)
+                        self._overridden_this_turn.add(guard.name)
                     continue
                 # Add appropriate hint
                 if verdict.action == "block" and not ctx.override_reason:
@@ -201,7 +205,10 @@ class GuardRegistry:
                     and ctx.override_reason
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
-                    display.guard_overridden(guard.name, ctx.override_reason)
+                    # Display override only once per guard per turn
+                    if guard.name not in self._overridden_this_turn:
+                        display.guard_overridden(guard.name, ctx.override_reason)
+                        self._overridden_this_turn.add(guard.name)
                     continue
                 if verdict.action == "block" and not ctx.override_reason:
                     verdict.message += _OVERRIDE_HINT
@@ -227,6 +234,7 @@ class GuardRegistry:
 
     def reset_turn(self):
         """Reset per-turn state for all guards."""
+        self._overridden_this_turn.clear()
         for guard in self._guards:
             guard.reset_turn()
 

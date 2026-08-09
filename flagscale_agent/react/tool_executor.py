@@ -351,72 +351,11 @@ class ToolExecutor:
             for i in range(_MAX_BATCH, len(tool_calls)):
                 capped_indices.add(i)
 
-        # Pre-exec: Guard checks
+        # Note: Guard checks are handled by kernel.py BEFORE tools reach here.
+        # kernel.py filters out blocked tools, so we don't re-check guards here.
+        # This prevents duplicate guard checks and double override displays.
         skip_indices: set[int] = set()
         results = [None] * len(tool_calls)
-
-        for i, tc in enumerate(tool_calls):
-            # Guard pre-checks (these also block)
-            from flagscale_agent.react.guard import GuardContext
-            try:
-                tool = agent.tool_registry.get(tc["name"])
-            except (KeyError, AttributeError):
-                pass
-            raw_args = tc.get("arguments", {})
-            # Extract override_reason from tool_args (same as kernel._build_ctx)
-            override_reason = ""
-            if raw_args and "_override_reason" in raw_args:
-                override_reason = raw_args["_override_reason"]
-                raw_args = {k: v for k, v in raw_args.items() if k != "_override_reason"}
-                tc["arguments"] = raw_args  # Strip _override_reason from actual execution args
-            guard_ctx = GuardContext(
-                tool_name=tc["name"],
-                tool_args=raw_args,
-                override_reason=override_reason,
-                turn_count=agent.turn_count,
-                recent_tool_history=agent._recent_tool_history[-8:],
-                context_pressure=agent.history.get_context_pressure() if agent.history else 0.0,
-                classify_fn=agent.judge.classify,
-            )
-            verdict = agent._kernel.deps.guard_registry.check_pre(guard_ctx)
-            if verdict and verdict.action == "block":
-                skip_indices.add(i)
-                results[i] = f"⛔ TOOL NOT EXECUTED — blocked: {verdict.message}"
-                # Display: show what was blocked
-                cmd_preview = str(tc.get("arguments", {}).get("command", "")) or str(tc.get("arguments", {}))
-                print(display.red(
-                    f"  ⛔ Blocked [{tc['name']}]: {cmd_preview}"
-                ))
-                print(display.yellow(
-                    f"     Correction: {verdict.message}"
-                ))
-                # Do NOT break — continue checking remaining tools in the batch
-            elif verdict and verdict.action == "escalate":
-                # Escalate: abort the ENTIRE batch — all tools are blocked
-                for j in range(len(tool_calls)):
-                    skip_indices.add(j)
-                    if results[j] is None:
-                        results[j] = f"⛔ BATCH ABORTED — escalation: {verdict.message}"
-                cmd_preview = str(tc.get("arguments", {}).get("command", "")) or str(tc.get("arguments", {}))
-                print(display.red(
-                    f"  ⛔ ESCALATION [{tc['name']}]: {cmd_preview}"
-                ))
-                print(display.yellow(
-                    f"     {verdict.message}"
-                ))
-                # Do NOT call inject_message_fn here — that would break
-                # tool_use/tool_result pairing. The escalation message is already
-                # embedded in the tool result string above.
-                break
-            elif verdict and verdict.action == "inject":
-                # Inject: tool still executes, but append advisory AFTER tool_results
-                # are in history. We collect them here and append to results later.
-                # Do NOT call inject_message_fn here — that would insert a user message
-                # between assistant(tool_use) and user(tool_result), breaking the API.
-                if not hasattr(self, '_pending_advisories'):
-                    self._pending_advisories = []
-                self._pending_advisories.append(verdict.message)
-                display.guard_inject(verdict.message)
 
         skip_indices |= dedup_indices | capped_indices
 
