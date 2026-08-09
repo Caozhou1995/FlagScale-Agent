@@ -28,6 +28,8 @@ from flagscale_agent.react.prompt import (
     SYSTEM_PROMPT_OPTIONAL,
     DASHBOARD_TEMPLATE,
 )
+from flagscale_agent.react.memory import Memory
+from flagscale_agent.react.paths import get_memory_dir
 
 if TYPE_CHECKING:
     from flagscale_agent.react.skills import SkillManager
@@ -198,9 +200,7 @@ class PromptBuilder:
     def _build_memory_keys_summary(self) -> str:
         """Return comma-separated list of all memory keys (no values)."""
         try:
-            from flagscale_agent.react.memory import AgentMemory
-            from flagscale_agent.react.paths import get_memory_dir
-            mem = AgentMemory(get_memory_dir())
+            mem = Memory(get_memory_dir())
             entries = mem.list_entries()
             if not entries:
                 return ""
