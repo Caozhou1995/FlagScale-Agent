@@ -67,7 +67,7 @@ class KnowledgeSkillGuard(Guard):
         self._calls_since_knowledge += 1
 
         if self._calls_since_knowledge >= self.BLOCK_THRESHOLD:
-            self._calls_since_knowledge = 0
+            # Do NOT reset counter here — only reset in accept_override if override succeeds
             return GuardVerdict.block(
                 f"[KnowledgeSkill] {self.BLOCK_THRESHOLD} tool calls without loading "
                 "domain knowledge or skills. Consider whether load_knowledge() or "

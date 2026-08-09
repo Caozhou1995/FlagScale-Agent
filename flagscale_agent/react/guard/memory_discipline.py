@@ -78,7 +78,7 @@ class MemoryDisciplineGuard(Guard):
         self._calls_since_memory += 1
 
         if self._calls_since_memory >= self.BLOCK_THRESHOLD:
-            self._calls_since_memory = 0
+            # Do NOT reset counter here — only reset in accept_override if override succeeds
             return GuardVerdict.block(
                 f"[MemoryDiscipline] {self.BLOCK_THRESHOLD} tool calls without any memory operation. "
                 "You likely have findings worth saving (facts, pitfalls, insights) or existing "
