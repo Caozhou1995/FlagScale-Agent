@@ -18,7 +18,6 @@ def test_guard_registry_complete():
     from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
     from flagscale_agent.react.guard.plan import PlanGuard
     from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
-    from flagscale_agent.react.guard.skill_reflection import SkillReflectionGuard
     from flagscale_agent.react.guard.package_search import PackageSearchGuard
     from flagscale_agent.react.guard.unit_test import UnitTestGuard
     from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
@@ -31,7 +30,6 @@ def test_guard_registry_complete():
     ContextPressureGuard()
     PlanGuard()
     TrainingMonitorGuard()
-    SkillReflectionGuard()
     PackageSearchGuard()
     UnitTestGuard()
     MemoryDisciplineGuard()

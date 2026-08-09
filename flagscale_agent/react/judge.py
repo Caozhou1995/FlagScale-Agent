@@ -432,65 +432,7 @@ Reply ONLY: {{"real": true/false, "need_more": null}}
 
 # ── Skill suggestion (semantic, replaces keyword matching) ────────────────────
 
-_CLASSIFY_PROMPTS["skill_suggest"] = """\
-Given the user request, decide which skills (if any) should be loaded.
-
-User request: {user_input}
-
-Available skills (not yet loaded):
-{available_skills}
-
-Rules:
-- ONLY suggest skills that are DIRECTLY and IMMEDIATELY needed for the current task.
-- Be CONSERVATIVE: when in doubt, do NOT suggest. Skills can always be loaded later.
-- If the task is a sub-step of a larger workflow (e.g., "install dependencies"), only suggest skills for THAT specific step, not the entire workflow.
-- Do NOT suggest skills for future steps that haven't started yet.
-- For simple operations (delete files, check status, list processes, read files), return empty list.
-- Maximum 2 skills per suggestion. If more seem relevant, pick only the most critical ones.
-- DISCUSSION vs EXECUTION: If the user is asking a question, discussing a concept, or reporting an observation (e.g., "精度有问题", "loss looks off", "how does porting work?"), do NOT suggest workflow skills. Only suggest workflow skills when the user explicitly requests an action (e.g., "做精度对齐", "port this model to Megatron", "align the precision between X and Y").
-- KEYWORD TRAP: Do not match on surface keywords alone. "精度" does not mean "run precision alignment workflow". "loss不对" does not mean "run model porting". Consider the user's INTENT, not just topic words.
-- Return ONLY a JSON array of skill names, e.g. ["train-env-setup"] or [].
-"""
-
-_CLASSIFY_PROMPTS["skill_suggest_by_context"] = """\
-Based on the agent's recent activity, decide which skills (if any) should be loaded NOW.
-
-Original task: {task}
-
-Recent tool calls (last {window} iterations):
-{recent_activity}
-
-Currently loaded skills: {loaded_skills}
-
-Available skills (not yet loaded):
-{available_skills}
-
-Rules:
-- Suggest a skill ONLY if the recent activity clearly indicates the agent is entering that skill's domain.
-- Examples: if the agent just launched training → suggest "train-monitor"; if the agent is debugging OOM → suggest "train-monitor".
-- Do NOT suggest skills already loaded.
-- Be CONSERVATIVE: max 1 skill per suggestion. Only suggest when the need is obvious.
-- Do NOT suggest workflow skills (precision-alignment, model-porter, etc.) just because the agent read or discussed related topics. Only suggest them when the agent is actively PERFORMING that workflow (e.g., running checkpoint conversion, writing alignment scripts).
-- Return ONLY a JSON array of skill names, e.g. ["train-monitor"] or [].
-"""
-
 # ── Constraint violation judgment (Phase 3) ──────────────────────────────────
-
-_CLASSIFY_PROMPTS["knowledge_suggest"] = """\
-Given the user request, decide which knowledge groups (if any) should be loaded.
-
-User request: {user_input}
-
-Available knowledge groups (not yet loaded):
-{available_groups}
-
-Rules:
-- ONLY suggest groups that are DIRECTLY relevant to the current task.
-- Be CONSERVATIVE: max 2 groups. When in doubt, do NOT suggest.
-- For simple operations (file edits, status checks, git commands), return empty list.
-- Knowledge is expensive to load — only suggest when domain expertise is clearly needed.
-- Return ONLY a JSON array of group names, e.g. ["know-megatron-parallel"] or [].
-"""
 
 _CLASSIFY_PROMPTS["is_constraint_violated"] = """\
 Determine if this tool call violates the given constraint.
@@ -1046,102 +988,6 @@ class Judge:
 
     # ── Route intent (replaces Orchestrator regex routing) ─────────────────
 
-    def suggest_skills(self, user_input: str, available_skills: list[dict]) -> list[str]:
-        """Suggest which skills to load based on semantic understanding.
-
-        Args:
-            user_input: The user's request text.
-            available_skills: List of {"name": ..., "description": ...} for unloaded skills.
-
-        Returns:
-            List of skill names to load (may be empty).
-        """
-        if not available_skills:
-            return []
-
-        skills_str = "\n".join(
-            f"- {s['name']}: {s.get('description', '')}" for s in available_skills
-        )
-        context = {
-            "user_input": user_input,
-            "available_skills": skills_str,
-        }
-        value, source = self.classify_traced("skill_suggest", context, default=[])
-        if not isinstance(value, list):
-            return []
-        # Validate: only return names that exist in available_skills
-        valid_names = {s["name"] for s in available_skills}
-        return [n for n in value if isinstance(n, str) and n in valid_names]
-
-    def suggest_skills_by_context(
-        self,
-        task: str,
-        recent_activity: list[dict],
-        loaded_skills: list[str],
-        available_skills: list[dict],
-    ) -> list[str]:
-        """Suggest skills based on recent tool activity (mid-turn).
-
-        Unlike suggest_skills() which uses user input, this uses the agent's
-        recent tool call history to detect when a new skill domain is entered.
-
-        Args:
-            task: The original user task description.
-            recent_activity: List of {"tool": ..., "args_summary": ...} dicts.
-            loaded_skills: Names of currently loaded skills.
-            available_skills: List of {"name": ..., "description": ...} for unloaded skills.
-
-        Returns:
-            List of skill names to load (max 1).
-        """
-        if not available_skills:
-            return []
-
-        skills_str = "\n".join(
-            f"- {s['name']}: {s.get('description', '')}" for s in available_skills
-        )
-        activity_str = "\n".join(
-            f"  [{a['tool']}] {a.get('args_summary', '')}" for a in recent_activity[-10:]
-        )
-        context = {
-            "task": task or "(unknown)",
-            "window": str(len(recent_activity)),
-            "recent_activity": activity_str or "(no activity yet)",
-            "loaded_skills": ", ".join(loaded_skills) if loaded_skills else "(none)",
-            "available_skills": skills_str,
-        }
-        value, source = self.classify_traced("skill_suggest_by_context", context, default=[])
-        if not isinstance(value, list):
-            return []
-        valid_names = {s["name"] for s in available_skills}
-        return [n for n in value[:1] if isinstance(n, str) and n in valid_names]
-
-    def suggest_knowledge(self, user_input: str, available_groups: list[dict]) -> list[str]:
-        """Suggest which knowledge groups to load based on semantic understanding.
-
-        Args:
-            user_input: The user's request text.
-            available_groups: List of {"name": ..., "description": ...} for unloaded groups.
-
-        Returns:
-            List of knowledge group names to load (may be empty).
-        """
-        if not available_groups:
-            return []
-
-        groups_str = "\n".join(
-            f"- {g['name']}: {g.get('description', '')}" for g in available_groups
-        )
-        context = {
-            "user_input": user_input,
-            "available_groups": groups_str,
-        }
-        value, source = self.classify_traced("knowledge_suggest", context, default=[])
-        if not isinstance(value, list):
-            return []
-        # Validate: only return names that exist in available_groups
-        valid_names = {g["name"] for g in available_groups}
-        return [n for n in value if isinstance(n, str) and n in valid_names][:2]
 
     def is_continuation(self, user_input: str, previous_summary: str) -> bool:
         """Determine if user_input is a follow-up to the previous turn.
@@ -1241,15 +1087,6 @@ class Judge:
                 constraints = data.get("constraints", [])
                 if isinstance(constraints, list):
                     return constraints
-            return []
-        if category in ("skill_suggest", "skill_suggest_by_context", "knowledge_suggest"):
-            # LLM should return a JSON array of skill names
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                skills = data.get("skills", [])
-                if isinstance(skills, list):
-                    return skills
             return []
         # Boolean categories
         real = data.get("real")

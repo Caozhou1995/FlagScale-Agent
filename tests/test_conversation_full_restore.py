@@ -25,7 +25,6 @@ def _make_agent_mock(session_dir):
     agent._session_id = "test123"
     agent._session_dir = session_dir
     agent._loaded_skills = set()
-    agent._active_skill_content = {}
     agent._session_input_tokens = 0
     agent._session_output_tokens = 0
     agent.turn_count = 0

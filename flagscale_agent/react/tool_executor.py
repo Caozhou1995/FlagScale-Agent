@@ -319,15 +319,6 @@ class ToolExecutor:
             skill_name = arguments.get("name", "")
             if skill_name not in agent._loaded_skills:
                 agent._loaded_skills.add(skill_name)
-                skill_content = result
-                prefix_end = result.find("\n\n")
-                if prefix_end != -1 and result.startswith("SUCCESS:"):
-                    skill_content = result[prefix_end + 2:]
-                agent._active_skill_content[skill_name] = skill_content
-                agent._skill_load_iterations[skill_name] = agent._total_iterations
-                agent._apply_skill_effects(skill_name)
-                agent._on_skill_loaded(skill_name, skill_content)
-                result = f"[Skill '{skill_name}' loaded — content available in system context]"
 
         return result
 

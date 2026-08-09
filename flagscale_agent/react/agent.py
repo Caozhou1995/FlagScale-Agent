@@ -192,10 +192,7 @@ class WorkerAgent:
         self._last_tool_calls_deque = deque(maxlen=5)
         self._turn_iteration_count: int = 0
         self._consecutive_single_tool_calls: int = 0
-        self._active_skill_content: dict[str, str] = {}
-        self._skill_load_iterations: dict[str, int] = {}
         self._total_iterations: int = 0
-        self._recently_referenced_skills: set[str] = set()
         self._original_user_task: str = ""
         self._session_start: float = time.time()
         self._session_input_tokens: int = 0
@@ -210,7 +207,6 @@ class WorkerAgent:
         self._streaming_in_code_block: bool = False
         self._last_compaction_count: int = 0
         self._recent_iters: list[dict] = []
-        self._skill_guards_registered: set[str] = set()  # Track registered skill guards
 
         self._refresh_system_prompt()
 
@@ -228,11 +224,6 @@ class WorkerAgent:
         guard_registry.register(ShellSafetyGuard())
 
         # Reliability guards (P7)
-
-        # Create SkillReflectionGuard (periodic self-review for loaded skills)
-        from flagscale_agent.react.guard.skill_reflection import SkillReflectionGuard
-        self._skill_reflection_guard = SkillReflectionGuard(review_interval=8)
-        guard_registry.register(self._skill_reflection_guard)
 
         guard_registry.register(ContextPressureGuard(
             working_window_tokens=self.history.working_window if self.history else 0
@@ -322,16 +313,6 @@ class WorkerAgent:
         from flagscale_agent.react.tools.hard_reset import HardResetTool
         self.tool_registry.register(HardResetTool(self))
 
-    def _on_skill_loaded(self, skill_name: str, skill_content: str,
-                          skip_extract: bool = False):
-        """Centralized handler after any skill is loaded."""
-        # Notify SkillReflectionGuard that a skill was loaded
-        self._skill_reflection_guard.on_skill_loaded(skill_name)
-        
-        self._refresh_system_prompt()
-
-
-
     def _build_proxies(self) -> dict[str, str]:
         proxies = {}
         for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
@@ -346,7 +327,7 @@ class WorkerAgent:
         tool_names = [t.name for t in self.tool_registry.all_tools()]
         self._prompt_builder.refresh(
             history=self.history,
-            active_skill_content=self._active_skill_content,
+            active_skill_content={},
             shared_storage_paths=getattr(self, "_shared_storage_paths", []),
             memory_context=memory_context,
             plan_context=plan_context,
@@ -713,10 +694,6 @@ class WorkerAgent:
             if self._command_handler.handle_slash_command(user_input):
                 continue
 
-            if self.config.auto_skill:
-                self._auto_load_skills(user_input)
-                self._auto_load_knowledge(user_input)
-
             self._inject_context()
             self._session_input_history.append(user_input)
             self.history.append({"role": "user", "content": user_input})
@@ -733,9 +710,6 @@ class WorkerAgent:
 
 
     def _run_single_shot(self, query: str):
-        if self.config.auto_skill:
-            self._auto_load_skills(query)
-            self._auto_load_knowledge(query)
         self._inject_context()
         self.history.append({"role": "user", "content": query})
         try:
@@ -810,19 +784,13 @@ class WorkerAgent:
         # Restore session token counts for cumulative tracking across resume/reload
         self._session_input_tokens = data.get("session_input_tokens", 0)
         self._session_output_tokens = data.get("session_output_tokens", 0)
-        skill_map = {}
         for skill_name in loaded:
             try:
                 content = self.skill_manager.load(skill_name)
                 if content:
                     self._loaded_skills.add(skill_name)
-                    self._active_skill_content[skill_name] = content
-                    skill_map[skill_name] = content
             except Exception:
                 pass
-        if skill_map:
-            for sn in skill_map:
-                self._on_skill_loaded(sn, skill_map[sn])
         # Refresh system prompt with restored context
         self._refresh_system_prompt()
 
@@ -1008,222 +976,6 @@ class WorkerAgent:
                     return "".join(texts)
         return ""
 
-    # ── Auto-skill loading ─────────────────────────────────────────────────
-
-    def _auto_load_skills(self, user_input: str):
-        """Load skills based on semantic judgment (primary) or keyword fallback.
-
-        Uses Judge.suggest_skills() for semantic matching. Falls back to keyword
-        matching only when Judge is unavailable.
-        """
-        skills = self.skill_manager.list_skills()
-        available = [s for s in skills if s.get("name", "") not in self._loaded_skills]
-        if not available:
-            return
-
-        loaded = set()
-
-        # Primary: semantic suggestion via Judge
-        if self.judge and self.judge.provider is not None:
-            suggested = self.judge.suggest_skills(user_input, available)
-            loaded = set(suggested[:2])  # Cap at 2 skills per auto-load
-        else:
-            # Fallback: keyword matching (Judge unavailable)
-            for s in available:
-                keywords = s.get("keywords", [])
-                name = s.get("name", "")
-                if any(kw.lower() in user_input.lower() for kw in keywords):
-                    loaded.add(name)
-                    if len(loaded) >= 2:
-                        break
-
-        for name in loaded:
-            try:
-                content = self.skill_manager.load(name)
-                if content:
-                    self._loaded_skills.add(name)
-                    self._active_skill_content[name] = content
-                    self._apply_skill_effects(name)
-                    display.skill_auto_loaded(name)
-                    self._on_skill_loaded(name, content)
-            except Exception:
-                pass
-
-    def _auto_load_knowledge(self, user_input: str):
-        """Load knowledge groups based on semantic judgment.
-
-        Uses Judge.suggest_knowledge() for semantic matching. Only loads indexes
-        (not full content) to keep context manageable.
-        """
-        all_groups = self._knowledge_manager.list_groups()
-        loaded_names = getattr(self, "_loaded_knowledge", set())
-        available = [g for g in all_groups if g["name"] not in loaded_names]
-        if not available:
-            return
-
-        if not (self.judge and self.judge.provider is not None):
-            return  # No fallback - knowledge suggestion requires semantic judgment
-
-        suggested = self.judge.suggest_knowledge(user_input, available)
-        if not suggested:
-            return
-
-        if not hasattr(self, "_loaded_knowledge"):
-            self._loaded_knowledge = set()
-
-        for name in suggested[:2]:
-            try:
-                index_content = self._knowledge_manager.get_index(name)
-                if index_content:
-                    self._loaded_knowledge.add(name)
-                    from flagscale_agent.react import display
-                    display.info(f"[KnowledgeAutoLoad] Loaded index for: {name}")
-            except Exception:
-                pass
-
-    def _apply_skill_effects(self, skill_name: str, _depth: int = 0):
-        """Apply effects declared in skill frontmatter - no hardcoded skill names.
-
-        _depth prevents recursive companion loading from cascading indefinitely.
-        """
-        if _depth >= 2:
-            return
-        effects = self.skill_manager.get_effects(skill_name)
-        if not effects:
-            return
-        # Auto-load companion skills
-        companions = effects.get("companion_skills")
-        if companions and isinstance(companions, list):
-            self._auto_load_companion_skills(companions, _depth=_depth + 1)
-
-    def _auto_load_companion_skills(self, skill_names: list[str], _depth: int = 0):
-        # Cap companion loading to prevent cascading skill explosion
-        # Only load companions that are not already loaded, max 2 at a time
-        needs_refresh = False
-        loaded_count = 0
-        _MAX_COMPANIONS = 2
-        for name in skill_names:
-            if name in self._loaded_skills:
-                continue
-            if loaded_count >= _MAX_COMPANIONS:
-                break
-            try:
-                content = self.skill_manager.load(name)
-                if content:
-                    self._loaded_skills.add(name)
-                    self._active_skill_content[name] = content
-                    self._skill_load_iterations[name] = self._total_iterations
-                    display.skill_auto_loaded(name)
-                    self._on_skill_loaded(name, content)
-                    # Fix 3: Do NOT call _apply_skill_effects for companions
-                    # to prevent infinite cascading (companion's companion's companion...)
-                    needs_refresh = True
-                    loaded_count += 1
-            except Exception:
-                pass
-        if needs_refresh:
-            self._refresh_system_prompt()
-
-    # ── Mid-turn dynamic skill loading/unloading ───────────────────────────
-
-    _SKILL_CHECK_INTERVAL = 10  # Check every N iterations
-    _SKILL_STALE_THRESHOLD = 50  # Unload after N iterations without relevance
-
-    def _mid_turn_skill_check(self, tool_calls: list):
-        """Periodically check if new skills should be loaded based on activity.
-
-        Called from _on_kernel_tool_results every _SKILL_CHECK_INTERVAL iterations.
-        Uses Judge LLM to decide if the agent's recent activity warrants loading
-        a new skill that was not obvious at turn start.
-        """
-        if self._total_iterations % self._SKILL_CHECK_INTERVAL != 0:
-            return
-        if self._total_iterations == 0:
-            return
-
-        # Don't burn judge budget if already exhausted
-        if self.judge.budget.exhausted:
-            return
-
-        skills = self.skill_manager.list_skills()
-        available = [s for s in skills if s.get("name", "") not in self._loaded_skills]
-        if not available:
-            return
-
-        # Build recent activity summary from _recent_iters
-        recent_activity = []
-        for tc in tool_calls:
-            args = tc.get("arguments", {})
-            summary = ""
-            if tc["name"] == "shell":
-                summary = args.get("command", "")
-            elif tc["name"] in ("read_file", "write_file", "edit_file"):
-                summary = args.get("path", "") or args.get("file_path", "")
-            elif tc["name"] == "load_skill":
-                summary = args.get("name", "")
-            else:
-                summary = str(args)
-            recent_activity.append({"tool": tc["name"], "args_summary": summary})
-
-        # Also include recent history from deque
-        for tool_name in list(self._last_tool_calls_deque)[-10:]:
-            if not any(a["tool"] == tool_name for a in recent_activity):
-                recent_activity.append({"tool": tool_name, "args_summary": ""})
-
-        suggested = self.judge.suggest_skills_by_context(
-            task=self._original_user_task,
-            recent_activity=recent_activity,
-            loaded_skills=list(self._loaded_skills),
-            available_skills=available,
-        )
-
-        for name in suggested[:1]:  # Max 1 per check
-            try:
-                content = self.skill_manager.load(name)
-                if content:
-                    self._loaded_skills.add(name)
-                    self._active_skill_content[name] = content
-                    self._skill_load_iterations[name] = self._total_iterations
-                    self._apply_skill_effects(name)
-                    display.skill_auto_loaded(name)
-                    self._on_skill_loaded(name, content)
-            except Exception:
-                pass
-
-    def _unload_stale_skills(self):
-        """Unload skills that have not been relevant for many iterations.
-
-        Frees context window space by removing skill content that the agent
-        has not needed. The skill can always be re-loaded later.
-        """
-        if self._total_iterations < self._SKILL_STALE_THRESHOLD:
-            return
-
-        stale = []
-        for name, load_iter in list(self._skill_load_iterations.items()):
-            age = self._total_iterations - load_iter
-            if age >= self._SKILL_STALE_THRESHOLD and name in self._active_skill_content:
-                # Check if skill was recently referenced (tool calls matching keywords)
-                if name in self._recently_referenced_skills:
-                    # Reset - it's still relevant
-                    self._skill_load_iterations[name] = self._total_iterations
-                    continue
-                stale.append(name)
-
-        for name in stale:
-            # Remove from active content (frees context), but keep in _loaded_skills
-            # so it will not be re-suggested immediately. It can be re-loaded via load_skill.
-            del self._active_skill_content[name]
-            del self._skill_load_iterations[name]
-            self._loaded_skills.discard(name)
-            print(display.dim(f"  ↓ Skill '{name}' unloaded (stale, can be re-loaded)"))
-
-        if stale:
-            self._refresh_system_prompt()
-
-        # Clear referenced set each check cycle
-        self._recently_referenced_skills.clear()
-
     # ── User path confirmation ────────────────────────────────────────────
 
     # ── React loop ──────────────────────────────────────────────────────────
@@ -1257,25 +1009,10 @@ class WorkerAgent:
             self._last_tool_calls_deque.append(tc["name"])
         self._total_iterations += 1
 
-        # Refresh system prompt if skill/plan tools were used
-        if any(tc["name"] in ("load_skill", "plan_create", "plan_update", "plan_status")
+        # Refresh system prompt if plan tools were used
+        if any(tc["name"] in ("plan_create", "plan_update", "plan_status")
                for tc in tool_calls):
-            # Register constraints for any newly loaded skills via load_skill tool
-            for tc, result in zip(tool_calls, results):
-                if tc["name"] == "load_skill" and isinstance(result, str) and result.startswith("SUCCESS"):
-                    skill_name = tc.get("arguments", {}).get("name", "")
-                    if skill_name and skill_name not in self._skill_guards_registered:
-                        content = self._active_skill_content.get(skill_name) or self.skill_manager.load(skill_name)
-                        if content:
-                            self._loaded_skills.add(skill_name)
-                            self._active_skill_content[skill_name] = content
-                            self._skill_load_iterations[skill_name] = self._total_iterations
-                            self._on_skill_loaded(skill_name, content)
             self._refresh_system_prompt()
-
-        # Dynamic mid-turn skill loading/unloading
-        self._mid_turn_skill_check(tool_calls)
-        self._unload_stale_skills()
 
         # Judge budget exhaustion warning
         if self.judge.budget.exhausted and self.judge.budget.skipped_detail:

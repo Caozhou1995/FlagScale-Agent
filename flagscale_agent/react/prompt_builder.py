@@ -54,7 +54,7 @@ class PromptBuilder:
 
         Args:
             history: HistoryManager instance to set prompt on
-            active_skill_content: {skill_name: content} for loaded skills
+            active_skill_content: IGNORED (kept for backward compat, skill content no longer injected)
             shared_storage_paths: Detected shared filesystem paths
             tool_names: List of available tool names
             memory_context: IGNORED (kept for backward compat, not injected)
@@ -80,14 +80,6 @@ class PromptBuilder:
         # ── Optional sections based on scene constraints ──
         optional_sections = self._build_optional_sections(plan_context)
 
-        # ── Skill context (full or abbreviated based on turn count) ──
-        skill_context = self._build_skill_context(
-            active_skill_content
-        )
-
-        # ── Critical rules extracted from skills ──
-        critical_rules = self._build_critical_rules(active_skill_content)
-
         # ── Shared storage note ──
         shared_storage_note = self._build_shared_storage_note(shared_storage_paths)
 
@@ -97,9 +89,7 @@ class PromptBuilder:
             tools=tools_str,
             skills=skills_summary,
             knowledge=knowledge_summary,
-            critical_rules=critical_rules,
             optional_sections=optional_sections + shared_storage_note,
-            skill_context=skill_context,
         )
 
         # ── Append dashboard at the very end ──
@@ -127,66 +117,6 @@ class PromptBuilder:
             optional_parts.append(SYSTEM_PROMPT_OPTIONAL.get("user_commands", ""))
 
         return "\n\n".join(p for p in optional_parts if p)
-
-    def _build_skill_context(
-        self, active_skill_content: Dict[str, str]
-    ) -> str:
-        """Build skill context block.
-
-        Strategy:
-        - First 5 turns after loading: full skill content
-        - After 5 turns: header only (critical rules extracted separately)
-        """
-        if not active_skill_content:
-            return ""
-
-        skill_bodies = []
-        for name, content in active_skill_content.items():
-            if self._turn_count <= 5:
-                # Early turns: full content
-                skill_bodies.append(content)
-            else:
-                # After turn 5: compact header only
-                # Critical rules are already extracted separately
-                lines = content.strip().split("\n")
-                header = "\n".join(lines[:3])
-                skill_bodies.append(
-                    f"{header}\n[... use load_skill('{name}') for full content ...]"
-                )
-
-        return "\n\n".join(skill_bodies)
-
-    def _build_critical_rules(self, active_skill_content: dict[str, str]) -> str:
-        """Extract CRITICAL-level rules from loaded skills.
-
-        Looks for content between `## CRITICAL` / `# CRITICAL` and the next heading.
-        Always included regardless of turn count.
-        """
-        if not active_skill_content:
-            return ""
-
-        critical_parts = []
-        for name, content in active_skill_content.items():
-            lines = content.split("\n")
-            capturing = False
-            captured = []
-            for line in lines:
-                if line.strip().lower().startswith(("## critical", "# critical")):
-                    capturing = True
-                    continue
-                elif capturing and line.strip().startswith("#"):
-                    break
-                elif capturing:
-                    captured.append(line)
-
-            if captured:
-                text = "\n".join(captured).strip()
-                if text:
-                    critical_parts.append(f"[{name} critical rules]\n{text}")
-
-        if not critical_parts:
-            return ""
-        return "\n\n".join(critical_parts) + "\n"
 
     def _build_skills_summary(self) -> str:
         """Build compact summary of all available skills for the header line."""

@@ -1,70 +1,9 @@
 ---
+description: Adapt a new model to vllm-plugin-FL by migrating model code from the
+  latest vLLM upstream. Covers source discovery, copy-then-patch workflow, import
+  conversion, model registration, and correctness verification against upstream GPU
+  ground truth.
 name: infer-model-adapt
-description: Adapt a new model to vllm-plugin-FL by migrating model code from the latest vLLM
-  upstream. Covers source discovery, copy-then-patch workflow, import conversion, model
-  registration, and correctness verification against upstream GPU ground truth.
-keywords:
-- inference
-- vllm
-- model
-- porting
-- adaptation
-- migration
-- plugin
-- model-runner
-- registration
-- correctness
-requires:
-- infer-env-setup
-suggests:
-- infer-hw-adapt
-- debug-strategy
-- ops-discipline
-constraints:
-- id: no_vllm_source_modification
-  description: Never modify vLLM source code — all changes go through plugin
-  trigger:
-    tools: [edit_file, write_file]
-    keywords: [site-packages/vllm, vllm/models]
-  prompt: Check if the agent is editing vLLM source files
-  correction: Copy the file to vllm_fl/models/ first, then patch the copy.
-- id: copy_before_patch
-  description: Always copy upstream file verbatim before making any edits
-  trigger:
-    keywords: [write_file, create model file]
-  prompt: Check if a clean upstream copy exists before editing
-  correction: First `cp <vllm_upstream>/<model>.py <plugin>/vllm_fl/models/<model>.py`, then edit.
-- id: import_check_per_batch
-  description: Run an import check after each batch of patches
-  trigger:
-    tools: [edit_file]
-    keywords: [from vllm, import vllm]
-  prompt: Check if the agent will verify the import after this patch
-  correction: Run `python3 -c "from vllm_fl.models.<model> import <Class>; print('OK')"` before next batch.
-- id: absolute_imports
-  description: All relative imports in copied files must be converted to absolute plugin-rooted imports
-  trigger:
-    tools: [edit_file, write_file]
-    keywords: [from .., from .]
-  prompt: Check if relative imports have been converted to absolute plugin imports
-  correction: Change `from ..utils import X` to `from vllm_fl.utils import X` (or `from vllm.utils import X` if not patched).
-- id: version_adaptive
-  description: Detect installed vLLM version before deciding what to patch
-  trigger:
-    keywords: [patch, adapt, copy upstream]
-  prompt: Check if the agent verified the installed vLLM version first
-  correction: Run `python3 -c "import vllm; print(vllm.__version__)"` and select patches based on actual version.
-context_injection:
-  always:
-  - Critical Rules
-  - Porting Pipeline
-  by_tool:
-    edit_file:
-    - Copy-then-Patch Discipline
-    - Import Conversion Rules
-    shell:
-    - Stage 0 Orientation
-    - Correctness Verification
 ---
 
 <!--

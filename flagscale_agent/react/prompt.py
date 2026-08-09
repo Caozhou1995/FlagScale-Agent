@@ -30,7 +30,7 @@ Working directory: {cwd}
 Tools: {tools}
 Skills: {skills}
 Knowledge: {knowledge}
-{critical_rules}
+
 
 ## Context Window
 
@@ -153,7 +153,7 @@ For content > 2500 chars:
 
 If write_file fails with "path parameter is required but was empty or missing" — that's truncation. Don't retry same content; split smaller.
 {optional_sections}
-{skill_context}"""
+"""
 
 # Optional sections injected based on state
 SYSTEM_PROMPT_OPTIONAL = {
