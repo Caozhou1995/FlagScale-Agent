@@ -829,7 +829,7 @@ class TestPromptIntegrity:
         """Static prompt should contain memory rules."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
         assert "## Memory" in SYSTEM_PROMPT_STATIC
-        assert "memory_write" in SYSTEM_PROMPT_STATIC
+        assert "memory_read" in SYSTEM_PROMPT_STATIC
         assert "cross-session knowledge" in SYSTEM_PROMPT_STATIC
 
 
