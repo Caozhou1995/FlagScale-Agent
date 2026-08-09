@@ -253,21 +253,6 @@ class SkillManager:
         body = parts[2].strip()
         return meta, body
 
-    # ── Phase 5.2: Skill-centric enhancements ─────────────────────────────
-
-    def get_workflow(self, name: str) -> Optional[Dict]:
-        """Get workflow definition from skill frontmatter.
-
-        Returns the workflow dict (with 'trigger' and 'stages' keys) or None.
-        """
-        meta = self.get_meta(name)
-        workflow = meta.get("workflow")
-        if not workflow or not isinstance(workflow, dict):
-            return None
-        if "stages" not in workflow or not workflow["stages"]:
-            return None
-        return workflow
-
     def get_constraints(self, name: str) -> List[Constraint]:
         """Extract hard constraints from skill frontmatter.
 
@@ -288,100 +273,6 @@ class SkillManager:
             except Exception as e:
                 pass
         return result
-
-    def get_focused_context(
-        self,
-        name: str,
-        stage_id: Optional[str] = None,
-        tool_name: Optional[str] = None,
-    ) -> str:
-        """Return focused context — only relevant sections of the skill body.
-
-        Uses context_injection rules from frontmatter to determine which
-        markdown sections to include. Falls back to full body when no rules defined.
-        """
-        mapping = self._scan()
-        skill_file = mapping.get(name)
-        if skill_file is None:
-            return ""
-        meta, body = self._parse_file(skill_file)
-
-        injection_rules = meta.get("context_injection")
-        if not injection_rules or not isinstance(injection_rules, dict):
-            return body  # No rules → full body
-
-        # Collect section titles to inject
-        sections_to_inject: set = set()
-
-        # Always-inject sections
-        always = injection_rules.get("always", [])
-        if isinstance(always, list):
-            sections_to_inject.update(always)
-
-        # By-stage sections
-        if stage_id:
-            by_stage = injection_rules.get("by_stage", {})
-            if isinstance(by_stage, dict):
-                stage_sections = by_stage.get(stage_id, [])
-                if isinstance(stage_sections, list):
-                    sections_to_inject.update(stage_sections)
-
-        # By-tool sections
-        if tool_name:
-            by_tool = injection_rules.get("by_tool", {})
-            if isinstance(by_tool, dict):
-                tool_sections = by_tool.get(tool_name, [])
-                if isinstance(tool_sections, list):
-                    sections_to_inject.update(tool_sections)
-
-        if not sections_to_inject:
-            return body  # No sections specified → full body
-
-        return self._extract_sections(body, sections_to_inject)
-
-    @staticmethod
-    def _extract_sections(body: str, section_titles: set) -> str:
-        """Extract markdown sections by heading title.
-
-        Matches ## or ### headings. Extracts content until the next heading
-        of equal or higher level.
-        """
-        if not section_titles:
-            return body
-
-        # Normalize titles for case-insensitive matching
-        normalized_titles = {t.lower().strip() for t in section_titles}
-
-        # Split body into sections by headings
-        # Pattern matches ## or ### headings
-        heading_pattern = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
-
-        sections = []
-        matches = list(heading_pattern.finditer(body))
-
-        for i, match in enumerate(matches):
-            level = len(match.group(1))
-            title = match.group(2).strip()
-
-            if title.lower() not in normalized_titles:
-                continue
-
-            # Find the end of this section (next heading of same or higher level)
-            start = match.start()
-            end = len(body)
-            for j in range(i + 1, len(matches)):
-                next_level = len(matches[j].group(1))
-                if next_level <= level:
-                    end = matches[j].start()
-                    break
-
-            sections.append(body[start:end].strip())
-
-        if not sections:
-            # No matching sections found — return full body as fallback
-            return body
-
-        return "\n\n".join(sections)
 
     @staticmethod
     def _compile_constraint(item: dict) -> Constraint:
