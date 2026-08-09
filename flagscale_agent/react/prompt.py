@@ -126,7 +126,7 @@ Skills and Knowledge are external reference documents — human-curated workflow
 **Skills** — workflow guides for specific task types:
 - Multi-step procedures: train-run, infer-model-adapt, train-data-prep
 - Use when: starting a complex task (>3 steps) in a specific domain
-- Pattern: see task type → load_skill → follow the workflow → adapt to specifics
+- Pattern: see task type → load_skill → convert to plan (plan_create) → execute step by step
 
 **Knowledge** — deep technical documentation for infrastructure domains:
 - Architecture, algorithms, implementation details: know-megatron-parallel, know-nccl-core, know-flash-attn
