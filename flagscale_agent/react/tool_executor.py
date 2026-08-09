@@ -132,16 +132,7 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         if path:
             summary += f" in {_short_path(path, 40)}"
         return summary
-    if tool_name == "flagscale_train_monitor":
-        exp = arguments.get("experiment", "")
-        log_type = arguments.get("log_type", "both")
-        filt = arguments.get("filter", "")
-        summary = exp if exp else ""
-        if filt:
-            summary += f" [{filt}]"
-        elif log_type != "both":
-            summary += f" [{log_type}]"
-        return summary
+
     if tool_name == "evict":
         indexes = arguments.get("indexes", [])
         if isinstance(indexes, list) and len(indexes) > 5:
@@ -285,18 +276,6 @@ class ToolExecutor:
         """Handle post-execution side effects (tracking, skill loading, etc.)."""
         agent = self._agent
 
-        # Record to recent tool history (for constraint judge context)
-        args_summary = tool_display_summary(tool_name, arguments) or str(arguments)
-        result_summary = result if result else ""
-        agent._recent_tool_history.append({
-            "tool": tool_name,
-            "args_summary": args_summary,
-            "result_summary": result_summary,
-        })
-        # Cap at 10 entries
-        if len(agent._recent_tool_history) > 10:
-            agent._recent_tool_history = agent._recent_tool_history[-10:]
-
         # Immediate compression for large shell output (saves tokens before entering history)
         if tool_name == "shell" and not error and len(result) > 3000:
             result = _compress_shell_result(result)
@@ -390,17 +369,6 @@ class ToolExecutor:
 
         if not to_run:
             display.parallel_tools_finish()
-            # Append pending advisories even for skip-only batches
-            if hasattr(self, '_pending_advisories') and self._pending_advisories:
-                advisory_msg = "\n".join(self._pending_advisories)
-                # NOTE: display already done at verdict time (line ~440). Don't re-display.
-                advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
-                advisory_text += advisory_msg
-                for i in range(len(results) - 1, -1, -1):
-                    if results[i] is not None:
-                        results[i] += advisory_text
-                        break
-                self._pending_advisories = []
             return results
 
         with ThreadPoolExecutor(max_workers=min(len(to_run), 4)) as pool:
@@ -409,19 +377,5 @@ class ToolExecutor:
                 results[futures[future]] = future.result()
 
         display.parallel_tools_finish()
-
-        # Append any pending guard advisories to the LAST tool result
-        # so they appear inside tool_result messages (safe for API ordering)
-        if hasattr(self, '_pending_advisories') and self._pending_advisories:
-            advisory_msg = "\n".join(self._pending_advisories)
-            # NOTE: display already done per-tool at verdict time (line ~440). Don't re-display.
-            advisory_text = "\n\n---\n[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
-            advisory_text += advisory_msg
-            # Find last non-None result to append to
-            for i in range(len(results) - 1, -1, -1):
-                if results[i] is not None:
-                    results[i] += advisory_text
-                    break
-            self._pending_advisories = []
 
         return results

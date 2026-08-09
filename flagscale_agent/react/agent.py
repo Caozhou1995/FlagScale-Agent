@@ -198,7 +198,7 @@ class WorkerAgent:
         self._last_checkpoint_tokens: int = 0
         self._last_tool_call: tuple | None = None
         self._tool_call_cache: dict[tuple, str] = {}
-        self._recent_tool_history: list[dict] = []  # [{tool, args_summary, result_summary}]
+
         self._streaming_in_code_block: bool = False
         self._last_compaction_count: int = 0
         self._recent_iters: list[dict] = []
