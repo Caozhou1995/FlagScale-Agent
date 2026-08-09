@@ -79,7 +79,6 @@ from flagscale_agent.react.guard.safety import ShellSafetyGuard
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.plan import PlanGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
-from flagscale_agent.react.guard.constraint import ConstraintGuard
 
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
 
@@ -89,7 +88,6 @@ from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGua
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
 
-from flagscale_agent.react.constraint.cache import ConstraintCache
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
 
@@ -114,8 +112,7 @@ class WorkerAgent:
     def __init__(self, config: AgentConfig,
                  # ── Shared infrastructure (for Orchestrator injection) ──
                  _provider=None, _tool_registry=None, _skill_manager=None,
-                 _memory=None, _task_plan=None,
-                 _constraint_cache=None):
+                 _memory=None, _task_plan=None):
         self.config = config
 
         # ── Infrastructure ──
@@ -179,7 +176,6 @@ class WorkerAgent:
         # ── Composed components ──
         self.judge = Judge(self.provider, budget=JudgeBudget(max_calls_per_turn=64))
         self._loaded_skills: set[str] = set()
-        self._constraint_cache = _constraint_cache or ConstraintCache(self._sessions_root)
 
         self._init_runtime_state()
         atexit.register(self._atexit_hook)
@@ -233,10 +229,10 @@ class WorkerAgent:
 
         # Reliability guards (P7)
 
-
-        # Create ConstraintGuard (will be populated with Skill constraints later)
-        self._constraint_guard = ConstraintGuard()
-        guard_registry.register(self._constraint_guard)
+        # Create SkillReflectionGuard (periodic self-review for loaded skills)
+        from flagscale_agent.react.guard.skill_reflection import SkillReflectionGuard
+        self._skill_reflection_guard = SkillReflectionGuard(review_interval=8)
+        guard_registry.register(self._skill_reflection_guard)
 
         guard_registry.register(ContextPressureGuard(
             working_window_tokens=self.history.working_window if self.history else 0
@@ -326,46 +322,12 @@ class WorkerAgent:
         from flagscale_agent.react.tools.hard_reset import HardResetTool
         self.tool_registry.register(HardResetTool(self))
 
-    def _register_llm_constraints(self, skill_name: str):
-        """Register LLM-extracted constraints from cache into ConstraintGuard."""
-        from flagscale_agent.react.constraint.extractor import _compile_one
-
-        constraint_specs = self._constraint_cache.items.get(skill_name)
-        if not constraint_specs:
-            return
-        llm_constraints = []
-        for i, c in enumerate(constraint_specs):
-            compiled = _compile_one(c, skill_name, i)
-            if compiled:
-                llm_constraints.append(compiled)
-        if llm_constraints:
-            self._constraint_guard.add_constraints(llm_constraints)
-
-    def _extract_skill_constraints(self, skill_name: str, skill_content: str):
-        """Extract constraints from skill content via LLM judge."""
-        self._constraint_cache.get_or_extract(
-            skill_name, skill_content, self.judge.extract_constraints
-        )
-
     def _on_skill_loaded(self, skill_name: str, skill_content: str,
                           skip_extract: bool = False):
-        """Centralized handler after any skill is loaded.
-
-        If skip_extract is True, constraint extraction is deferred (used
-        when batching multiple skill loads with concurrent extraction).
-        """
-        # Register frontmatter-defined guards (structured constraints/warnings)
-        self._register_skill_guards(skill_name)
-        if not skip_extract:
-            self._extract_skill_constraints(skill_name, skill_content)
-        self._register_llm_constraints(skill_name)
-        self._refresh_system_prompt()
-
-    def _batch_extract_and_rebuild(self, skill_map: dict[str, str]):
-        """Extract constraints from multiple skills concurrently, then register."""
-        self._constraint_cache.batch_extract(skill_map, self.judge.extract_constraints)
-        for skill_name in skill_map:
-            self._register_llm_constraints(skill_name)
+        """Centralized handler after any skill is loaded."""
+        # Notify SkillReflectionGuard that a skill was loaded
+        self._skill_reflection_guard.on_skill_loaded(skill_name)
+        
         self._refresh_system_prompt()
 
 
@@ -859,7 +821,8 @@ class WorkerAgent:
             except Exception:
                 pass
         if skill_map:
-            self._batch_extract_and_rebuild(skill_map)
+            for sn in skill_map:
+                self._on_skill_loaded(sn, skill_map[sn])
         # Refresh system prompt with restored context
         self._refresh_system_prompt()
 
@@ -1047,29 +1010,6 @@ class WorkerAgent:
 
     # ── Auto-skill loading ─────────────────────────────────────────────────
 
-    def _register_skill_guards(self, skill_name: str):
-        """Register constraints from skill YAML frontmatter AND LLM-extracted cache.
-
-        Called after a skill is loaded. Extracts structured constraints
-        from the Skill's YAML frontmatter and registers them with the Guard system.
-        Also registers any LLM-extracted constraints from the cache.
-        Idempotent - skips if already registered.
-        """
-        if skill_name in self._skill_guards_registered:
-            return
-        self._skill_guards_registered.add(skill_name)
-
-        # 1. YAML frontmatter constraints
-        try:
-            constraints = self.skill_manager.get_constraints(skill_name)
-            if constraints:
-                self._constraint_guard.add_constraints(constraints)
-        except Exception:
-            pass
-
-        # 2. LLM-extracted constraints from cache (if already available)
-        self._register_llm_constraints(skill_name)
-
     def _auto_load_skills(self, user_input: str):
         """Load skills based on semantic judgment (primary) or keyword fallback.
 
@@ -1105,12 +1045,9 @@ class WorkerAgent:
                     self._active_skill_content[name] = content
                     self._apply_skill_effects(name)
                     display.skill_auto_loaded(name)
-                    self._register_skill_guards(name)
+                    self._on_skill_loaded(name, content)
             except Exception:
                 pass
-        if loaded:
-            skill_map = {n: self._active_skill_content.get(n, "") for n in loaded}
-            self._batch_extract_and_rebuild(skill_map)
 
     def _auto_load_knowledge(self, user_input: str):
         """Load knowledge groups based on semantic judgment.
@@ -1177,7 +1114,7 @@ class WorkerAgent:
                     self._active_skill_content[name] = content
                     self._skill_load_iterations[name] = self._total_iterations
                     display.skill_auto_loaded(name)
-                    self._register_skill_guards(name)
+                    self._on_skill_loaded(name, content)
                     # Fix 3: Do NOT call _apply_skill_effects for companions
                     # to prevent infinite cascading (companion's companion's companion...)
                     needs_refresh = True
@@ -1185,11 +1122,7 @@ class WorkerAgent:
             except Exception:
                 pass
         if needs_refresh:
-            skill_map = {
-                n: self._active_skill_content.get(n, "")
-                for n in skill_names if n in self._loaded_skills
-            }
-            self._batch_extract_and_rebuild(skill_map)
+            self._refresh_system_prompt()
 
     # ── Mid-turn dynamic skill loading/unloading ───────────────────────────
 
@@ -1253,7 +1186,6 @@ class WorkerAgent:
                     self._skill_load_iterations[name] = self._total_iterations
                     self._apply_skill_effects(name)
                     display.skill_auto_loaded(name)
-                    self._register_skill_guards(name)
                     self._on_skill_loaded(name, content)
             except Exception:
                 pass
@@ -1663,3 +1595,4 @@ class WorkerAgent:
     @staticmethod
     def _is_context_limit_error(e) -> bool:
         return _is_context_limit_error(e)
+

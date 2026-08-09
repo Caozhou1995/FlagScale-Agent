@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Skill manager — load and parse SKILL.md files.
-
-Enhanced for Phase 5.2 Skill-centric architecture:
-- get_workflow(): extract workflow stages from frontmatter
-- get_constraints(): extract hard constraints for ConstraintGuard
-- get_focused_context(): return only relevant sections by stage/tool
-"""
+"""Skill manager — load and parse SKILL.md files."""
 
 import os
 import re
@@ -26,8 +20,6 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 import yaml
-
-from flagscale_agent.react.constraint import Constraint, ConstraintTrigger
 
 
 
@@ -252,51 +244,3 @@ class SkillManager:
             meta = {}
         body = parts[2].strip()
         return meta, body
-
-    def get_constraints(self, name: str) -> List[Constraint]:
-        """Extract hard constraints from skill frontmatter.
-
-        Returns compiled Constraint objects ready for ConstraintGuard.
-        """
-        meta = self.get_meta(name)
-        raw_constraints = meta.get("constraints")
-        if not raw_constraints or not isinstance(raw_constraints, list):
-            return []
-
-        result = []
-        for item in raw_constraints:
-            if not isinstance(item, dict):
-                continue
-            try:
-                constraint = self._compile_constraint(item)
-                result.append(constraint)
-            except Exception as e:
-                pass
-        return result
-
-    @staticmethod
-    def _compile_constraint(item: dict) -> Constraint:
-        """Compile a constraint dict from frontmatter into a Constraint object."""
-        trigger_raw = item.get("trigger", item.get("trigger_on", {}))
-        if not isinstance(trigger_raw, dict):
-            trigger_raw = {}
-
-        # Support both 'tools' and 'tool' keys
-        tool_names_raw = trigger_raw.get("tools", [])
-        if not tool_names_raw:
-            tool_val = trigger_raw.get("tool", "")
-            if tool_val:
-                tool_names_raw = [tool_val]
-
-        trigger = ConstraintTrigger(
-            tool_names=set(tool_names_raw) if tool_names_raw else set(),
-            keywords=trigger_raw.get("keywords", []),
-        )
-
-        return Constraint(
-            id=item["id"],
-            description=item.get("description", ""),
-            trigger=trigger,
-            prompt=item.get("prompt", ""),
-            correction=item.get("correction", item.get("reminder", "")),
-        )
