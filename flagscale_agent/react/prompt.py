@@ -241,7 +241,7 @@ No test coverage = not complete. Tests are not optional — they protect other u
 
     "user_commands": """## User Commands
 
-`/mode auto|confirm`, `/memory list|clear|delete`, `/skill <name>`, `/plan`, `/plan abandon`, `/save`, `/resume`, `/compact`, `/reset`, `/reload`, `/quit`""",
+`/resume`, `/reload`, `/session`, `/quit`""",
 }
 
 # Dashboard template — appended at the very end of system prompt (recency bias)

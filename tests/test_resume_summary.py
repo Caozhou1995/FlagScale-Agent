@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for session resume summary generation fix.
+"""Tests for session resume summary generation.
 
-Bug: _generate_missing_summaries and CommandHandler._generate_resume_summary
-used `stream, _ = provider.chat_stream(...)` which fails because chat_stream
-returns an Iterator (generator), not a tuple. Fixed to use provider.chat().
+Verifies that _generate_missing_summaries generates simple text summaries
+from session_input_history without LLM calls.
 """
 
 import json
@@ -123,53 +122,3 @@ class TestResumeSummaryGeneration:
         # Summary remains empty (not updated due to JSON error)
         assert sessions[0]["session_summary"] == ""
 
-
-class TestCommandHandlerResumeSummary:
-    """Verify CommandHandler._generate_resume_summary uses provider.chat()."""
-
-    def test_generates_summary_via_chat(self, tmp_path):
-        """_generate_resume_summary should use provider.chat, not chat_stream."""
-        from flagscale_agent.react.commands import CommandHandler
-
-        conv_data = {
-            "messages": [
-                {"role": "user", "content": "分析pipeline并行"},
-                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
-                {"role": "user", "content": "继续"},
-            ]
-        }
-        session_dir = str(tmp_path / "cmd_session")
-        os.makedirs(session_dir)
-        conv_path = os.path.join(session_dir, "conversation.json")
-        with open(conv_path, "w", encoding="utf-8") as f:
-            json.dump(conv_data, f, ensure_ascii=False)
-
-        # Create handler with mock agent
-        handler = CommandHandler.__new__(CommandHandler)
-        handler.agent = MagicMock()
-        handler.agent.provider = MagicMock()
-        handler.agent.provider.chat.return_value = {
-            "content": "分析并行策略\n已完成pipeline分析\n下一步分析TP",
-            "tool_calls": None,
-        }
-
-        session_info = {"session_dir": session_dir}
-        summary = handler._generate_resume_summary(session_info)
-
-        # Verify chat (not chat_stream) was called
-        handler.agent.provider.chat.assert_called_once()
-        handler.agent.provider.chat_stream.assert_not_called()
-        assert "分析" in summary
-
-    def test_handles_error_returns_fallback(self, tmp_path):
-        """On error, returns error message instead of crashing."""
-        from flagscale_agent.react.commands import CommandHandler
-
-        handler = CommandHandler.__new__(CommandHandler)
-        handler.agent = MagicMock()
-        handler.agent.provider = MagicMock()
-        handler.agent.provider.chat.side_effect = Exception("timeout")
-
-        session_info = {"session_dir": str(tmp_path / "nonexist")}
-        summary = handler._generate_resume_summary(session_info)
-        assert "失败" in summary or "无法" in summary
