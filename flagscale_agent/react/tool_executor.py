@@ -34,10 +34,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 from flagscale_agent.react import display
-from flagscale_agent.react.constants import (
-    READ_ONLY_TOOLS,
-    READ_FILE_SUMMARY_THRESHOLD,
-)
+READ_ONLY_TOOLS = {
+    "read_file", "grep", "find", "ls", "list_files",
+    "memory_read", "memory_list", "plan_status", "web_fetch",
+}
 
 if TYPE_CHECKING:
     from flagscale_agent.react.agent import WorkerAgent
@@ -349,27 +349,6 @@ class ToolExecutor:
         results = [None] * len(tool_calls)
 
         skip_indices |= dedup_indices | capped_indices
-
-        # Serialize non-read shell commands
-        write_shell_indices = []
-        for i, tc in enumerate(tool_calls):
-            if i in skip_indices:
-                continue
-            if tc["name"] == "shell":
-                cmd = tc["arguments"].get("command", "")
-                if not isinstance(cmd, str):
-                    cmd = str(cmd) if cmd else ""
-                if not agent.judge.classify("is_read_only_shell", {"command": cmd}, default=False):
-                    write_shell_indices.append(i)
-        if len(write_shell_indices) > 1:
-            for idx in write_shell_indices[1:]:
-                skip_indices.add(idx)
-                results[idx] = (
-                    "[PARALLEL WRITE BLOCK — COMMAND NOT EXECUTED]\n\n"
-                    "Non-read shell commands cannot run in parallel. "
-                    "Issue them sequentially in separate responses.\n"
-                )
-
 
         for i in dedup_indices:
             orig = seen_calls[(tool_calls[i]["name"], json.dumps(tool_calls[i].get("arguments", {}), sort_keys=True))]

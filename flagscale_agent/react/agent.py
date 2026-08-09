@@ -91,12 +91,7 @@ from flagscale_agent.react.guard.arg_type import ArgTypeGuard
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
 
-from flagscale_agent.react.judge import Judge, JudgeBudget
-
-from flagscale_agent.react.constants import (
-    READ_ONLY_TOOLS,
-    READ_FILE_SUMMARY_THRESHOLD,
-)
+from flagscale_agent.react.judge import Judge
 from flagscale_agent.react.commands import CommandHandler
 
 
@@ -174,7 +169,7 @@ class WorkerAgent:
         self._tool_executor = ToolExecutor(self)
 
         # ── Composed components ──
-        self.judge = Judge(self.provider, budget=JudgeBudget(max_calls_per_turn=64))
+        self.judge = Judge(self.provider)
         self._loaded_skills: set[str] = set()
 
         self._init_runtime_state()
@@ -986,7 +981,6 @@ class WorkerAgent:
         self._interrupted = False
         self._turn_iteration_count = 0
         self._context_pressure_warned = False
-        self.judge.budget._exhausted_warned = False
 
         result = self._kernel.run_turn()
 
@@ -1013,16 +1007,6 @@ class WorkerAgent:
         if any(tc["name"] in ("plan_create", "plan_update", "plan_status")
                for tc in tool_calls):
             self._refresh_system_prompt()
-
-        # Judge budget exhaustion warning
-        if self.judge.budget.exhausted and self.judge.budget.skipped_detail:
-            if not self.judge.budget._exhausted_warned:
-                self.judge.budget._exhausted_warned = True
-                print(display.yellow(
-                    f"\n[⚠ JUDGE BUDGET EXHAUSTED] {self.judge.budget.calls_this_turn}/"
-                    f"{self.judge.budget.max_calls_per_turn} calls used. "
-                    f"Skipped: {self.judge.budget.skipped_detail}"
-                ))
 
         # Context pressure warning is handled by ContextPressureGuard - no duplicate check here
 

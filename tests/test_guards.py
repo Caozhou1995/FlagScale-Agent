@@ -23,7 +23,7 @@ from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.plan import PlanGuard
 from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
-from flagscale_agent.react.judge import Judge, JudgeBudget
+from flagscale_agent.react.judge import Judge
 
 
 class MockProvider:
@@ -100,13 +100,6 @@ class TestShellSafetyGuard:
         result = g.check_pre(ctx)
         assert result is None
         assert len(provider.calls) == 0
-
-    def test_blocks_when_no_classify(self):
-        g = ShellSafetyGuard()
-        ctx = _ctx("shell", {"command": "rm -rf /"})
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "block"
 
     def test_check_post_returns_none(self):
         """After refactor, safety check_post does nothing."""
@@ -238,8 +231,11 @@ class TestGuardRegistry:
         reg = GuardRegistry()
         g = ShellSafetyGuard()
         reg.register(g)
-        # No classify_fn → blocks
-        ctx = _ctx("shell", {"command": "rm -rf /"})
+        # is_fatal=False, is_dangerous=True → blocks
+        provider = MockProvider(responses=['{"decision": false}', '{"decision": true}'])
+        judge = Judge(provider)
+        ctx = _ctx("shell", {"command": "rm -rf /"},
+                   classify_fn=judge.classify)
         verdict = reg.check_pre(ctx)
         assert verdict is not None
         assert verdict.action == "block"
