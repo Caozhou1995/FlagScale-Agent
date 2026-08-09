@@ -238,15 +238,4 @@ No test coverage = not complete. Tests are not optional — they protect other u
 
 DASHBOARD_TEMPLATE = "\n---\n[{dashboard_content}]"
 
-# Backward compatibility alias
-SYSTEM_PROMPT_CORE = SYSTEM_PROMPT_STATIC
-SYSTEM_PROMPT = SYSTEM_PROMPT_STATIC
 
-
-def _is_tool_result_msg(msg):
-    if msg.get("role") == "tool":
-        return True
-    content = msg.get("content")
-    if isinstance(content, list):
-        return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-    return False
