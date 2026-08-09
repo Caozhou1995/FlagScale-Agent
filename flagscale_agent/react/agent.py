@@ -459,8 +459,7 @@ class WorkerAgent:
 
         Returns empty string on failure (fallback to programmatic summary).
         """
-        import logging
-        logger = logging.getLogger(__name__)
+        from flagscale_agent.react import display
         
         try:
             # Use current messages as context for the summary
@@ -478,8 +477,8 @@ class WorkerAgent:
                 status = pm.get_status()
                 if status:
                     plan_info = f"\nCurrent plan:\n{status}"
-            except Exception as e:
-                logger.debug(f"[Hard Reset Summary] Plan fetch failed: {e}")
+            except Exception:
+                pass  # Plan fetch failure is non-critical
 
             prompt_msgs = [
                 {"role": "user", "content": (
@@ -503,14 +502,10 @@ class WorkerAgent:
             context_msgs = list(messages) + prompt_msgs
             
             # Call LLM with error handling
-            stream_result = self.provider.chat_stream(context_msgs, [])
-            if stream_result is None:
-                logger.warning("[Hard Reset Summary] chat_stream returned None")
-                return ""
-            
-            stream, _ = stream_result
+            # chat_stream returns Iterator[Dict] yielding events directly
+            stream = self.provider.chat_stream(context_msgs, [])
             if stream is None:
-                logger.warning("[Hard Reset Summary] stream is None")
+                display.warn("[Hard Reset Summary] chat_stream returned None")
                 return ""
             
             result_text = ""
@@ -518,22 +513,17 @@ class WorkerAgent:
                 if isinstance(event, dict):
                     if event.get("type") == "text":
                         result_text += event.get("content", "")
-                elif hasattr(event, "type"):
-                    if event.type == "content_block_delta":
-                        delta = getattr(event, "delta", None)
-                        if delta and hasattr(delta, "text"):
-                            result_text += delta.text
             
             result_text = result_text.strip()
             if not result_text:
-                logger.warning("[Hard Reset Summary] LLM returned empty result")
+                display.warn("[Hard Reset Summary] LLM returned empty result")
             return result_text
             
         except TypeError as e:
-            logger.warning(f"[Hard Reset Summary] Type error (likely None stream): {e}")
+            display.warn(f"[Hard Reset Summary] Type error: {e}")
             return ""
         except Exception as e:
-            logger.warning(f"[Hard Reset Summary] Unexpected error: {type(e).__name__}: {e}")
+            display.warn(f"[Hard Reset Summary] Unexpected error: {type(e).__name__}: {e}")
             return ""
 
     def _build_programmatic_summary(self) -> str:
@@ -810,7 +800,7 @@ class WorkerAgent:
             turns = s.get("user_turns", 0)
             summary = s.get("session_summary", "")
             if not summary:
-                summary = "(摘要生成失败)"
+                summary = "(summary unavailable)"
             print(display.dim(f"  {i}. {sid}  {ts} ({turns} turns):"))
             for line in summary.strip().split("\n"):
                 print(display.dim(f"     {line}"))
