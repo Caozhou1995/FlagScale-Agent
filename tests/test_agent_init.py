@@ -49,7 +49,6 @@ def test_tool_registry_complete():
     from flagscale_agent.react.tools.monitor import FlagScaleTrainMonitorTool
     from flagscale_agent.react.tools.inspect_checkpoint import InspectCheckpointTool
     from flagscale_agent.react.tools.evict import EvictTool
-    from flagscale_agent.react.tools.evict_list import EvictListTool
     from flagscale_agent.react.tools.recall import RecallTool
     from flagscale_agent.react.tools.memory_write import MemoryWriteTool
     from flagscale_agent.react.tools.memory_read import MemoryReadTool
@@ -68,7 +67,6 @@ def test_tool_registry_complete():
     assert FlagScaleTrainMonitorTool is not None
     assert InspectCheckpointTool is not None
     assert EvictTool is not None
-    assert EvictListTool is not None
     assert RecallTool is not None
     assert MemoryWriteTool is not None
     assert MemoryReadTool is not None
@@ -138,4 +136,4 @@ def test_agent_construction_smoke(tmp_path, monkeypatch):
     
     # Verify context_manager has access to its dependencies
     assert agent.context_manager.history is agent.history
-    assert agent.context_manager.provider is agent.provider
+

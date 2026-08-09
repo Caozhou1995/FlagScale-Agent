@@ -22,7 +22,7 @@ import re
 # Tools that only read state and never modify anything.
 # Used by guards to distinguish exploratory actions from mutations.
 READ_ONLY_TOOLS = frozenset({
-    "read_file", "memory_read", "memory_list", "evict_list", "recall",
+    "read_file", "memory_read", "memory_list", "recall",
     "load_skill", "load_knowledge", "plan_status",
     "inspect_checkpoint", "web_fetch", "flagscale_train_monitor",
 })

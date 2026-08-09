@@ -71,7 +71,7 @@ from flagscale_agent.react.tools.plan_update import PlanUpdateTool
 from flagscale_agent.react.tools.plan_status import PlanStatusTool
 from flagscale_agent.react.tools.inspect_checkpoint import InspectCheckpointTool
 from flagscale_agent.react.tools.evict import EvictTool
-from flagscale_agent.react.tools.evict_list import EvictListTool
+
 from flagscale_agent.react.tools.recall import RecallTool
 
 from flagscale_agent.react.guard.safety import ShellSafetyGuard
@@ -141,13 +141,10 @@ class WorkerAgent:
 
         # Swap store for context management V3 (evict/recall)
         from flagscale_agent.react.swap_store import SwapStore
-        from flagscale_agent.react.evict_summary import EvictSummaryStore
         from flagscale_agent.react.context_manager import ContextManager
         self.context_manager = ContextManager(
             history=self.history,
             swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
-            evict_summary=EvictSummaryStore(session_dir),
-            provider=self.provider,
         )
 
         memory_dir = get_memory_dir()
@@ -300,7 +297,6 @@ class WorkerAgent:
         
         # Context management tools
         self.tool_registry.register(EvictTool())
-        self.tool_registry.register(EvictListTool())
         self.tool_registry.register(RecallTool())
 
         # Hard reset - LLM-initiated full context reset
@@ -712,13 +708,10 @@ class WorkerAgent:
         self.task_plan._dir = os.path.join(session_dir, "plans")
         # Re-point swap store to restored session's dir
         from flagscale_agent.react.swap_store import SwapStore
-        from flagscale_agent.react.evict_summary import EvictSummaryStore
         from flagscale_agent.react.context_manager import ContextManager
         self.context_manager = ContextManager(
             history=self.history,
             swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
-            evict_summary=EvictSummaryStore(session_dir),
-            provider=self.provider,
         )
 
         # Clean up the empty new session dir if it's different
@@ -1251,8 +1244,6 @@ class WorkerAgent:
                 special_results[i] = self.context_manager.handle_evict(tc.get("arguments", {}))
             elif tc["name"] == "recall":
                 special_results[i] = self.context_manager.handle_recall(tc.get("arguments", {}))
-            elif tc["name"] == "evict_list":
-                special_results[i] = self.context_manager.handle_evict_list(tc.get("arguments", {}))
             else:
                 normal_calls.append((i, tc))
 

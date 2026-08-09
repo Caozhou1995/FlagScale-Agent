@@ -104,7 +104,7 @@ class TestNonEmptyToolStillBlocked:
         """Save tools pass through even at high pressure."""
         save_tools = ["memory_write", "memory_read", "memory_list",
                       "plan_update", "plan_status", "plan_create",
-                      "evict", "evict_list", "recall", "hard_reset"]
+                      "evict", "recall", "hard_reset"]
         for tool in save_tools:
             guard = ContextPressureGuard()
             ctx = _make_ctx(0.95, evictable_count=80, tool_name=tool)

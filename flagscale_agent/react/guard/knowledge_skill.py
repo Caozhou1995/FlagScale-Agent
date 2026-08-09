@@ -43,7 +43,7 @@ class KnowledgeSkillGuard(Guard):
 
     # Tools that don't count toward threshold (meta-operations)
     _META_TOOLS = frozenset((
-        "evict", "evict_list", "recall",
+        "evict", "recall",
         "plan_status", "plan_create", "plan_update",
         "memory_read", "memory_list", "memory_write",
     ))

@@ -39,7 +39,7 @@ class PlanUpdateGuard(Guard):
     # Tools that don't count toward threshold (meta-operations)
     _META_TOOLS = frozenset((
         "plan_status",  # Read-only
-        "evict", "evict_list", "recall",
+        "evict", "recall",
         "memory_read", "memory_list",
     ))
 

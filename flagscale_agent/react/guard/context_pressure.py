@@ -47,7 +47,7 @@ class ContextPressureGuard(Guard):
     _SAVE_TOOLS = frozenset({
         "memory_write", "memory_read", "memory_list",
         "plan_update", "plan_status", "plan_create",
-        "evict", "evict_list", "recall",
+        "evict", "recall",
         "hard_reset",
     })
 

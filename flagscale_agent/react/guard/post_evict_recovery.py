@@ -33,7 +33,7 @@ _RECOVERY_TOOLS = frozenset((
 ))
 
 # Tools that are eviction-related (don't trigger reminder during eviction itself)
-_EVICT_TOOLS = frozenset(("evict", "evict_list"))
+_EVICT_TOOLS = frozenset(("evict",))
 
 
 class PostEvictRecoveryGuard(Guard):

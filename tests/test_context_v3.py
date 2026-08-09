@@ -341,7 +341,7 @@ class TestContextPressureGuard:
 
     def test_evict_path_allows_save_tools(self):
         """Evict path allows memory/plan/evict tools through."""
-        for tool in ["memory_write", "plan_update", "evict", "evict_list", "recall"]:
+        for tool in ["memory_write", "plan_update", "evict", "recall"]:
             guard = self._fresh_guard()
             ctx = MockGuardContext(0.85, evictable_count=70)
             ctx.tool_name = tool

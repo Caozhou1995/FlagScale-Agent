@@ -128,9 +128,6 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         return str(indexes)
     if tool_name == "recall":
         return f"index={arguments.get('index', '?')}"
-    if tool_name == "evict_list":
-        kw = arguments.get("keyword", "")
-        return f"keyword='{kw}'" if kw else ""
     return ""
 
 

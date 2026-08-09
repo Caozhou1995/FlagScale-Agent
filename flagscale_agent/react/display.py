@@ -204,7 +204,7 @@ _TOOL_ICONS = {
     "flagscale_train_monitor": "🚂",
     "evict": "🗑️",
     "recall": "↩️",
-    "evict_list": "📑",
+
 }
 
 
