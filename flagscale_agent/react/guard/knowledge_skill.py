@@ -80,13 +80,13 @@ class KnowledgeSkillGuard(Guard):
 
         if self._calls_since_knowledge % self.INJECT_THRESHOLD == 0:
             return GuardVerdict.inject(
-                "[KnowledgeSkill] You haven't loaded domain knowledge or skills "
-                "recently. Consider whether the current task involves a specialized "
-                "domain (parallelism, training config, NCCL, data pipeline, model "
-                "porting, etc.) that would benefit from load_knowledge() or "
-                "load_skill(). Loading knowledge BEFORE acting prevents avoidable "
-                "mistakes. If the current task is straightforward and doesn't need "
-                "domain expertise, proceed as normal.",
+                f"[KnowledgeSkill] {self._calls_since_knowledge} tool calls without "
+                "loading domain knowledge or skills. Consider whether the current task "
+                "involves a specialized domain (parallelism, training config, NCCL, data "
+                "pipeline, model porting, etc.) that would benefit from load_knowledge() or "
+                "load_skill(). Loading knowledge BEFORE acting prevents avoidable mistakes. "
+                "If the current task is straightforward and doesn't need domain expertise, "
+                "proceed as normal.",
                 reason="no_knowledge_load_recently",
                 category="knowledge_skill",
             )
