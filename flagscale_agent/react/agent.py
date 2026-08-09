@@ -605,8 +605,7 @@ class WorkerAgent:
         display.goodbye()
         # Generate session summary before saving
         summary = self._generate_session_summary()
-        self._save_conversation(completed=True, session_summary=summary)
-        mark_completed(self._session_dir)
+        self._save_conversation(completed=False, session_summary=summary)
         sys.exit(0)
 
     # ── Main entry ──────────────────────────────────────────────────────────

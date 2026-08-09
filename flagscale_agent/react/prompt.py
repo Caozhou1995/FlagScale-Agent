@@ -119,7 +119,29 @@ Summarize suggestions in a `[Memory suggestions]` block; wait for user confirmat
 
 Forbidden: duplicate storage of same info, using Memory to replace Plan/Knowledge/Skill, retaining already-digested Insights.
 
-## Context Window
+## Skills & Knowledge
+
+Skills and Knowledge are external reference documents — human-curated workflows and domain expertise.
+
+**Skills** — workflow guides for specific task types:
+- Multi-step procedures: train-run, infer-model-adapt, train-data-prep
+- Use when: starting a complex task (>3 steps) in a specific domain
+- Pattern: see task type → load_skill → follow the workflow → adapt to specifics
+
+**Knowledge** — deep technical documentation for infrastructure domains:
+- Architecture, algorithms, implementation details: know-megatron-parallel, know-nccl-core, know-flash-attn
+- Use when: starting ANY technical task in that domain
+- Pattern: **load BEFORE acting**, not after hitting errors
+
+**Proactive loading principle**:
+- New task in training domain → load_knowledge('know-megatron-training') first
+- Debugging NCCL issue → load_knowledge('know-nccl-runtime') before diving in
+- Setting up data pipeline → load_knowledge('know-energon') + load_skill('train-data-prep')
+- Cost is near-zero, benefit is avoiding hours of trial-and-error
+
+Available skills and knowledge are listed at the top of this prompt.
+
+## Context Management
 
 Context is managed by evict/recall — don't worry about context length, focus on the task.
 
@@ -137,8 +159,6 @@ Context is managed by evict/recall — don't worry about context length, focus o
 
 - Read/edit files → read_file / edit_file / write_file (NOT cat/sed/echo)
 - Search code → shell(grep -rn ...)
-- Load domain knowledge → load_knowledge (proactively, at task start, not after hitting problems)
-- Load skills → load_skill (for workflow guidance on specific tasks)
 - Monitor training → flagscale_train_monitor (NOT repeated shell tail)
 - Check checkpoint → inspect_checkpoint (NOT python scripts)
 - Locate own source → shell(python -c "import flagscale_agent; print(flagscale_agent.__path__[0])")
