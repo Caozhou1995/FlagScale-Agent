@@ -741,12 +741,10 @@ class FlagScaleTrainMonitorTool(Tool):
     @staticmethod
     def _read_tail(path, n=20):
         """Read last n lines of a file, return as list."""
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-            return [l.rstrip() for l in lines[-n:]]
-        except (FileNotFoundError, OSError):
+        content = _tail(path, n)
+        if content == "(empty)":
             return ["(file not found)"]
+        return [l.rstrip() for l in content.splitlines()]
 
     @staticmethod
     def _read_tail_from(path, offset, max_bytes=8192):

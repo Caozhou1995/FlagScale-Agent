@@ -28,6 +28,7 @@ from flagscale_agent.react.tools.monitor import (
     _is_harmless,
     _last_sorted_subdir,
     _numeric_key,
+    _tail,
 )
 
 
@@ -290,3 +291,73 @@ class TestLogDiscovery:
         tool = FlagScaleTrainMonitorTool()
         logs = tool._discover_logs(output_dir)
         assert "ERROR" in logs.get("error", "")
+
+
+
+# ─── Tests for _tail and _read_tail unification ─────────────────────────────
+
+class TestTailFunctions:
+    def test_tail_basic(self, tmp_path):
+        f = tmp_path / "log.txt"
+        f.write_text("line1\nline2\nline3\nline4\nline5\n")
+        result = _tail(str(f), n=3)
+        assert "line3" in result
+        assert "line4" in result
+        assert "line5" in result
+        assert "line1" not in result
+
+    def test_tail_missing_file(self):
+        result = _tail("/nonexistent/path/log.txt", n=10)
+        assert result == "(empty)"
+
+    def test_tail_empty_file(self, tmp_path):
+        f = tmp_path / "empty.log"
+        f.write_text("")
+        result = _tail(str(f), n=10)
+        assert result == "(empty)"
+
+    def test_read_tail_delegates_to_tail(self, tmp_path):
+        f = tmp_path / "log.txt"
+        f.write_text("aaa\nbbb\nccc\n")
+        tool = FlagScaleTrainMonitorTool()
+        lines = tool._read_tail(str(f), n=2)
+        assert isinstance(lines, list)
+        assert "bbb" in lines
+        assert "ccc" in lines
+
+    def test_read_tail_missing_file(self):
+        tool = FlagScaleTrainMonitorTool()
+        lines = tool._read_tail("/nonexistent/path", n=5)
+        assert lines == ["(file not found)"]
+
+
+# ─── Tests for _parse_megatron_metrics edge cases ────────────────────────────
+
+class TestMetricsParsing:
+    def test_parse_scientific_notation(self):
+        text = " iteration     100/ 5000 | lm loss: 2.3456E+01 | grad norm: 1.5E-02"
+        m = _parse_megatron_metrics(text)
+        assert m["last_iter"] == 100
+        assert abs(m["last_loss"]["lm_loss"] - 23.456) < 0.01
+        assert abs(m["last_loss"]["grad_norm"] - 0.015) < 0.001
+
+    def test_parse_ce_loss(self):
+        text = " iteration     50/ 1000 | ce_loss: 8.1234 | grad norm: 0.5"
+        m = _parse_megatron_metrics(text)
+        assert abs(m["last_loss"]["ce_loss"] - 8.1234) < 0.001
+
+    def test_parse_multiple_loss_types(self):
+        # "loss:" regex also matches "lm loss:" — lm_loss captures 5.0, loss also gets 5.0
+        text = " iteration     10/ 100 | lm loss: 5.0 | grad norm: 1.0"
+        m = _parse_megatron_metrics(text)
+        assert m["last_loss"]["lm_loss"] == 5.0
+        assert m["last_loss"]["loss"] == 5.0  # "loss" regex matches "lm loss" too
+        assert m["last_loss"]["grad_norm"] == 1.0
+
+    def test_health_check_auto_detect_vocab(self):
+        """When vocab_size=0 and loss ~ ln(vocab), warning should mention it."""
+        import math
+        # loss = ln(151936) ≈ 11.93, set loss exactly to trigger
+        metrics = {"last_loss": {"lm_loss": 11.93}, "iterations": [1], "last_iter": 1, "anomalies": []}
+        warnings = _health_check(metrics, vocab_size=0)
+        assert any("151936" in w for w in warnings)
