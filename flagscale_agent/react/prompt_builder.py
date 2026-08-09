@@ -188,7 +188,25 @@ class PromptBuilder:
                 f" | conversation_full.json: {session_dir}/conversation_full.json"
             )
 
+        # Memory keys — list known keys so agent can memory_read without memory_list()
+        memory_keys = self._build_memory_keys_summary()
+        if memory_keys:
+            parts.append(f"Memory keys: {memory_keys}")
+
         return " | ".join(parts)
+
+    def _build_memory_keys_summary(self) -> str:
+        """Return comma-separated list of all memory keys (no values)."""
+        try:
+            from flagscale_agent.react.memory import AgentMemory
+            from flagscale_agent.react.paths import get_memory_dir
+            mem = AgentMemory(get_memory_dir())
+            entries = mem.list_entries()
+            if not entries:
+                return ""
+            return ", ".join(e["key"] for e in entries)
+        except Exception:
+            return ""
 
     def _build_shared_storage_note(self, shared_storage_paths: list[str]) -> str:
         """Build a note about shared storage paths for conda environments."""
