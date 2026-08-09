@@ -211,8 +211,7 @@ class FlagScaleTrainMonitorTool(Tool):
         "required": ["output_dir"],
     }
 
-    def __init__(self, display_fn=None, classify_fn=None):
-        self._display_fn = display_fn
+    def __init__(self, classify_fn=None):
         self._classify_fn = classify_fn
 
     def execute(self, **kwargs) -> str:
@@ -454,10 +453,6 @@ class FlagScaleTrainMonitorTool(Tool):
                     return self._format_watch_result(
                         "hang_detected", poll_count, elapsed, events, tail
                     )
-
-            # Display progress
-            if self._display_fn:
-                self._display_fn(poll_count, elapsed, phase, last_step_number)
 
             time.sleep(interval)
 

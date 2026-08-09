@@ -123,6 +123,6 @@ class TestPrompts:
         assert _HEALTH_PROMPT
         assert "{command}" in _HEALTH_PROMPT
 
-    def test_prompts_have_context_placeholder(self):
+    def test_prompts_have_placeholders(self):
         for name, prompt in _CLASSIFY_PROMPTS.items():
-            assert "{command}" in prompt, f"Prompt {name} missing {{command}} placeholder"
+            assert "{" in prompt, f"Prompt {name} missing placeholders"

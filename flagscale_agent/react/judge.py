@@ -24,6 +24,29 @@ from typing import Any
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 _CLASSIFY_PROMPTS: dict[str, str] = {
+    "is_error": """\
+Is this stderr output a REAL training error that should stop monitoring?
+
+Stderr content:
+{text}
+
+Context: {context}
+
+Answer YES for:
+- Python tracebacks (Traceback, RuntimeError, CUDA error, OOM)
+- NCCL failures (NCCL error, timeout, connection refused)
+- Segfaults, killed signals, abort
+- Repeated assertion failures
+
+Answer NO for:
+- Deprecation/Future/UserWarnings
+- torch.cuda.amp deprecation notices
+- OMP_NUM_THREADS, thread settings
+- wandb version notices
+- Informational messages printed to stderr
+- Single-line warnings without stack traces
+Reply ONLY: {{"real": true/false}}""",
+
     "is_fatal": """\
 Is this shell command FATALLY DESTRUCTIVE — causing IRREVERSIBLE catastrophic damage?
 
