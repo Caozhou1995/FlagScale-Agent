@@ -240,11 +240,15 @@ class AgentKernel:
                         result.stop_reason = "max_continuations"
                         break
 
-                    continuation = self._generate_continuation()
+                    # Track consecutive text-only responses (no tools, no stop signal)
+                    self._consecutive_text_only = getattr(self, "_consecutive_text_only", 0) + 1
+
+                    continuation = self._generate_continuation(text_only=True)
                     d.history.append({"role": "user", "content": continuation})
                     continue
 
                 self._continuation_count = 0
+                self._consecutive_text_only = 0  # Reset: tools were executed
 
                 # ── Execute tools ──
                 _pre_guard_verdicts = []
@@ -499,7 +503,48 @@ class AgentKernel:
                     return "".join(texts)
         return ""
 
-    def _generate_continuation(self) -> str:
+    def _generate_continuation(self, text_only: bool = False) -> str:
+        """Generate continuation prompt.
+
+        Args:
+            text_only: If True, the previous response had no tool calls and no
+                stop signal. Use a more explicit prompt to help LLM self-correct.
+        """
+        consecutive = getattr(self, "_consecutive_text_only", 0)
+
+        # If LLM has been outputting text without tools repeatedly, escalate clarity
+        if text_only and consecutive >= 3:
+            return (
+                "You have responded 3+ times with text only — no tool calls and no "
+                "stop signal ([TASK_COMPLETE] or [NEED_USER_INPUT]).\n\n"
+                "You MUST do one of:\n"
+                "1. Emit a tool call (shell, readFile, editFile, etc.) to take action\n"
+                "2. End with [TASK_COMPLETE] if the task is done\n"
+                "3. End with [NEED_USER_INPUT] if you need user input\n\n"
+                "Do NOT output only narration or intentions. Act or stop."
+            )
+
+        if text_only:
+            plan_hint = ""
+            task_plan = getattr(self.deps, "task_plan", None)
+            if task_plan:
+                active = task_plan.get_active()
+                if active:
+                    pending = [
+                        s for s in active.get("steps", [])
+                        if s.get("status") not in ("done", "skipped")
+                    ]
+                    if pending:
+                        step = pending[0]
+                        plan_hint = f" Current step: {step.get('title', step.get('description', ''))}"
+            return (
+                "Your previous response contained text but no tool calls and no stop signal. "
+                "If you intended to use a tool, emit it now. "
+                "If done, end with [TASK_COMPLETE] or [NEED_USER_INPUT]."
+                f"{plan_hint}"
+            )
+
+        # Normal continuation (after tool execution, LLM just didn't stop)
         task_plan = getattr(self.deps, "task_plan", None)
         if task_plan:
             active = task_plan.get_active()
