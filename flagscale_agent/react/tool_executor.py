@@ -121,14 +121,6 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         return summary
     if tool_name == "memory_read":
         return arguments.get("key", "")
-    if tool_name == "grep":
-        pattern = arguments.get("pattern", "")
-        path = arguments.get("path", "")
-        summary = pattern
-        if path:
-            summary += f" in {_short_path(path, 40)}"
-        return summary
-
     if tool_name == "evict":
         indexes = arguments.get("indexes", [])
         if isinstance(indexes, list) and len(indexes) > 5:
