@@ -12,47 +12,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared utilities for guards using two-phase detection.
-
-Two-phase pattern:
-1. Cheap trigger: keyword/threshold/counter (zero LLM cost, may have false positives)
-2. Precise judgment: classify_fn LLM call (eliminates false positives)
-"""
+"""Shared utilities for guards."""
 
 from __future__ import annotations
 
-# Source constants — must match judge.py
-SOURCE_LLM = "llm"
-SOURCE_FAST = "fast"
-SOURCE_CACHE = "cache"
-SOURCE_DEFAULT = "default"
-SOURCE_UNAVAILABLE = "unavailable"
-
-_TRUSTED_SOURCES = frozenset({SOURCE_LLM, SOURCE_FAST, SOURCE_CACHE})
+import re
 
 
-def get_judge_result(classify_fn, category: str, context: dict, default=None):
-    """Call classify_fn and return (value, source) tuple.
+# Tools that only read state and never modify anything.
+# Used by guards to distinguish exploratory actions from mutations.
+READ_ONLY_TOOLS = frozenset({
+    "read_file", "memory_read", "memory_list", "recall",
+    "load_skill", "load_knowledge", "plan_status",
+    "inspect_checkpoint", "web_fetch", "flagscale_train_monitor",
+})
 
-    Shared utility for all guards that use two-phase detection.
-    Returns (default, SOURCE_UNAVAILABLE) on any failure.
+
+# ---------------------------------------------------------------------------
+# Launch command detection
+# ---------------------------------------------------------------------------
+
+def _is_flagscale_launch_command(cmd: str) -> bool:
+    """Detect FlagScale training launch commands.
+
+    Supports compound commands (cd xxx && flagscale train ...).
+    Strips quoted content to avoid grep "flagscale train" false positives.
     """
-    try:
-        judge = getattr(classify_fn, "__self__", None)
-        if judge and hasattr(judge, "classify_traced"):
-            return judge.classify_traced(category, context, default)
+    if not isinstance(cmd, str):
+        return False
 
-        result = classify_fn(category, context, default=default)
-        if (isinstance(result, tuple) and len(result) == 2
-                and isinstance(result[1], str)
-                and result[1] in (SOURCE_FAST, SOURCE_LLM, SOURCE_CACHE,
-                                  SOURCE_DEFAULT, SOURCE_UNAVAILABLE)):
-            return result
-        return (result, SOURCE_LLM)
-    except Exception:
-        return (default, SOURCE_UNAVAILABLE)
+    cmd_lower = cmd.lower()
 
+    # Remove quoted content to avoid false positives like grep "flagscale train"
+    cleaned = re.sub(r'''["'][^"']*["']''', '', cmd_lower)
 
-def is_trusted(source: str) -> bool:
-    """Check if a classify source is trustworthy (not a fallback default)."""
-    return source in _TRUSTED_SOURCES
+    # Pattern 1: flagscale train <model>
+    if "flagscale train " in cleaned:
+        non_run_flags = ("--stop", "--dryrun", "--test", "--query", "--tune")
+        if any(flag in cleaned for flag in non_run_flags):
+            return False
+        return True
+
+    # Pattern 2: flagscale run ...
+    if "flagscale run " in cleaned:
+        non_run_actions = ("--action dryrun", "--action stop", "--action test",
+                          "--action query", "--action auto_tune",
+                          "-a dryrun", "-a stop", "-a test")
+        if any(a in cleaned for a in non_run_actions):
+            return False
+        return True
+
+    # Pattern 3: python[3] run.py ... action=run
+    if ("python" in cleaned and "run.py" in cleaned
+            and ("--config-name" in cleaned or "--config-path" in cleaned)
+            and "action=run" in cleaned):
+        return True
+
+    return False

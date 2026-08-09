@@ -1,80 +1,15 @@
 ---
+description: 'Verify inference output precision for vllm-plugin-FL on any hardware
+  backend. Compares token-level outputs against NVIDIA + upstream vLLM ground truth.
+  Use this skill whenever a task requires a correctness gate: model porting, hardware
+  adaptation, plugin version upgrades, or regression detection after any code change.
+  Trigger when the user says "check precision", "verify correctness", "compare outputs",
+  "run E2E precision test", "precision alignment", or "does the output match NVIDIA?".
+  Works for text-only and multimodal models; greedy decoding (temperature=0) is the
+  standard mode.
+
+  '
 name: infer-precision-check
-description: >
-  Verify inference output precision for vllm-plugin-FL on any hardware backend.
-  Compares token-level outputs against NVIDIA + upstream vLLM ground truth.
-  Use this skill whenever a task requires a correctness gate: model porting,
-  hardware adaptation, plugin version upgrades, or regression detection after
-  any code change. Trigger when the user says "check precision", "verify
-  correctness", "compare outputs", "run E2E precision test", "precision
-  alignment", or "does the output match NVIDIA?". Works for text-only and
-  multimodal models; greedy decoding (temperature=0) is the standard mode.
-keywords:
-- inference
-- precision
-- correctness
-- e2e
-- ground-truth
-- token-comparison
-- regression
-- vllm
-- hardware
-requires:
-- infer-env-setup
-suggests:
-- infer-hw-adapt
-- infer-model-adapt
-- debug-strategy
-constraints:
-- id: greedy_only
-  description: Always use temperature=0 (greedy) for precision comparisons
-  trigger:
-    keywords: [temperature, sampling, top_p, top_k]
-  prompt: Check if the comparison uses greedy decoding
-  correction: >
-    Set temperature=0, top_p=1.0, top_k=-1 on both GT and target sides.
-    Any sampling randomness makes token-level comparison meaningless.
-- id: gt_first
-  description: Always generate GT outputs before running target hardware
-  trigger:
-    keywords: [target hardware, target backend, run on]
-  prompt: Check if GT outputs have already been collected and saved
-  correction: >
-    Run the GT script on NVIDIA first, save outputs to a JSON file,
-    then run the target hardware script and compare.
-- id: same_model_weights
-  description: GT and target must load identical model weights
-  trigger:
-    keywords: [model path, model_path, load model]
-  prompt: Check if both sides point to the same model weights
-  correction: >
-    Verify with md5sum on representative weight files, or confirm both sides
-    mount the same NFS path. Different weights make comparison meaningless.
-- id: log_all_outputs
-  description: All inference outputs must be saved to files, never just printed
-  trigger:
-    tools: [shell]
-    keywords: [generate, llm.generate, vllm serve, curl]
-  prompt: Check if the command saves output to a log file
-  correction: >
-    Pipe to 2>&1 | tee /workspace/adapt-logs/precision_<side>_<timestamp>.log
-    and save token IDs to JSON for offline comparison.
-- id: tp_parity
-  description: TP size must be identical on GT and target unless testing TP scaling
-  trigger:
-    keywords: [tensor_parallel, tp_size, --tensor-parallel-size]
-  prompt: Check if TP size matches between GT and target runs
-  correction: >
-    Use TP=1 for the initial precision gate. Only increase TP after TP=1 passes.
-context_injection:
-  always:
-  - Critical Rules
-  - Comparison Protocol
-  by_tool:
-    shell:
-    - Environment Probe
-    - GT Collection Commands
-    - Target Collection Commands
 ---
 
 <!--

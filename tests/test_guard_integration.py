@@ -7,21 +7,17 @@
 
 import pytest
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict, GuardRegistry
-from flagscale_agent.react.state_machine import AgentState
 
 
 # ─── Fixtures: minimal guards for testing each behavior ───
 
 class SoftReminderGuard(Guard):
-    """Fires inject_msg every 3 calls."""
+    """Fires inject every 3 calls."""
     name = "soft_reminder"
     priority = 90
-    overridable = True
-    escalate_after = 3
     decay_after_idle = 5
 
     def __init__(self):
-        super().__init__()
         self._call_count = 0
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
@@ -35,17 +31,10 @@ class SoftReminderGuard(Guard):
             )
         return None
 
-    def is_satisfied(self, ctx: GuardContext) -> bool:
-        return False
-
-    def reset_state(self):
-        super().reset_state()
-        self._call_count = 0
-
     def reset_turn(self):
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         self._call_count = 0
 
 
@@ -53,16 +42,13 @@ class HardBlockGuard(Guard):
     """Blocks if tool_name is 'dangerous_tool'."""
     name = "hard_blocker"
     priority = 10
-    overridable = True
-
-    def __init__(self):
-        super().__init__()
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if ctx.tool_name == "dangerous_tool":
             return GuardVerdict.block(
                 "BLOCKED: dangerous_tool is not allowed.",
                 reason="safety",
+                category="test_block",
             )
         return None
 
@@ -70,16 +56,10 @@ class HardBlockGuard(Guard):
         # Accept if reason is substantive (>20 chars)
         return len(reason.strip()) > 20
 
-    def is_satisfied(self, ctx: GuardContext) -> bool:
-        return False
-
-    def reset_state(self):
-        super().reset_state()
-
     def reset_turn(self):
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         pass
 
 
@@ -87,10 +67,6 @@ class NonOverridableBlockGuard(Guard):
     """Blocks and cannot be overridden."""
     name = "absolute_blocker"
     priority = 5
-    overridable = False
-
-    def __init__(self):
-        super().__init__()
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if ctx.tool_name == "forbidden_tool":
@@ -100,16 +76,10 @@ class NonOverridableBlockGuard(Guard):
             )
         return None
 
-    def is_satisfied(self, ctx: GuardContext) -> bool:
-        return False
-
-    def reset_state(self):
-        super().reset_state()
-
     def reset_turn(self):
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         pass
 
 
@@ -117,11 +87,9 @@ class SatisfiableGuard(Guard):
     """Fires inject until a specific tool is called, then satisfied."""
     name = "satisfiable"
     priority = 50
-    overridable = True
     decay_after_idle = 20  # high so decay doesn't interfere
 
     def __init__(self):
-        super().__init__()
         self._needs_action = True
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
@@ -138,17 +106,10 @@ class SatisfiableGuard(Guard):
             self._needs_action = False
         return None
 
-    def is_satisfied(self, ctx: GuardContext) -> bool:
-        return not self._needs_action
-
-    def reset_state(self):
-        super().reset_state()
-        self._needs_action = True
-
     def reset_turn(self):
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         pass
 
 
@@ -163,9 +124,8 @@ def _make_registry(guards):
 
 
 def _ctx(tool_name="shell", tool_args=None, tool_result=None,
-         override_reason="", state=AgentState.EXECUTING):
+         override_reason="", ):
     return GuardContext(
-        current_state=state,
         tool_name=tool_name,
         tool_args=tool_args or {},
         tool_result=tool_result,
@@ -179,7 +139,7 @@ def _ctx(tool_name="shell", tool_args=None, tool_result=None,
 
 class TestSoftInject:
     def test_inject_fires_on_threshold(self):
-        """Guard fires inject_msg after 3 calls."""
+        """Guard fires inject after 3 calls."""
         reg = _make_registry([SoftReminderGuard()])
         ctx = _ctx("shell")
 
@@ -190,7 +150,7 @@ class TestSoftInject:
         # Call 3: inject fires
         v = reg.check_pre(ctx)
         assert v is not None
-        assert v.action == "inject_msg"
+        assert v.action == "inject"
         assert "Reminder" in v.message
 
     def test_inject_repeats_cyclically(self):
@@ -211,13 +171,13 @@ class TestSoftInject:
         assert v2 is not None
 
     def test_inject_does_not_block(self):
-        """inject_msg verdict should not prevent tool execution (action != block)."""
+        """inject verdict should not prevent tool execution (action != block)."""
         g = SoftReminderGuard()
         g._call_count = 2
         ctx = _ctx("shell")
         v = g.check_pre(ctx)
-        assert v.action == "inject_msg"
-        # In kernel, inject_msg → _apply_verdict returns False (not blocked)
+        assert v.action == "inject"
+        # In kernel, inject → _apply_verdict returns False (not blocked)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -253,21 +213,6 @@ class TestHardBlock:
         assert v.action == "block"  # Block wins
         assert "inject" not in v.action
 
-    def test_non_overridable_cannot_be_bypassed(self):
-        """Non-overridable guard rejects any override reason."""
-        reg = _make_registry([NonOverridableBlockGuard()])
-        ctx = _ctx("forbidden_tool",
-                   override_reason="I have a very good reason to do this dangerous operation")
-        v = reg.check_pre(ctx)
-        # Still blocked — override not accepted
-        assert v is not None
-        assert v.action == "block"
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TEST 3: OVERRIDE (LLM bypasses block with reason)
-# ═══════════════════════════════════════════════════════════════════
-
 class TestOverride:
     def test_override_with_good_reason(self):
         """Guard accepts override with substantive reason (>20 chars)."""
@@ -295,88 +240,7 @@ class TestOverride:
         assert v is not None
         assert v.action == "block"
 
-    def test_override_only_applies_to_overridable_guards(self):
-        """Non-overridable guards ignore override_reason entirely."""
-        reg = _make_registry([NonOverridableBlockGuard()])
-        ctx = _ctx("forbidden_tool",
-                   override_reason="Critical emergency requiring immediate action on forbidden tool")
-        v = reg.check_pre(ctx)
-        assert v is not None
-        assert v.action == "block"
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TEST 4: TRIGGER & RESET LIFECYCLE
-# ═══════════════════════════════════════════════════════════════════
-
 class TestLifecycle:
-    def test_reset_new_turn_resets_guard(self):
-        """reset_new_turn clears per-turn state."""
-        reg = _make_registry([SoftReminderGuard()])
-        ctx = _ctx("shell")
-
-        # Fire 2 calls
-        reg.check_pre(ctx)
-        reg.check_pre(ctx)
-        assert reg.guards[0]._call_count == 2
-
-        # New turn → counter resets
-        reg.reset_new_turn()
-        assert reg.guards[0]._call_count == 0
-
-    def test_reset_iteration_calls_reset_turn(self):
-        """reset_iteration (per LLM+tool loop) calls each guard's reset_turn."""
-        reg = _make_registry([SoftReminderGuard()])
-        ctx = _ctx("shell")
-
-        # SoftReminderGuard.reset_turn is a no-op, but verify it doesn't crash
-        reg.check_pre(ctx)
-        reg.reset_iteration()
-        # Counter should still be 1 (reset_turn is no-op for this guard)
-        assert reg.guards[0]._call_count == 1
-
-    def test_decay_resets_state_after_idle(self):
-        """After decay_after_idle iterations without firing, guard resets."""
-        g = SoftReminderGuard()
-        g._call_count = 2  # Prime to fire on next check
-
-        # Simulate 5 idle ticks (decay_after_idle = 5)
-        for _ in range(5):
-            g._tick_idle()
-
-        # State should be reset
-        assert g._call_count == 0
-
-    def test_decay_does_not_trigger_early(self):
-        """Decay doesn't reset before reaching threshold."""
-        g = SoftReminderGuard()
-        g._call_count = 2
-
-        # 4 idle ticks (threshold is 5) — should NOT reset
-        for _ in range(4):
-            g._tick_idle()
-
-        assert g._call_count == 2  # Unchanged
-
-    def test_firing_resets_idle_counter(self):
-        """When a guard fires, its idle counter resets (no decay)."""
-        reg = _make_registry([SoftReminderGuard()])
-        ctx = _ctx("shell")
-
-        # 2 idle ticks
-        reg.guards[0]._tick_idle()
-        reg.guards[0]._tick_idle()
-        assert reg.guards[0]._iterations_since_trigger == 2
-
-        # Fire the guard (3rd call triggers it)
-        reg.guards[0]._call_count = 2
-        v = reg.check_pre(ctx)
-        assert v is not None
-
-        # After firing, tick_guard_lifecycle records the trigger
-        # which resets _iterations_since_trigger to 0
-        assert reg.guards[0]._iterations_since_trigger == 0
-
     def test_satisfied_guard_stops_firing(self):
         """Once is_satisfied returns True, guard is skipped."""
         reg = _make_registry([SatisfiableGuard()])
@@ -395,33 +259,6 @@ class TestLifecycle:
         v2 = reg.check_pre(ctx)
         assert v2 is None
 
-    def test_escalation_chain_inject_to_block(self):
-        """After escalate_after injects, guard upgrades to block."""
-        g = SoftReminderGuard()
-        reg = _make_registry([g])
-
-        # Fire inject escalate_after times
-        for i in range(g.escalate_after):
-            g._call_count = 2  # ensure it fires
-            ctx = _ctx("shell")
-            ctx.turn_count = i + 1
-            v = reg.check_pre(ctx)
-            assert v is not None
-            assert v.action == "inject_msg"
-
-        # Next fire should be block (escalation)
-        g._call_count = 2
-        ctx = _ctx("shell")
-        ctx.turn_count = g.escalate_after + 1
-        v = reg.check_pre(ctx)
-        assert v is not None
-        assert v.action == "block", f"Expected block, got {v.action}"
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TEST 5: MEMORY DISCIPLINE (the real guard, end-to-end)
-# ═══════════════════════════════════════════════════════════════════
-
 class TestMemoryDisciplineE2E:
     def test_reminder_every_10_calls(self):
         """Fires every 10 non-memory calls, resets on memory use."""
@@ -436,7 +273,7 @@ class TestMemoryDisciplineE2E:
         # 10th: reminder
         v = g.check_pre(ctx)
         assert v is not None
-        assert v.action == "inject_msg"
+        assert v.action == "inject"
         assert "10 tool calls" in v.message
 
         # Counter reset after firing — next 9 no reminder
@@ -486,7 +323,7 @@ class TestMemoryDisciplineE2E:
         for _ in range(7):
             g.check_pre(ctx)
 
-        g.reset_new_turn()
+        g.reset_turn()
         assert g._calls_since_memory == 7  # Persists
 
         # 3 more → fires
@@ -511,7 +348,7 @@ class TestMultiGuardInteraction:
         ctx = _ctx("shell")
         v = reg.check_pre(ctx)
         assert v is not None
-        assert v.action == "inject_msg"
+        assert v.action == "inject"
         # Both messages present
         assert "Reminder" in v.message
         assert "fix_tool" in v.message
@@ -546,11 +383,9 @@ class EscalatingGuard(Guard):
     """A guard that fires inject and defines effectiveness criteria."""
     name = "escalating"
     priority = 50
-    overridable = True
     decay_after_idle = 100  # prevent decay interference
 
     def __init__(self):
-        super().__init__()
         self._should_fire = True
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
@@ -562,23 +397,10 @@ class EscalatingGuard(Guard):
             )
         return None
 
-    def was_inject_effective(self, ctx: GuardContext) -> bool | None:
-        if ctx.tool_name == "target_tool":
-            return True
-        # After any non-target tool, consider ineffective
-        return False
-
-    def is_satisfied(self, ctx: GuardContext) -> bool:
-        return False
-
-    def reset_state(self):
-        super().reset_state()
-        self._should_fire = True
-
     def reset_turn(self):
         pass
 
-    def reset_new_turn(self):
+    def reset_turn(self):
         pass
 
 
@@ -587,7 +409,6 @@ class TestEscalationChain:
 
     def _simulate_ineffective_cycles(self, reg, n_cycles=3):
         """Simulate n_cycles of: inject fires in pre, then post marks ineffective."""
-        from flagscale_agent.react.tools.base import ToolEffect
 
         for _ in range(n_cycles):
             pre_ctx = _ctx("shell")
@@ -598,40 +419,12 @@ class TestEscalationChain:
 
             # Post: tool was "shell" (not "target_tool"), so ineffective
             post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
         return v
 
-    def test_inject_becomes_escalate_after_ineffective(self):
-        """After 3 consecutive ineffective injects, should_suppress triggers escalation."""
-        from flagscale_agent.react.tools.base import ToolEffect
-
-        reg = _make_registry([EscalatingGuard()])
-
-        # Cycle through: inject fires, check_post marks it ineffective
-        for i in range(4):
-            pre_ctx = _ctx("shell")
-            pre_ctx.turn_count = i + 1
-            v = reg.check_pre(pre_ctx)
-            assert v is not None
-
-            post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
-            reg.check_post(post_ctx)
-
-        # After 3+ ineffective injects, the tracker should escalate on next pre
-        pre_ctx = _ctx("shell")
-        pre_ctx.turn_count = 5
-        v = reg.check_pre(pre_ctx)
-        assert v is not None
-        # Should have escalated (either action == "escalate" or message indicates upgrade)
-        assert v.action == "escalate" or "repeatedly" in v.message.lower() or "ignored" in v.message.lower(), \
-            f"Expected escalation, got action={v.action}, msg={v.message[:100]}"
-
     def test_effective_action_resets_escalation(self):
         """If agent responds to inject, escalation counter resets."""
-        from flagscale_agent.react.tools.base import ToolEffect
 
         reg = _make_registry([EscalatingGuard()])
 
@@ -641,7 +434,6 @@ class TestEscalationChain:
             pre_ctx.turn_count = i + 1
             reg.check_pre(pre_ctx)
             post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
         # Now agent responds correctly
@@ -649,7 +441,6 @@ class TestEscalationChain:
         pre_ctx.turn_count = 3
         reg.check_pre(pre_ctx)
         post_ctx = _ctx("target_tool")
-        post_ctx.tool_effects = ToolEffect(writes=frozenset({"filesystem"}))
         reg.check_post(post_ctx)
 
         # Next cycle should be inject again (not escalate), counter reset
@@ -659,52 +450,27 @@ class TestEscalationChain:
             v = reg.check_pre(pre_ctx)
             assert v is not None
             # Should still be inject, not escalate
-            assert v.action == "inject_msg", \
-                f"Expected inject_msg after reset, got {v.action}"
+            assert v.action == "inject", \
+                f"Expected inject after reset, got {v.action}"
             post_ctx = _ctx("shell")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
             reg.check_post(post_ctx)
 
     def test_memory_discipline_escalation(self):
-        """MemoryDiscipline guard escalates after repeated ignoring.
-        
-        inject → inject ignored × escalate_after → block (but block no longer
-        terminates the turn — it's injected as a strong advisory).
-        """
+        """MemoryDiscipline guard blocks after 30 calls without memory ops."""
         from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
-        from flagscale_agent.react.tools.base import ToolEffect
 
         guard = MemoryDisciplineGuard()
         reg = _make_registry([guard])
 
-        # Simulate 10 non-memory tool calls to trigger first inject
-        for _ in range(10):
+        # Simulate 30 non-memory tool calls
+        for i in range(30):
             pre_ctx = _ctx("shell")
-            reg.check_pre(pre_ctx)
-
-        # Should have injected
-        pre_ctx = _ctx("shell")
-        v = reg.check_pre(pre_ctx)
-        # After 10 calls, the guard should fire (threshold is 10)
-        # It may have already fired on the 10th call above; just verify mechanism works
-
-        # Now simulate repeated cycles of inject + ignore
-        for cycle in range(4):
-            # Force counter back to trigger threshold
-            guard._calls_since_memory = 10
-            pre_ctx = _ctx("read_file")
-            pre_ctx.turn_count = cycle + 1
             v = reg.check_pre(pre_ctx)
-            if v is None:
-                continue  # guard may have internal suppression
 
-            # Post: agent used read_file, not memory
-            post_ctx = _ctx("read_file")
-            post_ctx.tool_effects = ToolEffect(reads=frozenset({"filesystem"}))
-            reg.check_post(post_ctx)
-
-        # After multiple ineffective cycles, check tracker state
-        tracker = reg.shared_state.inject_tracker
-        # Should have recorded some ineffective entries
-        ineff = tracker.consecutive_ineffective("memory_discipline", "memory_idle_reminder")
-        assert ineff >= 2, f"Expected 2+ ineffective, got {ineff}"
+        # The 30th call should have triggered a block
+        # Counter resets after block, so let's verify by doing another 30
+        guard._calls_since_memory = 29
+        pre_ctx = _ctx("read_file")
+        v = reg.check_pre(pre_ctx)
+        assert v is not None
+        assert v.action == "block"

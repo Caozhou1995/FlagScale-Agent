@@ -17,7 +17,7 @@
 import os
 import time
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_READ_FS
+from flagscale_agent.react.tools.base import Tool
 
 
 class FileCache:
@@ -89,7 +89,6 @@ def get_file_cache() -> FileCache:
 
 class ReadFileTool(Tool):
     name = "read_file"
-    effects = EFFECT_READ_FS
     description = (
         "Read the contents of a file. Returns content with line numbers for easy reference. "
         "Hard limit: 500 lines per call. Files over 500 lines MUST be read in segments "

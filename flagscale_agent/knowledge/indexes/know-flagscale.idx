@@ -1,0 +1,138 @@
+# know-flagscale
+# FlagScale框架：Repo结构、Hydra两级Config体系、Runner执行链路、训练Config字段全表、训练Runner详解、Examples目录规范
+
+## flagscale/01_repo_structure.md (212 lines)
+L1: FlagScale Repo 结构与架构 深度源码分析
+  L3: 1. 概述与设计动机
+  L14: 2. 源码定位
+  L29: 3. 架构总览
+    L31: 3.1 顶层目录结构
+    L59: 3.2 Runner 核心类关系图
+    L90: 3.3 任务类型与后端映射
+  L104: 4. 核心模块分析
+    L106: 4.1 Runner 基类（新架构）
+    L129: 4.2 Runner 工厂
+L136: 注册模式（伪代码，runner_factory.py:L20-50）
+    L153: 4.3 训练 Runner（旧架构）
+    L172: 4.4 工具函数库
+  L189: 5. 设计决策对比表
+  L199: 6. 边界条件与约束
+  L207: 7. 配置建议
+
+## flagscale/02_config_system.md (259 lines)
+L1: FlagScale Hydra 两级 Config 体系 深度源码分析
+  L3: 1. 概述与设计动机
+  L14: 2. 源码定位
+  L23: 3. 两级配置架构
+    L25: 3.1 文件组织
+    L40: 3.2 Level 1（实验配置）结构
+L43: examples/qwen3/conf/train.yaml
+    L71: 3.3 Level 2（任务配置）结构
+L76: examples/qwen3/conf/train/0_6b.yaml
+  L110: 4. Config 合并与展平机制
+    L112: 4.1 Hydra 合并规则
+    L134: 4.2 OmegaConf 插值
+L139: Level 2 引用 Level 1 的值
+    L152: 4.3 展平为命令行参数
+    L193: 4.4 展平数据流
+  L215: 5. 边界条件与约束
+    L217: 5.1 展平的陷阱
+    L226: 5.2 跨级插值约束
+    L232: 5.3 命令行覆盖
+  L242: 6. 配置切换对比表
+  L253: 7. 调优指南
+
+## flagscale/03_runner_execution.md (216 lines)
+L1: FlagScale Runner 执行链路 深度源码分析
+  L3: 1. 概述与设计动机
+  L11: 2. 源码定位
+  L24: 3. 完整执行时序图
+  L68: 4. 核心阶段详解
+    L70: 4.1 阶段 1：CLI → Hydra
+L75: cli.py:71-93
+    L87: 4.2 阶段 2：Runner 选择
+    L104: 4.3 阶段 3：配置补全
+    L121: 4.4 阶段 4：torchrun 命令构建
+    L150: 4.5 阶段 5：脚本生成
+L157: 1. 创建目录
+L160: 2. before_start 命令（用户自定义环境准备）
+L163: 3. cd 到 FlagScale 根目录
+L166: 4. 执行 torchrun（后台或前台）
+    L171: 4.6 阶段 6：多节点调度
+L176: 并发调度所有节点（runner_train.py:543-551）
+  L192: 5. 新旧架构对比表
+  L203: 6. 边界条件与约束
+  L211: 7. 调优指南
+
+## flagscale/04_train_config.md (202 lines)
+L1: FlagScale 训练 Config 字段全表 深度源码分析
+  L3: 1. 概述
+L10: runner_train.py:50-68 (简化)
+  L28: 2. Section 归属规则
+  L42: 3. system 字段详解
+    L44: 3.1 并行策略
+    L55: 3.2 分布式优化
+    L63: 3.3 精度配置
+    L74: 3.4 日志配置
+    L90: 3.5 检查点配置
+    L103: 3.6 其他系统参数
+  L115: 4. model 字段详解
+    L117: 4.1 架构参数
+    L145: 4.2 训练超参
+    L156: 4.3 优化器配置
+  L171: 5. data 字段详解
+  L183: 6. 展平后的键名冲突检测
+  L193: 7. 验证规则总结
+
+## flagscale/05_train_runner.md (265 lines)
+L1: FlagScale 训练 Runner 详解 深度源码分析
+  L3: 1. 概述
+  L9: 2. 输出目录结构
+  L74: 3. 路径构建源码
+    L76: 3.1 目录补全 (`_update_config_train`, L93-163)
+L79: runner_train.py:93-163 (核心逻辑)
+    L102: 3.2 torchrun log-dir 构建 (`_get_runner_cmd_train`, L166-230)
+L105: runner_train.py:177-218 (关键逻辑)
+L114: ...
+L115: 最终传给 torchrun:
+L117: torchrun 内部再创建: {log_dir}/{rdzv_id}/attempt_{restart_count}/{local_rank}/
+    L132: 3.3 host_output 文件路径 (`_generate_run_script_train`, L240-255)
+L135: runner_train.py:245-249
+  L143: 4. 生成的 bash 脚本结构
+    L145: 4.1 run 脚本 (`host_{rank}_{ip}_run.sh`)
+L149: === 目录创建 ===
+L152: === before_start 命令（用户自定义） ===
+L155: === cd 到 FlagScale 根目录 ===
+L158: === 环境变量注入 ===
+L163: === torchrun 命令 ===
+    L187: 4.2 stop 脚本 (`host_{rank}_{ip}_stop.sh`)
+L193: after_stop 命令（用户自定义）
+  L196: 5. 多节点调度流程
+    L198: 5.1 Hostfile 解析
+L201: hostfile 格式
+    L208: 5.2 并发 SSH 执行
+L211: runner_train.py:543-551 (简化)
+    L224: 5.3 SSH 命令模板
+L227: 共享 FS（默认）：脚本已通过共享存储可见
+L230: 无共享 FS：先传送脚本
+  L235: 6. 日志定位指南
+    L237: 6.1 找到最新训练日志
+L240: 方法 1：按时间戳排序
+L243: 方法 2：找到 loss 所在 rank（最后 PP stage，rank = tp*pp - tp 或更高）
+L246: 方法 3：host.output 汇总文件
+    L250: 6.2 crash 诊断
+L253: 检查所有 rank 的 stderr
+  L259: 7. 边界条件
+
+## flagscale/06_examples_convention.md (143 lines)
+L1: FlagScale Examples 目录规范 深度源码分析
+  L3: 1. 概述
+  L9: 2. 标准目录结构
+  L30: 3. 实际模型分析
+    L32: 3.1 覆盖的模型系列（截至当前）
+    L43: 3.2 配置变体命名规范
+    L55: 3.3 典型 Level 1 配置对比
+  L66: 4. Level 1 必填字段清单
+  L88: 5. Level 2 最小可用模板
+  L127: 6. 新增模型配置步骤
+  L136: 7. 常见错误

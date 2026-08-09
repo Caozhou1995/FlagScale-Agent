@@ -17,15 +17,13 @@
 from types import SimpleNamespace
 
 from flagscale_agent.react.guard import GuardContext, GuardVerdict, GuardRegistry
-from flagscale_agent.react.guard.safety import SafetyGuard
-from flagscale_agent.react.guard.progress import ProgressGuard
-from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
+from flagscale_agent.react.guard.safety import ShellSafetyGuard
+
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
+from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.plan import PlanGuard
-from flagscale_agent.react.guard.training_runtime import TrainingRuntimeGuard
-from flagscale_agent.react.state_machine import AgentState
-from flagscale_agent.react.tools.base import ToolEffect
-from flagscale_agent.react.judge import Judge, JudgeBudget
+from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
+from flagscale_agent.react.judge import Judge
 
 
 class MockProvider:
@@ -42,34 +40,54 @@ class MockProvider:
 
 
 def _ctx(tool_name="", tool_args=None, tool_result=None,
-         classify_fn=None, state=AgentState.EXECUTING, **kwargs):
+         classify_fn=None, **kwargs):
     return GuardContext(
         tool_name=tool_name,
         tool_args=tool_args or {},
         tool_result=tool_result,
-        current_state=state,
         classify_fn=classify_fn,
         **kwargs,
     )
 
 
-# ── SafetyGuard ──────────────────────────────────────────────────────────
+# ── ShellSafetyGuard ──────────────────────────────────────────────────────────
 
 
-class TestSafetyGuard:
+class TestShellSafetyGuard:
     def test_blocks_dangerous_command(self):
-        provider = MockProvider(responses=['{"real": true, "need_more": null}'])
+        # First response: is_fatal=false, second: is_dangerous=true
+        provider = MockProvider(responses=[
+            '{"real": false, "need_more": null}',
+            '{"real": true, "need_more": null}',
+        ])
         judge = Judge(provider)
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         ctx = _ctx("shell", {"command": "rm -rf /etc"}, classify_fn=judge.classify)
         result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
 
-    def test_allows_safe_command(self):
-        provider = MockProvider(responses=['{"real": false, "need_more": null}'])
+    def test_escalates_fatal_command(self):
+        # is_fatal=true → escalate (cannot override)
+        provider = MockProvider(responses=[
+            '{"real": true, "need_more": null}',
+        ])
         judge = Judge(provider)
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
+        ctx = _ctx("shell", {"command": "rm -rf /"}, classify_fn=judge.classify)
+        result = g.check_pre(ctx)
+        assert result is not None
+        assert result.action == "escalate"
+        assert "FATAL" in result.message
+
+    def test_allows_safe_command(self):
+        # is_fatal=false, is_dangerous=false
+        provider = MockProvider(responses=[
+            '{"real": false, "need_more": null}',
+            '{"real": false, "need_more": null}',
+        ])
+        judge = Judge(provider)
+        g = ShellSafetyGuard()
         ctx = _ctx("shell", {"command": "ls -la"}, classify_fn=judge.classify)
         result = g.check_pre(ctx)
         assert result is None
@@ -77,109 +95,22 @@ class TestSafetyGuard:
     def test_skips_non_shell_tools(self):
         provider = MockProvider(responses=[])
         judge = Judge(provider)
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         ctx = _ctx("read_file", {"path": "/tmp/test.py"}, classify_fn=judge.classify)
         result = g.check_pre(ctx)
         assert result is None
         assert len(provider.calls) == 0
 
-    def test_blocks_when_no_classify(self):
-        g = SafetyGuard()
-        ctx = _ctx("shell", {"command": "rm -rf /"})
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "block"
-
-    def test_error_increments_counter(self):
-        provider = MockProvider(responses=[
-            '{"real": true, "need_more": null}',   # is_error
-            '{"real": false, "need_more": null}',  # is_success
-        ])
+    def test_check_post_returns_none(self):
+        """After refactor, safety check_post does nothing."""
+        g = ShellSafetyGuard()
+        provider = MockProvider(responses=[])
         judge = Judge(provider)
-        g = SafetyGuard()
         ctx = _ctx("shell", {"command": "python broken.py"},
                    "RuntimeError: something failed", classify_fn=judge.classify)
-        g.check_post(ctx)
-        assert g._consecutive_errors == 1
-
-    def test_escalates_at_hard_threshold(self):
-        g = SafetyGuard()
-        g._consecutive_errors = 4
-        provider = MockProvider(responses=[
-            '{"real": true, "need_more": null}',   # is_error
-            '{"real": false, "need_more": null}',  # is_success
-        ])
-        judge = Judge(provider)
-        ctx = _ctx("shell", {"command": "fail"}, "RuntimeError",
-                   classify_fn=judge.classify)
         result = g.check_post(ctx)
-        assert result is not None
-        assert result.action == "escalate"
-        assert g._consecutive_errors == 5
-
-
-# ── ProgressGuard ─────────────────────────────────────────────────────────
-
-
-class TestProgressGuard:
-    def test_tracks_reads(self):
-        g = ProgressGuard()
-        # Without SharedState, ProgressGuard uses ctx.recent_tool_names fallback
-        for i in range(5):
-            ctx = _ctx("read_file", {"path": f"/tmp/file_{i}.py"}, "content",
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
-            ctx.recent_tool_names = ["read_file"] * (i + 1)
-            g.check_post(ctx)
-        # Track unique files read
-        assert len(g._read_files) == 5
-
-    def test_resets_on_productive_tool(self):
-        g = ProgressGuard()
-        g._read_files = {"/tmp/a.py", "/tmp/b.py"}
-        g._reread_count = 3
-        ctx = _ctx("write_file", {"path": "/tmp/test.py", "content": "x=1"},
-                   "File written",
-                   tool_effects=ToolEffect(writes=frozenset({"filesystem"})))
-        g.check_post(ctx)
-        assert len(g._read_files) == 0
-        assert g._reread_count == 0
-
-    def test_stale_threshold_triggers_inject(self):
-        g = ProgressGuard()
-        # Pre-populate: file already seen, so re-reads trigger
-        g._read_files.add("/tmp/same.py")
-        # Need to re-read enough times to hit threshold
-        for i in range(4):
-            ctx = _ctx("read_file", {"path": "/tmp/same.py"}, "content",
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
-            ctx.recent_tool_names = ["read_file"] * (i + 6)  # simulate streak
-            result = g.check_post(ctx)
-        # After multiple re-reads, should trigger inject
-        assert result is not None
-        assert result.action == "inject_msg"
-
-
-# ── LoopDetectGuard ───────────────────────────────────────────────────────
-
-
-class TestLoopDetectGuard:
-    def test_detects_repeated_calls(self):
-        g = LoopDetectGuard()
-        for _ in range(3):
-            ctx = _ctx("read_file", {"path": "/tmp/same.py"})
-            g.check_pre(ctx)
-        # After 3 identical calls, should detect loop
-        ctx = _ctx("read_file", {"path": "/tmp/same.py"})
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
-
-    def test_no_loop_with_different_calls(self):
-        g = LoopDetectGuard()
-        for i in range(5):
-            ctx = _ctx("read_file", {"path": f"/tmp/file_{i}.py"})
-            result = g.check_pre(ctx)
         assert result is None
+
 
 
 # ── ContextPressureGuard ──────────────────────────────────────────────────
@@ -189,28 +120,40 @@ class TestContextPressureGuard:
     def test_no_action_below_threshold(self):
         g = ContextPressureGuard()
         ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.5)
-        result = g.check_post(ctx)
+        result = g.check_pre(ctx)
         assert result is None
 
-    def test_inject_at_soft_threshold(self):
+    def test_no_action_at_78_percent(self):
         g = ContextPressureGuard()
         ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.78)
-        result = g.check_post(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
+        result = g.check_pre(ctx)
+        assert result is None  # below 80% threshold
 
-    def test_block_at_hard_threshold(self):
+    def test_block_at_80_percent_with_evictable(self):
         g = ContextPressureGuard()
-        # Guard only blocks after INJECT_LIMIT (5) inject reminders at hard threshold
-        # Simulate having already issued enough inject reminders
-        g._hard_remind_count = g.INJECT_LIMIT
-        # Must provide evictable_indexes so guard doesn't short-circuit (no-evict path returns None)
-        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.96,
-                   evictable_indexes=[1, 2, 3, 4, 5])
-        result = g.check_post(ctx)
+        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.82,
+                   evictable_indexes=list(range(80)))
+        result = g.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
-        assert "30%" in result.message or "MUST" in result.message
+        assert result.category == "context_pressure_evict"
+
+    def test_block_at_hard_reset_threshold(self):
+        g = ContextPressureGuard()
+        # pressure >= 85% AND evictable < 50 → block non-save tools
+        ctx = _ctx("shell", {"command": "ls"}, context_pressure=0.88,
+                   evictable_indexes=[1, 2, 3, 4, 5])
+        result = g.check_pre(ctx)
+        assert result is not None
+        assert result.action == "block"
+        assert "hard_reset" in (result.category or "")
+
+    def test_hard_reset_allows_save_tools(self):
+        g = ContextPressureGuard()
+        ctx = _ctx("memory_write", {"key": "x", "type": "fact", "content": "y"},
+                   context_pressure=0.88, evictable_indexes=[1, 2, 3])
+        result = g.check_pre(ctx)
+        assert result is None
 
 
 # ── PlanGuard ─────────────────────────────────────────────────────────────
@@ -219,144 +162,57 @@ class TestContextPressureGuard:
 class TestPlanGuard:
     def test_allows_plan_tools(self):
         g = PlanGuard()
-        g._complex_task_no_plan = True
         ctx = _ctx("plan_create", {})
         result = g.check_pre(ctx)
         assert result is None
 
-    def test_blocks_after_threshold_when_complex(self):
-        g = PlanGuard()
-        g._complex_task_no_plan = True
-        for i in range(7):
-            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
-            g.check_pre(ctx)
-        ctx = _ctx("read_file", {"path": "/tmp/extra.py"},
-                   tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+    def test_reminds_at_threshold(self):
+        g = PlanGuard(task_plan=None)
+        for i in range(14):
+            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"})
+            result = g.check_pre(ctx)
+            assert result is None
+        # 15th call triggers
+        ctx = _ctx("shell", {"command": "ls"})
         result = g.check_pre(ctx)
         assert result is not None
-        assert result.action == "block"
+        assert result.action == "inject"
+
+    def test_reminds_periodically(self):
+        g = PlanGuard(task_plan=None)
+        for i in range(30):
+            ctx = _ctx("shell", {"command": f"cmd{i}"})
+            g.check_pre(ctx)
+        # 30th call should also trigger (second reminder)
+        assert g._calls_without_plan == 30
+        ctx = _ctx("shell", {"command": "extra"})
+        result = g.check_pre(ctx)
+        # 31st call, not multiple of 15 -> no inject
+        assert result is None
 
     def test_resets_on_plan_create(self):
-        g = PlanGuard()
-        g._complex_task_no_plan = True
-        g._pre_plan_tool_calls = 5
-        g._consecutive_reads = 9
-        g._block_count = 1
+        g = PlanGuard(task_plan=None)
+        g._calls_without_plan = 20
         ctx = _ctx("plan_create", {})
         g.check_post(ctx)
-        assert g._complex_task_no_plan is False
-        assert g._pre_plan_tool_calls == 0
-        assert g._consecutive_reads == 0
-        assert g._block_count == 0
+        assert g._calls_without_plan == 0
 
-    def test_does_not_block_when_plan_exists(self):
-        """Regression: once a plan exists, PlanGuard must not block reads."""
+    def test_does_not_remind_when_plan_exists(self):
         from unittest.mock import MagicMock
         task_plan = MagicMock()
         task_plan.get_active.return_value = {"title": "test", "steps": []}
-
         g = PlanGuard(task_plan=task_plan)
-        g._complex_task_no_plan = True
-        # Simulate many consecutive reads — should NOT block because plan exists
-        for i in range(20):
-            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
+        for i in range(30):
+            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"})
             result = g.check_pre(ctx)
-            assert result is None, f"Should not block at call {i+1} when plan exists"
+            assert result is None
 
-    def test_independent_mode_does_not_block_when_plan_exists(self):
-        """Regression: independent mode (no mark_complex_task) also respects existing plan."""
-        from unittest.mock import MagicMock
-        task_plan = MagicMock()
-        task_plan.get_active.return_value = {"title": "docs plan", "steps": [{"status": "doing"}]}
-
-        g = PlanGuard(task_plan=task_plan)
-        # Do NOT call mark_complex_task — this tests independent mode
-        for i in range(15):
-            ctx = _ctx("read_file", {"path": f"/tmp/f{i}.py"},
-                       tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
-            result = g.check_pre(ctx)
-            assert result is None, f"Independent mode should not block at call {i+1} when plan exists"
-
-    def test_independent_warn_still_fires_without_plan(self):
-        """Without active plan, independent-mode warn still triggers at threshold."""
+    def test_reset_turn(self):
         g = PlanGuard(task_plan=None)
-        # Use the dynamic property that accounts for TaskMode multiplier
-        g._consecutive_reads = g._plan_gate_independent_warn - 1
-        ctx = _ctx("read_file", {"path": "/tmp/warn.py"},
-                   tool_effects=ToolEffect(reads=frozenset({"filesystem"})))
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
+        g._calls_without_plan = 20
+        g.reset_turn()
+        assert g._calls_without_plan == 0
 
-
-# ── TrainingRuntimeGuard ──────────────────────────────────────────────────
-
-
-class TestTrainingRuntimeGuard:
-    def test_detects_training_launch(self):
-        # Fast path handles is_training_command(torchrun)=True and is_kill_command(torchrun)=False
-        # No LLM calls needed
-        provider = MockProvider(responses=[])
-        judge = Judge(provider)
-        g = TrainingRuntimeGuard()
-        ctx = _ctx("shell",
-                   {"command": "torchrun --nproc_per_node=8 train.py"},
-                   classify_fn=judge.classify)
-        g.check_post(ctx)
-        assert g._awaiting_monitor is True
-        assert g._training_started is True
-
-    def test_monitor_gate_blocks_after_launch(self):
-        provider = MockProvider(responses=['{"real": false, "need_more": null}'])
-        judge = Judge(provider)
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        ctx = _ctx("shell", {"command": "pip install pkg"},
-                   classify_fn=judge.classify)
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "block"
-
-    def test_monitor_clears_gate(self):
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        ctx = _ctx("monitor", {"output_dir": "/tmp/train"})
-        result = g.check_pre(ctx)
-        assert result is None
-        assert g._awaiting_monitor is False
-
-    def test_escalates_after_3_failures(self):
-        g = TrainingRuntimeGuard()
-        g._consecutive_train_failures = 2
-        g._training_started = True
-        # With cheap trigger: torchrun matches _LAUNCH_TRIGGER_RE, so
-        # is_training_command is called. Kill detection skipped (no kill keyword).
-        # Then is_training_failure and is_zombie_gpu are called.
-        provider = MockProvider(responses=[
-            '{"real": true, "need_more": null}',   # is_training_command (torchrun matches trigger)
-            '{"real": true, "need_more": null}',   # is_training_failure
-            '{"real": false, "need_more": null}',  # is_zombie_gpu
-        ])
-        judge = Judge(provider)
-        ctx = _ctx("shell", {"command": "torchrun train.py"},
-                   "RuntimeError: OOM", classify_fn=judge.classify)
-        result = g.check_post(ctx)
-        assert g._consecutive_train_failures == 3
-        assert result is not None
-        assert result.action == "escalate"
-
-    def test_read_only_diagnostic_allowed(self):
-        # nvidia-smi is fast-pathed as read-only — no LLM call needed
-        provider = MockProvider(responses=[])
-        judge = Judge(provider)
-        g = TrainingRuntimeGuard()
-        g._awaiting_monitor = True
-        ctx = _ctx("shell", {"command": "nvidia-smi"},
-                   classify_fn=judge.classify)
-        result = g.check_pre(ctx)
-        assert result is None or result.action != "block"
 
 
 # ── GuardRegistry ─────────────────────────────────────────────────────────
@@ -365,43 +221,134 @@ class TestTrainingRuntimeGuard:
 class TestGuardRegistry:
     def test_register_and_priority_order(self):
         reg = GuardRegistry()
-        g1 = SafetyGuard()  # priority 10
-        g2 = ProgressGuard()  # priority 30
+        g1 = ShellSafetyGuard()  # priority 10
+        g2 = ContextPressureGuard()  # priority 60
         reg.register(g2)
         reg.register(g1)
         assert reg.guards[0].priority <= reg.guards[1].priority
 
     def test_check_pre_first_verdict_wins(self):
         reg = GuardRegistry()
-        g = SafetyGuard()
+        g = ShellSafetyGuard()
         reg.register(g)
-        # No classify_fn → blocks
-        ctx = _ctx("shell", {"command": "rm -rf /"})
+        # is_fatal=False, is_dangerous=True → blocks
+        provider = MockProvider(responses=['{"decision": false}', '{"decision": true}'])
+        judge = Judge(provider)
+        ctx = _ctx("shell", {"command": "rm -rf /"},
+                   classify_fn=judge.classify)
         verdict = reg.check_pre(ctx)
         assert verdict is not None
         assert verdict.action == "block"
 
     def test_reset_turn(self):
         reg = GuardRegistry()
-        g = LoopDetectGuard()
+        g = ContextPressureGuard()
         reg.register(g)
-        g._tool_call_cache[("read_file", "path=/tmp/x")] = "content"
         reg.reset_turn()
-        assert len(g._tool_call_cache) == 0
+        # Should not raise — guards can be reset without error
 
 
 # ── GuardContext ──────────────────────────────────────────────────────────
 
 
-class TestGuardContextPhaseName:
-    def test_phase_name_from_executing(self):
-        ctx = GuardContext(current_state=AgentState.EXECUTING)
-        assert ctx.phase_name == "executing"
 
-    def test_phase_name_from_idle(self):
-        ctx = GuardContext(current_state=AgentState.IDLE)
-        assert ctx.phase_name == "idle"
+# ── _is_flagscale_launch_command ──────────────────────────────────────────
 
-    def test_phase_name_from_planning(self):
-        ctx = GuardContext(current_state=AgentState.PLANNING)
-        assert ctx.phase_name == "planning"
+
+class TestIsFlagscaleLaunchCommand:
+    """Test precise FlagScale launch detection."""
+
+    def test_flagscale_train_basic(self):
+        assert _is_flagscale_launch_command("flagscale train qwen3_0_6b") is True
+
+    def test_flagscale_train_with_config(self):
+        assert _is_flagscale_launch_command("flagscale train qwen3 --config /path/to/config.yaml") is True
+
+    def test_flagscale_run_with_config(self):
+        assert _is_flagscale_launch_command(
+            "flagscale run --config-path /workspace --config-name train_config"
+        ) is True
+
+    def test_python_run_py(self):
+        assert _is_flagscale_launch_command(
+            "python run.py --config-path=/workspace --config-name=train action=run"
+        ) is True
+
+    def test_python3_run_py(self):
+        # v6: Pattern 3 requires action=run
+        assert _is_flagscale_launch_command(
+            "python3 run.py --config-path=/workspace --config-name=train action=run"
+        ) is True
+        # Without action=run → not a launch
+        assert _is_flagscale_launch_command(
+            "python3 run.py --config-path=/workspace --config-name=train"
+        ) is False
+
+    def test_flagscale_train_stop_not_launch(self):
+        assert _is_flagscale_launch_command("flagscale train qwen3 --stop") is False
+
+    def test_flagscale_train_dryrun_not_launch(self):
+        assert _is_flagscale_launch_command("flagscale train qwen3 --dryrun") is False
+
+    def test_flagscale_run_action_stop_not_launch(self):
+        assert _is_flagscale_launch_command(
+            "flagscale run --config-path /p --config-name c --action stop"
+        ) is False
+
+    def test_grep_flagscale_not_launch(self):
+        """grep with flagscale keyword should NOT be detected as launch."""
+        assert _is_flagscale_launch_command('grep "flagscale train" logs/') is False
+
+    def test_echo_flagscale_not_launch(self):
+        assert _is_flagscale_launch_command('echo "flagscale train qwen3"') is False
+
+    def test_git_push_flagscale_not_launch(self):
+        assert _is_flagscale_launch_command("git push origin dev_flagscale") is False
+
+    def test_cat_run_py_not_launch(self):
+        assert _is_flagscale_launch_command("cat run.py") is False
+
+    def test_cd_flagscale_not_launch(self):
+        assert _is_flagscale_launch_command("cd /workspace/FlagScale && ls") is False
+
+    def test_compound_with_launch(self):
+        """Compound command where one segment is a real launch."""
+        assert _is_flagscale_launch_command(
+            "cd /workspace/FlagScale && flagscale train qwen3_0_6b"
+        ) is True
+
+    def test_plain_torchrun_not_launch(self):
+        """torchrun alone is NOT a FlagScale launch."""
+        assert _is_flagscale_launch_command("torchrun --nproc_per_node=8 train.py") is False
+
+
+
+
+
+# ── TrainingMonitorGuard ──────────────────────────────────────────────────
+
+class TestTrainingMonitorGuard:
+
+    def test_no_launch_no_block(self):
+        g = TrainingMonitorGuard()
+        ctx = _ctx("shell", {"command": "ls"})
+        assert g.check_pre(ctx) is None
+
+    def test_launch_detected_blocks_non_monitor(self):
+        g = TrainingMonitorGuard()
+        launch_ctx = _ctx("shell", {"command": "python3 run.py --config-path=conf --config-name=config action=run"})
+        g.check_post(launch_ctx)
+        next_ctx = _ctx("shell", {"command": "ls"})
+        verdict = g.check_pre(next_ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+
+    def test_launch_then_monitor_clears(self):
+        g = TrainingMonitorGuard()
+        launch_ctx = _ctx("shell", {"command": "python3 run.py --config-path=conf --config-name=config action=run"})
+        g.check_post(launch_ctx)
+        monitor_ctx = _ctx("flagscale_train_monitor", {"output_dir": "/tmp"})
+        verdict = g.check_pre(monitor_ctx)
+        assert verdict is None
+        next_ctx = _ctx("shell", {"command": "ls"})
+        assert g.check_pre(next_ctx) is None

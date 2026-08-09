@@ -192,50 +192,41 @@ class TestCheckResumeStartup:
         assert "debug-strategy" not in captured.out
 
     def test_startup_fallback_when_no_summary(self, tmp_path, capsys, monkeypatch):
-        """Sessions without summary should call LLM to generate, then persist."""
+        """Sessions without summary should generate simple text summary, then persist."""
         session_dir = str(tmp_path / "sess-nosummary")
         os.makedirs(session_dir)
         messages = [{"role": "user", "content": "帮我优化训练性能"}]
         save_conversation(
             session_dir, "nosummary-1234", messages,
             completed=False,
+            session_input_history=["帮我优化训练性能"],
         )
 
         from flagscale_agent.react.agent import WorkerAgent
         from unittest.mock import MagicMock
-        import json
 
-        # Mock LLM response (provider.chat returns dict)
+        # Create agent mock
         agent = MagicMock(spec=WorkerAgent)
         agent._sessions_root = str(tmp_path)
-        agent.provider = MagicMock()
-        agent.provider.chat.return_value = {
-            "content": "优化Qwen3训练性能\n已完成baseline测试\n待进行profiling",
-            "tool_calls": None,
-        }
         # Bind real methods
         agent._generate_missing_summaries = lambda sessions: WorkerAgent._generate_missing_summaries(agent, sessions)
 
         WorkerAgent._check_resume(agent)
 
         captured = capsys.readouterr()
-        # Should show generated summary
-        assert "优化Qwen3训练性能" in captured.out
-        assert "已完成baseline测试" in captured.out
-        assert "待进行profiling" in captured.out
-        # Should have persisted to conversation.json
-        with open(os.path.join(session_dir, "conversation.json")) as f:
-            data = json.load(f)
-        assert "优化Qwen3训练性能" in data["session_summary"]
+        # Should show generated simple text summary (format: [1] <message>)
+        assert "帮我优化训练性能" in captured.out
+        assert "[1]" in captured.out
 
     def test_startup_summary_generation_failure_graceful(self, tmp_path, capsys):
-        """If LLM call fails, show fallback without crash."""
+        """If JSON parsing fails, still show session without crash."""
         session_dir = str(tmp_path / "sess-fail")
         os.makedirs(session_dir)
         messages = [{"role": "user", "content": "test"}]
         save_conversation(
             session_dir, "failsess-1234", messages,
             completed=False,
+            session_input_history=["test"],
         )
 
         from flagscale_agent.react.agent import WorkerAgent
@@ -243,14 +234,12 @@ class TestCheckResumeStartup:
 
         agent = MagicMock(spec=WorkerAgent)
         agent._sessions_root = str(tmp_path)
-        agent.provider = MagicMock()
-        agent.provider.chat.side_effect = Exception("API error")
         # Bind real method
         agent._generate_missing_summaries = lambda sessions: WorkerAgent._generate_missing_summaries(agent, sessions)
 
         WorkerAgent._check_resume(agent)
 
         captured = capsys.readouterr()
-        # Should not crash, shows fallback
+        # Should not crash, shows session with generated summary
         assert "1 resumable session" in captured.out
-        assert "摘要生成失败" in captured.out
+        assert "test" in captured.out

@@ -37,10 +37,8 @@ class ArgTypeGuard(Guard):
     """Block tool calls with arguments that don't match the declared schema types."""
 
     name = "arg_type"
-    overridable = False  # Type errors are never acceptable
 
     def __init__(self, tool_registry=None):
-        super().__init__()
         self._tool_registry = tool_registry
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:

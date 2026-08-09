@@ -33,7 +33,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from flagscale_agent.react.state_machine import AgentState, StateMachine
 from flagscale_agent.react.guard import GuardContext, GuardRegistry, GuardVerdict
 from flagscale_agent.react import display
 
@@ -71,7 +70,6 @@ class KernelResult:
     output_tokens: int = 0
     elapsed: float = 0.0
     interrupted: bool = False
-    final_state: AgentState = AgentState.COMPLETED
     stop_reason: str = ""
 
 
@@ -83,9 +81,8 @@ class AgentKernel:
 
     def __init__(self, deps: KernelDeps):
         self.deps = deps
-        self.fsm = StateMachine(AgentState.IDLE)
         self._interrupted = False
-        self._plan_auto_continue_count = 0
+        self._continuation_count = 0
 
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
@@ -98,11 +95,9 @@ class AgentKernel:
         turn_start = time.time()
 
         self._interrupted = False
-        self._plan_auto_continue_count = 0  # Reset per turn to avoid poisoning
-        self._signal_reminder_sent = False  # Reset fallback signal reminder
-        self.fsm.transition(AgentState.EXECUTING, reason="new turn")
+        self._continuation_count = 0  # Reset per turn
         d.judge.reset_turn()
-        d.guard_registry.reset_new_turn()
+        d.guard_registry.reset_turn()
 
         _prev_handler = signal.getsignal(signal.SIGINT)
 
@@ -120,8 +115,7 @@ class AgentKernel:
                 if self._interrupted:
                     break
 
-                # Reset guards for this iteration (called once per LLM+tool loop)
-                d.guard_registry.reset_iteration()
+                # Guard reset happens per-turn (at line 101), not per-iteration
                 d.judge.reset_turn()
 
                 schemas = d.get_schemas_fn()
@@ -154,16 +148,12 @@ class AgentKernel:
                     self._interrupted = True
                     break
                 except Exception as e:
-                    if d.is_context_limit_error_fn(e):
-                        response, usage = self._recover_context_overflow(e, schemas)
-                        if response is None:
-                            result.stop_reason = "context_overflow_unrecoverable"
-                            break
-                    else:
-                        d.display.thinking_clear()
-                        display.warn(f"LLM call failed: {e}")
-                        result.stop_reason = f"llm_error: {e}"
-                        break
+                    # Context overflow should be prevented by ContextPressureGuard
+                    # which prompts LLM to call evict/hard_reset before reaching this point
+                    d.display.thinking_clear()
+                    display.warn(f"LLM call failed: {e}")
+                    result.stop_reason = f"llm_error: {e}"
+                    break
 
                 elapsed = time.time() - getattr(self, "_t0", time.time())
                 in_tok = usage.get("input_tokens") or 0
@@ -224,45 +214,41 @@ class AgentKernel:
                     if "[TASK_COMPLETE]" in assistant_text or "[NEED_USER_INPUT]" in assistant_text:
                         result.stop_reason = "explicit_signal"
                         break
-                    if not self._should_auto_continue_plan():
-                        # Defense: if last turn had tool calls (still working) and this turn
-                        # is trivially short (<10 chars), auto-continue instead of stopping
-                        if (len(assistant_text.strip()) < 10 and iteration > 0
-                                and getattr(self, "_last_turn_had_tools", False)):
-                            short_retries = getattr(self, "_short_output_retries", 0)
-                            if short_retries < 2:
-                                self._short_output_retries = short_retries + 1
-                                d.display.warn(f"Short output without tools after active turn, auto-continuing...")
-                                d.history.append({"role": "user", "content": "[system: please continue your work]"})
-                                continue
-                            else:
-                                self._short_output_retries = 0
-                        # Fallback: give LLM one chance to add the missing signal
-                        if not getattr(self, "_signal_reminder_sent", False):
-                            self._signal_reminder_sent = True
-                            d.history.append({"role": "user", "content": (
-                                "[system] 你刚才的回复没有包含 [TASK_COMPLETE] 或 [NEED_USER_INPUT]。"
-                                "如果当前指令已响应完成且不需要用户输入，请回复 [TASK_COMPLETE]。"
-                                "如果需要用户确认或提供信息，请回复 [NEED_USER_INPUT]。"
-                            )})
+
+                    # ── Continuation: LLM didn't stop, keep going ──
+                    # Short output retry (truncated/confused)
+                    if (len(assistant_text.strip()) < 10 and iteration > 0
+                            and getattr(self, "_last_turn_had_tools", False)):
+                        short_retries = getattr(self, "_short_output_retries", 0)
+                        if short_retries < 2:
+                            self._short_output_retries = short_retries + 1
+                            d.display.warn(f"Short output without tools after active turn, auto-continuing...")
+                            d.history.append({"role": "user", "content": "[system: please continue your work]"})
                             continue
-                        self._signal_reminder_sent = False
-                        result.stop_reason = "no_tool_calls"
-                        break
-                    # Plan auto-continue — check token budget first
+                        else:
+                            self._short_output_retries = 0
+
+                    # Context pressure check
                     pressure = d.history.get_context_pressure() if hasattr(d.history, 'get_context_pressure') else 0
                     if pressure >= 0.85:
                         result.stop_reason = "context_pressure"
                         break
-                    self._plan_auto_continue_count += 1
-                    if self._plan_auto_continue_count > 10:
-                        result.stop_reason = "plan_auto_continue_limit"
+
+                    # Continuation count limit (hard ceiling)
+                    self._continuation_count += 1
+                    if self._continuation_count > d.config.max_continuations:
+                        result.stop_reason = "max_continuations"
                         break
-                    continuation = self._generate_continuation()
+
+                    # Track consecutive text-only responses (no tools, no stop signal)
+                    self._consecutive_text_only = getattr(self, "_consecutive_text_only", 0) + 1
+
+                    continuation = self._generate_continuation(text_only=True)
                     d.history.append({"role": "user", "content": continuation})
                     continue
 
-                self._plan_auto_continue_count = 0
+                self._continuation_count = 0
+                self._consecutive_text_only = 0  # Reset: tools were executed
 
                 # ── Execute tools ──
                 _pre_guard_verdicts = []
@@ -276,6 +262,7 @@ class AgentKernel:
                     # Collect verdicts and apply them AFTER tool_results are in history.
                     blocked_indices = set()
                     _pre_guard_verdicts = []  # (verdict, blocked) pairs to apply after tool_results
+                    _seen_injects = set()  # Deduplicate inject across multiple tool_calls
                     for i, tc in enumerate(tool_calls):
                         ctx = self._build_ctx(
                             tool_name=tc["name"],
@@ -286,14 +273,19 @@ class AgentKernel:
                         if verdict is not None:
                             if verdict.action in ("block", "escalate"):
                                 blocked_indices.add(i)
-                                _pre_guard_verdicts.append(verdict)
-                                if verdict.action == "block":
-                                    display.guard_block(verdict.message)
-                                else:
-                                    display.guard_escalate(verdict.message)
-                            elif verdict.action == "inject_msg":
+                                # Deduplicate block/escalate across tool_calls
+                                msg_key = verdict.message[:120]
+                                if msg_key not in _seen_injects:
+                                    _seen_injects.add(msg_key)
+                                    _pre_guard_verdicts.append(verdict)
+                                # Display is handled later in _apply_verdict — don't display here
+                            elif verdict.action == "inject":
                                 # Soft advisory — defer until after tool_results are appended
-                                _pre_guard_verdicts.append(verdict)
+                                # Deduplicate: same message from same guard across tool_calls
+                                msg_key = verdict.message[:120]
+                                if msg_key not in _seen_injects:
+                                    _seen_injects.add(msg_key)
+                                    _pre_guard_verdicts.append(verdict)
 
                     # Execute tools (skip blocked ones)
                     if blocked_indices:
@@ -331,6 +323,7 @@ class AgentKernel:
 
                 # ── Post-guard checks (per tool) ──
                 post_verdicts = []
+                _seen_post_injects = set()  # Deduplicate inject across tool_calls
                 for tc, tool_result in zip(tool_calls, results):
                     ctx = self._build_ctx(
                         tool_name=tc["name"],
@@ -339,6 +332,11 @@ class AgentKernel:
                     )
                     verdict = d.guard_registry.check_post(ctx)
                     if verdict is not None:
+                        # Deduplicate all verdict types across multiple tool_calls
+                        msg_key = verdict.message[:120]
+                        if msg_key in _seen_post_injects:
+                            continue
+                        _seen_post_injects.add(msg_key)
                         post_verdicts.append(verdict)
 
                 tool_results = [
@@ -385,12 +383,7 @@ class AgentKernel:
             signal.signal(signal.SIGINT, _prev_handler)
 
         result.interrupted = self._interrupted
-        result.final_state = self.fsm.current_state
         result.elapsed = time.time() - turn_start
-        if self._interrupted:
-            self.fsm.force_transition(AgentState.INTERRUPTED, reason="user interrupt")
-        else:
-            self.fsm.transition(AgentState.COMPLETED, reason=result.stop_reason or "done")
         return result
 
     # ── Internal helpers ─────────────────────────────────────────────────────
@@ -415,11 +408,8 @@ class AgentKernel:
         d = self.deps
         history = d.history
         # Resolve tool effects from registry
-        from flagscale_agent.react.tools.base import ToolEffect
-        tool_effects = ToolEffect()
         try:
             tool = d.tool_registry.get(tool_name)
-            tool_effects = tool.effects
         except (KeyError, AttributeError):
             pass
         # Extract override_reason from tool_args (LLM declares why a blocked call is justified)
@@ -434,13 +424,11 @@ class AgentKernel:
             tool_name=tool_name,
             tool_args=tool_args,
             tool_result=tool_result,
-            tool_effects=tool_effects,
+            
             turn_count=getattr(d.config, "_turn_count", 0),
             context_pressure=history.get_context_pressure() if history else 0.0,
             evictable_indexes=history.get_evictable_indexes() if history else [],
             messages=history.get_messages() if history else [],
-            current_state=self.fsm.current_state,
-            transitions_count=len(self.fsm.history),
             classify_fn=d.judge.classify,
             override_reason=override_reason,
             assistant_text=assistant_text,
@@ -449,11 +437,10 @@ class AgentKernel:
     def _apply_verdict(self, verdict: GuardVerdict, pre: bool) -> bool:
         """Apply a guard verdict. Returns True if this tool call should be blocked.
 
-        v5 semantics (escalation chain: inject → block → escalate):
-        - inject_msg: soft advisory appended to tool_result, turn continues
+        v6 semantics (escalation chain: inject → block → escalate):
+        - inject: soft advisory appended to tool_result, turn continues
         - block: prevent tool execution, LLM can override with reason
         - escalate: prevent tool execution + independent message, NOT overridable
-        - force_compact: trigger compaction, turn continues
         """
         d = self.deps
         if verdict.action == "block":
@@ -465,7 +452,7 @@ class AgentKernel:
             d.inject_message_fn(verdict.message)
             display.guard_escalate(verdict.message)
             return True
-        elif verdict.action == "inject_msg":
+        elif verdict.action == "inject":
             # v4: Soft advisory — append to last tool_result instead of
             # creating a new user message. This avoids conversation pollution.
             if d.append_advisory_fn:
@@ -473,44 +460,7 @@ class AgentKernel:
             else:
                 d.inject_message_fn(verdict.message)
             display.guard_inject(verdict.message)
-        elif verdict.action == "force_compact":
-            # V3: force_compact = evict oldest 30% of evictable messages
-            evictable = d.history.get_evictable_indexes()
-            if evictable:
-                count = max(1, len(evictable) * 30 // 100)
-                for idx in evictable[:count]:
-                    d.history.evict_message(idx)
         return False
-
-    def _recover_context_overflow(self, exc, schemas):
-        """Evict old messages on context overflow, then retry LLM call once."""
-        d = self.deps
-
-        # Save recovery state to plan before eviction
-        self._save_recovery_state()
-
-        d.display.thinking_clear()
-        display.warn("Context overflow, evicting old messages...")
-
-        evictable = d.history.get_evictable_indexes()
-        if not evictable:
-            display.warn("No evictable messages — cannot recover.")
-            return None, {}
-
-        # Evict 50% of evictable messages (aggressive, single pass)
-        count = max(1, len(evictable) * 50 // 100)
-        for idx in evictable[:count]:
-            d.history.evict_message(idx)
-
-        messages = d.history.get_messages()
-        _call = d.call_llm_fn or (lambda m, s: d.provider.chat_stream(m, s))
-        try:
-            d.display.thinking()
-            return _call(messages, schemas)
-        except Exception as e2:
-            d.display.thinking_clear()
-            display.warn(f"LLM call failed after eviction: {e2}")
-            return None, {}
 
     def _detect_self_modification(self, tool_calls: list) -> bool:
         """Check if any tool call modified flagscale_agent/ source files.
@@ -539,75 +489,6 @@ class AgentKernel:
                 return True
         return False
 
-    def _save_recovery_state(self):
-        """Save current progress to plan notes before compaction.
-
-        This ensures the agent can recover its working state after context
-        is compacted, preventing the post-compaction death loop.
-        """
-        d = self.deps
-        task_plan = getattr(d, "task_plan", None)
-        if not task_plan:
-            return
-
-        active = task_plan.get_active()
-        if not active:
-            return
-
-        # Find current "doing" step
-        steps = active.get("steps", [])
-        doing_steps = [s for s in steps if s.get("status") == "doing"]
-        if not doing_steps:
-            return
-
-        step = doing_steps[0]
-        step_id = step.get("id")
-
-        # Build recovery context from recent history
-        recent_msgs = d.history.get_messages()[-6:]  # Last 3 exchanges
-        recovery_lines = []
-        for msg in recent_msgs:
-            if msg.get("role") == "assistant":
-                content = msg.get("content", "")
-                if isinstance(content, str) and content.strip():
-                    for line in content.split("\n"):
-                        if line.strip() and not line.startswith("["):
-                            recovery_lines.append(line.strip()[:200])
-                            break
-
-        if recovery_lines:
-            recovery_note = "RECOVERY: " + " | ".join(recovery_lines[-3:])
-            try:
-                task_plan.update_step(step_id, "doing", recovery_note)
-            except Exception:
-                pass
-
-    def _should_auto_continue_plan(self) -> bool:
-        """Check if there's an active plan with pending steps.
-        
-        Also checks if the assistant's last response is asking the user a question
-        (waiting for user input). If so, do NOT auto-continue — let the user respond.
-        """
-        task_plan = getattr(self.deps, "task_plan", None)
-        if task_plan is None:
-            return False
-        active = task_plan.get_active()
-        if not active:
-            return False
-        has_pending = any(
-            s.get("status") not in ("done", "skipped")
-            for s in active.get("steps", [])
-        )
-        if not has_pending:
-            return False
-        
-        # Check if assistant is waiting for user input (asking a question)
-        last_text = self._get_last_assistant_text()
-        if last_text and self._is_asking_user(last_text):
-            return False
-        
-        return True
-
     def _get_last_assistant_text(self) -> str:
         """Get the text content of the last assistant message."""
         d = self.deps
@@ -622,42 +503,48 @@ class AgentKernel:
                     return "".join(texts)
         return ""
 
-    def _is_asking_user(self, text: str) -> bool:
-        """Detect if the assistant text is asking the user a question / waiting for input.
-        
-        Heuristic: check if the last meaningful line ends with a question mark or
-        contains explicit "waiting for user" patterns.
-        """
-        # Get the last few non-empty lines
-        lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
-        if not lines:
-            return False
-        
-        last_line = lines[-1]
-        
-        # Explicit signal
-        if "[NEED_USER_INPUT]" in text:
-            return True
-        
-        # Ends with question mark (supports Chinese and English)
-        if last_line.endswith("?") or last_line.endswith("？"):
-            return True
-        
-        # Common patterns for asking user (Chinese + English)
-        asking_patterns = [
-            "你选", "你觉得", "你希望", "你要", "要我",
-            "which do you", "what do you", "do you want", "shall i",
-            "should i", "would you", "let me know", "your choice",
-            "选哪个", "怎么处理", "如何处理",
-        ]
-        last_lower = last_line.lower()
-        for pattern in asking_patterns:
-            if pattern in last_lower:
-                return True
-        
-        return False
+    def _generate_continuation(self, text_only: bool = False) -> str:
+        """Generate continuation prompt.
 
-    def _generate_continuation(self) -> str:
+        Args:
+            text_only: If True, the previous response had no tool calls and no
+                stop signal. Use a more explicit prompt to help LLM self-correct.
+        """
+        consecutive = getattr(self, "_consecutive_text_only", 0)
+
+        # If LLM has been outputting text without tools repeatedly, escalate clarity
+        if text_only and consecutive >= 3:
+            return (
+                "You have responded 3+ times with text only — no tool calls and no "
+                "stop signal ([TASK_COMPLETE] or [NEED_USER_INPUT]).\n\n"
+                "You MUST do one of:\n"
+                "1. Emit a tool call (shell, readFile, editFile, etc.) to take action\n"
+                "2. End with [TASK_COMPLETE] if the task is done\n"
+                "3. End with [NEED_USER_INPUT] if you need user input\n\n"
+                "Do NOT output only narration or intentions. Act or stop."
+            )
+
+        if text_only:
+            plan_hint = ""
+            task_plan = getattr(self.deps, "task_plan", None)
+            if task_plan:
+                active = task_plan.get_active()
+                if active:
+                    pending = [
+                        s for s in active.get("steps", [])
+                        if s.get("status") not in ("done", "skipped")
+                    ]
+                    if pending:
+                        step = pending[0]
+                        plan_hint = f" Current step: {step.get('title', step.get('description', ''))}"
+            return (
+                "Your previous response contained text but no tool calls and no stop signal. "
+                "If you intended to use a tool, emit it now. "
+                "If done, end with [TASK_COMPLETE] or [NEED_USER_INPUT]."
+                f"{plan_hint}"
+            )
+
+        # Normal continuation (after tool execution, LLM just didn't stop)
         task_plan = getattr(self.deps, "task_plan", None)
         if task_plan:
             active = task_plan.get_active()

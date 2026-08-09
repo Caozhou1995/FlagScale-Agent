@@ -14,14 +14,12 @@
 
 """Plan status tool — show current plan progress."""
 
-from flagscale_agent.react.tools.base import Tool, ToolEffect
+from flagscale_agent.react.tools.base import Tool
 
-_EFFECT_PLAN_READ = ToolEffect(reads=frozenset({"plan"}))
 
 
 class PlanStatusTool(Tool):
     name = "plan_status"
-    effects = _EFFECT_PLAN_READ
     description = (
         "Show the current task plan and progress. "
         "Use at the start of a turn to check where you left off, "

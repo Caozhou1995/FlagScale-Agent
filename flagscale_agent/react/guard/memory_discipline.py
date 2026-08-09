@@ -15,51 +15,33 @@
 """MemoryDisciplineGuard — reminds the agent to use memory proactively.
 
 Logic:
-- Track tool calls since last memory read/write (or last reminder)
+- Track tool calls since last memory read/write
 - Every 10 calls without memory operation → inject a reminder
-- After memory_read/memory_list returns content → inject staleness check reminder
+- Every 30 calls without memory operation → block (overridable)
+- Before TASK_COMPLETE without memory review → inject evolution reminder
 - If LLM reads/writes memory, reset counter
-- If LLM overrides, reset counter
-- No cap — keeps reminding every 10 calls as long as memory isn't used
 """
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
-_STALENESS_MSG = (
-    "[MemoryDiscipline] You just read memories. Verify each entry against "
-    "current code/state. If any memory is outdated (environment changed, "
-    "bug fixed, path moved), supersede or delete it NOW via "
-    "memory_write(supersedes=['old/key/here']). "
-    "Do NOT leave stale memories uncorrected."
-)
-
-
 class MemoryDisciplineGuard(Guard):
-    """Remind agent to read/write memory if it hasn't done so recently.
-
-    Also enforces self-evolution: before TASK_COMPLETE, remind agent to
-    review memory for new findings, digestible insights, or stale facts.
-    """
+    """Remind agent to read/write memory if it hasn't done so recently."""
 
     name = "memory_discipline"
     priority = 90  # Low priority — advisory only
-    overridable = True
 
-    # How many tool calls without memory ops before reminding
-    reminder_threshold = 10
+    INJECT_THRESHOLD = 10
+    BLOCK_THRESHOLD = 30
 
     def __init__(self):
-        super().__init__()
         self._calls_since_memory = 0
-        self._staleness_reminded = False
         self._evolution_reminded = False
-        self._has_memory_review = False  # whether agent did memory_list this session
+        self._has_memory_review = False
 
     _MEMORY_TOOLS = frozenset((
         "memory_write", "memory_read", "memory_list",
         "plan_status", "plan_create", "plan_update",
-        "workspace_experiment",
     ))
 
     _MEMORY_READ_TOOLS = frozenset(("memory_read", "memory_list"))
@@ -80,11 +62,6 @@ class MemoryDisciplineGuard(Guard):
                     "(3) Can any existing insight be digested into a concrete artifact — "
                     "create/improve a skill, knowledge doc, or agent code?\n"
                     "(4) Any existing fact invalidated by this session's work?\n\n"
-                    "Evolution example:\n"
-                    "  pitfall/nccl/nic_exclude_syntax (hit 2+ times, same root cause)\n"
-                    "  → elevate to insight/nccl/whitelist_over_exclude\n"
-                    "  → digest: add step to skill 'train-run': always use NCCL_IB_HCA=<list> whitelist, "
-                    "排除式(^dev) in NCCL 2.28+ has known bugs\n\n"
                     "Report [Memory suggestions] to user with proposed actions; "
                     "do NOT self-execute digest/delete without confirmation.",
                     reason="evolution_check_before_complete",
@@ -96,68 +73,38 @@ class MemoryDisciplineGuard(Guard):
             self._calls_since_memory = 0
             if ctx.tool_name in self._MEMORY_READ_TOOLS:
                 self._has_memory_review = True
-            if ctx.tool_name == "memory_write":
-                self._staleness_reminded = False
             return None
 
         self._calls_since_memory += 1
 
-        if self._calls_since_memory >= self.reminder_threshold:
-            self._calls_since_memory = 0
+        if self._calls_since_memory >= self.BLOCK_THRESHOLD:
+            # Do NOT reset counter here — only reset in accept_override if override succeeds
+            return GuardVerdict.block(
+                f"[MemoryDiscipline] {self.BLOCK_THRESHOLD} tool calls without any memory operation. "
+                "You likely have findings worth saving (facts, pitfalls, insights) or existing "
+                "memories that could help. Run memory_list() or memory_write() before continuing.",
+                reason=f"no_memory_ops_{self.BLOCK_THRESHOLD}_calls",
+                category="memory_discipline",
+            )
+
+        if self._calls_since_memory % self.INJECT_THRESHOLD == 0:
             return GuardVerdict.inject(
-                f"[MemoryDiscipline] {self.reminder_threshold} tool calls without "
+                f"[MemoryDiscipline] {self._calls_since_memory} tool calls without "
                 "reading or writing memory. Consider: saving key findings as fact/pitfall/insight, "
                 "or checking existing memories to avoid repeating past work. "
                 "If a pitfall recurs, elevate to insight; "
                 "if an insight has enough evidence, digest into skill/knowledge/agent code.",
                 reason="no_memory_ops_recently",
-                category="memory_idle_reminder",
+                category="memory_discipline",
             )
 
         return None
 
-    def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        """After memory_read/memory_list returns content, remind to verify staleness."""
-        if ctx.tool_name not in self._MEMORY_READ_TOOLS:
-            return None
-
-        if self._staleness_reminded:
-            return None
-
-        result = ctx.tool_result or ""
-        if not result or len(result) < 20:
-            return None
-        if "no entries" in result.lower() or "not found" in result.lower():
-            return None
-
-        self._staleness_reminded = True
-        return GuardVerdict.inject(
-            _STALENESS_MSG,
-            reason="memory_staleness_check",
-            category="memory_staleness_reminder",
-        )
-
-    def was_inject_effective(self, ctx: GuardContext) -> bool | None:
-        if ctx.tool_name in self._MEMORY_TOOLS:
-            return True
-        return False
-
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        """Allow override of block if LLM provides a reason."""
         if reason and len(reason.strip()) > 5:
             self._calls_since_memory = 0
             return True
         return False
 
-    def reset_state(self):
-        super().reset_state()
-        self._calls_since_memory = 0
-        self._staleness_reminded = False
-        self._evolution_reminded = False
-        self._has_memory_review = False
 
-    def reset_turn(self):
-        pass
-
-    def reset_new_turn(self):
-        """New user message — reset staleness flag so next read batch gets reminder."""
-        self._staleness_reminded = False

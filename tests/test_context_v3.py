@@ -300,121 +300,70 @@ class TestHistoryEvictRecall:
 class MockGuardContext:
     """Minimal mock of GuardContext for testing."""
 
-    def __init__(self, pressure: float):
+    def __init__(self, pressure: float, evictable_count: int = 60):
         self.context_pressure = pressure
-        self.evictable_indexes = list(range(1, 20))
+        self.evictable_indexes = list(range(1, evictable_count + 1))
+        self.tool_name = ""
+        self.tool_args = {}
 
 
 class TestContextPressureGuard:
-    """Test the ContextPressureGuard with V3 evict behavior."""
+    """Test the ContextPressureGuard with simplified block-only design."""
 
     def setup_method(self):
         from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
         self.guard = ContextPressureGuard()
 
-    def test_no_pressure_no_action(self):
-        """Below soft limit, no action."""
+    def _fresh_guard(self):
+        from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
+        return ContextPressureGuard()
+
+    def test_no_action_below_80(self):
+        """Below 80%, no action."""
         ctx = MockGuardContext(0.5)
-        result = self.guard.check_post(ctx)
+        result = self.guard.check_pre(ctx)
         assert result is None
 
-    def test_soft_limit_injects(self):
-        """At 75%, injects advisory."""
-        ctx = MockGuardContext(0.76)
-        result = self.guard.check_post(ctx)
-        assert result is not None
-        assert result.action == "inject_msg"
-        assert "76%" in result.message
-        assert "evict" in result.message.lower()
+        ctx = MockGuardContext(0.79)
+        result = self.guard.check_pre(ctx)
+        assert result is None
 
-    def test_soft_limit_fires_once(self):
-        """Soft warning fires only once until pressure drops."""
-        ctx = MockGuardContext(0.76)
-        result1 = self.guard.check_post(ctx)
-        assert result1 is not None and result1.action == "inject_msg"
-
-        # Second call at same pressure — no repeat
-        result2 = self.guard.check_post(ctx)
-        assert result2 is None
-
-    def test_soft_limit_resets_on_drop(self):
-        """Soft warning resets when pressure drops below threshold * 0.9."""
-        ctx_high = MockGuardContext(0.76)
-        self.guard.check_post(ctx_high)
-
-        # Drop well below
-        ctx_low = MockGuardContext(0.60)
-        self.guard.check_post(ctx_low)
-
-        # Should fire again on next rise
-        result = self.guard.check_post(ctx_high)
-        assert result is not None and result.action == "inject_msg"
-
-    def test_hard_limit_blocks(self):
-        """After INJECT_LIMIT reminders at hard limit, blocks."""
-        ctx = MockGuardContext(0.92)
-        # First (INJECT_LIMIT - 1) calls inject
-        for _ in range(self.guard.INJECT_LIMIT - 1):
-            result = self.guard.check_post(ctx)
-            assert result is not None
-            assert result.action == "inject_msg"
-        # INJECT_LIMIT-th call should block
-        result = self.guard.check_post(ctx)
+    def test_evict_path_blocks(self):
+        """>=80% with evictable >= 60 → block non-save tools."""
+        ctx = MockGuardContext(0.82, evictable_count=80)
+        ctx.tool_name = "shell"
+        ctx.tool_args = {"command": "ls"}
+        result = self.guard.check_pre(ctx)
         assert result is not None
         assert result.action == "block"
+        assert "evict" in result.message.lower()
+        assert result.category == "context_pressure_evict"
 
-    def test_hard_block_persists_until_30_freed(self):
-        """Hard limit only fires at >= 90%. Below 90% falls to soft limit or nothing."""
-        ctx_block = MockGuardContext(0.92)
-        # Reach blocked state
-        for _ in range(self.guard.INJECT_LIMIT):
-            self.guard.check_post(ctx_block)
-        # Confirmed blocked at 92%
-        result = self.guard.check_post(ctx_block)
+    def test_evict_path_allows_save_tools(self):
+        """Evict path allows memory/plan/evict tools through."""
+        for tool in ["memory_write", "plan_update", "evict", "recall"]:
+            guard = self._fresh_guard()
+            ctx = MockGuardContext(0.85, evictable_count=70)
+            ctx.tool_name = tool
+            ctx.tool_args = {}
+            result = guard.check_pre(ctx)
+            assert result is None, f"{tool} should be allowed"
+
+    def test_evict_path_releases_below_50(self):
+        """After evicting below 50%, normal tools work again."""
+        # First block
+        ctx = MockGuardContext(0.82, evictable_count=80)
+        ctx.tool_name = "shell"
+        ctx.tool_args = {}
+        result = self.guard.check_pre(ctx)
         assert result is not None and result.action == "block"
 
-        # At 80% — below hard limit, soft warning fires (not block)
-        ctx_lower = MockGuardContext(0.80)
-        result = self.guard.check_post(ctx_lower)
-        # Should be soft inject (first time at soft level after hard)
-        assert result is None or result.action == "inject_msg"
-
-        # Below hysteresis (< 0.675) — fully resets
-        ctx_freed = MockGuardContext(0.62)
-        result = self.guard.check_post(ctx_freed)
-        assert result is None  # Fully reset
-
-    def test_hard_block_exact_30_threshold(self):
-        """Exactly 30% freed should unblock."""
-        ctx_block = MockGuardContext(0.90)
-        # Exhaust inject limit to enter blocked state
-        for _ in range(self.guard.INJECT_LIMIT):
-            self.guard.check_post(ctx_block)
-        # Ensure blocked
-        self.guard.check_post(ctx_block)
-
-        # Free exactly 30%: 90% * (1 - 0.30) = 63%
-        ctx_exact = MockGuardContext(0.63)
-        result = self.guard.check_post(ctx_exact)
-        assert result is None  # Unblocked
-
-    def test_reset_clears_state(self):
-        """reset() clears all guard state."""
-        # Build up remind count
-        ctx = MockGuardContext(0.92)
-        for _ in range(3):
-            self.guard.check_post(ctx)
-        self.guard.reset()
-
-        # Should be clean now
-        result = self.guard.check_post(MockGuardContext(0.5))
-        assert result is None
-
-    def test_zero_pressure(self):
-        """Zero pressure returns None."""
-        result = self.guard.check_post(MockGuardContext(0.0))
-        assert result is None
-
+        # After evict, pressure drops to 45%
+        ctx2 = MockGuardContext(0.45, evictable_count=40)
+        ctx2.tool_name = "shell"
+        ctx2.tool_args = {}
+        result2 = self.guard.check_pre(ctx2)
+        assert result2 is None
 
 # ════════════════════════════════════════════════════════════════════════════════
 # Integration: Agent evict/recall handling
@@ -764,36 +713,36 @@ class TestEdgeCases:
 
     # ── Guard edge: exact boundary values ──
 
-    def test_guard_at_exactly_75_percent(self):
-        """Exactly 75% is the threshold boundary."""
+    def test_guard_at_exactly_80_percent(self):
+        """Exactly 80% is the threshold boundary."""
         from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
         guard = ContextPressureGuard()
-        ctx = MockGuardContext(0.75)
+        ctx = MockGuardContext(0.80, evictable_count=80)
+        ctx.tool_name = "shell"
+        ctx.tool_args = {}
         # At exactly threshold, should trigger (>=)
-        result = guard.check_post(ctx)
+        result = guard.check_pre(ctx)
         assert result is not None
 
-    def test_guard_just_below_75(self):
-        """Just below 75% should not trigger."""
+    def test_guard_just_below_80(self):
+        """Just below 80% should not trigger."""
         from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
         guard = ContextPressureGuard()
-        ctx = MockGuardContext(0.749)
-        result = guard.check_post(ctx)
+        ctx = MockGuardContext(0.799)
+        result = guard.check_pre(ctx)
         assert result is None
 
     def test_guard_at_exactly_90(self):
-        """Exactly 90% should eventually block after INJECT_LIMIT."""
+        """Exactly 90% with enough evictable should block immediately."""
         from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
         guard = ContextPressureGuard()
-        ctx = MockGuardContext(0.90)
-        # First call at 90% injects (not immediate block)
-        result = guard.check_post(ctx)
+        ctx = MockGuardContext(0.90, evictable_count=80)
+        ctx.tool_name = "shell"
+        ctx.tool_args = {}
+        result = guard.check_pre(ctx)
         assert result is not None
-        assert result.action == "inject_msg"
-        # After enough calls, blocks
-        for _ in range(guard.INJECT_LIMIT - 1):
-            result = guard.check_post(ctx)
         assert result.action == "block"
+        assert result.category == "context_pressure_evict"
 
 
 class TestFullLog:
@@ -838,25 +787,50 @@ class TestFullLog:
 class TestPromptIntegrity:
     """Test that prompt modules load correctly after refactoring."""
 
+    def test_static_prompt_format_no_keyerror(self):
+        """SYSTEM_PROMPT_STATIC.format() must not raise KeyError.
+
+        All braces in example JSON/code blocks must be escaped as {{ }}.
+        Regression test for: unescaped {"command": ...} caused KeyError.
+        """
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        # These are the actual placeholders used by prompt_builder.py
+        try:
+            result = SYSTEM_PROMPT_STATIC.format(
+                cwd="/workspace/test",
+                tools="shell, read_file, write_file",
+                skills="train-run, train-config",
+                knowledge="know-megatron-training",
+                critical_rules="",
+                optional_sections="",
+                skill_context="",
+            )
+        except KeyError as e:
+            raise AssertionError(
+                f"SYSTEM_PROMPT_STATIC has unescaped braces causing KeyError: {e}. "
+                f"Escape literal braces as {{{{ }}}} in prompt.py."
+            )
+        assert len(result) > 1000  # sanity: prompt is non-trivial
+
     def test_static_prompt_is_english(self):
         import re
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
         # No Chinese characters in static prompt
         assert not re.search(r'[\u4e00-\u9fff]', SYSTEM_PROMPT_STATIC)
 
-    def test_optional_sections_have_required_keys(self):
-        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
-        assert "planning" in SYSTEM_PROMPT_OPTIONAL
-        assert "memory_rules" in SYSTEM_PROMPT_OPTIONAL
+    def test_static_prompt_contains_planning_section(self):
+        """Static prompt should contain planning guidance."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "## Plan" in SYSTEM_PROMPT_STATIC
+        assert "plan_create" in SYSTEM_PROMPT_STATIC
+        assert "Step Notes" in SYSTEM_PROMPT_STATIC
 
-    def test_planning_always_injected(self):
-        """prompt_builder should inject planning even without active plan."""
-        from flagscale_agent.react.prompt_builder import PromptBuilder
-        from flagscale_agent.react.prompt import SYSTEM_PROMPT_OPTIONAL
-        # planning section exists and has content about plan_create
-        planning = SYSTEM_PROMPT_OPTIONAL.get("planning", "")
-        assert "plan_create" in planning
-        assert "Step Notes" in planning
+    def test_static_prompt_contains_memory_section(self):
+        """Static prompt should contain memory rules."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "## Memory" in SYSTEM_PROMPT_STATIC
+        assert "memory_read" in SYSTEM_PROMPT_STATIC
+        assert "cross-session knowledge" in SYSTEM_PROMPT_STATIC
 
 
 class TestNoUnnecessaryTruncation:

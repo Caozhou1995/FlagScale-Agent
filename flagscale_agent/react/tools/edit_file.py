@@ -16,7 +16,7 @@
 
 import os
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_WRITE_FS
+from flagscale_agent.react.tools.base import Tool
 from flagscale_agent.react.tools.read_file import get_file_cache
 
 # -- Same protected paths as write_file.py --
@@ -42,7 +42,6 @@ def _is_protected_path(path: str) -> bool:
 
 class EditFileTool(Tool):
     name = "edit_file"
-    effects = EFFECT_WRITE_FS
     description = "Edit a file by replacing an exact string match. The old_string must match exactly (including whitespace)."
     parameters = {
         "type": "object",

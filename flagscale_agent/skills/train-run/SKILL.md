@@ -1,69 +1,9 @@
 ---
+description: Launch, stop, and manage FlagScale distributed training jobs. Covers
+  server connection, environment checks, GPU availability, preflight validation, training
+  launch (CLI and legacy), stop commands, log directory structure, and quick verification
+  paths.
 name: train-run
-description: Launch, stop, and manage FlagScale distributed training jobs. Covers server connection, environment checks, GPU
-  availability, preflight validation, training launch (CLI and legacy), stop commands, log directory structure, and quick
-  verification paths.
-keywords:
-- train
-- training
-- launch
-- start
-- stop
-- run
-- preflight
-- dry run
-- dryrun
-- 训练
-- 启动训练
-- 开始训练
-- 停止训练
-- 分布式训练
-- GPU
-- finetune
-- pretrain
-parameters:
-- name: model_name
-  description: Model name (e.g., qwen3, llama3)
-- name: exp_dir
-  description: Experiment output directory
-requires:
-- workspace-layout
-- train-config
-suggests:
-- train-env-setup
-- train-data-prep
-constraints:
-- id: no_kill_without_check
-  description: Never kill training processes without checking logs first
-  trigger:
-    tools:
-    - shell
-    keywords:
-    - pkill
-    - killall
-    - kill -9
-  prompt: Check if the agent is about to kill a training process without first reading logs to understand why
-  correction: Read training logs first to diagnose the issue before killing the process.
-- id: monitor_reminder
-  description: Remind to monitor training after launch
-  trigger:
-    tools:
-    - shell
-    keywords:
-    - flagscale.train
-    - torchrun
-    - python -m
-  prompt: Check if this is a training launch command (not dryrun)
-  correction: After launching training, immediately call monitor() to observe the process.
-context_injection:
-  always:
-  - Critical Rules
-  - Post-Launch Protocol
-  by_tool:
-    shell:
-    - 'Step 3: Preflight Check'
-    - 'Step 4: Start / Stop Training'
-    - Error Handling
 ---
 
 <!--

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FlagScale Agent — ReAct loop with composable Guard/Judge architecture.
+"""FlagScale Agent - ReAct loop with composable Guard/Judge architecture.
 
 No Mixin inheritance. State is owned by Guard instances.
 Scene + Profile parameterize behavior without subclassing.
@@ -49,7 +49,6 @@ from flagscale_agent.react.session import (
     find_resumable_sessions, list_sessions, get_session_dir,
     append_session_index, get_recent_sessions,
 )
-from flagscale_agent.react.experiment_manager import ExperimentManager
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.tools import ToolRegistry
 from flagscale_agent.react.tools.edit_file import EditFileTool
@@ -59,113 +58,41 @@ from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.shell import ShellTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
-from flagscale_agent.react.tools.find_log import FindLatestLogTool
-from flagscale_agent.react.tools.parse_metrics import ParseTrainingMetricsTool
-from flagscale_agent.react.tools.workspace_experiment import WorkspaceExperimentTool
+# find_log removed - merged into monitor
+
 from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
 from flagscale_agent.react.tools.memory_list import MemoryListTool
 from flagscale_agent.react.plan import TaskPlan
-from flagscale_agent.react.tools.monitor import MonitorTool
+from flagscale_agent.react.tools.monitor import FlagScaleTrainMonitorTool
 from flagscale_agent.react.tools.plan_create import PlanCreateTool
 from flagscale_agent.react.tools.plan_update import PlanUpdateTool
 from flagscale_agent.react.tools.plan_status import PlanStatusTool
-from flagscale_agent.react.tools.validate_config import ValidateConfigTool
 from flagscale_agent.react.tools.inspect_checkpoint import InspectCheckpointTool
-from flagscale_agent.react.tools.compact_context import CompactContextTool
 from flagscale_agent.react.tools.evict import EvictTool
-from flagscale_agent.react.tools.evict_list import EvictListTool
+
 from flagscale_agent.react.tools.recall import RecallTool
 
-from flagscale_agent.react.guard.safety import SafetyGuard
-from flagscale_agent.react.guard.loop_detect import LoopDetectGuard
-from flagscale_agent.react.guard.progress import ProgressGuard
+from flagscale_agent.react.guard.safety import ShellSafetyGuard
+
 from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.plan import PlanGuard
-from flagscale_agent.react.guard.training_runtime import TrainingRuntimeGuard
-from flagscale_agent.react.guard.constraint import ConstraintGuard
-from flagscale_agent.react.guard.error_classifier import ErrorClassifierGuard
-from flagscale_agent.react.guard.circuit_breaker import CircuitBreakerGuard
-from flagscale_agent.react.guard.budget import BudgetGuard
-from flagscale_agent.react.guard.env_compat import EnvCompatGuard
-from flagscale_agent.react.guard.output_quality import OutputQualityGuard
-from flagscale_agent.react.guard.training_attempt import TrainingAttemptGuard
-from flagscale_agent.react.guard.experiment_tracking import ExperimentTrackingGuard
-from flagscale_agent.react.guard.output_dir_reuse import OutputDirReuseGuard
-from flagscale_agent.react.guard.megatron_path import MegatronPathGuard
+from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
+
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
-from flagscale_agent.react.guard.debug_discipline import DebugDisciplineGuard
-from flagscale_agent.react.guard.file_tool import FileToolGuard
+
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
-from flagscale_agent.react.guard.knowledge_first import KnowledgeFirstGuard
+from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
-from flagscale_agent.react.constraint.cache import ConstraintCache
+
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
 
-from flagscale_agent.react.judge import Judge, JudgeBudget
-from flagscale_agent.react.scene import ScenePreset, PRESETS
-from flagscale_agent.react.profile import WorkerProfile, PROFILES
-from flagscale_agent.react.constants import (
-    READ_ONLY_TOOLS,
-    CORE_TOOLS,
-    PHASE_TOOL_SETS,
-    READ_FILE_SUMMARY_THRESHOLD,
-    READ_FILE_SUMMARY_THRESHOLD_PORTING,
-)
+from flagscale_agent.react.judge import Judge
 from flagscale_agent.react.commands import CommandHandler
-
-
-# ── WorkerResult ───────────────────────────────────────────────────────────────
-
-@dataclass
-class WorkerResult:
-    """Structured result from WorkerAgent.execute().
-
-    Used by Orchestrator to compose multi-stage pipeline results.
-    status: "success" | "failed" | "partial"
-    """
-
-    status: str  # "success", "failed", "partial", "interrupted"
-    summary: str = ""
-    artifacts: dict = field(default_factory=dict)
-    files_read: list[str] = field(default_factory=list)
-    files_written: list[str] = field(default_factory=list)
-    turn_count: int = 0
-    session_input_tokens: int = 0
-    session_output_tokens: int = 0
-    elapsed_seconds: float = 0.0
-    interrupted: bool = False
-
-
-# ── _ModeFlags ─────────────────────────────────────────────────────────────────
-
-@dataclass
-class _ModeFlags:
-    """Dynamic mode flags — set by skill effects, not hardcoded.
-
-    _active_modes: arbitrary mode strings set by skill frontmatter effects.
-    Workflow state fields are scenario-agnostic (work for training and inference).
-    """
-
-    _active_modes: set = field(default_factory=set)
-
-    # Scenario-agnostic workflow state
-    runtime_started: bool = False       # training started / inference serving started
-    env_compat_analyzed: bool = False
-    path_confirmed: bool = False        # user confirmed approach (porting path, deploy path, etc.)
-    confirmed_path: str | None = None   # which approach was confirmed
-
-    def has(self, mode: str) -> bool:
-        """Check if a mode is active."""
-        return mode in self._active_modes
-
-    def set(self, mode: str):
-        """Activate a mode."""
-        self._active_modes.add(mode)
 
 
 # ── WorkerAgent ──────────────────────────────────────────────────────────────
@@ -177,13 +104,11 @@ class WorkerAgent:
     by Guard instances. All infrastructure is composed via __init__.
     """
 
-    def __init__(self, config: AgentConfig, scene: ScenePreset | None = None,
+    def __init__(self, config: AgentConfig,
                  # ── Shared infrastructure (for Orchestrator injection) ──
                  _provider=None, _tool_registry=None, _skill_manager=None,
-                 _memory=None, _task_plan=None, _experiment_manager=None,
-                 _constraint_cache=None):
+                 _memory=None, _task_plan=None):
         self.config = config
-        self.scene = scene
 
         # ── Infrastructure ──
         self.skill_manager = _skill_manager or SkillManager(config.skill_dirs)
@@ -201,22 +126,8 @@ class WorkerAgent:
         self._session_dir = session_dir
         self._sessions_root = sessions_root
 
-        experiments_dir = os.path.join(session_dir, "experiments")
-        self._experiment_manager = _experiment_manager or ExperimentManager(experiments_dir)
 
-        # Swap store for context management V3 (evict/recall)
-        from flagscale_agent.react.swap_store import SwapStore
-        from flagscale_agent.react.evict_summary import EvictSummaryStore
-        swap_store_dir = os.path.join(session_dir, "swap_store")
-        self._swap_store = SwapStore(swap_store_dir)
-        self._evict_summary = EvictSummaryStore(session_dir)
-
-        memory_dir = get_memory_dir()
-        self.memory = _memory or Memory(memory_dir)
-
-        plan_dir = os.path.join(session_dir, "plans")
-        self.task_plan = _task_plan or TaskPlan(plan_dir)
-
+        # Provider and history must be created before ContextManager
         if not config.api_key:
             raise ValueError(
                 "API key not found. Set ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, or OPENAI_API_KEY."
@@ -228,33 +139,35 @@ class WorkerAgent:
 
         self.history = HistoryManager(max_context_tokens=config.max_context_tokens)
 
+        # Swap store for context management V3 (evict/recall)
+        from flagscale_agent.react.swap_store import SwapStore
+        from flagscale_agent.react.context_manager import ContextManager
+        self.context_manager = ContextManager(
+            history=self.history,
+            swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
+        )
+
+        memory_dir = get_memory_dir()
+        self.memory = _memory or Memory(memory_dir)
+
+        plan_dir = os.path.join(session_dir, "plans")
+        self.task_plan = _task_plan or TaskPlan(plan_dir)
+
         if not _tool_registry:
             self._register_tools()
-        if not _experiment_manager:
-            self._load_plugin_tools()
-        self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
-        self.tool_registry.register(MemoryReadTool(self.memory))
-        self.tool_registry.register(MemoryListTool(self.memory))
-        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
-        self.tool_registry.register(PlanUpdateTool(self.task_plan))
-        self.tool_registry.register(PlanStatusTool(self.task_plan))
-
-        # ── Orchestrator (set by run_agent_orchestrated) ──
-        self._orchestrator = None
 
         # ── Command handler ──
         self._command_handler = CommandHandler(self)
 
         # ── Prompt builder ──
-        self._prompt_builder = PromptBuilder(self.skill_manager, self.scene)
+        self._prompt_builder = PromptBuilder(self.skill_manager)
 
         # ── Tool executor ──
         self._tool_executor = ToolExecutor(self)
 
         # ── Composed components ──
-        self.judge = Judge(self.provider, budget=JudgeBudget(max_calls_per_turn=64))
+        self.judge = Judge(self.provider)
         self._loaded_skills: set[str] = set()
-        self._constraint_cache = _constraint_cache or ConstraintCache(self._sessions_root)
 
         self._init_runtime_state()
         atexit.register(self._atexit_hook)
@@ -265,37 +178,26 @@ class WorkerAgent:
         Extracted to keep __init__ focused on dependency wiring.
         Can be re-called for tests or worker resets.
         """
-        self._phase_override: str | None = None  # Only set for testing
         self.turn_count: int = 0
+        self._session_input_history: list[str] = []  # All user inputs in this session
         self._interrupted: bool = False
         self._last_tool_calls_deque = deque(maxlen=5)
-        self._extra_tools_next_iter: set[str] = set()
         self._turn_iteration_count: int = 0
-        self._consecutive_single_tool_calls: int = 0
-        self._active_skill_content: dict[str, str] = {}
-        self._skill_load_iterations: dict[str, int] = {}
+
         self._total_iterations: int = 0
-        self._recently_referenced_skills: set[str] = set()
-        self.modes = _ModeFlags()
-        self._mode_phase_map: dict[str, str] = {}  # mode → initial phase, built from skill effects
         self._original_user_task: str = ""
         self._session_start: float = time.time()
         self._session_input_tokens: int = 0
         self._session_output_tokens: int = 0
-        self._auto_turn_count: int = 0
-        self._last_write_turn: int = 0
-        self._code_written: bool = False
-        self._files_read_this_session: set[str] = set()
-        self._files_written_this_session: set[str] = set()
+
+
         self._last_checkpoint_tokens: int = 0
         self._last_tool_call: tuple | None = None
         self._tool_call_cache: dict[tuple, str] = {}
-        self._recent_tool_history: list[dict] = []  # [{tool, args_summary, result_summary}]
+
         self._streaming_in_code_block: bool = False
         self._last_compaction_count: int = 0
         self._recent_iters: list[dict] = []
-        self._current_stage_id: str | None = None  # For focused context injection
-        self._skill_guards_registered: set[str] = set()  # Track registered skill guards
 
         self._refresh_system_prompt()
 
@@ -308,66 +210,30 @@ class WorkerAgent:
         from flagscale_agent.react.guard import GuardRegistry
 
         guard_registry = GuardRegistry()
-        # Register native guards
-        constraints = self.scene.constraints if self.scene else set()
-        # Arg type guard first — most fundamental, prevents crashes from malformed LLM args
+        # Register native guards - all guards registered unconditionally
         guard_registry.register(ArgTypeGuard(tool_registry=self.tool_registry))
-        guard_registry.register(SafetyGuard())
+        guard_registry.register(ShellSafetyGuard())
 
         # Reliability guards (P7)
-        self._budget_guard = BudgetGuard(
-            max_tokens=self.config.budget_max_tokens,
-            max_tool_calls=self.config.budget_max_tool_calls,
-        )
-        guard_registry.register(self._budget_guard)
-        guard_registry.register(CircuitBreakerGuard(
-            trip_threshold=self.config.circuit_breaker_threshold,
-            cooldown_iters=self.config.circuit_breaker_cooldown,
-        ))
-        guard_registry.register(LoopDetectGuard())
-        guard_registry.register(ErrorClassifierGuard())
-        guard_registry.register(OutputQualityGuard())
-        guard_registry.register(EnvCompatGuard())
 
-        # Create ConstraintGuard (will be populated with Skill constraints later)
-        self._constraint_guard = ConstraintGuard()
-        guard_registry.register(self._constraint_guard)
-
-        # Build and register dynamic constraints (e.g., shared storage)
-        self._build_dynamic_constraints()
-
-        guard_registry.register(ProgressGuard())
         guard_registry.register(ContextPressureGuard(
             working_window_tokens=self.history.working_window if self.history else 0
         ))
         guard_registry.register(PlanGuard(task_plan=self.task_plan))
 
-        # Plan and experiment enforcement guards (Phase 7)
+        # Plan enforcement guard
         from flagscale_agent.react.guard.plan_update import PlanUpdateGuard
-        from flagscale_agent.react.guard.experiment import ExperimentGuard
         guard_registry.register(PlanUpdateGuard(task_plan=self.task_plan))
-        guard_registry.register(ExperimentGuard(experiment_manager=self._experiment_manager))
+        guard_registry.register(TrainingMonitorGuard())
+        guard_registry.register(PackageSearchGuard())
 
-        if "is_training" in constraints or "is_inference" in constraints or not constraints:
-            guard_registry.register(TrainingRuntimeGuard())
-            guard_registry.register(TrainingAttemptGuard())
-            guard_registry.register(ExperimentTrackingGuard())
-            guard_registry.register(OutputDirReuseGuard())
-            guard_registry.register(MegatronPathGuard())
-            guard_registry.register(PackageSearchGuard())
-            guard_registry.register(DebugDisciplineGuard())
-            from flagscale_agent.react.guard.comprehension_gate import ComprehensionGateGuard
-            guard_registry.register(ComprehensionGateGuard())
-
-        # File tool guard (always active)
-        guard_registry.register(FileToolGuard())
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
-        guard_registry.register(KnowledgeFirstGuard())
+        guard_registry.register(KnowledgeSkillGuard())
 
         deps = KernelDeps(
             provider=self.provider,
@@ -377,7 +243,7 @@ class WorkerAgent:
             guard_registry=guard_registry,
             config=self.config,
             display=display,
-            get_schemas_fn=lambda: self._get_filtered_schemas(self.phase),
+            get_schemas_fn=self._get_all_schemas,
             inject_message_fn=self._inject_message,
             append_advisory_fn=self._append_advisory,
             append_tool_results_fn=self._append_tool_results,
@@ -394,168 +260,48 @@ class WorkerAgent:
     # ── Initialization helpers ───────────────────────────────────────────────
 
     def _register_tools(self):
+        # Core file and shell tools
         self.tool_registry.register(ReadFileTool())
         self.tool_registry.register(WriteFileTool())
         self.tool_registry.register(EditFileTool())
         self.tool_registry.register(
             ShellTool(
                 remind_interval=self.config.shell_remind_interval,
-                check_dangerous=self.config.dangerous_commands_check,
-                require_confirm=self.config.confirm_commands,
                 env=self.config.shell_env,
                 health_judge_fn=self._health_judge,
             )
         )
+        
+        # Knowledge and skill tools
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
         self.tool_registry.register(LoadKnowledgeTool(self._knowledge_manager))
+        
+        # Memory and plan tools
+        from flagscale_agent.react.tools.memory_write import MemoryWriteTool
+        from flagscale_agent.react.tools.memory_read import MemoryReadTool
+        from flagscale_agent.react.tools.memory_list import MemoryListTool
+        from flagscale_agent.react.tools.plan_create import PlanCreateTool
+        from flagscale_agent.react.tools.plan_update import PlanUpdateTool
+        from flagscale_agent.react.tools.plan_status import PlanStatusTool
+        self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
+        self.tool_registry.register(MemoryReadTool(self.memory))
+        self.tool_registry.register(MemoryListTool(self.memory))
+        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
+        self.tool_registry.register(PlanUpdateTool(self.task_plan))
+        self.tool_registry.register(PlanStatusTool(self.task_plan))
+        
+        # Web and infrastructure tools
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
-        self.tool_registry.register(FindLatestLogTool())
-        self.tool_registry.register(ParseTrainingMetricsTool())
-        self.tool_registry.register(MonitorTool(classify_fn=self._judge_confirm))
-        self.tool_registry.register(WorkspaceExperimentTool(self._experiment_manager, task_plan=self.task_plan))
-        self.tool_registry.register(ValidateConfigTool())
+        self.tool_registry.register(FlagScaleTrainMonitorTool(classify_fn=self._judge_confirm))
         self.tool_registry.register(InspectCheckpointTool())
-        self.tool_registry.register(CompactContextTool(self.history))
+        
+        # Context management tools
         self.tool_registry.register(EvictTool())
-        self.tool_registry.register(EvictListTool())
         self.tool_registry.register(RecallTool())
 
-    def _build_dynamic_constraints(self):
-        """Build runtime-detected constraints and register with ConstraintGuard.
-
-        Detects shared storage and other runtime conditions, then creates
-        Constraint objects and injects them into the unified ConstraintGuard.
-        """
-        from flagscale_agent.react.constraint import Constraint, ConstraintTrigger
-
-        shared_paths = self._detect_shared_storage()
-        self._shared_storage_paths = shared_paths
-
-        if shared_paths:
-            path_list = ", ".join(shared_paths)
-            constraint = Constraint(
-                id="env_shared_storage",
-                description=f"Shared storage detected at {path_list}. Conda envs must use --prefix on shared storage.",
-                trigger=ConstraintTrigger(
-                    tool_names={"shell"},
-                    keywords=["conda create"],
-                ),
-                prompt=(
-                    f"SCOPE: shell command creates a conda environment using -n/--name "
-                    f"(local node storage) instead of --prefix on shared storage. "
-                    f"CHECK: 'conda create' with -n or --name flag, WITHOUT a --prefix "
-                    f"pointing to the shared storage ({path_list})."
-                ),
-                correction=(
-                    f"Shared storage detected at: {path_list}. "
-                    f"Use --prefix on shared storage instead of -n/--name "
-                    f"(e.g. --prefix {shared_paths[0]}/envs/<name>). "
-                    f"This ensures multi-node training can access the same environment."
-                ),
-            )
-            self._constraint_guard.add_constraints([constraint])
-
-    def _register_llm_constraints(self, skill_name: str):
-        """Register LLM-extracted constraints from cache into ConstraintGuard."""
-        from flagscale_agent.react.constraint.extractor import _compile_one
-
-        constraint_specs = self._constraint_cache.items.get(skill_name)
-        if not constraint_specs:
-            return
-        llm_constraints = []
-        for i, c in enumerate(constraint_specs):
-            compiled = _compile_one(c, skill_name, i)
-            if compiled:
-                llm_constraints.append(compiled)
-        if llm_constraints:
-            self._constraint_guard.add_constraints(llm_constraints)
-
-    def _extract_skill_constraints(self, skill_name: str, skill_content: str):
-        """Extract constraints from skill content via LLM judge."""
-        self._constraint_cache.get_or_extract(
-            skill_name, skill_content, self.judge.extract_constraints
-        )
-
-    def _on_skill_loaded(self, skill_name: str, skill_content: str,
-                          skip_extract: bool = False):
-        """Centralized handler after any skill is loaded.
-
-        If skip_extract is True, constraint extraction is deferred (used
-        when batching multiple skill loads with concurrent extraction).
-        """
-        # Register frontmatter-defined guards (structured constraints/warnings)
-        self._register_skill_guards(skill_name)
-        if not skip_extract:
-            self._extract_skill_constraints(skill_name, skill_content)
-        self._register_llm_constraints(skill_name)
-        self._refresh_system_prompt()
-
-    def _batch_extract_and_rebuild(self, skill_map: dict[str, str]):
-        """Extract constraints from multiple skills concurrently, then register."""
-        self._constraint_cache.batch_extract(skill_map, self.judge.extract_constraints)
-        for skill_name in skill_map:
-            self._register_llm_constraints(skill_name)
-        self._refresh_system_prompt()
-
-    @staticmethod
-    def _detect_shared_storage() -> list[str]:
-        """Detect shared/network filesystem mount points.
-
-        Checks common mount points and the current working directory.
-        Returns a (possibly empty) list of shared filesystem paths.
-        """
-        candidates = [
-            "/share", "/mnt/share", "/mnt/cfs", "/mnt/dfs",
-            "/mnt/nfs", "/mnt/lustre", "/data/shared", "/shared",
-        ]
-        shared = []
-        for path in candidates:
-            if os.path.ismount(path):
-                shared.append(path)
-
-        # Also check if cwd is under a shared FS
-        cwd = os.getcwd()
-        # Look for FUSE, NFS, CIFS, Lustre, GPFS in mount info
-        try:
-            with open("/proc/mounts") as f:
-                mounts = f.read()
-            for line in mounts.splitlines():
-                parts = line.split()
-                if len(parts) < 2:
-                    continue
-                mount_point = parts[0]
-                mount_path = parts[1]
-                fs_type = parts[2] if len(parts) > 2 else ""
-                # Network/shared filesystem types
-                if fs_type in ("fuse", "nfs", "nfs4", "cifs", "lustre", "gpfs",
-                               "glusterfs", "ceph", "pvfs2", "afs", "beegfs"):
-                    if mount_path not in shared:
-                        shared.append(mount_path)
-                # Check if cwd or its parents match a mount
-                if mount_path != "/" and cwd.startswith(mount_path + "/"):
-                    if mount_path not in shared:
-                        shared.append(mount_path)
-        except Exception:
-            pass
-
-        # Sort by path length (shorter = more general) so the most general
-        # shared path comes first for --prefix suggestions
-        shared.sort(key=len)
-        return shared
-
-    def _load_plugin_tools(self):
-        for tool_dir in self.config.plugin_tool_dirs:
-            if not os.path.isdir(tool_dir):
-                continue
-            for entry in os.listdir(tool_dir):
-                if not entry.endswith(".py") or entry.startswith("_"):
-                    continue
-                path = os.path.join(tool_dir, entry)
-                try:
-                    with open(path) as f:
-                        exec(f.read(), {"__file__": path})
-                except Exception:
-                    display.warn(f"Failed to load plugin tool {entry}: {sys.exc_info()[1]}")
+        # Hard reset - LLM-initiated full context reset
+        from flagscale_agent.react.tools.hard_reset import HardResetTool
+        self.tool_registry.register(HardResetTool(self))
 
     def _build_proxies(self) -> dict[str, str]:
         proxies = {}
@@ -571,50 +317,13 @@ class WorkerAgent:
         tool_names = [t.name for t in self.tool_registry.all_tools()]
         self._prompt_builder.refresh(
             history=self.history,
-            active_skill_content=self._active_skill_content,
-            current_stage_id=self._current_stage_id,
+            active_skill_content={},
             shared_storage_paths=getattr(self, "_shared_storage_paths", []),
             memory_context=memory_context,
             plan_context=plan_context,
             tool_names=tool_names,
+            session_dir=self._session_dir,
         )
-
-    # ── GuardContext builder ────────────────────────────────────────────────
-
-    def _build_obs(
-        self,
-        tool_name: str = "",
-        tool_args: dict | None = None,
-        tool_result: str | None = None,
-    ) -> "GuardContext":
-        from flagscale_agent.react.guard import GuardContext
-        from flagscale_agent.react.tools.base import ToolEffect
-        tool_effects = ToolEffect()
-        try:
-            tool = self.tool_registry.get(tool_name)
-            tool_effects = tool.effects
-        except (KeyError, AttributeError):
-            pass
-        ctx = GuardContext(
-            tool_name=tool_name,
-            tool_args=tool_args or {},
-            tool_result=tool_result,
-            tool_effects=tool_effects,
-            turn_count=self.turn_count,
-            recent_tool_names=list(self._last_tool_calls_deque)[-10:],
-            context_pressure=self.history.get_context_pressure() if self.history else 0.0,
-            evictable_indexes=self.history.get_evictable_indexes() if self.history else [],
-            current_state=self._kernel.fsm.current_state,
-            transitions_count=len(self._kernel.fsm.history),
-            classify_fn=self.judge.classify,
-            experiment_compare_fn=self._experiment_manager.compare if self._experiment_manager else None,
-            experiment_diff_fn=self._experiment_manager.diff_last_attempts if self._experiment_manager else None,
-            current_experiment_name=self._experiment_manager.get_current_experiment() if self._experiment_manager else "",
-            assistant_text=self._get_last_assistant_text(),
-        )
-        # Attach history reference for auto-evict in ContextPressureGuard
-        ctx._history = self.history
-        return ctx
 
     # ── Health judge (delegates to unified Judge) ───────────────────────────
 
@@ -644,6 +353,8 @@ class WorkerAgent:
             session_summary=session_summary,
             session_input_tokens=self._session_input_tokens,
             session_output_tokens=self._session_output_tokens,
+            turn_count=self.turn_count,
+            session_input_history=self._session_input_history,
         )
         # Save full (pre-eviction) conversation alongside
         self._save_conversation_full()
@@ -662,6 +373,10 @@ class WorkerAgent:
         data = {
             "session_id": self._session_id,
             "messages": full_log,
+            "index_offset": self.history._index_offset,
+            "reset_count": self.history._reset_count,
+            "turn_count": self.turn_count,
+            "session_input_history": self._session_input_history,
         }
         # Atomic write
         try:
@@ -680,7 +395,7 @@ class WorkerAgent:
     def _auto_save(self):
         """Auto-save conversation after each completed turn.
 
-        Silent — no user-facing output. Failures are swallowed to avoid
+        Silent - no user-facing output. Failures are swallowed to avoid
         disrupting the interactive flow.
         """
         try:
@@ -689,63 +404,45 @@ class WorkerAgent:
             pass
 
     def _generate_session_summary(self) -> str:
-        """Call LLM to generate a 3-line session summary for resume display.
-
-        Format: 主要内容 / 当前进展 / 下一步待做
+        """Generate session summary by showing first 2 and last 2 user inputs.
+        
+        Uses _session_input_history (pure user inputs, no system injections).
+        
+        Format:
+        [1] <first input, truncated to 80 chars>
+        [2] <second input, truncated to 80 chars>
+        ...
+        [N-1] <second-to-last input, truncated to 80 chars>
+        [N] <last input, truncated to 80 chars>
         """
         try:
-            # Collect last N user messages as context
-            user_msgs = [m for m in self.history.messages if m.get("role") == "user"]
-            recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
-            context_snippets = []
-            for m in recent:
-                content = m.get("content", "")
-                if isinstance(content, str):
-                    context_snippets.append(content)
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            context_snippets.append(block.get("text", ""))
-                            break
-            context_text = "\n".join(context_snippets)
-
-            # Also include plan status if available
-            plan_info = ""
-            try:
-                from flagscale_agent.react.tools.plan import PlanManager
-                pm = PlanManager()
-                status = pm.get_status()
-                if status:
-                    plan_info = f"\n当前计划:\n{status}"
-            except Exception:
-                pass
-
-            prompt_msgs = [
-                {"role": "user", "content": (
-                    "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
-                    "第1行：这个会话主要在做什么（一句话）\n"
-                    "第2行：当前进展到哪里了（一句话）\n"
-                    "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
-                    f"最近的用户消息:\n{context_text}\n{plan_info}\n\n"
-                    "直接输出3行摘要，不要任何前缀或解释。"
-                )}
-            ]
-            # Use provider directly for a quick non-streaming call
-            stream, _ = self.provider.chat_stream(prompt_msgs, [])
-            result_text = ""
-            for event in stream:
-                if hasattr(event, "type"):
-                    if event.type == "content_block_delta":
-                        delta = getattr(event, "delta", None)
-                        if delta and hasattr(delta, "text"):
-                            result_text += delta.text
-                elif isinstance(event, dict):
-                    result_text += event.get("text", "")
-            return result_text.strip()
+            user_inputs = self._session_input_history
+            if not user_inputs:
+                return "(no user input)"
+            
+            def truncate_text(text: str, max_len=80):
+                if len(text) > max_len:
+                    return text[:max_len] + "..."
+                return text
+            
+            lines = []
+            total = len(user_inputs)
+            
+            if total <= 4:
+                for i, text in enumerate(user_inputs, 1):
+                    lines.append(f"[{i}] {truncate_text(text)}")
+            else:
+                for i in range(2):
+                    lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
+                lines.append("...")
+                for i in range(total-2, total):
+                    lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
+            
+            return "\n".join(lines)
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning(f"[Hard Reset] Summary generation failed: {e}")
-            return ""
+            logging.getLogger(__name__).warning(f"[Session Summary] Failed: {e}")
+            return "(summary generation failed)"
 
     def _generate_hard_reset_summary(self) -> str:
         """Call LLM to generate a work-state summary for hard reset continuation.
@@ -758,9 +455,11 @@ class WorkerAgent:
 
         Returns empty string on failure (fallback to programmatic summary).
         """
+        from flagscale_agent.react import display
+        
         try:
             # Use current messages as context for the summary
-            # Strip internal fields (like _ext_idx) that APIs don't accept
+            # Strip internal fields (like _ext_idx) that APIs do not accept
             messages = []
             for msg in self.history.messages:
                 clean = {k: v for k, v in msg.items() if not k.startswith("_")}
@@ -775,7 +474,7 @@ class WorkerAgent:
                 if status:
                     plan_info = f"\nCurrent plan:\n{status}"
             except Exception:
-                pass
+                pass  # Plan fetch failure is non-critical
 
             prompt_msgs = [
                 {"role": "user", "content": (
@@ -797,24 +496,35 @@ class WorkerAgent:
 
             # Prepend the current conversation as context
             context_msgs = list(messages) + prompt_msgs
+            
+            # Call LLM with error handling
+            # chat_stream returns Iterator[Dict] yielding events directly
             stream = self.provider.chat_stream(context_msgs, [])
+            if stream is None:
+                display.warn("[Hard Reset Summary] chat_stream returned None")
+                return ""
+            
             result_text = ""
             for event in stream:
                 if isinstance(event, dict):
                     if event.get("type") == "text":
                         result_text += event.get("content", "")
-                elif hasattr(event, "type"):
-                    if event.type == "content_block_delta":
-                        delta = getattr(event, "delta", None)
-                        if delta and hasattr(delta, "text"):
-                            result_text += delta.text
-            return result_text.strip()
-        except Exception:
+            
+            result_text = result_text.strip()
+            if not result_text:
+                display.warn("[Hard Reset Summary] LLM returned empty result")
+            return result_text
+            
+        except TypeError as e:
+            display.warn(f"[Hard Reset Summary] Type error: {e}")
+            return ""
+        except Exception as e:
+            display.warn(f"[Hard Reset Summary] Unexpected error: {type(e).__name__}: {e}")
             return ""
 
     def _build_programmatic_summary(self) -> str:
         """Build a programmatic fallback summary when LLM call fails."""
-        parts = ["[Context Hard Reset — conversation auto-compacted]"]
+        parts = ["[Context Hard Reset - conversation auto-compacted]"]
 
         # Plan status
         try:
@@ -840,7 +550,7 @@ class WorkerAgent:
         total_messages = len(self.history._full_log)
 
         header = (
-            f"[Context Hard Reset #{reset_count} — conversation auto-compacted]\n"
+            f"[Context Hard Reset #{reset_count} - conversation auto-compacted]\n"
             f"Previous conversation: {total_messages} messages total, "
             f"saved in conversation_full.json.\n"
             f"Session: {self._session_dir}\n"
@@ -891,8 +601,7 @@ class WorkerAgent:
         display.goodbye()
         # Generate session summary before saving
         summary = self._generate_session_summary()
-        self._save_conversation(completed=True, session_summary=summary)
-        mark_completed(self._session_dir)
+        self._save_conversation(completed=False, session_summary=summary)
         sys.exit(0)
 
     # ── Main entry ──────────────────────────────────────────────────────────
@@ -910,12 +619,12 @@ class WorkerAgent:
                 break
 
         extra = self._startup_hints()
-        display.banner(self.config.provider, self.config.model, mode=self.config.mode,
+        display.banner(self.config.provider, self.config.model,
                        context_window=self.config.max_context_tokens, extra_lines=extra)
         self._check_proxy()
 
         if auto_resume_id:
-            # Auto-resume after /reload — find and restore the session
+            # Auto-resume after /reload - find and restore the session
             self._auto_resume(auto_resume_id)
         else:
             self._check_resume()
@@ -925,7 +634,7 @@ class WorkerAgent:
         os.makedirs(os.path.dirname(history_file), exist_ok=True)
         completer = WordCompleter(
             ["/quit", "/reload", "/skill", "/save", "/memory",
-             "/mode", "/plan", "/resume", "/compact", "/reset", "/session"],
+             "/plan", "/resume", "/reset", "/session"],
             sentence=True,
         )
         # Key bindings: Enter submits, but pasted newlines are preserved
@@ -965,23 +674,8 @@ class WorkerAgent:
             if self._command_handler.handle_slash_command(user_input):
                 continue
 
-            # ── Orchestrator routing ──
-            if self._orchestrator is not None:
-                self._run_orchestrated(user_input)
-                continue
-
-            # Detect scene
-            if self.scene is None:
-                self.scene = ScenePreset.auto_detect(user_input=user_input)
-
-            if self.config.auto_skill:
-                self._auto_load_skills(user_input)
-
-            self._auto_turn_count = 0
-            self._inject_context(user_input)
-            self._check_user_porting_confirmation(user_input)
-            self._detect_and_set_task_mode(user_input)
-            self._reset_guard_escalation()
+            self._inject_context()
+            self._session_input_history.append(user_input)
             self.history.append({"role": "user", "content": user_input})
             try:
                 self._react_loop()
@@ -991,470 +685,34 @@ class WorkerAgent:
                 self._auto_save()
                 continue
 
-            while self.config.mode == "auto" and self._should_auto_continue():
-                self._auto_turn_count += 1
-                continuation = self._generate_continuation_prompt()
-                print(display.yellow(
-                    f"\n[Auto turn {self._auto_turn_count}/{self.config.max_auto_turns}] Continuing...\n"
-                ))
-                self.history.append({"role": "user", "content": continuation})
-                try:
-                    self._react_loop()
-                except KeyboardInterrupt:
-                    display.interrupted()
-                    print(display.yellow("\n[Auto mode] Interrupted by user.\n"))
-                    self._auto_save()
-                    break
-
-            # Auto-save after each complete user turn (including all auto-continuations)
+            # Auto-save after each complete user turn
             self._auto_save()
 
-            if self._auto_turn_count > 0:
-                print(display.yellow(
-                    f"\n[Auto mode] Stopped after {self._auto_turn_count} auto turns.\n"
-                ))
-                self._auto_turn_count = 0
-
-    def _run_orchestrated(self, user_input: str):
-        """Route user input via Orchestrator and dispatch to execution mode.
-
-        Called from run() when self._orchestrator is set.
-        Displays stage progress for subtask mode, handles Ctrl+C for cancellation.
-
-        Continuation detection: if the user input is a follow-up/confirmation
-        to the previous turn, skip re-routing and continue in single mode.
-        """
-        o = self._orchestrator
-
-        # ── Continuation detection: skip re-routing for follow-ups ──
-        if self.history.messages and self._is_continuation_input(user_input):
-            print(display.dim("\n[Orchestrator] Continuation detected, skipping re-route"))
-            self._run_single_mode(user_input)
-            return
-
-        # Build history context for routing — summarize completed stages
-        history_context = self._build_stage_history_context()
-
-        print(display.dim("\n[Orchestrator] Routing..."))
-        route = o.route(user_input, history_context=history_context)
-
-        mode = route.get("mode", "single")
-        template = route.get("template", "")
-        dynamic_stages = route.get("dynamic_stages", [])
-        reason = route.get("reason", "")
-
-        # ── Routing display ──
-        source_parts = []
-        if template:
-            source_parts.append(f"template={template}")
-        if dynamic_stages:
-            source_parts.append("stages=dynamic")
-        if not source_parts:
-            source_parts.append("default")
-        source_str = ", ".join(source_parts)
-        print(display.dim(f"[Orchestrator] mode={mode}, {source_str}"))
-        if reason:
-            print(display.dim(f"[Orchestrator] reason: {reason}"))
-        else:
-            # Fallback reason when LLM didn't provide one
-            fallback_reasons = {
-                "single": "task can be handled by a single worker sequentially",
-                "subtask": "task requires multiple stages with dependencies",
-                "batch": "task compares independent variants in parallel",
-            }
-            print(display.dim(f"[Orchestrator] reason: {fallback_reasons.get(mode, mode)}"))
-
-        # ── Subtask mode: show stage overview, then serial execution ──
-        if mode == "subtask":
-            # Check if all stages are already completed in history
-            completed = o.check_stages_completed_in_history(
-                route, user_input, self.history.messages
-            )
-            if completed:
-                # All stages already done — downgrade to single mode with context
-                stage_summary = "\n".join(
-                    f"  - {sid}: {summary}" for sid, summary in completed.items()
-                )
-                print(display.dim(
-                    f"[Orchestrator] All stages already completed in history. "
-                    f"Routing to single worker with existing results."
-                ))
-                # Inject context and run as single worker
-                context_msg = (
-                    f"The following precision alignment stages have already been completed "
-                    f"with existing data. Use these results directly — do NOT re-execute "
-                    f"the pipeline:\n{stage_summary}\n\n"
-                    f"User request: {user_input}"
-                )
-                self._run_single_mode(context_msg)
-                return
-
-            subtasks = o._build_subtask_definitions(route, user_input)
-            if not subtasks:
-                print(display.red("\nNo stages to execute for this task."))
-                return
-
-            total = len(subtasks)
-            print(f"\n[Orchestrator] Task will be split into {total} stage{'s' if total > 1 else ''}:")
-            for i, sub in enumerate(subtasks, 1):
-                print(f"  Stage {i}/{total}: {sub.id} — {sub.description}")
-            print()
-
-            upstream: dict[str, str] = {}
-            batches = o.subtask_runner._topological_batches(subtasks)
-            stage_idx = 0
-
-            try:
-                for batch in batches:
-                    for sub in batch:
-                        stage_idx += 1
-                        self._current_stage_id = sub.id
-                        self._refresh_system_prompt()
-                        print(f"[Stage {stage_idx}/{total}] Running: {sub.id}...")
-                        context = o.subtask_runner._build_upstream_summary(
-                            sub.upstream_keys, upstream
-                        )
-
-                        worker = o._create_worker(sub.profile_name)
-                        task = o.subtask_runner._build_task(
-                            sub.description, user_input, context
-                        )
-
-                        result = worker.execute(task)
-                        if result.interrupted:
-                            print(display.yellow(
-                                f"\n  ⚠ Stage {stage_idx}/{total} ({sub.id}) interrupted by user."
-                            ))
-                            print(display.yellow("  Progress saved. Continue later with /plan resume."))
-                            self._inject_subtask_result_to_history(
-                                f"[Stage {stage_idx}/{total}] {sub.id}: INTERRUPTED"
-                            )
-                            upstream.update(result.artifacts)
-                            upstream[sub.id] = result.summary
-                            self._current_stage_id = None
-                            return
-                        if result.status == "failed":
-                            print(display.red(
-                                f"  ✗ {sub.id} failed: {result.summary}"
-                            ))
-                            self._inject_subtask_result_to_history(
-                                f"[Stage {stage_idx}/{total}] {sub.id}: FAILED — {result.summary}"
-                            )
-                            upstream.update(result.artifacts)
-                            upstream[sub.id] = result.summary
-                            self._current_stage_id = None
-                            return
-
-                        upstream.update(result.artifacts)
-                        upstream[sub.id] = result.summary
-                        art_str = ", ".join(
-                            f"{k}={str(v)}" for k, v in result.artifacts.items()
-                        ) if result.artifacts else "none"
-                        print(f"  ✓ {sub.id} complete. Artifacts: {art_str}")
-
-                        # Inject stage summary into main agent's history
-                        self._inject_subtask_result_to_history(
-                            f"[Stage {stage_idx}/{total}] {sub.id}: OK — {result.summary}"
-                        )
-
-            except KeyboardInterrupt:
-                interrupted_name = subtasks[stage_idx - 1].id if 0 < stage_idx <= len(subtasks) else "?"
-                print(display.yellow(
-                    f"\n  ⚠ Stage {stage_idx}/{total} ({interrupted_name}) interrupted by user."
-                ))
-                print(display.yellow("  Progress saved. Continue later with /plan resume."))
-                self._current_stage_id = None
-                return
-
-            # Final summary
-            final_summary = f"All {total} stages completed."
-            self._inject_subtask_result_to_history(
-                f"[Orchestrator] {final_summary} Artifacts: {json.dumps({k: str(v) for k, v in upstream.items()}, ensure_ascii=False)}"
-            )
-            self._current_stage_id = None
-            return
-
-        # ── Batch mode: parallel execution ──
-        if mode == "batch":
-            batch_tasks = route.get("batch_tasks", [])
-            if len(batch_tasks) < 2:
-                print(display.red("\n[Orchestrator] Batch mode requires at least 2 tasks."))
-                return
-
-            # Keep user input in main agent's history for context continuity
-            self.history.append({"role": "user", "content": user_input})
-
-            print(f"\n[Orchestrator] Running {len(batch_tasks)} experiments in parallel:")
-            for i, t in enumerate(batch_tasks, 1):
-                print(f"  Run {i}: {t}")
-
-            results = o.run_batch_interactive(route, user_input)
-
-            print()
-            for i, r in enumerate(results, 1):
-                icon = "✓" if r.status == "success" else "✗"
-                print(f"[Run {i}] {icon} {r.status}: {r.summary}")
-
-            # Inject summary into main agent's history
-            summary_lines = ["[Batch comparison results]"]
-            for i, r in enumerate(results, 1):
-                summary_lines.append(
-                    f"  Run {i}: {r.status} — {r.summary}"
-                )
-            self._inject_subtask_result_to_history("\n".join(summary_lines))
-            return
-
-        # ── Single mode: use existing ReAct loop ──
-        self._run_single_mode(user_input)
-
-    def _run_single_mode(self, user_input: str):
-        """Execute user input in single ReAct mode (no subtask/batch routing)."""
-        if self.scene is None:
-            self.scene = ScenePreset.auto_detect(user_input=user_input)
-
-        if self.config.auto_skill:
-            self._auto_load_skills(user_input)
-
-        self._auto_turn_count = 0
-        self._inject_context(user_input)
-        self._check_user_porting_confirmation(user_input)
-        self._detect_and_set_task_mode(user_input)
-        self.history.append({"role": "user", "content": user_input})
-        try:
-            self._react_loop()
-        except KeyboardInterrupt:
-            display.interrupted()
-            self._interrupted = True
-            self._auto_save()
-            return
-
-        while self.config.mode == "auto" and self._should_auto_continue():
-            self._auto_turn_count += 1
-            continuation = self._generate_continuation_prompt()
-            print(display.yellow(
-                f"\n[Auto turn {self._auto_turn_count}/{self.config.max_auto_turns}] Continuing...\n"
-            ))
-            self.history.append({"role": "user", "content": continuation})
-            try:
-                self._react_loop()
-            except KeyboardInterrupt:
-                display.interrupted()
-                print(display.yellow("\n[Auto mode] Interrupted by user.\n"))
-                self._auto_save()
-                break
-
-        # Auto-save after each complete user turn
-        self._auto_save()
-
-        if self._auto_turn_count > 0:
-            print(display.yellow(
-                f"\n[Auto mode] Stopped after {self._auto_turn_count} auto turns.\n"
-            ))
-            self._auto_turn_count = 0
-
-    def _is_continuation_input(self, user_input: str) -> bool:
-        """Determine if user_input is a follow-up to the previous turn.
-
-        Uses Judge.is_continuation() which has a fast heuristic path
-        for common confirmations and an LLM fallback for ambiguous cases.
-        """
-        # Need at least one previous assistant message to be a "continuation"
-        prev_summary = self._get_last_assistant_summary()
-        if not prev_summary:
-            return False
-
-        judge = getattr(self, "judge", None)
-        if judge is None:
-            # No judge available — use simple heuristic only
-            stripped = user_input.strip().lower()
-            _FAST = {"确认", "好的", "可以", "是的", "对", "行", "嗯", "ok",
-                     "yes", "y", "go", "sure", "继续", "好", "是", "对的",
-                     "没问题", "确定", "同意", "proceed", "continue"}
-            return stripped in _FAST
-
-        try:
-            return judge.is_continuation(user_input, prev_summary)
-        except Exception:
-            return False
-
-    def _get_last_assistant_summary(self) -> str:
-        """Get a brief summary of the last assistant turn for continuation detection."""
-        for msg in reversed(self.history.messages):
-            if msg.get("role") == "assistant":
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    # Extract text blocks
-                    texts = []
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            texts.append(block.get("text", ""))
-                    return " ".join(texts)
-        return ""
-
-    def _build_stage_history_context(self) -> str:
-        """Build a summary of completed stages from conversation history.
-
-        Scans for [system: task stage result] markers and returns a concise
-        summary for the routing LLM, so it knows prior work exists.
-        """
-        import re
-        stage_pattern = re.compile(
-            r"\[Stage\s+(\d+)/(\d+)\]\s+(\w+):\s+(OK|FAILED|INTERRUPTED)\s*[—–-]?\s*(.*)"
-        )
-        completed = []
-        for msg in self.history.messages:
-            content = msg.get("content", "")
-            if not isinstance(content, str):
-                continue
-            if "[system: task stage result]" not in content:
-                continue
-            match = stage_pattern.search(content)
-            if match:
-                stage_id = match.group(3)
-                status = match.group(4)
-                completed.append(f"{stage_id}:{status}")
-
-        if not completed:
-            return ""
-
-        return (
-            f"PRIOR COMPLETED STAGES in this conversation: [{', '.join(completed)}]. "
-            f"These stages have already been executed. Do NOT re-run them as subtask mode."
-        )
-
-    def _inject_subtask_result_to_history(self, summary: str):
-        """Inject a structured subtask/batch result into the main agent's history.
-
-        Injected as a user message prefixed with [system: task stage result] marker
-        so the LLM sees upstream results while keeping turn semantics correct.
-        """
-        self.history.append({
-            "role": "user",
-            "content": f"[system: task stage result]\n{summary}"
-        })
 
     def _run_single_shot(self, query: str):
-        if self.scene is None:
-            self.scene = ScenePreset.auto_detect(user_input=query)
-        if self.config.auto_skill:
-            self._auto_load_skills(query)
-        self._inject_context(query)
+        self._inject_context()
         self.history.append({"role": "user", "content": query})
         try:
             self._react_loop()
         except Exception:
             display.warn("WorkerAgent._run_single_shot() react loop failed")
 
-    def execute(self, task: str) -> WorkerResult:
-        """Non-interactive entry point for programmatic (Orchestrator) use.
-
-        Runs the full ReAct loop for a single task and returns structured results.
-        No PromptSession, no CLI interaction, no sys.exit() — safe for Embedder
-        or BatchRunner to call.
-
-        Returns WorkerResult with status, summary, artifacts, and token stats.
-        """
-        t0 = time.time()
-
-        if self.scene is None:
-            self.scene = ScenePreset.auto_detect(user_input=task)
-        if self.config.auto_skill:
-            self._auto_load_skills(task)
-
-        self._inject_context(task)
-        self._original_user_task = task
-        self.history.append({"role": "user", "content": task})
-
-        # Fix 5: Enable worker mode on ProgressGuard for tighter thresholds
-        for g in self._kernel.deps.guard_registry.guards:
-            if isinstance(g, ProgressGuard):
-                g.is_worker_mode = True
-                break
-
-        # ── Run loop with error guard ──
-        loop_error: str | None = None
-        try:
-            self._react_loop()
-        except Exception as e:
-            display.warn(f"WorkerAgent.execute() react loop failed: {e}")
-            loop_error = str(e)
-
-        # ── Determine outcome ──
-        last_text = self._get_last_assistant_text()
-        task_complete = "[TASK_COMPLETE]" in last_text
-        needs_user = "[NEED_USER_INPUT]" in last_text
-
-        # Collect artifacts from session
-        artifacts: dict[str, str] = {}
-        active_plan = self.task_plan.get_active()
-        if active_plan:
-            done = sum(1 for s in active_plan.get("steps", [])
-                       if s.get("status") in ("done", "skipped"))
-            total = len(active_plan.get("steps", []))
-            artifacts["plan_progress"] = f"{done}/{total}"
-            artifacts["plan_id"] = active_plan.get("id", "")
-            artifacts["plan_title"] = active_plan.get("title", "")
-
-        experiments = self._experiment_manager.list()
-        if experiments:
-            artifacts["experiments"] = json.dumps(
-                [{"name": e["name"], "status": e["status"]} for e in experiments[:5]]
-            )
-
-        # Determine status — use full output, no truncation.
-        # The summary is what downstream stages receive as context.
-        clean_text = last_text.replace("[TASK_COMPLETE]", "").replace("[NEED_USER_INPUT]", "").strip()
-        if loop_error:
-            status = "failed"
-            summary = f"ReAct loop crashed: {loop_error}"
-        elif task_complete:
-            status = "success"
-            summary = clean_text or "Task completed."
-        elif needs_user:
-            status = "partial"
-            summary = clean_text or "Waiting for user input."
-        elif not self.history.messages:
-            status = "failed"
-            summary = "No messages in history — provider or config issue."
-        else:
-            status = "partial"
-            summary = clean_text or "No final response."
-
-        elapsed = time.time() - t0
-
-        return WorkerResult(
-            status=status,
-            summary=summary,
-            artifacts=artifacts,
-            files_read=list(self._files_read_this_session),
-            files_written=list(self._files_written_this_session),
-            turn_count=self.turn_count,
-            session_input_tokens=self._session_input_tokens,
-            session_output_tokens=self._session_output_tokens,
-            elapsed_seconds=elapsed,
-            interrupted=self._interrupted,
-        )
-
-    # ── Session management ─────────────────────────────────────────────────
-
     def _restore_session(self, data: dict, session_dir: str):
-        """Restore a previous session — take over its session_id and dir."""
+        """Restore a previous session - take over its session_id and dir."""
         # Take over the old session identity
         old_session_dir = self._session_dir
         self._session_id = data.get("session_id", self._session_id)
         self._session_dir = session_dir
 
-        # Re-point plan and experiment manager to old session's dirs
+        # Re-point plan to old session's dirs
         self.task_plan._dir = os.path.join(session_dir, "plans")
-        self._experiment_manager._dir = os.path.join(session_dir, "experiments")
-
         # Re-point swap store to restored session's dir
         from flagscale_agent.react.swap_store import SwapStore
-        from flagscale_agent.react.evict_summary import EvictSummaryStore
-        self._swap_store = SwapStore(os.path.join(session_dir, "swap_store"))
-        self._evict_summary = EvictSummaryStore(session_dir)
+        from flagscale_agent.react.context_manager import ContextManager
+        self.context_manager = ContextManager(
+            history=self.history,
+            swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
+        )
 
         # Clean up the empty new session dir if it's different
         if old_session_dir != session_dir:
@@ -1465,34 +723,51 @@ class WorkerAgent:
             except Exception:
                 pass
 
+        # Restore _full_log from conversation_full.json if it exists.
+        # This preserves the complete audit trail across /reload and hard resets.
+        full_log_path = os.path.join(session_dir, "conversation_full.json")
+        full_log_seeded = False
+        if os.path.isfile(full_log_path):
+            try:
+                with open(full_log_path, "r", encoding="utf-8") as f:
+                    full_data_on_disk = json.load(f)
+                full_msgs = full_data_on_disk.get("messages", [])
+                if full_msgs:
+                    import copy
+                    self.history._full_log = [copy.deepcopy(m) for m in full_msgs]
+                    # Restore hard reset state
+                    self.history._index_offset = full_data_on_disk.get("index_offset", 0)
+                    self.history._reset_count = full_data_on_disk.get("reset_count", 0)
+                    full_log_seeded = True
+            except Exception:
+                pass
+
         messages = data.get("messages", [])
-        # Skip the old system prompt — we already have a fresh one from __init__
+        # Skip the old system prompt - we already have a fresh one from __init__
         for msg in messages:
             if msg.get("role") == "system":
                 continue
-            self.history.append(msg)
-        # Restore turn count from message history
-        self.turn_count = sum(
-            1 for m in messages
-            if m.get("role") == "user" and isinstance(m.get("content", ""), str)
-            and not m.get("content", "").startswith("[") and not m.get("content", "").startswith("<")
-        )
+            if full_log_seeded:
+                # Only append to _messages; _full_log already has the complete history
+                self.history._messages.append(msg)
+                # Tag with ext_idx from full_log length (messages were already recorded there)
+                msg["_ext_idx"] = msg.get("_ext_idx", len(self.history._full_log))
+            else:
+                self.history.append(msg)
+        # Restore turn count and session input history
+        self._session_input_history = data.get("session_input_history", [])
+        self.turn_count = data.get("turn_count", len(self._session_input_history))
         loaded = data.get("loaded_skills", [])
         # Restore session token counts for cumulative tracking across resume/reload
         self._session_input_tokens = data.get("session_input_tokens", 0)
         self._session_output_tokens = data.get("session_output_tokens", 0)
-        skill_map = {}
         for skill_name in loaded:
             try:
                 content = self.skill_manager.load(skill_name)
                 if content:
                     self._loaded_skills.add(skill_name)
-                    self._active_skill_content[skill_name] = content
-                    skill_map[skill_name] = content
             except Exception:
                 pass
-        if skill_map:
-            self._batch_extract_and_rebuild(skill_map)
         # Refresh system prompt with restored context
         self._refresh_system_prompt()
 
@@ -1517,75 +792,68 @@ class WorkerAgent:
             turns = s.get("user_turns", 0)
             summary = s.get("session_summary", "")
             if not summary:
-                summary = "(摘要生成失败)"
+                summary = "(summary unavailable)"
             print(display.dim(f"  {i}. {sid}  {ts} ({turns} turns):"))
             for line in summary.strip().split("\n"):
                 print(display.dim(f"     {line}"))
         print(display.dim("Type: resume <number> or resume <session_id>"))
 
     def _generate_missing_summaries(self, sessions: list):
-        """Generate summaries for sessions that don't have one, using LLM batch."""
+        """Generate simple summaries for sessions, reading fresh from conversation file each time.
+        
+        This method is called on every resume/reload to generate real-time summaries.
+        Uses first 2 + ... + last 2 user messages. No LLM calls, no caching.
+        """
         import json as _json
+        import logging
+        logger = logging.getLogger(__name__)
+        
         for s in sessions:
             session_dir = s.get("session_dir", "")
             if not session_dir:
                 continue
+            
+            # Always regenerate from file (real-time refresh, no cache)
             conv_path = os.path.join(session_dir, "conversation.json")
             if not os.path.isfile(conv_path):
                 continue
+            
             try:
                 with open(conv_path, "r", encoding="utf-8") as f:
                     conv_data = _json.load(f)
-                messages = conv_data.get("messages", [])
-                # Extract user messages for context
-                user_msgs = [m for m in messages if m.get("role") == "user"]
-                recent = user_msgs[-10:] if len(user_msgs) > 10 else user_msgs
-                snippets = []
-                for m in recent:
-                    content = m.get("content", "")
-                    if isinstance(content, str):
-                        snippets.append(content)
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                snippets.append(block.get("text", ""))
-                                break
-                context_text = "\n".join(snippets)
-                if not context_text.strip():
+                
+                user_inputs = conv_data.get("session_input_history", [])
+                
+                if not user_inputs:
+                    s["session_summary"] = "(no user input)"
                     continue
-
-                prompt_msgs = [
-                    {"role": "user", "content": (
-                        "请用中文为这个会话生成一个简短摘要，严格3行，不要多余格式：\n"
-                        "第1行：这个会话主要在做什么（一句话）\n"
-                        "第2行：当前进展到哪里了（一句话）\n"
-                        "第3行：下一步待做什么（没有则写'无下一步待做'）\n\n"
-                        f"最近的用户消息:\n{context_text}\n\n"
-                        "直接输出3行摘要，不要任何前缀或解释。"
-                    )}
-                ]
-                response = self.provider.chat(prompt_msgs, [])
-                summary = ""
-                if isinstance(response, dict):
-                    resp_content = response.get("content", "")
-                    if isinstance(resp_content, list):
-                        for block in resp_content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                summary += block.get("text", "")
-                    elif isinstance(resp_content, str):
-                        summary = resp_content
-                summary = summary.strip()
-                if summary:
-                    # Save back to conversation.json
-                    conv_data["session_summary"] = summary
-                    import tempfile
-                    fd, tmp = tempfile.mkstemp(dir=session_dir, prefix=".tmp_conv_", suffix=".json")
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        _json.dump(conv_data, f, ensure_ascii=False, indent=2)
-                    os.replace(tmp, conv_path)
-                    # Update the in-memory session dict
-                    s["session_summary"] = summary
-            except Exception:
+                
+                # Use same truncation logic as _generate_session_summary
+                def truncate_text(text: str, max_len=80):
+                    if len(text) > max_len:
+                        return text[:max_len] + "..."
+                    return text
+                
+                lines = []
+                total = len(user_inputs)
+                
+                if total <= 4:
+                    for i, text in enumerate(user_inputs, 1):
+                        lines.append(f"[{i}] {truncate_text(text)}")
+                else:
+                    # First 2
+                    for i in range(2):
+                        lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
+                    lines.append("...")
+                    # Last 2
+                    for i in range(total-2, total):
+                        lines.append(f"[{i+1}] {truncate_text(user_inputs[i])}")
+                
+                summary = "\n".join(lines)
+                s["session_summary"] = summary
+                
+            except Exception as e:
+                logger.warning(f"[Missing Summary] Failed for {session_dir}: {e}")
                 continue
 
     def _auto_resume(self, session_id: str):
@@ -1624,73 +892,7 @@ class WorkerAgent:
 
     # ── Context injection ───────────────────────────────────────────────────
 
-    def _build_memory_context(self) -> str:
-        """Build a lightweight memory summary — content is on-demand via tools.
-
-        Only tells the LLM how many entries exist per type, so it knows
-        to call memory_list/memory_read when needed. No content injection.
-        """
-        all_entries = self.memory.list_entries()
-        if not all_entries:
-            return ""
-
-        # Count by type
-        counts = {"fact": 0, "pitfall": 0, "insight": 0}
-        for e in all_entries:
-            t = e.get("type", "")
-            if t in counts:
-                counts[t] += 1
-
-        parts = [f"{v} {k}" for k, v in counts.items() if v > 0]
-        total = sum(counts.values())
-        summary = ", ".join(parts)
-        return (
-            f"<context-memory>{total} entries ({summary}). "
-            f"Use memory_list/memory_read to access.</context-memory>"
-        )
-
-    def _reset_guard_escalation(self):
-        """Reset guard escalation state on new user input — prevents stale escalations."""
-        for guard in self._kernel.deps.guard_registry.guards:
-            if hasattr(guard, 'reset_escalation'):
-                guard.reset_escalation()
-            # Also reset loop detection history for fresh user intent
-            if hasattr(guard, '_exact_repeat_count'):
-                guard._exact_repeat_count = {}
-
-    def _detect_and_set_task_mode(self, user_input: str):
-        """Auto-detect TaskMode from user input via LLM judge and set on SharedState.
-
-        Uses judge.classify("task_mode", ...) for semantic understanding.
-        Skips on very short/ambiguous inputs to save budget.
-        """
-        from flagscale_agent.react.guard.shared_state import TaskMode
-
-        shared_state = self._kernel.deps.guard_registry.shared_state
-
-        # Skip on trivially short inputs (saves a judge call)
-        stripped = user_input.strip()
-        if len(stripped) <= 2:
-            return
-
-        result, _ = self.judge.classify_traced(
-            "task_mode",
-            {"user_input": user_input},
-            default="keep",
-        )
-
-        mode_map = {
-            "porting": TaskMode.PORTING,
-            "analysis": TaskMode.ANALYSIS,
-            "debugging": TaskMode.DEBUGGING,
-            "implementation": TaskMode.IMPLEMENTATION,
-        }
-
-        if result in mode_map:
-            shared_state.set_task_mode(mode_map[result])
-        # "keep" or unrecognized → don't change current mode
-
-    def _inject_context(self, user_input: str):
+    def _inject_context(self):
         # Memory is no longer injected into system prompt (accessed via tools).
         # Plan context is only used for the dashboard line at the end.
         plan_context = self._build_plan_context()
@@ -1730,7 +932,7 @@ class WorkerAgent:
         hints = []
         sessions = find_resumable_sessions(self._sessions_root)
         if sessions:
-            hints.append(f"{len(sessions)} resumable session(s) — use /resume to restore")
+            hints.append(f"{len(sessions)} resumable session(s) - use /resume to restore")
         return hints
 
     def _check_proxy(self):
@@ -1739,38 +941,6 @@ class WorkerAgent:
             print(display.dim(f"Proxy detected: {', '.join(proxy_vars)}"))
 
     # ── Auto-continue ──────────────────────────────────────────────────────
-
-    def _should_auto_continue(self) -> bool:
-        if self._auto_turn_count >= self.config.max_auto_turns:
-            return False
-        if self._interrupted:
-            return False
-        last_text = self._get_last_assistant_text()
-        if "[TASK_COMPLETE]" in last_text or "[NEED_USER_INPUT]" in last_text:
-            return False
-        # Fallback: if response is extremely short (< 10 chars) and has no tool calls,
-        # it means the LLM was truncated or confused — force continue
-        if len(last_text.strip()) < 10:
-            # Check if there were tool calls in the last assistant message
-            has_tool_use = False
-            for msg in reversed(self.history.messages):
-                if msg.get("role") == "assistant":
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        has_tool_use = any(
-                            b.get("type") == "tool_use"
-                            for b in content
-                            if isinstance(b, dict)
-                        )
-                    break
-            if not has_tool_use:
-                # Extremely short response with no tool calls — auto continue
-                return True
-        active_plan = self.task_plan.get_active()
-        result = self.judge.complexity(last_text, has_plan=active_plan is not None)
-        if result.get("needs_plan"):
-            return False
-        return True
 
     def _get_last_assistant_text(self) -> str:
         for msg in reversed(self.history.messages):
@@ -1783,251 +953,7 @@ class WorkerAgent:
                     return "".join(texts)
         return ""
 
-    def _generate_continuation_prompt(self) -> str:
-        plan_context = self._build_plan_context()
-        base = (
-            "[SYSTEM] Continue working on the task. If you've completed the task, "
-            "respond with [TASK_COMPLETE]. If you need user input, respond with [NEED_USER_INPUT]."
-        )
-        if plan_context:
-            return base + f"\n\nCurrent plan:\n{plan_context}"
-        return base
-
-    # ── Auto-skill loading ─────────────────────────────────────────────────
-
-    def _register_skill_guards(self, skill_name: str):
-        """Register constraints from skill YAML frontmatter AND LLM-extracted cache.
-
-        Called after a skill is loaded. Extracts structured constraints
-        from the Skill's YAML frontmatter and registers them with the Guard system.
-        Also registers any LLM-extracted constraints from the cache.
-        Idempotent — skips if already registered.
-        """
-        if skill_name in self._skill_guards_registered:
-            return
-        self._skill_guards_registered.add(skill_name)
-
-        # 1. YAML frontmatter constraints
-        try:
-            constraints = self.skill_manager.get_constraints(skill_name)
-            if constraints:
-                self._constraint_guard.add_constraints(constraints)
-        except Exception:
-            pass
-
-        # 2. LLM-extracted constraints from cache (if already available)
-        self._register_llm_constraints(skill_name)
-
-    def _auto_load_skills(self, user_input: str):
-        """Load skills based on semantic judgment (primary) or keyword fallback.
-
-        Uses Judge.suggest_skills() for semantic matching. Falls back to keyword
-        matching only when Judge is unavailable.
-        """
-        skills = self.skill_manager.list_skills()
-        available = [s for s in skills if s.get("name", "") not in self._loaded_skills]
-        if not available:
-            return
-
-        loaded = set()
-
-        # Primary: semantic suggestion via Judge
-        if self.judge and self.judge.provider is not None:
-            suggested = self.judge.suggest_skills(user_input, available)
-            loaded = set(suggested[:2])  # Cap at 2 skills per auto-load
-        else:
-            # Fallback: keyword matching (Judge unavailable)
-            for s in available:
-                keywords = s.get("keywords", [])
-                name = s.get("name", "")
-                if any(kw.lower() in user_input.lower() for kw in keywords):
-                    loaded.add(name)
-                    if len(loaded) >= 2:
-                        break
-
-        for name in loaded:
-            try:
-                content = self.skill_manager.load(name)
-                if content:
-                    self._loaded_skills.add(name)
-                    self._active_skill_content[name] = content
-                    self._apply_skill_effects(name)
-                    display.skill_auto_loaded(name)
-                    self._register_skill_guards(name)
-            except Exception:
-                pass
-        if loaded:
-            skill_map = {n: self._active_skill_content.get(n, "") for n in loaded}
-            self._batch_extract_and_rebuild(skill_map)
-
-    def _apply_skill_effects(self, skill_name: str, _depth: int = 0):
-        """Apply effects declared in skill frontmatter — no hardcoded skill names.
-
-        _depth prevents recursive companion loading from cascading indefinitely.
-        """
-        if _depth >= 2:
-            return
-        effects = self.skill_manager.get_effects(skill_name)
-        if not effects:
-            return
-        # Set mode flag
-        mode = effects.get("mode")
-        if mode:
-            self.modes.set(mode)
-        # Record initial_phase mapping
-        initial_phase = effects.get("initial_phase")
-        if mode and initial_phase:
-            self._mode_phase_map[mode] = initial_phase
-        # Auto-load companion skills
-        companions = effects.get("companion_skills")
-        if companions and isinstance(companions, list):
-            self._auto_load_companion_skills(companions, _depth=_depth + 1)
-
-    def _auto_load_companion_skills(self, skill_names: list[str], _depth: int = 0):
-        # Cap companion loading to prevent cascading skill explosion
-        # Only load companions that aren't already loaded, max 2 at a time
-        needs_refresh = False
-        loaded_count = 0
-        _MAX_COMPANIONS = 2
-        for name in skill_names:
-            if name in self._loaded_skills:
-                continue
-            if loaded_count >= _MAX_COMPANIONS:
-                break
-            try:
-                content = self.skill_manager.load(name)
-                if content:
-                    self._loaded_skills.add(name)
-                    self._active_skill_content[name] = content
-                    self._skill_load_iterations[name] = self._total_iterations
-                    display.skill_auto_loaded(name)
-                    self._register_skill_guards(name)
-                    # Fix 3: Do NOT call _apply_skill_effects for companions
-                    # to prevent infinite cascading (companion's companion's companion...)
-                    needs_refresh = True
-                    loaded_count += 1
-            except Exception:
-                pass
-        if needs_refresh:
-            skill_map = {
-                n: self._active_skill_content.get(n, "")
-                for n in skill_names if n in self._loaded_skills
-            }
-            self._batch_extract_and_rebuild(skill_map)
-
-    # ── Mid-turn dynamic skill loading/unloading ───────────────────────────
-
-    _SKILL_CHECK_INTERVAL = 10  # Check every N iterations
-    _SKILL_STALE_THRESHOLD = 50  # Unload after N iterations without relevance
-
-    def _mid_turn_skill_check(self, tool_calls: list):
-        """Periodically check if new skills should be loaded based on activity.
-
-        Called from _on_kernel_tool_results every _SKILL_CHECK_INTERVAL iterations.
-        Uses Judge LLM to decide if the agent's recent activity warrants loading
-        a new skill that wasn't obvious at turn start.
-        """
-        if self._total_iterations % self._SKILL_CHECK_INTERVAL != 0:
-            return
-        if self._total_iterations == 0:
-            return
-
-        # Don't burn judge budget if already exhausted
-        if self.judge.budget.exhausted:
-            return
-
-        skills = self.skill_manager.list_skills()
-        available = [s for s in skills if s.get("name", "") not in self._loaded_skills]
-        if not available:
-            return
-
-        # Build recent activity summary from _recent_iters
-        recent_activity = []
-        for tc in tool_calls:
-            args = tc.get("arguments", {})
-            summary = ""
-            if tc["name"] == "shell":
-                summary = args.get("command", "")
-            elif tc["name"] in ("read_file", "write_file", "edit_file"):
-                summary = args.get("path", "") or args.get("file_path", "")
-            elif tc["name"] == "load_skill":
-                summary = args.get("name", "")
-            else:
-                summary = str(args)
-            recent_activity.append({"tool": tc["name"], "args_summary": summary})
-
-        # Also include recent history from deque
-        for tool_name in list(self._last_tool_calls_deque)[-10:]:
-            if not any(a["tool"] == tool_name for a in recent_activity):
-                recent_activity.append({"tool": tool_name, "args_summary": ""})
-
-        suggested = self.judge.suggest_skills_by_context(
-            task=self._original_user_task,
-            recent_activity=recent_activity,
-            loaded_skills=list(self._loaded_skills),
-            available_skills=available,
-        )
-
-        for name in suggested[:1]:  # Max 1 per check
-            try:
-                content = self.skill_manager.load(name)
-                if content:
-                    self._loaded_skills.add(name)
-                    self._active_skill_content[name] = content
-                    self._skill_load_iterations[name] = self._total_iterations
-                    self._apply_skill_effects(name)
-                    display.skill_auto_loaded(name)
-                    self._register_skill_guards(name)
-                    self._on_skill_loaded(name, content)
-            except Exception:
-                pass
-
-    def _unload_stale_skills(self):
-        """Unload skills that haven't been relevant for many iterations.
-
-        Frees context window space by removing skill content that the agent
-        hasn't needed. The skill can always be re-loaded later.
-        """
-        if self._total_iterations < self._SKILL_STALE_THRESHOLD:
-            return
-
-        stale = []
-        for name, load_iter in list(self._skill_load_iterations.items()):
-            age = self._total_iterations - load_iter
-            if age >= self._SKILL_STALE_THRESHOLD and name in self._active_skill_content:
-                # Check if skill was recently referenced (tool calls matching keywords)
-                if name in self._recently_referenced_skills:
-                    # Reset — it's still relevant
-                    self._skill_load_iterations[name] = self._total_iterations
-                    continue
-                stale.append(name)
-
-        for name in stale:
-            # Remove from active content (frees context), but keep in _loaded_skills
-            # so it won't be re-suggested immediately. It can be re-loaded via load_skill.
-            del self._active_skill_content[name]
-            del self._skill_load_iterations[name]
-            self._loaded_skills.discard(name)
-            print(display.dim(f"  ↓ Skill '{name}' unloaded (stale, can be re-loaded)"))
-
-        if stale:
-            self._refresh_system_prompt()
-
-        # Clear referenced set each check cycle
-        self._recently_referenced_skills.clear()
-
     # ── User path confirmation ────────────────────────────────────────────
-
-    def _check_user_porting_confirmation(self, user_input: str):
-        if self.modes.path_confirmed:
-            return
-        result = self.judge.classify("is_user_porting_confirm", {"user_input": user_input}, default="")
-        if result == "mode_b":
-            self.modes.path_confirmed = True
-            self.modes.confirmed_path = "mode_b"
-        elif result == "mode_c":
-            self.modes.path_confirmed = True
-            self.modes.confirmed_path = "mode_c"
 
     # ── React loop ──────────────────────────────────────────────────────────
 
@@ -2037,14 +963,12 @@ class WorkerAgent:
         self._interrupted = False
         self._turn_iteration_count = 0
         self._context_pressure_warned = False
-        self.judge.budget._exhausted_warned = False
 
         result = self._kernel.run_turn()
 
         self._interrupted = result.interrupted
         self._session_input_tokens += result.input_tokens
         self._session_output_tokens += result.output_tokens
-        self._budget_guard.report_tokens(result.input_tokens, result.output_tokens)
         self._turn_iteration_count = result.iterations
         display.turn_summary(self.turn_count, result.elapsed, result.input_tokens, result.output_tokens,
                              session_input_tokens=self._session_input_tokens,
@@ -2056,66 +980,28 @@ class WorkerAgent:
 
     def _on_kernel_tool_results(self, tool_calls: list, results: list):
         """Called by Kernel after tool execution and guard checks."""
-        # Track tool calls for phase management
+        # Track tool calls
         for tc in tool_calls:
             self._last_tool_calls_deque.append(tc["name"])
-            phase_tools = PHASE_TOOL_SETS.get(self.phase)
-            if phase_tools is not None and tc["name"] not in (phase_tools | CORE_TOOLS):
-                self._extra_tools_next_iter.add(tc["name"])
         self._total_iterations += 1
 
-        # Refresh system prompt if skill/plan tools were used
-        if any(tc["name"] in ("load_skill", "plan_create", "plan_update", "plan_status")
+        # Refresh system prompt if plan tools were used
+        if any(tc["name"] in ("plan_create", "plan_update", "plan_status")
                for tc in tool_calls):
-            # Register constraints for any newly loaded skills via load_skill tool
-            for tc, result in zip(tool_calls, results):
-                if tc["name"] == "load_skill" and isinstance(result, str) and result.startswith("SUCCESS"):
-                    skill_name = tc.get("arguments", {}).get("name", "")
-                    if skill_name and skill_name not in self._skill_guards_registered:
-                        content = self._active_skill_content.get(skill_name) or self.skill_manager.load(skill_name)
-                        if content:
-                            self._loaded_skills.add(skill_name)
-                            self._active_skill_content[skill_name] = content
-                            self._skill_load_iterations[skill_name] = self._total_iterations
-                            self._on_skill_loaded(skill_name, content)
             self._refresh_system_prompt()
 
-        # Dynamic mid-turn skill loading/unloading
-        self._mid_turn_skill_check(tool_calls)
-        self._unload_stale_skills()
-
-        # Judge budget exhaustion warning
-        if self.judge.budget.exhausted and self.judge.budget.skipped_detail:
-            if not self.judge.budget._exhausted_warned:
-                self.judge.budget._exhausted_warned = True
-                print(display.yellow(
-                    f"\n[⚠ JUDGE BUDGET EXHAUSTED] {self.judge.budget.calls_this_turn}/"
-                    f"{self.judge.budget.max_calls_per_turn} calls used. "
-                    f"Skipped: {self.judge.budget.skipped_detail}"
-                ))
-
-        # Context pressure warning is handled by ContextPressureGuard — no duplicate check here
-
-        # Auto-memory-write: capture critical training state from monitor results
-        self._auto_memorize_training_state(tool_calls, results)
+        # Context pressure warning is handled by ContextPressureGuard - no duplicate check here
 
         self._tool_call_cache = {}
         print()
 
-    def _auto_memorize_training_state(self, tool_calls: list, results: list):
-        """Auto-memorize training state is disabled in the new memory system.
-        
-        The redesigned memory only stores entries that pass the three-category
-        test (fact/pitfall/insight). Temporary session state like log paths
-        should be tracked via plan or conversation context, not memory.
-        """
-        pass
+
 
     def _inject_message(self, msg: str):
         """Inject a guard block/escalate message into conversation history.
 
         v4: This is now ONLY called for block/escalate verdicts.
-        Soft inject_msg goes through _append_advisory instead.
+        Soft inject goes through _append_advisory instead.
         """
         self.history.append({"role": "user", "content": msg})
 
@@ -2133,12 +1019,13 @@ class WorkerAgent:
         Anthropic format (role=user, content=[{type: tool_result, ...}]).
         Falls back to a lightweight user message if no tool_result exists.
         """
-        # Display advisory to user terminal (same dim gray style as inject verdict)
-        display.guard_inject(msg)
+        # NOTE: Do NOT call display.guard_inject(msg) here - the caller
+        # (kernel.py _handle_guard_verdict) already displays it. Calling here
+        # would produce duplicate display on terminal.
         
         advisory_suffix = (
             f"\n\n---\n"
-            f"[Guard Advisory — note but do not respond to this, prioritize tool results and user requests]\n"
+            f"[Guard Advisory - note but do not respond to this, prioritize tool results and user requests]\n"
             f"{msg}"
         )
         messages = self.history.get_messages()
@@ -2173,57 +1060,24 @@ class WorkerAgent:
                 # If this user message has no tool_result blocks, keep searching
                 continue
 
-            # Stop searching if we hit an assistant message (don't go past the
+            # Stop searching if we hit an assistant message (do not go past the
             # current turn boundary)
             if m.get("role") == "assistant":
                 break
 
         # Fallback: no tool_result found (e.g., pre-guard at turn start).
-        # Use a lightweight system-scoped message that won't be confused with
+        # Use a lightweight system-scoped message that will not be confused with
         # user instructions.
         self.history.append({
             "role": "user",
-            "content": f"[GUARD ADVISORY — note but do not respond to this, "
+            "content": f"[GUARD ADVISORY - note but do not respond to this, "
                        f"prioritize tool results and user requests]\n{msg}",
         })
 
-    # ── Phase tracking ─────────────────────────────────────────────────────
+    def _get_all_schemas(self) -> list[dict]:
+        """Return all tool schemas (no phase filtering)."""
+        return self.tool_registry.to_schemas(self.provider.schema_format)
 
-    @property
-    def phase(self) -> str:
-        """Derive tool-availability phase from runtime context.
-
-        Replaces the old mutable self.phase string. Phase determines which
-        tools are available via PHASE_TOOL_SETS.
-        """
-        if self._phase_override:
-            return self._phase_override
-        # If runtime is active (training running / inference serving), verification mode
-        runtime_active = any(
-            isinstance(g, TrainingRuntimeGuard) and g._training_started
-            for g in self._kernel.deps.guard_registry.guards
-        )
-        if runtime_active:
-            return "verification"
-        if self._code_written:
-            return "implementation"
-        # Check mode→phase mapping from loaded skill effects
-        for mode, phase in self._mode_phase_map.items():
-            if self.modes.has(mode):
-                return phase
-        return "idle"
-
-    @phase.setter
-    def phase(self, value: str):
-        """Allow explicit phase override (for tests and backward compat)."""
-        self._phase_override = value if value != "idle" else None
-
-    def _get_filtered_schemas(self, phase: str) -> list[dict]:
-        phase_tools = PHASE_TOOL_SETS.get(phase, set())
-        tool_names = CORE_TOOLS | phase_tools | self._extra_tools_next_iter
-        return self.tool_registry.to_schemas_filtered(
-            self.provider.schema_format, tool_names
-        )
 
     # ── LLM streaming ──────────────────────────────────────────────────────
 
@@ -2236,46 +1090,9 @@ class WorkerAgent:
         usage = {}
         self._streaming_in_code_block = False
 
-        def _handle_context_overflow() -> bool:
-            """Evict old messages on context overflow. Returns True if retry is safe."""
-            try:
-                hm = self.history
-
-                # Check if we should do a full hard reset instead of normal eviction
-                if hm.should_hard_reset():
-                    self._hard_reset_context()
-                    nonlocal messages
-                    messages = hm.get_messages()
-                    return True
-
-                evictable = hm.get_evictable_indexes()
-                if not evictable:
-                    # No evictable messages and hard reset not triggered — try hard reset as last resort
-                    self._hard_reset_context()
-                    messages = hm.get_messages()
-                    return True
-
-                # Evict at least 30% of evictable messages (oldest first)
-                count = max(1, len(evictable) * 30 // 100)
-                to_evict = evictable[:count]
-                evicted_any = False
-                for idx in to_evict:
-                    result = hm.evict_message(idx)
-                    if result is not None:
-                        # Store to swap if available
-                        if hasattr(self, '_swap_store') and self._swap_store:
-                            self._swap_store.save(idx, result)
-                        evicted_any = True
-                if evicted_any:
-                    messages = hm.get_messages()
-                return evicted_any
-            except Exception:
-                return False
-
         stream = retry_with_backoff(
             lambda: self.provider.chat_stream(messages, schemas),
             max_retries=3,
-            on_context_overflow=_handle_context_overflow,
         )
 
         thinking_cleared = False
@@ -2374,19 +1191,8 @@ class WorkerAgent:
                 if content_parts or tool_calls:
                     stream_truncated = True
                     break
-                if _is_context_limit_error(e):
-                    display.warn("Context too large, compacting...")
-                    if _handle_context_overflow():
-                        stream = retry_with_backoff(
-                            lambda: self.provider.chat_stream(messages, schemas),
-                            max_retries=3,
-                            on_context_overflow=_handle_context_overflow,
-                        )
-                        continue
-                    else:
-                        raise
                 # Non-retryable 400 errors (e.g., tool_use/tool_result pairing)
-                # should not be retried — they are permanent request errors.
+                # should not be retried - they are permanent request errors.
                 from flagscale_agent.react.retry import _extract_status
                 _status = _extract_status(e)
                 if _status == 400:
@@ -2398,7 +1204,6 @@ class WorkerAgent:
                     stream = retry_with_backoff(
                         lambda: self.provider.chat_stream(messages, schemas),
                         max_retries=3,
-                        on_context_overflow=_handle_context_overflow,
                     )
                     continue
                 raise
@@ -2418,7 +1223,7 @@ class WorkerAgent:
                 try:
                     arguments = json.loads(tc["arguments_json"]) if tc["arguments_json"] else {}
                 except json.JSONDecodeError:
-                    # Incomplete JSON from truncated stream — skip this tool call
+                    # Incomplete JSON from truncated stream - skip this tool call
                     continue
                 parsed_tool_calls.append({"id": tc["id"], "name": tc["name"], "arguments": arguments})
             if not parsed_tool_calls:
@@ -2436,348 +1241,32 @@ class WorkerAgent:
 
         for i, tc in enumerate(tool_calls):
             if tc["name"] == "evict":
-                special_results[i] = self._handle_evict(tc.get("arguments", {}))
+                special_results[i] = self.context_manager.handle_evict(tc.get("arguments", {}))
             elif tc["name"] == "recall":
-                special_results[i] = self._handle_recall(tc.get("arguments", {}))
-            elif tc["name"] == "evict_list":
-                special_results[i] = self._handle_evict_list(tc.get("arguments", {}))
+                special_results[i] = self.context_manager.handle_recall(tc.get("arguments", {}))
             else:
                 normal_calls.append((i, tc))
 
         # Execute normal tools
         if normal_calls:
             normal_tc_list = [tc for _, tc in normal_calls]
-            normal_results = self._tool_executor.execute_batch(normal_tc_list)
+            try:
+                normal_results = self._tool_executor.execute_batch(normal_tc_list)
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                normal_results = [
+                    f"Error executing tool: {e}\n\n[Tool: {tc['name']}]\n[Args: {tc.get('arguments', {})}]\n[Traceback]\n{tb}"
+                    for tc in normal_tc_list
+                ]
             for (orig_idx, _), result in zip(normal_calls, normal_results):
                 special_results[orig_idx] = result
 
         # Reassemble in original order
         return [special_results[i] for i in range(len(tool_calls))]
 
-    def _handle_evict(self, arguments: dict) -> str:
-        """Process an evict tool call against the message history."""
-        indexes = arguments.get("indexes", []) if arguments else []
-        # Display start
-        if indexes:
-            display.tool_start("evict", f"indexes={indexes[:10]}{'...' if len(indexes) > 10 else ''}")
-        else:
-            display.tool_start("evict", "")
-        t0 = time.time()
-
-        if not arguments:
-            result_msg = "ERROR: 'indexes' parameter is required and must be a non-empty list."
-            display.tool_done("evict", time.time() - t0, detail="missing indexes", error=True)
-            return result_msg
-
-        if not indexes:
-            result_msg = "ERROR: 'indexes' parameter is required and must be a non-empty list."
-            display.tool_done("evict", time.time() - t0, detail="empty indexes", error=True)
-            return result_msg
-
-        if not isinstance(indexes, list):
-            if isinstance(indexes, (int, float)):
-                indexes = [int(indexes)]
-            else:
-                result_msg = "ERROR: 'indexes' must be a list of integers."
-                display.tool_done("evict", time.time() - t0, detail="invalid type", error=True)
-                return result_msg
-
-        evicted_count = 0
-        freed_tokens = 0
-        errors = []
-        # Collect messages for batch summary before evicting
-        messages_for_summary = []  # [(index, role, tool_name, content)]
-
-        for idx in indexes:
-            if isinstance(idx, float) and idx == int(idx):
-                idx = int(idx)
-            if not isinstance(idx, int):
-                errors.append(f"index {idx}: not an integer")
-                continue
-
-            # Skip if already summarized (idempotent)
-            if self._evict_summary.has(idx):
-                # Already evicted and summarized previously, just skip
-                result = self.history.evict_message(idx)
-                if result:
-                    content = result["content"]
-                    if not isinstance(content, str):
-                        content = json.dumps(content, ensure_ascii=False)
-                    self._swap_store.save(idx, content, result.get("metadata"))
-                    evicted_count += 1
-                    freed_tokens += result.get("metadata", {}).get("tokens", 0)
-                continue
-
-            # Get message content BEFORE evicting (for summary generation)
-            msg = self.history.get_message_at(idx)
-            if msg is None:
-                errors.append(f"index {idx}: out of range")
-                continue
-
-            # Extract info for summary
-            role = msg.get("role", "unknown")
-            tool_name = None
-            content_for_summary = ""
-
-            if role == "tool":
-                # Tool result message
-                tool_name = msg.get("name") or msg.get("tool_name", "unknown")
-                content_for_summary = msg.get("content", "")
-                if isinstance(content_for_summary, list):
-                    content_for_summary = json.dumps(content_for_summary, ensure_ascii=False)
-            elif role == "assistant":
-                content_for_summary = msg.get("content", "")
-                if isinstance(content_for_summary, list):
-                    # Extract text blocks and tool_use names
-                    parts = []
-                    for block in content_for_summary:
-                        if isinstance(block, dict):
-                            if block.get("type") == "text":
-                                parts.append(block.get("text", ""))
-                            elif block.get("type") == "tool_use":
-                                tool_name = block.get("name", "")
-                                parts.append(f"[tool_use: {tool_name}({json.dumps(block.get('input', {}), ensure_ascii=False)})]")
-                    content_for_summary = "\n".join(parts)
-            elif role == "user":
-                content_for_summary = msg.get("content", "")
-                if isinstance(content_for_summary, list):
-                    parts = []
-                    for block in content_for_summary:
-                        if isinstance(block, dict):
-                            if block.get("type") == "text":
-                                parts.append(block.get("text", ""))
-                            elif block.get("type") == "tool_result":
-                                parts.append(f"[tool_result: {block.get('content', '')}]")
-                    content_for_summary = "\n".join(parts)
-
-            messages_for_summary.append((idx, role, tool_name, content_for_summary))
-
-            # Now evict
-            result = self.history.evict_message(idx)
-            if result is None:
-                errors.append(f"index {idx}: not evictable (already evicted, system prompt, protected tail)")
-                # Remove from summary list
-                messages_for_summary.pop()
-                continue
-
-            content = result["content"]
-            if not isinstance(content, str):
-                content = json.dumps(content, ensure_ascii=False)
-            self._swap_store.save(idx, content, result.get("metadata"))
-            evicted_count += 1
-            freed_tokens += result.get("metadata", {}).get("tokens", 0)
-
-            # Handle paired eviction (tool_use + tool_result must stay paired)
-            paired = result.get("paired_evict")
-            if paired:
-                paired_idx = paired["index"]
-                paired_content = paired["content"]
-                paired_content_str = paired_content
-                if not isinstance(paired_content_str, str):
-                    paired_content_str = json.dumps(paired_content, ensure_ascii=False)
-                paired_meta = {
-                    "role": "user",
-                    "tokens": paired["tokens"],
-                    "paired_with": idx,  # Link back so recall can restore both
-                }
-                self._swap_store.save(paired_idx, paired_content_str, paired_meta)
-                evicted_count += 1
-                freed_tokens += paired["tokens"]
-                # Save primary's metadata with paired_idx so recall can restore both
-                primary_meta = result.get("metadata", {})
-                primary_meta["paired_with"] = paired_idx
-                self._swap_store.save(idx, content, primary_meta)
-                # Add paired to summary with actual content
-                paired_summary_content = paired_content_str if paired_content_str else f"[tool_result paired with index {idx}]"
-                messages_for_summary.append((paired_idx, "user", None, paired_summary_content))
-
-        # Generate summaries via LLM for newly evicted messages
-        if messages_for_summary:
-            self._generate_evict_summaries(messages_for_summary)
-
-        # Display result
-        result_msg = f"Evicted {evicted_count} message(s), freed ~{freed_tokens} tokens."
-        if errors:
-            result_msg += f" Skipped: {'; '.join(errors[:5])}"
-        elapsed = time.time() - t0
-        display.tool_done("evict", elapsed, detail=f"{evicted_count} evicted, ~{freed_tokens} tokens freed")
-
-        return result_msg
-
-    def _generate_evict_summaries(self, messages: list):
-        """Generate LLM summaries for evicted messages and store them.
-
-        Each message gets its own LLM call for precise summary.
-        Uses ThreadPoolExecutor for concurrent API calls.
-        Short messages (≤150 chars) are used directly as their own summary
-        without wasting an LLM call.
-
-        Args:
-            messages: List of (index, role, tool_name, content_str) tuples.
-        """
-        if not messages:
-            return
-
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        # Threshold: messages shorter than this don't need LLM summarization
-        SHORT_THRESHOLD = 150
-
-        # Separate short vs long messages
-        needs_llm = []
-        results = {}
-
-        for idx, role, tool_name, content in messages:
-            content_clean = (content or "").strip()
-            if len(content_clean) <= SHORT_THRESHOLD:
-                # Short enough to be its own summary — no LLM needed
-                summary = content_clean.replace("\n", " ") if content_clean else f"[{role}] {tool_name or 'empty message'}"
-                results[idx] = summary
-            else:
-                needs_llm.append((idx, role, tool_name, content))
-
-        def _summarize_one(idx: int, role: str, tool_name: str, content: str) -> tuple:
-            """Call LLM to generate one-line summary. Returns (index, summary)."""
-            prompt = (
-                "Summarize this evicted conversation message in ONE concise line (max 120 chars). "
-                "State the concrete action or content factually. Do NOT infer intent or add interpretation.\n\n"
-                f"[role={role}"
-            )
-            if tool_name:
-                prompt += f", tool={tool_name}"
-            prompt += f"]\n{content}"
-
-            try:
-                response = self.provider.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    tools=[],
-                )
-                summary = ""
-                if isinstance(response, dict):
-                    resp_content = response.get("content", "")
-                    if isinstance(resp_content, list):
-                        for block in resp_content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                summary += block.get("text", "")
-                    elif isinstance(resp_content, str):
-                        summary = resp_content
-                    if not summary:
-                        msg = response.get("message", {})
-                        summary = msg.get("content", "") if isinstance(msg, dict) else ""
-                return (idx, summary.strip().split("\n")[0][:200])  # First line, max 200 chars
-            except Exception as e:
-                fallback = content.replace("\n", " ") if content else f"[{role}]"
-                return (idx, f"[no-llm] {fallback}")
-
-        # Concurrent LLM calls only for long messages
-        if needs_llm:
-            max_workers = min(len(needs_llm), 10)
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {
-                    executor.submit(_summarize_one, idx, role, tool_name, content): idx
-                    for idx, role, tool_name, content in needs_llm
-                }
-                for future in as_completed(futures):
-                    try:
-                        idx, summary = future.result(timeout=30)
-                        results[idx] = summary
-                    except Exception:
-                        idx = futures[future]
-                        results[idx] = "[timeout] summary generation failed"
-
-        # Store all summaries and update placeholders in history
-        for idx, role, tool_name, _ in messages:
-            summary = results.get(idx, f"[{role}] {tool_name or 'message'}")
-            self._evict_summary.add(idx, role, summary, tool_name)
-            self.history.update_evict_placeholder(idx, summary)
-
-    def _handle_recall(self, arguments: dict) -> str:
-        """Process a recall tool call — retrieve evicted content from swap store."""
-        index = arguments.get("index") if arguments else None
-        display.tool_start("recall", f"index={index}")
-        t0 = time.time()
-
-        if not arguments:
-            display.tool_done("recall", time.time() - t0, detail="missing index", error=True)
-            return "ERROR: 'index' parameter is required."
-
-        if index is None:
-            display.tool_done("recall", time.time() - t0, detail="missing index", error=True)
-            return "ERROR: 'index' parameter is required."
-        if isinstance(index, float) and index == int(index):
-            index = int(index)
-        if not isinstance(index, int):
-            display.tool_done("recall", time.time() - t0, detail="invalid type", error=True)
-            return "ERROR: 'index' must be an integer."
-
-        content = self._swap_store.load(index)
-        if content is None:
-            # Fallback: try recall from full_log (handles pre-reset or non-evicted messages)
-            content = self.history.recall_from_full_log(index)
-            if content is None:
-                display.tool_done("recall", time.time() - t0, detail=f"index {index} not found", error=True)
-                return f"ERROR: No evicted content found at index {index}."
-            # full_log recall — no in-place restoration (message not in current _messages)
-            elapsed = time.time() - t0
-            display.tool_done("recall", elapsed, detail=f"index={index} from full_log")
-            return content
-
-        # Restore the original content back into history so subsequent LLM calls
-        # see it in-place (not just as this turn's tool_result).
-        restored = self.history.recall_message(index, content)
-
-        # Also restore paired message to maintain tool_use/tool_result pairing
-        metadata = self._swap_store.load_metadata(index)
-        paired_idx = metadata.get("paired_with") if metadata else None
-        if paired_idx is not None:
-            paired_content = self._swap_store.load(paired_idx)
-            if paired_content is not None:
-                self.history.recall_message(paired_idx, paired_content)
-
-        summary_entry = self._evict_summary.get(index)
-        summary_hint = summary_entry.get("summary", "") if summary_entry else ""
-        restore_status = "restored" if restored else "returned"
-        elapsed = time.time() - t0
-        display.tool_done("recall", elapsed, detail=f"index={index} {restore_status} | {summary_hint}")
-
-        return content
-
-    def _handle_evict_list(self, arguments: dict) -> str:
-        """List all evicted message summaries for recall navigation."""
-        keyword = arguments.get("keyword", "") if arguments else ""
-        display.tool_start("evict_list", f"keyword='{keyword}'" if keyword else "")
-        t0 = time.time()
-
-        entries = self._evict_summary.list_all()
-        if not entries:
-            display.tool_done("evict_list", time.time() - t0, detail="0 entries")
-            return "No evicted messages with summaries found."
-
-        # Optional filter by keyword
-        kw_lower = keyword.lower()
-
-        lines = []
-        for e in entries:
-            if kw_lower and kw_lower not in e.get("summary", "").lower() and kw_lower not in (e.get("tool_name") or "").lower():
-                continue
-            tool_part = f" [{e['tool_name']}]" if e.get("tool_name") else ""
-            lines.append(f"  {e['index']:>5}: ({e['role']}{tool_part}) {e['summary']}")
-
-        if not lines:
-            display.tool_done("evict_list", time.time() - t0, detail=f"0 matching '{keyword}'")
-            return f"No evicted messages matching '{keyword}'."
-
-        header = f"Evicted messages ({len(lines)} entries):"
-        if keyword:
-            header = f"Evicted messages matching '{keyword}' ({len(lines)} entries):"
-
-        result = header + "\n" + "\n".join(lines)
-        elapsed = time.time() - t0
-        display.tool_done("evict_list", elapsed, detail=f"{len(lines)} entries")
-        return result
-
-    def _execute_tool(self, tool_call, skip_confirm=False):
-        return self._tool_executor.execute_single(tool_call, skip_confirm=skip_confirm)
+    def _execute_tool(self, tool_call):
+        return self._tool_executor.execute_single(tool_call)
 
     def _append_tool_results(self, tool_results: list[dict]):
         """Append tool results, merging them into a single user message.
@@ -2808,209 +1297,3 @@ class WorkerAgent:
     def _is_context_limit_error(e) -> bool:
         return _is_context_limit_error(e)
 
-    # ── Compaction helpers ─────────────────────────────────────────────────
-
-    def _extract_memories_before_compaction(self, to_drop: list[dict]):
-        """Auto-extract key findings from messages about to be dropped.
-
-        Rules (no LLM call, pure heuristics to keep it fast):
-        1. Error + fix pattern → finding
-        2. Path discoveries (checkpoint, env, config) → context
-        3. Numerical results (loss, throughput) → finding
-        """
-        import hashlib
-
-        extracted = []
-        all_text = ""
-
-        for msg in to_drop:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        parts.append(block.get("content", "") or block.get("text", ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                content = "\n".join(parts)
-            if not isinstance(content, str):
-                continue
-            all_text += content + "\n"
-
-        # Rule 1: Error + resolution patterns
-        error_fix_patterns = [
-            # "Error: X ... fixed by Y" or "solved by"
-            (r'(?:Error|ERROR|Exception|OOM|NCCL|CUDA).*?[:]\s*(.{20,200})',
-             r'(?:fix|solve|resolv|workaround|solution).*?[:]\s*(.{20,200})'),
-        ]
-        errors_found = re.findall(
-            r'(?:Error|ERROR|Exception|Traceback|OOM|NCCL error|CUDA error)[^\n]{10,200}',
-            all_text
-        )
-        fixes_found = re.findall(
-            r'(?:fixed|solved|resolved|workaround|the fix|solution)[^\n]{10,200}',
-            all_text, re.IGNORECASE
-        )
-        if errors_found and fixes_found:
-            error_summary = errors_found[0]
-            fix_summary = fixes_found[0]
-            key = "auto_fix_" + hashlib.md5(error_summary.encode()).hexdigest()[:8]
-            extracted.append({
-                "key": key,
-                "type": "finding",
-                "content": f"Error: {error_summary}\nFix: {fix_summary}",
-            })
-
-        # Rule 2: Important path discoveries
-        path_patterns = [
-            (r'(?:checkpoint|ckpt|model|weight)s?\s*(?:path|dir|at|in)?[:\s]+(/\S{10,200})', "checkpoint_path"),
-            (r'(?:conda|env|environment)\s*(?:path|prefix|at|in)?[:\s]+(/\S{10,200})', "env_path"),
-            (r'(?:config|yaml|conf)\s*(?:path|file|at|in)?[:\s]+(/\S{10,200})', "config_path"),
-        ]
-        for pattern, label in path_patterns:
-            matches = re.findall(pattern, all_text, re.IGNORECASE)
-            if matches:
-                path_val = matches[-1].rstrip(".,;:\"')")  # last mention is most recent
-                key = f"auto_path_{label}_{hashlib.md5(path_val.encode()).hexdigest()[:6]}"
-                extracted.append({
-                    "key": key,
-                    "type": "context",
-                    "content": f"{label}: {path_val}",
-                })
-
-        # Rule 3: Numerical results (loss, throughput, tokens-per-sec)
-        metric_patterns = [
-            (r'(?:loss|lm.loss)\s*[:=]\s*([\d.]+(?:e[+-]?\d+)?)', "loss"),
-            (r'(?:throughput|tokens.per.sec|tps|samples.per.sec)\s*[:=]\s*([\d.]+)', "throughput"),
-            (r'(?:elapsed.time.per.iteration|iter.time)\s*[:=]\s*([\d.]+)', "iter_time"),
-        ]
-        metrics_found = []
-        for pat, label in metric_patterns:
-            matches = re.findall(pat, all_text, re.IGNORECASE)
-            if matches:
-                metrics_found.append(f"{label}={matches[-1]}")
-        if metrics_found:
-            key = "auto_metrics_" + hashlib.md5(
-                "\n".join(metrics_found).encode()
-            ).hexdigest()[:8]
-            extracted.append({
-                "key": key,
-                "type": "finding",
-                "content": "Training metrics observed: " + "; ".join(metrics_found[:5]),
-            })
-
-        # Rule 4: Current hypothesis / root cause analysis (critical for continuity)
-        hypothesis_matches = re.findall(
-            r'HYPOTHESIS:\s*(.{20,300})', all_text, re.IGNORECASE
-        )
-        if hypothesis_matches:
-            latest = hypothesis_matches[-1]
-            key = "auto_hypothesis_" + hashlib.md5(latest.encode()).hexdigest()[:6]
-            extracted.append({
-                "key": key,
-                "type": "context",
-                "content": f"Active hypothesis before compaction: {latest}",
-            })
-
-        # Rule 5: Current experiment/attempt status
-        experiment_matches = re.findall(
-            r"workspace_experiment.*?name['\"]?\s*[:=]\s*['\"]?(\w+)", all_text
-        )
-        if experiment_matches:
-            exp_name = experiment_matches[-1]
-            # Extract last attempt result if available
-            result_matches = re.findall(
-                r"result['\"]?\s*[:=]\s*['\"]([^'\"]{10,200})", all_text
-            )
-            result_info = f", last result: {result_matches[-1]}" if result_matches else ""
-            key = f"auto_experiment_state_{exp_name}"
-            extracted.append({
-                "key": key,
-                "type": "context",
-                "content": f"Active experiment '{exp_name}'{result_info}",
-            })
-
-        # Write extracted memories (max 5 per compaction to avoid noise)
-        # NOTE: Auto-extraction is disabled in the redesigned memory system.
-        # The new memory only accepts fact/pitfall/insight with proper key format.
-        # Auto-extracted compaction state doesn't fit these categories.
-        pass
-
-    def _summarize_for_compaction(self, text: str) -> str:
-        response = self.provider.chat(
-            [{"role": "user", "content": f"Summarize this conversation segment for an AI agent that will continue working on the same task. Keep under 1500 tokens. Include: file paths, error messages, decisions, current approach.\n\n{text}"}],
-            tools=[]
-        )
-        return response.get("content", "")
-
-    def _score_messages_for_compaction(self, messages: list[dict]) -> list[int]:
-        """Score messages for compaction priority. Higher = more important to keep.
-        
-        Priority tiers:
-        - 10: Messages with experiment state, hypothesis, active decisions
-        - 8: Messages with error diagnosis, root cause analysis
-        - 7: Messages with training metrics, checkpoint info
-        - 5: Normal messages (default)
-        - 3: Verbose tool output (long file reads, pip install logs)
-        - 2: Repeated monitoring checks with no new info
-        """
-        scores = []
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        parts.append(block.get("content", "") or block.get("text", ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                content = "\n".join(parts)
-            if not isinstance(content, str):
-                scores.append(5)
-                continue
-
-            score = 5  # default
-
-            # Boost: experiment state and decisions
-            if re.search(r'HYPOTHESIS:|ROOT CAUSE:|DECISION:', content, re.IGNORECASE):
-                score = max(score, 10)
-            elif re.search(r'workspace_experiment.*add_attempt|workspace_experiment.*create', content):
-                score = max(score, 10)
-
-            # Boost: error diagnosis and fixes
-            elif re.search(r'(?:root cause|diagnosed|the actual problem|fix(?:ed)? by)', content, re.IGNORECASE):
-                score = max(score, 8)
-            elif re.search(r'2-Strike|same category.*fail|strike.*block', content, re.IGNORECASE):
-                score = max(score, 8)
-
-            # Boost: training metrics and results
-            elif re.search(r'iteration\s+\d+.*loss|lm loss.*\d+\.\d+|throughput', content, re.IGNORECASE):
-                score = max(score, 7)
-
-            # Penalize: verbose tool output
-            elif len(content) > 3000 and re.search(
-                r'pip install|Collecting |Building wheel|Successfully installed', content):
-                score = min(score, 3)
-            elif len(content) > 5000 and msg.get("role") == "tool":
-                score = min(score, 3)
-
-            # Penalize: repeated "no new content" monitoring
-            elif re.search(r'No new content|Still running.*no new metrics', content, re.IGNORECASE):
-                score = min(score, 2)
-
-            scores.append(score)
-        return scores
-
-    def _summarize_file_content(self, content: str, path: str) -> str:
-        lines = content.splitlines()
-        if len(lines) <= 100:
-            return content
-        head = "\n".join(lines[:30])
-        mid = "\n".join(lines[len(lines)//2 - 10:len(lines)//2 + 20])
-        tail = "\n".join(lines[-30:])
-        return f"{head}\n\n[... {len(lines) - 60} lines omitted from {path} ...]\n\n{mid}\n\n[...]\n\n{tail}"
-
-
-    @staticmethod
-    def _is_quick_test_command(cmd: str) -> bool:
-        return bool(re.search(r'--train-iters\s+', cmd))

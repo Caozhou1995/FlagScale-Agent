@@ -1,18 +1,9 @@
 ---
+description: Upgrade vllm-plugin-FL to a new vLLM version on NVIDIA hardware. Covers
+  version detection, API diff analysis, targeted fixes, and validation across unit
+  tests, offline inference, and serving. Applies to any vLLM minor version bump (e.g.,
+  0.20.x to 0.24.x).
 name: infer-plugin-upgrade
-description: Upgrade vllm-plugin-FL to a new vLLM version on NVIDIA hardware. Covers version
-  detection, API diff analysis, targeted fixes, and validation across unit tests, offline
-  inference, and serving. Applies to any vLLM minor version bump (e.g., 0.20.x to 0.24.x).
-keywords:
-  - vllm plugin upgrade
-  - vllm version bump
-  - plugin API breakage
-  - vllm-plugin-FL
-triggers:
-  - vllm-plugin-FL upgrade
-  - plugin version bump
-  - vllm version upgrade
-  - plugin API breakage after vllm update
 ---
 
 ## Critical Rules

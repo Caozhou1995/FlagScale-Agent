@@ -54,7 +54,7 @@ class PackageSearchGuard(Guard):
     """Warn when agent blindly searches for package/source locations."""
 
     name = "package_search"
-    priority = 25  # Higher priority than megatron_path (30)
+    priority = 25
 
     def __init__(self):
         self._warned_this_turn = False
@@ -83,6 +83,7 @@ class PackageSearchGuard(Guard):
                         "'Which conda environment has X installed?' "
                         "Only proceed after the user provides the path.",
                         reason="blind_package_search",
+                        category="package_search",
                     )
                 return None
 

@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_NETWORK
+from flagscale_agent.react.tools.base import Tool
 
 # ── SSRF protection: blocked host patterns ──
 _BLOCKED_HOSTS = (
@@ -50,7 +50,6 @@ def _validate_url(url: str):
 
 class WebFetchTool(Tool):
     name = "web_fetch"
-    effects = EFFECT_NETWORK
     description = "Fetch a URL and extract its main text content. Useful for reading documentation, GitHub pages, error references, etc."
     parameters = {
         "type": "object",

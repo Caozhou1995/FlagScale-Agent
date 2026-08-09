@@ -81,8 +81,7 @@ class AgentConfig:
     max_context_tokens: int = 0  # 0 = auto-detect from model
     shell_remind_interval: int = 60
     dangerous_commands_check: bool = True
-    confirm_commands: bool = True
-    mode: str = "confirm"  # "confirm" or "auto"
+    confirm_commands: bool = False
     max_output_tokens: int = 8192
     session_dir: Optional[str] = None
     auto_skill: bool = True
@@ -93,11 +92,7 @@ class AgentConfig:
     poll_detect_window: int = 2
     poll_interval: int = 15
     poll_max_duration: int = 300
-    max_auto_turns: int = 20
-    budget_max_tokens: int = 10_000_000
-    budget_max_tool_calls: int = 500
-    circuit_breaker_threshold: int = 4
-    circuit_breaker_cooldown: int = 3
+    max_continuations: int = 200
     _config_path: Optional[str] = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -136,12 +131,6 @@ class AgentConfig:
                 val = os.environ.get(var)
                 if val:
                     self.shell_env[var] = val
-
-        if self.mode not in ("confirm", "auto"):
-            self.mode = "confirm"
-        if self.mode == "auto":
-            self.confirm_commands = False
-            self.max_iterations = 2**31 - 1
 
     @classmethod
     def from_yaml(cls, path: str) -> "AgentConfig":
@@ -186,13 +175,6 @@ class AgentConfig:
             if k in valid_fields:
                 setattr(self, k, v)
         # Re-run post-init validation
-        if self.mode not in ("confirm", "auto"):
-            self.mode = "confirm"
-        if self.mode == "auto":
-            self.confirm_commands = False
-            self.max_iterations = 2**31 - 1
-        else:
-            self.confirm_commands = True
         for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"):
             if var not in self.shell_env:
                 val = os.environ.get(var)

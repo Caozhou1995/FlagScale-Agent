@@ -475,11 +475,11 @@ class HistoryManager:
             # For assistant/user messages, show a brief summary
             text_preview = ""
             if isinstance(content, str):
-                text_preview = content[:50].replace("\n", " ")
+                text_preview = content[:80].replace("\n", " ")
             elif isinstance(content, list):
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "text":
-                        text_preview = b.get("text", "")[:50].replace("\n", " ")
+                        text_preview = b.get("text", "")[:80].replace("\n", " ")
                         break
             placeholder = (
                 f"[evicted | index={display_index} | role={role} | {text_preview}... | {tokens} tokens]"
@@ -605,26 +605,6 @@ class HistoryManager:
             del msg["_evicted_tokens"]
         return True
 
-    def update_evict_placeholder(self, index: int, summary: str) -> bool:
-        """Update an evicted message's placeholder with a better summary.
-
-        Called after LLM generates a summary, to replace the raw content
-        truncation with a meaningful one-liner.
-
-        Returns True if updated, False if not evicted at that index.
-        """
-        if index < 0 or index >= len(self._messages):
-            return False
-        msg = self._messages[index]
-        if not msg.get("_evicted"):
-            return False
-        tokens = msg.get("_evicted_tokens", 0)
-        role = msg.get("role", "unknown")
-        # Rebuild placeholder with summary
-        msg["content"] = (
-            f"[evicted | index={index} | role={role} | {summary} | {tokens} tokens]"
-        )
-        return True
 
     def get_evictable_indexes(self) -> List[int]:
         """Return external indexes of messages that can be evicted, in order.
@@ -697,10 +677,8 @@ class HistoryManager:
             return args.get("path", "")[:80]
         if tool_name == "web_fetch":
             return args.get("url", "")[:80]
-        if tool_name in ("find_latest_log", "parse_training_metrics"):
-            return args.get("experiment", args.get("log_path", ""))[:60]
-        if tool_name == "monitor":
-            return args.get("file", args.get("output_dir", ""))[:60]
+        if tool_name in ("flagscale_train_monitor",):
+            return args.get("output_dir", args.get("log_path", args.get("experiment", "")))[:60]
         for v in args.values():
             if isinstance(v, str) and v:
                 return v[:60]

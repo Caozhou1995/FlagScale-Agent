@@ -14,12 +14,11 @@
 
 """Memory write tool — save facts, pitfalls, and insights."""
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_WRITE_MEMORY
+from flagscale_agent.react.tools.base import Tool
 
 
 class MemoryWriteTool(Tool):
     name = "memory_write"
-    effects = EFFECT_WRITE_MEMORY
     description = (
         "Save a memory entry for cross-session continuity. "
         "Three types only:\n"
@@ -34,7 +33,7 @@ class MemoryWriteTool(Tool):
         "- fact: info obtained by probing, not obvious, likely needed in future sessions\n"
         "- pitfall: debugging took >2 rounds, cause was non-obvious, likely to recur\n"
         "- insight: reusable pattern found, cannot digest now, has clear target artifact\n\n"
-        "Do NOT use memory for: experiment records (→ workspace_experiment), "
+        "Do NOT use memory for: "
         "session temp state (→ plan/context), easily re-read configs (→ read_file), "
         "complete procedures (→ skill), systematic knowledge (→ knowledge)."
     )

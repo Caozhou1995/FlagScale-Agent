@@ -1,74 +1,9 @@
 ---
+description: Set up inference environment for vllm-plugin-FL on hardware backends.
+  Covers SSH connection, Docker container creation, CPU-only vLLM install, plugin
+  editable install, FlagGems install, and import verification. Use before infer-hw-adapt
+  or infer-model-adapt.
 name: infer-env-setup
-description: Set up inference environment for vllm-plugin-FL on hardware backends. Covers SSH
-  connection, Docker container creation, CPU-only vLLM install, plugin editable install,
-  FlagGems install, and import verification. Use before infer-hw-adapt or infer-model-adapt.
-keywords:
-- inference
-- vllm
-- docker
-- container
-- install
-- environment
-- setup
-- ssh
-- flaggems
-- plugin
-requires:
-- workspace-layout
-suggests:
-- infer-hw-adapt
-- infer-model-adapt
-- ops-discipline
-constraints:
-- id: no_host_install
-  description: Never install inference packages (vLLM, plugin, FlagGems) directly on the host machine
-  trigger:
-    tools: [shell]
-    keywords: [pip install vllm, pip install -e, pip install flag]
-  prompt: Check if the agent is installing packages outside of a Docker container
-  correction: All inference package installs must happen inside the Docker container via `docker exec`.
-- id: cpu_only_vllm
-  description: vLLM must be installed with VLLM_TARGET_DEVICE=empty (CPU-only)
-  trigger:
-    tools: [shell]
-    keywords: [pip install vllm]
-  prompt: Check if VLLM_TARGET_DEVICE=empty is set during vLLM install
-  correction: The plugin provides the hardware backend. Install with VLLM_TARGET_DEVICE=empty.
-- id: pin_vllm_version
-  description: Always pin the exact vLLM version from plugin's pyproject.toml
-  trigger:
-    tools: [shell]
-    keywords: [pip install vllm]
-  prompt: Check if a specific vLLM version is pinned
-  correction: Read pyproject.toml first, then install with `pip install vllm==X.Y.Z`.
-- id: fresh_workspace
-  description: Each adaptation task uses a fresh clone in its own directory
-  trigger:
-    keywords: [reuse, existing directory, same workspace]
-  prompt: Check if the agent is reusing an existing workspace directory
-  correction: Create a new adapt/<backend>-vllm-<version>/ directory for each task.
-- id: network_host
-  description: Docker containers on GPU machines must use --network host
-  trigger:
-    tools: [shell]
-    keywords: [docker run, docker create]
-  prompt: Check if --network host is included in docker run/create command
-  correction: Add --network host to the docker command.
-- id: check_container_first
-  description: Check for existing containers before creating new ones
-  trigger:
-    keywords: [docker run, docker create]
-  prompt: Check if the agent verified no suitable container already exists
-  correction: Run `docker ps -a` first. Reuse running containers; start stopped ones.
-context_injection:
-  always:
-  - Critical Rules
-  - Remote Access
-  by_tool:
-    shell:
-    - Container Setup
-    - Environment Variables
 ---
 
 <!--

@@ -33,7 +33,7 @@ _RECOVERY_TOOLS = frozenset((
 ))
 
 # Tools that are eviction-related (don't trigger reminder during eviction itself)
-_EVICT_TOOLS = frozenset(("evict", "evict_list"))
+_EVICT_TOOLS = frozenset(("evict",))
 
 
 class PostEvictRecoveryGuard(Guard):
@@ -46,10 +46,8 @@ class PostEvictRecoveryGuard(Guard):
 
     name = "post_evict_recovery"
     priority = 15  # High priority — context loss is critical
-    overridable = True
 
     def __init__(self):
-        super().__init__()
         self._evicted_count = 0
         self._needs_recovery = False
         self._reminded = False
@@ -84,6 +82,9 @@ class PostEvictRecoveryGuard(Guard):
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         """Before non-recovery tool calls, remind to restore context."""
+        if not ctx.tool_name:
+            return None
+
         if not self._needs_recovery:
             return None
 
@@ -104,23 +105,16 @@ class PostEvictRecoveryGuard(Guard):
             f"significant context was lost. Before continuing, restore your working state:\n"
             f"1. plan_status() — check current task progress and step notes\n"
             f"2. memory_read(key='fact/cluster/') or relevant prefix — recover environment facts\n"
-            f"3. If needed: recall(index=N) for specific evicted content\n\n"
+            f"3. If needed: recall(index=N) for specific evicted content\n"
+            f"4. For deep recovery: read conversation_full.json in your session directory "
+            f"(grep/read_file on it to find past instructions, tool results, or code snippets "
+            f"without re-executing commands)\n\n"
             f"Do NOT proceed on stale assumptions. Verify key parameters "
             f"(IPs, ports, paths, parallelism config) from memory or plan notes.",
             reason="heavy_eviction_detected",
             category="post_evict_recovery",
         )
 
-    def reset_state(self):
-        super().reset_state()
-        self._evicted_count = 0
-        self._needs_recovery = False
-        self._reminded = False
-
     def reset_turn(self):
-        """Don't reset across turns — eviction impact persists."""
-        pass
-
-    def reset_new_turn(self):
-        """On new user message, if recovery was already reminded, allow continuation."""
+        """On new user message, allow re-reminding if still not recovered."""
         self._reminded = False

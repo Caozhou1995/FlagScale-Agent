@@ -12,10 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PlanUpdateGuard — enforces plan updates after step completion."""
+"""PlanUpdateGuard — enforces plan updates after step completion.
+
+Logic:
+- Track tool calls (iterations) since last plan_update
+- Every 30 iterations without plan_update → inject reminder
+- Reset counter when plan_update/plan_create called
+- Meta tools (plan_status, evict, memory_read) don't count
+"""
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.state_machine import AgentState
 
 
 class PlanUpdateGuard(Guard):
@@ -26,20 +32,23 @@ class PlanUpdateGuard(Guard):
     """
 
     name = "plan_update"
-    priority = 50  # Run after ConstraintGuard but before LoopDetectGuard
-    activate_on_states = {AgentState.EXECUTING}
+    priority = 50
+
+    REMIND_THRESHOLD = 30  # iterations without plan_update before injecting reminder
+
+    # Tools that don't count toward threshold (meta-operations)
+    _META_TOOLS = frozenset((
+        "plan_status",  # Read-only
+        "evict", "recall",
+        "memory_read", "memory_list",
+    ))
 
     def __init__(self, task_plan):
         self._task_plan = task_plan
-        self._last_update_turn = -1
-        self._turns_since_update = 0
+        self._iters_since_update = 0
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         """Check if plan needs updating after tool execution."""
-        # Only enforce if a plan exists with active steps
-        if not self._task_plan:
-            return None
-
         active_plan = self._task_plan.get_active()
         if not active_plan:
             return None
@@ -48,30 +57,29 @@ class PlanUpdateGuard(Guard):
         if not steps:
             return None
 
-        # Track plan_update calls
-        if ctx.tool_name == "plan_update":
-            self._last_update_turn = ctx.turn_count
-            self._turns_since_update = 0
+        # Plan updated — reset counter
+        if ctx.tool_name in ("plan_update", "plan_create"):
+            self._iters_since_update = 0
             return None
 
-        # Count actual turns (not tool calls) since last update
-        if ctx.turn_count > self._last_update_turn:
-            turns_elapsed = ctx.turn_count - self._last_update_turn
-        else:
-            turns_elapsed = self._turns_since_update
+        # Meta tools don't count
+        if ctx.tool_name in self._META_TOOLS:
+            return None
 
-        # Inject reminder if plan hasn't been updated in 3+ actual turns
-        if turns_elapsed >= 3 and ctx.tool_name not in ("plan_status", "plan_create"):
+        self._iters_since_update += 1
+
+        # Periodic reminder every 30 iterations
+        if self._iters_since_update > 0 and self._iters_since_update % self.REMIND_THRESHOLD == 0:
             doing_steps = [s for s in steps if s.get("status") == "doing"]
             if doing_steps:
                 step_id = doing_steps[0].get("id")
                 return GuardVerdict.inject(
                     message=(
-                        f"[PlanUpdate] Active step {step_id} not updated in {turns_elapsed} turns. "
-                        f"Mark it done/skipped, or add notes (decisions, attempts, key values) "
-                        f"to preserve context."
+                        f"[PlanUpdate] Active step {step_id} not updated in {self._iters_since_update} iterations. "
+                        f"Mark it done/skipped, or add notes to preserve context."
                     ),
-                    reason="plan_not_updated"
+                    reason="plan_not_updated",
+                    category="plan_update",
                 )
 
         return None

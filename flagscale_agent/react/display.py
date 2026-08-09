@@ -201,10 +201,10 @@ _TOOL_ICONS = {
     "plan_create": "📋",
     "plan_update": "📋",
     "plan_status": "📋",
-    "find_latest_log": "📄",
+    "flagscale_train_monitor": "🚂",
     "evict": "🗑️",
     "recall": "↩️",
-    "evict_list": "📑",
+
 }
 
 
@@ -314,7 +314,7 @@ def pasted_input(text: str):
 
 # ── Banner ──────────────────────────────────────────────────────────────
 
-def banner(provider, model, mode=None, context_window=None, extra_lines=None):
+def banner(provider, model, context_window=None, extra_lines=None):
     from flagscale_agent import __version__
 
     # ASCII logo
@@ -331,10 +331,9 @@ def banner(provider, model, mode=None, context_window=None, extra_lines=None):
     _print()
 
     title = f"FlagScale Agent v{__version__}"
-    mode_str = f" | Mode: {mode}" if mode else ""
     ctx_str = f" | Context: {context_window // 1000}k" if context_window else ""
-    info = f"Provider: {provider} | Model: {model}{mode_str}{ctx_str}"
-    cmds = "Commands: /skill  /plan  /save  /resume  /memory  /mode  /compact  /reset  /reload  /quit"
+    info = f"Provider: {provider} | Model: {model}{ctx_str}"
+    cmds = "Commands: /resume  /reload  /session  /quit"
     lines = [info, cmds]
     if extra_lines:
         lines.extend(extra_lines)
@@ -413,35 +412,6 @@ def thinking_clear():
     """Cancel thinking — removes the line entirely. Alias for thinking_done."""
     thinking_done()
 
-
-# ── Context compaction ─────────────────────────────────────────────────
-
-_last_compaction_to = 0
-_compaction_suppressed = 0
-
-
-def context_compacted(from_tokens, to_tokens, compaction_num=None, ratio=None):
-    global _last_compaction_to, _compaction_suppressed
-    # Clear any in-progress thinking animation so we print on a fresh line
-    thinking_done()
-    # Suppress if change from last notification is < 5k tokens
-    if abs(to_tokens - _last_compaction_to) < 5000 and _last_compaction_to > 0:
-        _compaction_suppressed += 1
-        if _compaction_suppressed >= 5:
-            from_k = from_tokens // 1000
-            to_k = to_tokens // 1000
-            _print(dim(f"📦 Context compacted ×{_compaction_suppressed + 1}: now {to_k}k tokens"))
-            _compaction_suppressed = 0
-            _last_compaction_to = to_tokens
-        return
-    _compaction_suppressed = 0
-    _last_compaction_to = to_tokens
-    from_k = from_tokens // 1000
-    to_k = to_tokens // 1000
-    detail = f"{from_k}k → {to_k}k"
-    if compaction_num is not None and ratio is not None:
-        detail += f" (#{compaction_num}, target {int(ratio * 100)}%)"
-    _print(dim(f"📦 Context compacted: {detail}"))
 
 
 # ── LLM done ────────────────────────────────────────────────────────────
@@ -565,19 +535,9 @@ class _ParallelDisplay:
         self._thread = threading.Thread(target=self._animate, daemon=True)
         self._thread.start()
 
-    def add_extra_lines(self, count):
-        """Track lines printed below the display area by external code."""
-        with self._lock:
-            self._extra_lines += count
-
     def mark_done(self, index, elapsed, error=False, detail=""):
         with self._lock:
             self._results[index] = (elapsed, error, detail)
-
-    def update_hint(self, index, hint):
-        """Update a running tool's hint text (e.g. health check status)."""
-        with self._lock:
-            self._hints[index] = hint
 
     def _animate(self):
         while not self._stop.is_set():
@@ -672,11 +632,6 @@ def parallel_tool_update(index, elapsed, error=False, detail=""):
         _parallel_display.mark_done(index, elapsed, error, detail)
 
 
-def parallel_tool_hint(index, hint):
-    """Update a running tool's hint (e.g. health check diagnosis)."""
-    if _parallel_display and not _parallel_display._stop.is_set():
-        _parallel_display.update_hint(index, hint)
-
 
 def parallel_tools_finish():
     """Stop parallel display and do final redraw."""
@@ -684,13 +639,6 @@ def parallel_tools_finish():
     if _parallel_display:
         _parallel_display.finish()
         _parallel_display = None
-
-
-# ── Guard display ──────────────────────────────────────────────────────────────
-
-def _guard_truncate_line(line: str, max_chars: int = 120) -> str:
-    """Return guard message line as-is (no truncation)."""
-    return line
 
 
 # ── Turn / session summary ──────────────────────────────────────────────
@@ -715,7 +663,7 @@ def guard_inject(message):
     lines = [l for l in message.strip().split('\n') if l.strip()]
     if not lines:
         return
-    _print(f"  {dim('🛡')} {dim(lines[0].strip())}")
+    _print(f"  🛡 {dim(lines[0].strip())}")
     for line in lines[1:]:
         _print(f"     {dim(line.strip())}")
 
@@ -760,24 +708,6 @@ def turn_summary(turn_num, elapsed, input_tokens, output_tokens,
     _print()
 
 
-# ── File / session ──────────────────────────────────────────────────────
-
-# ── Skill / plan ────────────────────────────────────────────────────────
-
-def plan_summary(text):
-    for line in text.split("\n"):
-        if line.startswith("Plan:"):
-            _print(cyan(line))
-        elif line.strip().startswith("[✓]"):
-            _print(dim(line))
-        elif line.strip().startswith("[→]"):
-            _print(yellow(line))
-        elif line.startswith("Progress:"):
-            _print(dim(line))
-        else:
-            _print(line)
-
-
 def interrupted():
     _stop_all_spinners()
     _print(yellow("\n  ⚠  Interrupted. Back to prompt."))
@@ -786,10 +716,6 @@ def interrupted():
 def goodbye():
     _stop_all_spinners()
     _print(green("\n  I'll remember where we left off. See you next time. 🚀\n"))
-
-
-def skill_auto_loaded(name):
-    _print(magenta(f"  🔧 Auto-loaded skill: {name}"))
 
 
 # ── Markdown rendering ──────────────────────────────────────────────────

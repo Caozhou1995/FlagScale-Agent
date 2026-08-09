@@ -1,7 +1,7 @@
 # know-source-analysis
 # 分析标准方法论：基础设施源码分析、模型实现分析、论文技术报告调研、硬件与通信基础设施分析的文档产出规范
 
-## analysis_standards/01_infrastructure_analysis.md (322 lines)
+## analysis_standards/01_infrastructure_analysis.md (333 lines)
 L1: 训练基础设施源码分析标准
   L13: 一、核心原则
   L27: 二、文档结构模板
@@ -38,8 +38,9 @@ L32: 第N章：[主题名称] 深度源码分析
     L275: know-torch-distributed（5章，平均 ~381 行）
     L285: know-flash-attn（5章，平均 ~361 行）
     L295: know-profiling（5章，平均 ~277 行）
-    L305: 其他知识组汇总
-    L317: 总结
+    L305: know-flagscale（6章，平均 ~184 行）
+    L316: 其他知识组汇总
+    L328: 总结
 
 ## analysis_standards/02_implementation_analysis.md (191 lines)
 L1: 模型训练实现分析标准

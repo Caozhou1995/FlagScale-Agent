@@ -46,7 +46,7 @@ EXPECTED_SKILLS = {
     "infer-plugin-upgrade",
 }
 
-REQUIRED_FRONTMATTER_FIELDS = {"name", "description", "keywords"}
+REQUIRED_FRONTMATTER_FIELDS = {"name", "description"}
 
 
 @pytest.fixture
@@ -97,15 +97,7 @@ class TestSkillFrontmatter:
             f"Skill directory '{skill_name}' has mismatched name: '{meta.get('name')}'"
         )
 
-    @pytest.mark.parametrize("skill_name", sorted(EXPECTED_SKILLS))
-    def test_keywords_is_nonempty_list(self, skill_name):
-        skill_file = os.path.join(SKILLS_DIR, skill_name, "SKILL.md")
-        with open(skill_file, "r", encoding="utf-8") as f:
-            content = f.read()
-        meta, _ = SkillManager._parse_frontmatter(content)
-        keywords = meta.get("keywords", [])
-        assert isinstance(keywords, list), f"Skill '{skill_name}' keywords is not a list"
-        assert len(keywords) > 0, f"Skill '{skill_name}' has empty keywords"
+
 
     @pytest.mark.parametrize("skill_name", sorted(EXPECTED_SKILLS))
     def test_description_is_nonempty(self, skill_name):

@@ -21,7 +21,6 @@ import threading
 import time
 import uuid
 
-from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import yaml
@@ -29,41 +28,8 @@ import yaml
 
 
 
-@dataclass
-class StepCheckpoint:
-    """Checkpoint recorded when a plan step completes."""
-
-    step_id: int
-    timestamp: float
-    files_modified: List[str] = field(default_factory=list)
-    memory_keys: List[str] = field(default_factory=list)
-    summary: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "step_id": self.step_id,
-            "timestamp": self.timestamp,
-            "files_modified": self.files_modified,
-            "memory_keys": self.memory_keys,
-            "summary": self.summary,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "StepCheckpoint":
-        return cls(
-            step_id=data.get("step_id", 0),
-            timestamp=data.get("timestamp", 0.0),
-            files_modified=data.get("files_modified", []),
-            memory_keys=data.get("memory_keys", []),
-            summary=data.get("summary", ""),
-        )
-
 VALID_STEP_STATUSES = ("pending", "doing", "done", "skipped", "blocked")
 VALID_PLAN_STATUSES = ("active", "paused", "completed", "abandoned")
-
-# Auto-sync thresholds
-_STEP_STALE_TURNS = 10  # A "doing" step with no update for this many turns is stale
-_PLAN_REBUILD_FAILURES = 3  # Consecutive failures before suggesting rebuild
 
 # Plan ID must only contain safe characters (prevent path traversal)
 _PLAN_ID_RE = re.compile(r'^plan_[a-zA-Z0-9_-]+$')
@@ -83,7 +49,6 @@ class TaskPlan:
     def __init__(self, plan_dir: str):
         self._dir = plan_dir
         self._lock = threading.RLock()
-        self._checkpoints: Dict[str, Dict[int, StepCheckpoint]] = {}  # plan_id → {step_id → checkpoint}
 
     def _plan_path(self, plan_id: str) -> str:
         # Prevent path traversal
@@ -155,7 +120,6 @@ class TaskPlan:
                     "title": desc,
                     "status": "pending",
                     "notes": "",
-                    "experiments": [],
                     "depends_on": [i - 1] if i > 1 else [],
                 })
 
@@ -223,18 +187,6 @@ class TaskPlan:
                 raise ValueError(f"Invalid status: {status}")
 
             step = self._find_step(plan, step_id)
-
-            # Plan Phase Gate: block completion if the NEW notes contain deferred work markers
-            # (only check the incoming note, not historical appended notes)
-            if status == "done" and notes:
-                _DEFERRED_MARKERS = ("todo", "deferred", "skipped", "pending", "later", "not yet", "tbd")
-                found = [m for m in _DEFERRED_MARKERS if m in notes.lower()]
-                if found:
-                    raise ValueError(
-                        f"Step {step_id} has unfinished markers ({', '.join(found)}) in notes. "
-                        f"Move deferred work to a new step with add_steps, or remove the markers."
-                    )
-
             step["status"] = status
             if notes:
                 # Append mode: notes accumulate as a log, one line per update
@@ -296,39 +248,6 @@ class TaskPlan:
                         ns["depends_on"] = [last_id]
                         last_id = ns["id"]
                 plan["steps"].extend(new_steps)
-
-            self._save(plan)
-            return plan
-
-    def link_experiment(self, step_id: int, experiment_name: str) -> dict:
-        """Link an experiment to a plan step.
-
-        If the experiment is already linked to other steps, returns the plan
-        with a warning annotation so the agent knows coordination is needed.
-        """
-        with self._lock:
-            plan = self.get_active()
-            if not plan:
-                raise ValueError("No active plan")
-            step = self._find_step(plan, step_id)
-
-            # Check if this experiment is already linked to other steps
-            other_steps = []
-            for s in plan["steps"]:
-                if s["id"] != step_id and experiment_name in s.get("experiments", []):
-                    other_steps.append(s["id"])
-
-            if "experiments" not in step or not isinstance(step.get("experiments"), list):
-                step["experiments"] = []
-            if experiment_name not in step["experiments"]:
-                step["experiments"].append(experiment_name)
-
-            if other_steps:
-                step.setdefault("_shared_experiment_note", "")
-                step["_shared_experiment_note"] = (
-                    f"Experiment '{experiment_name}' is shared with step(s) {other_steps}. "
-                    f"Coordinate changes — modifications affect all linked steps."
-                )
 
             self._save(plan)
             return plan
@@ -449,12 +368,6 @@ class TaskPlan:
         for s in plan["steps"]:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"{s['id']}. [{icon}] {s['title']}"
-            exps = s.get("experiments", [])
-            if exps:
-                line += f" [exp: {', '.join(exps)}]"
-            shared_note = s.get("_shared_experiment_note", "")
-            if shared_note:
-                line += f" ⚠️ {shared_note}"
             lines.append(line)
             if s.get("notes"):
                 for note_line in s["notes"].split("\n"):
@@ -470,9 +383,6 @@ class TaskPlan:
         for s in plan["steps"]:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"  {s['id']}. [{icon}] {s['title']}"
-            exps = s.get("experiments", [])
-            if exps:
-                line += f" [exp: {', '.join(exps)}]"
             lines.append(line)
             if s.get("notes"):
                 for note_line in s["notes"].split("\n"):
@@ -520,206 +430,3 @@ class TaskPlan:
                 continue
         return count
 
-    # ── Auto-sync: tool results → plan step updates ──────────────────────
-
-    def auto_sync_step(self, tool_name: str, success: bool, result_summary: str = "", turn: int = 0):
-        """Auto-update the current 'doing' step based on tool execution results.
-
-        Called after productive tool execution to keep plan in sync with reality.
-        - success=True on a productive tool → mark step done via update_step
-          (which enforces deferred work validation)
-        - success=False → append failure note to step
-        """
-        with self._lock:
-            plan = self.get_active()
-            if not plan:
-                return
-
-            doing_steps = [s for s in plan["steps"] if s["status"] == "doing"]
-            if not doing_steps:
-                return
-
-            step = doing_steps[0]
-
-            # Track turn for staleness detection
-            step["_last_activity_turn"] = turn
-
-            if success and tool_name in ("write_file", "edit_file"):
-                # Delegate to update_step so deferred work validation applies
-                notes = result_summary if result_summary else ""
-                try:
-                    plan = self.update_step(step["id"], "done", notes=notes)
-                except ValueError as e:
-                    # Deferred work found — append note instead
-                    step["notes"] = (step.get("notes", "") + f" ⚠ auto-done blocked: {e}").strip()
-                    self._save(plan)
-            elif not success:
-                # Failure — append to notes
-                failures = step.get("_failure_count", 0) + 1
-                step["_failure_count"] = failures
-                note = f" [fail #{failures}: {result_summary[:80]}]" if result_summary else f" [fail #{failures}]"
-                step["notes"] = (step.get("notes", "") + note).strip()
-                self._save(plan)
-
-    def _auto_advance(self, plan: dict):
-        """Advance the next pending step to 'doing' after current step completes."""
-        for s in plan["steps"]:
-            if s["status"] == "pending":
-                deps = s.get("depends_on", [])
-                if not deps or all(
-                    self._find_step(plan, d)["status"] in ("done", "skipped")
-                    for d in deps
-                ):
-                    s["status"] = "doing"
-                    break
-
-    # ── Consistency check ────────────────────────────────────────────────
-
-    def check_consistency(self, current_turn: int) -> Optional[str]:
-        """Check plan consistency and return a warning message if issues found.
-
-        Called periodically (every N turns) to detect:
-        - Stale "doing" steps (no activity for too many turns)
-        - Steps with multiple failures still marked "doing"
-        - Plan overall progress stalled
-        """
-        plan = self.get_active()
-        if not plan:
-            return None
-
-        issues = []
-        doing_steps = [s for s in plan["steps"] if s["status"] == "doing"]
-
-        for step in doing_steps:
-            last_activity = step.get("_last_activity_turn", 0)
-            turns_stale = current_turn - last_activity if last_activity else current_turn
-
-            # Stale step detection
-            if turns_stale >= _STEP_STALE_TURNS:
-                issues.append(
-                    f"Step {step['id']} ('{step['title'][:40]}') has been 'doing' for "
-                    f"{turns_stale} turns without progress. Consider: is it still relevant?"
-                )
-
-            # Repeated failure detection
-            failures = step.get("_failure_count", 0)
-            if failures >= 3:
-                issues.append(
-                    f"Step {step['id']} ('{step['title']}') has {failures} failures. "
-                    f"Consider skipping it or replanning."
-                )
-
-        if not issues:
-            return None
-
-        return (
-            "\n[PLAN CONSISTENCY CHECK]\n"
-            + "\n".join(f"  ⚠ {issue}" for issue in issues)
-            + "\nConsider: plan_update(action='abandon') + plan_create to replan, "
-            "or plan_update(action='step_skip') for blocked steps."
-        )
-
-    def should_rebuild(self, consecutive_failures: int) -> bool:
-        """Return True if the plan should be rebuilt due to repeated failures."""
-        if consecutive_failures < _PLAN_REBUILD_FAILURES:
-            return False
-        plan = self.get_active()
-        if not plan:
-            return False
-        doing_steps = [s for s in plan["steps"] if s["status"] == "doing"]
-        if doing_steps:
-            failures = doing_steps[0].get("_failure_count", 0)
-            return failures >= _PLAN_REBUILD_FAILURES
-        return False
-
-    def record_turn_activity(self, turn: int):
-        """Record that the current turn had activity on the active plan's doing step."""
-        with self._lock:
-            plan = self.get_active()
-            if not plan:
-                return
-            doing_steps = [s for s in plan["steps"] if s["status"] == "doing"]
-            if doing_steps:
-                doing_steps[0]["_last_activity_turn"] = turn
-                self._save(plan)
-
-    # ── Checkpoint & Rollback ────────────────────────────────────────────────
-
-    def checkpoint(self, step_id: int, files: List[str] = None,
-                   memory_keys: List[str] = None, summary: str = "") -> Optional[StepCheckpoint]:
-        """Record a checkpoint when a plan step completes.
-
-        Called automatically when update_step marks a step as 'done'.
-        Stores which files were modified and which memory keys were written.
-        """
-        plan = self.get_active()
-        if not plan:
-            return None
-
-        plan_id = plan.get("id", "")
-        cp = StepCheckpoint(
-            step_id=step_id,
-            timestamp=time.time(),
-            files_modified=files or [],
-            memory_keys=memory_keys or [],
-            summary=summary,
-        )
-
-        if plan_id not in self._checkpoints:
-            self._checkpoints[plan_id] = {}
-        self._checkpoints[plan_id][step_id] = cp
-
-        return cp
-
-    def get_checkpoint(self, step_id: int) -> Optional[StepCheckpoint]:
-        """Get checkpoint for a specific step in the active plan."""
-        plan = self.get_active()
-        if not plan:
-            return None
-        plan_id = plan.get("id", "")
-        plan_cps = self._checkpoints.get(plan_id, {})
-        return plan_cps.get(step_id)
-
-    def get_rollback_info(self, step_id: int) -> str:
-        """Get rollback information for a step — what was done and how to undo.
-
-        Does NOT perform actual rollback (too dangerous). Returns information
-        so the agent knows where to restart from.
-        """
-        plan = self.get_active()
-        if not plan:
-            return "No active plan."
-
-        plan_id = plan.get("id", "")
-        plan_cps = self._checkpoints.get(plan_id, {})
-
-        # Find all checkpoints from step_id onward
-        steps_to_rollback = sorted(
-            [sid for sid in plan_cps if sid >= step_id]
-        )
-
-        if not steps_to_rollback:
-            return f"No checkpoints found from step {step_id} onward."
-
-        lines = [f"Rollback info from step {step_id}:"]
-        for sid in steps_to_rollback:
-            cp = plan_cps[sid]
-            lines.append(f"  Step {sid}: {cp.summary}")
-            if cp.files_modified:
-                lines.append(f"    Files modified: {', '.join(cp.files_modified)}")
-            if cp.memory_keys:
-                lines.append(f"    Memory keys written: {', '.join(cp.memory_keys)}")
-
-        lines.append("")
-        lines.append("To rollback: revert the listed files and re-execute from step "
-                     f"{step_id}. Memory keys may need to be updated.")
-        return "\n".join(lines)
-
-    def list_checkpoints(self) -> List[Dict]:
-        """List all checkpoints for the active plan."""
-        plan = self.get_active()
-        if not plan:
-            return []
-        plan_id = plan.get("id", "")
-        plan_cps = self._checkpoints.get(plan_id, {})
-        return [cp.to_dict() for cp in sorted(plan_cps.values(), key=lambda c: c.step_id)]

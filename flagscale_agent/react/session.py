@@ -43,7 +43,8 @@ def get_session_dir(session_id: str) -> str:
 def save_conversation(session_dir: str, session_id: str, messages: List[Dict[str, Any]],
                       loaded_skills: List[str] = None, metadata: Dict = None,
                       completed: bool = False, session_summary: str = None,
-                      session_input_tokens: int = 0, session_output_tokens: int = 0) -> str:
+                      session_input_tokens: int = 0, session_output_tokens: int = 0,
+                      turn_count: int = 0, session_input_history: List[str] = None) -> str:
     """Save conversation to session_dir/conversation.json. Overwrites on each call.
 
     Uses atomic write (tmp file + rename) to prevent corruption on crash.
@@ -59,6 +60,8 @@ def save_conversation(session_dir: str, session_id: str, messages: List[Dict[str
         "metadata": metadata or {},
         "session_input_tokens": session_input_tokens,
         "session_output_tokens": session_output_tokens,
+        "turn_count": turn_count,
+        "session_input_history": session_input_history or [],
     }
     if session_summary:
         data["session_summary"] = session_summary
@@ -152,7 +155,7 @@ def find_resumable_sessions(sessions_root: str = None) -> List[Dict[str, Any]]:
                 "session_dir": entry_path,
                 "timestamp": data.get("timestamp", 0),
                 "loaded_skills": data.get("loaded_skills", []),
-                "user_turns": len(user_msgs),
+                "user_turns": data.get("turn_count") or len(user_msgs),
                 "last_user_msg": last_user,
                 "session_summary": data.get("session_summary", ""),
             })

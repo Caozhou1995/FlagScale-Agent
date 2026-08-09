@@ -57,7 +57,6 @@ def main(
 
     from flagscale_agent.react.config import AgentConfig
     from flagscale_agent.react.agent import WorkerAgent
-    from flagscale_agent.react.orchestrator import Orchestrator
 
     if config:
         cfg = AgentConfig.from_yaml(str(config))
@@ -74,18 +73,6 @@ def main(
         cfg.confirm_commands = False
 
     agent_instance = WorkerAgent(cfg)
-
-    # Wire Orchestrator with shared infrastructure
-    orchestrator = Orchestrator(
-        provider=agent_instance.provider,
-        tool_registry=agent_instance.tool_registry,
-        skill_manager=agent_instance.skill_manager,
-        session_memory=agent_instance.memory,
-        task_plan=agent_instance.task_plan,
-        experiment_manager=agent_instance._experiment_manager,
-        config=cfg,
-    )
-    agent_instance._orchestrator = orchestrator
 
     agent_instance.run(single_shot_query=query)
 

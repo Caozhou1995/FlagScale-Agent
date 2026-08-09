@@ -14,7 +14,7 @@ class TestShellDictCommandFix:
     def test_shell_execute_rejects_dict_command(self):
         """Shell execute() returns ERROR for dict commands."""
         from flagscale_agent.react.tools.shell import ShellTool
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command={"type": "string", "value": "ls"})
         assert "ERROR" in result
         assert "dict" in result
@@ -22,14 +22,14 @@ class TestShellDictCommandFix:
     def test_shell_execute_rejects_list_command(self):
         """Shell execute() returns ERROR for list commands."""
         from flagscale_agent.react.tools.shell import ShellTool
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command=["ls", "-la"])
         assert "ERROR" in result
 
     def test_shell_execute_accepts_string_command(self):
         """Shell execute() works normally for string commands."""
         from flagscale_agent.react.tools.shell import ShellTool
-        tool = ShellTool(require_confirm=False)
+        tool = ShellTool()
         result = tool.execute(command="echo hello_test_12345")
         assert "hello_test_12345" in result
 
@@ -59,22 +59,6 @@ class TestShellDictCommandFix:
 
         assert isinstance(raw_args["command"], str)
         assert "description" in raw_args["command"]
-
-    def test_env_compat_guard_handles_dict_command(self):
-        """EnvCompatGuard.check_pre doesn't crash on dict commands."""
-        from flagscale_agent.react.guard.env_compat import EnvCompatGuard
-        from flagscale_agent.react.guard import GuardContext
-        guard = EnvCompatGuard()
-        ctx = GuardContext(
-            tool_name="shell",
-            tool_args={"command": {"type": "string", "value": "echo hello"}},
-            tool_effects=None,
-        )
-        # Should NOT raise 'dict' object has no attribute 'lower'
-        # The key test: no exception is thrown
-        result = guard.check_pre(ctx)
-        # Result is None (no guard action needed for a simple echo)
-        assert result is None
 
 
 if __name__ == "__main__":

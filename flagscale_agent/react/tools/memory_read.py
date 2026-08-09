@@ -14,12 +14,11 @@
 
 """Memory read tool — retrieve a specific memory entry or list by prefix."""
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_READ_MEMORY
+from flagscale_agent.react.tools.base import Tool
 
 
 class MemoryReadTool(Tool):
     name = "memory_read"
-    effects = EFFECT_READ_MEMORY
     description = (
         "Read a specific memory entry by key, or list entries by prefix.\n\n"
         "Exact key: memory_read(key='fact/cluster/ssh_port')\n"

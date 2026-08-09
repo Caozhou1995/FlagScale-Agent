@@ -17,7 +17,7 @@
 import os
 import re
 
-from flagscale_agent.react.tools.base import Tool, EFFECT_READ_FS
+from flagscale_agent.react.tools.base import Tool
 
 
 def _safe_torch_load(path: str):
@@ -173,7 +173,6 @@ def inspect_checkpoint(path, reference_path="", expected_keys="", sample_count=2
 
 class InspectCheckpointTool(Tool):
     name = "inspect_checkpoint"
-    effects = EFFECT_READ_FS
     description = (
         "Deep inspection of a PyTorch checkpoint (.pt/.bin/.safetensors). "
         "Reports key count, shape/dtype summary, detects anomalies (all-zero, NaN/Inf), "
