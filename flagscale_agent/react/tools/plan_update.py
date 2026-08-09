@@ -91,10 +91,6 @@ class PlanUpdateTool(Tool):
                 "type": "string",
                 "description": "Plan ID to reactivate (for reactivate action).",
             },
-            "experiment": {
-                "type": "string",
-                "description": "Experiment name to link to this step (for step_done/step_doing). Automatically appended to the step's experiments list.",
-            },
         },
         "required": ["action"],
     }
@@ -104,22 +100,17 @@ class PlanUpdateTool(Tool):
 
     def execute(self, **kwargs) -> str:
         action = kwargs["action"]
-        experiment = kwargs.get("experiment", "")
         try:
             if action == "step_done":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
                     return "ERROR: step_id required for step_done (integer or 'step_N' format)."
                 self._plan.update_step(step_id, "done", kwargs.get("notes", ""))
-                if experiment:
-                    self._plan.link_experiment(step_id, experiment)
             elif action == "step_doing":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
                     return "ERROR: step_id required for step_doing (integer or 'step_N' format)."
                 self._plan.update_step(step_id, "doing", kwargs.get("notes", ""))
-                if experiment:
-                    self._plan.link_experiment(step_id, experiment)
             elif action == "step_skip":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:

@@ -12,7 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PlanUpdateGuard — enforces plan updates after step completion."""
+"""PlanUpdateGuard — enforces plan updates after step completion.
+
+Logic:
+- Track tool calls (iterations) since last plan_update
+- Every 30 iterations without plan_update → inject reminder
+- Reset counter when plan_update/plan_create called
+- Meta tools (plan_status, evict, memory_read) don't count
+"""
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
@@ -27,12 +34,18 @@ class PlanUpdateGuard(Guard):
     name = "plan_update"
     priority = 50
 
+    REMIND_THRESHOLD = 30  # iterations without plan_update before injecting reminder
 
-    REMIND_THRESHOLD = 20  # turns without plan_update before injecting reminder
+    # Tools that don't count toward threshold (meta-operations)
+    _META_TOOLS = frozenset((
+        "plan_status",  # Read-only
+        "evict", "evict_list", "recall",
+        "memory_read", "memory_list",
+    ))
 
     def __init__(self, task_plan):
         self._task_plan = task_plan
-        self._last_update_turn = 0
+        self._iters_since_update = 0
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         """Check if plan needs updating after tool execution."""
@@ -44,24 +57,25 @@ class PlanUpdateGuard(Guard):
         if not steps:
             return None
 
-        # Track plan_update/plan_create calls as "plan touched"
+        # Plan updated — reset counter
         if ctx.tool_name in ("plan_update", "plan_create"):
-            self._last_update_turn = ctx.turn_count
+            self._iters_since_update = 0
             return None
 
-        # Skip plan-related reads
-        if ctx.tool_name == "plan_status":
+        # Meta tools don't count
+        if ctx.tool_name in self._META_TOOLS:
             return None
 
-        turns_elapsed = ctx.turn_count - self._last_update_turn
+        self._iters_since_update += 1
 
-        if turns_elapsed >= self.REMIND_THRESHOLD:
+        # Periodic reminder every 30 iterations
+        if self._iters_since_update > 0 and self._iters_since_update % self.REMIND_THRESHOLD == 0:
             doing_steps = [s for s in steps if s.get("status") == "doing"]
             if doing_steps:
                 step_id = doing_steps[0].get("id")
                 return GuardVerdict.inject(
                     message=(
-                        f"[PlanUpdate] Active step {step_id} not updated in {turns_elapsed} turns. "
+                        f"[PlanUpdate] Active step {step_id} not updated in {self._iters_since_update} iterations. "
                         f"Mark it done/skipped, or add notes to preserve context."
                     ),
                     reason="plan_not_updated",
