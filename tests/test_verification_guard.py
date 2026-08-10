@@ -35,7 +35,7 @@ class TestVerificationGuard:
         
         assert verdict is not None
         assert verdict.action == "block"
-        assert "verification evidence required" in verdict.message.lower()
+        assert "verification required" in verdict.message.lower()
         assert verdict.reason == "step_done_no_verification"
 
     def test_allows_step_done_with_override_reason(self):

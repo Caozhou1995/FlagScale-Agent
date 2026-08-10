@@ -44,21 +44,11 @@ Execution flow:
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
-_VERIFICATION_REQUIRED = """[VerificationGuard] Verification evidence required before step_done.
+_VERIFICATION_REQUIRED = """[VerificationGuard] Step completion blocked — verification required.
 
-You called plan_update(action="step_done") without verification evidence.
+To proceed, verify the step goal was achieved, then retry with _override_reason.
 
-Complex operations can fail silently. Before marking a step complete, verify the goal was achieved:
-- Code changes: check syntax, imports, key functions exist
-- Git operations: grep conflict markers, verify file count, check key files parseable
-- Config changes: read config back, verify key fields present and valid
-- Installations: test import, run basic functionality
-
-To proceed:
-1. Run verification commands (grep/read_file/shell/python -c) — these are NOT blocked
-2. Once verified, call plan_update(step_done, _override_reason="verification details")
-
-Example: _override_reason="grep shows no conflicts, __init__.py parseable, import test passed"
+Example: plan_update(action="step_done", _override_reason="checked files, no conflicts, import works")
 """
 
 _POST_RECOVERY_REMINDER = """[VerificationGuard] Context was just recovered via hard_reset.
