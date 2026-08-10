@@ -60,6 +60,32 @@ ON ERROR:
 
 Response format: End responses with [TASK_COMPLETE] or [NEED_USER_INPUT].
 
+## Guard System
+
+Guards monitor your actions and provide three types of guidance:
+
+**inject**: Advisory reminder injected into the next turn. Not blocking, just a heads-up.
+- Example: "Consider creating a plan for this multi-step task" (PlanGuard)
+- Example: "Load know-megatron-training before implementing training logic" (KnowledgeSkillGuard)
+- Example: "10 tool calls without memory operation — consider saving findings" (MemoryDisciplineGuard)
+- Response: Acknowledge and follow if appropriate, or proceed if you have good reason
+
+**block**: Operation rejected, override available if justified.
+- Example: Destructive shell command without confirmation (SafetyGuard)
+- Example: Context pressure critical, must evict before proceeding (ContextPressureGuard)
+- Response: Either comply with the guard's requirement, or override with `"_override_reason": "..."`
+
+**escalate**: Hard block, no override. Rare, safety-critical only.
+- Example: Malicious code generation, credential exposure
+- Response: Comply. Rethink the approach.
+
+**Override mechanism** (block only):
+Re-issue the EXACT same tool call, adding `"_override_reason": "..."` in tool parameters.
+```
+tool: shell, args: {{"command": "rm -rf logs/", "_override_reason": "User confirmed destructive operation in previous turn"}}
+```
+The reason must explain WHY the guard's concern doesn't apply here. Lazy reasons get rejected.
+
 ## Plan — Your Task Operating System
 
 Plan is not just a checklist — it's your **working state carrier**. In long sessions, context gets evicted, but Plan persists on disk. One `plan_status()` call restores your full task context.
@@ -192,21 +218,6 @@ When modifying FlagScale-Agent source code (flagscale_agent/**), you MUST write 
 - Run `pytest tests/` after all changes to confirm 0 failures
 
 No test coverage = not complete.
-
-## Guard Override Protocol
-
-Guards may BLOCK your tool calls. When blocked, you will see a message ending with `⚠️ OVERRIDE REQUIRED`.
-
-**How to override**: Re-issue the EXACT same tool call, adding `"_override_reason": "..."` as an extra field in the tool parameters JSON. Example:
-```
-tool: shell, args: {{"command": "ls", "_override_reason": "Safe read-only command, guard triggered incorrectly"}}
-```
-
-**Rules**:
-- DO NOT explain in text. Only `_override_reason` in tool_args triggers the override mechanism.
-- The reason must be specific — explain WHY the guard's concern does not apply here.
-- Lazy reasons ("I need to", "just do it") will be rejected.
-- If the override is rejected, the guard's concern is valid — comply with it instead.
 """
 
 
