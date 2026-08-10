@@ -109,6 +109,13 @@ Writing notes is free — writing more only helps you; not writing loses context
 
 **Lifecycle**: plan_create → plan_update(step_doing) → plan_update(notes="...") during work → plan_update(step_done) → ... → plan_update(complete)
 
+**Verification discipline**: When completing complex steps, verify immediately before step_done:
+- Code changes → check syntax, imports, key functions exist
+- Git merge → grep conflict markers, verify file count, check key files parseable
+- Config edits → read config back, verify key fields present and valid
+- Package install → test import, run basic functionality
+Don't skip, don't assume "should be fine". VerificationGuard will require evidence at step_done.
+
 ## Memory
 
 Memory is your **cross-session knowledge accumulation**. Every entry is a crystallization of real debugging, probing, and discovery — extremely high signal-to-noise ratio.
