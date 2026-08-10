@@ -87,6 +87,7 @@ from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
+from flagscale_agent.react.guard.verification import VerificationGuard
 
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
@@ -234,6 +235,8 @@ class WorkerAgent:
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
         guard_registry.register(KnowledgeSkillGuard())
+        # Verification discipline guard (always active, block on step_done without evidence)
+        guard_registry.register(VerificationGuard())
 
         deps = KernelDeps(
             provider=self.provider,
@@ -591,6 +594,12 @@ class WorkerAgent:
 
         # 4. Save conversation state (persist full_log)
         self._save_conversation_full()
+        
+        # 5. Notify guards that recovery happened
+        if hasattr(self, 'kernel') and self.kernel and self.kernel.deps.guard_registry:
+            for guard in self.kernel.deps.guard_registry.guards:
+                if hasattr(guard, 'notify_recovery'):
+                    guard.notify_recovery()
 
         display.warn(
             f"[Hard Reset] Done. Cleared {stats['cleared_count']} messages, "
@@ -633,8 +642,7 @@ class WorkerAgent:
         history_file = get_input_history_file()
         os.makedirs(os.path.dirname(history_file), exist_ok=True)
         completer = WordCompleter(
-            ["/quit", "/reload", "/skill", "/save", "/memory",
-             "/plan", "/resume", "/reset", "/session"],
+            ["/quit", "/reload", "/resume", "/session"],
             sentence=True,
         )
         # Key bindings: Enter submits, but pasted newlines are preserved
