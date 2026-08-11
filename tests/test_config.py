@@ -42,7 +42,6 @@ class TestAgentConfig:
         assert cfg.max_iterations == 200
         assert cfg.max_context_tokens == 200000
         assert cfg.shell_remind_interval == 60
-        assert cfg.dangerous_commands_check is True
 
     def test_anthropic_default_model(self):
         cfg = AgentConfig(provider="anthropic")

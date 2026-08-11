@@ -18,21 +18,16 @@
 # ── LLM Provider ──
 provider: anthropic                        # anthropic | openai
 model: claude-sonnet-4-20250514            # Model name
+# api_key: sk-xxx                          # Optional: API key (defaults to env var)
+# base_url: https://api.custom.com/v1      # Optional: Custom API endpoint
 
-# ── Execution Mode ──
-mode: auto                                 # auto | confirm
-max_iterations: 200                        # Max tool-call turns per session
-
-# ── Skills ──
-auto_skill: true                           # Auto-load skills based on task context
-auto_plan: true                            # Auto-create plans for multi-step tasks
+# ── Execution Limits ──
+max_iterations: 200                        # Max iterations per turn (thinking → tool → observation loop)
+max_continuations: 200                     # Max consecutive empty responses before stopping
+max_context_tokens: 0                      # Context window size (0 = auto-detect from model)
+max_output_tokens: 8192                    # Max tokens per LLM response
 
 # ── Network (optional) ──
 # shell_env:
 #   HTTP_PROXY: "http://your-proxy:port"
 #   HTTPS_PROXY: "http://your-proxy:port"
-
-# ── Budget Limits ──
-# budget:
-#   max_tokens: 1000000                    # Max total tokens per session
-#   max_tool_calls: 500                    # Max tool calls per session

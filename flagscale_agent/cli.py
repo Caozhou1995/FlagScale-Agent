@@ -64,20 +64,16 @@ def main(
 
     from flagscale_agent.react.config import AgentConfig
     from flagscale_agent.react.agent import WorkerAgent
-
     if config:
         cfg = AgentConfig.from_yaml(str(config))
-        if provider != "anthropic":
-            cfg.provider = provider
+        # Always apply CLI overrides
+        cfg.provider = provider
         if model:
             cfg.model = model
         if base_url:
             cfg.base_url = base_url
     else:
         cfg = AgentConfig.auto_load(provider=provider, model=model, base_url=base_url)
-
-    if query:
-        cfg.confirm_commands = False
 
     agent_instance = WorkerAgent(cfg)
 
