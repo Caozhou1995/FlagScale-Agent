@@ -80,24 +80,21 @@ class AgentConfig:
     max_iterations: int = 200
     max_context_tokens: int = 0  # 0 = auto-detect from model
     shell_remind_interval: int = 60
-    dangerous_commands_check: bool = True
-    confirm_commands: bool = False
     max_output_tokens: int = 8192
     session_dir: Optional[str] = None
-    auto_skill: bool = True
-    auto_plan: bool = True
-    plugin_tool_dirs: List[str] = field(default_factory=list)
     skill_dirs: List[str] = field(default_factory=list)
     shell_env: Dict[str, str] = field(default_factory=dict)
-    poll_detect_window: int = 2
-    poll_interval: int = 15
-    poll_max_duration: int = 300
     max_continuations: int = 200
     _config_path: Optional[str] = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.model is None:
-            env_model = os.environ.get("ANTHROPIC_MODEL") if self.provider == "anthropic" else None
+            if self.provider == "anthropic":
+                env_model = os.environ.get("ANTHROPIC_MODEL")
+            elif self.provider == "openai":
+                env_model = os.environ.get("OPENAI_DEFAULT_MODEL")
+            else:
+                env_model = None
             self.model = env_model or DEFAULT_MODELS.get(self.provider, "claude-sonnet-4-20250514")
 
         # Auto-detect context window from model if not explicitly set
@@ -159,9 +156,38 @@ class AgentConfig:
             config = cls()
             config._config_path = config_path
 
+        # Apply overrides
         for k, v in overrides.items():
             if v is not None and hasattr(config, k):
                 setattr(config, k, v)
+        
+        # Re-run provider-dependent initialization if provider was overridden
+        if "provider" in overrides and overrides["provider"] is not None:
+            # Re-detect model, api_key, base_url based on the new provider
+            if "model" not in overrides or overrides["model"] is None:
+                if config.provider == "anthropic":
+                    env_model = os.environ.get("ANTHROPIC_MODEL")
+                elif config.provider == "openai":
+                    env_model = os.environ.get("OPENAI_DEFAULT_MODEL")
+                else:
+                    env_model = None
+                config.model = env_model or DEFAULT_MODELS.get(config.provider, "claude-sonnet-4-20250514")
+            
+            if "api_key" not in overrides or overrides["api_key"] is None:
+                if config.provider == "anthropic":
+                    config.api_key = (
+                        os.environ.get("ANTHROPIC_AUTH_TOKEN")
+                        or os.environ.get("ANTHROPIC_API_KEY")
+                    )
+                elif config.provider == "openai":
+                    config.api_key = os.environ.get("OPENAI_API_KEY")
+            
+            if "base_url" not in overrides or overrides["base_url"] is None:
+                if config.provider == "anthropic":
+                    config.base_url = os.environ.get("ANTHROPIC_BASE_URL")
+                elif config.provider == "openai":
+                    config.base_url = os.environ.get("OPENAI_BASE_URL")
+        
         return config
 
     def reload(self):

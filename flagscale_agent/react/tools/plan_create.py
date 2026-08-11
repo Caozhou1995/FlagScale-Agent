@@ -36,8 +36,23 @@ class PlanCreateTool(Tool):
             },
             "steps": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "Ordered list of step descriptions.",
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "acceptance": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["title"],
+                        },
+                    ]
+                },
+                "description": "Ordered list of step descriptions (strings) or structured steps (objects with title and optional acceptance).",
             },
         },
         "required": ["title", "steps"],
@@ -65,12 +80,26 @@ class PlanCreateTool(Tool):
 
         if not steps or not isinstance(steps, list):
             return "ERROR: At least one step is required."
-        # Ensure all items are strings (not nested structures)
-        steps = [str(s) for s in steps if s]
-        if not steps:
+        
+        # Normalize steps: keep dicts as-is, convert strings
+        normalized = []
+        for s in steps:
+            if not s:
+                continue
+            if isinstance(s, dict):
+                # Structured step
+                if "title" not in s:
+                    return f"ERROR: Step dict must have 'title' field: {s}"
+                normalized.append(s)
+            else:
+                # Plain string step
+                normalized.append(str(s))
+        
+        if not normalized:
             return "ERROR: At least one step is required."
+        
         try:
-            plan = self._plan.create(title, steps, self._session_id)
+            plan = self._plan.create(title, normalized, self._session_id)
             return f"Plan created.\n\n{self._plan.summary()}"
         except Exception as e:
             return f"ERROR: {e}"

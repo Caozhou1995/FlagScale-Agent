@@ -109,9 +109,36 @@ Writing notes is free — writing more only helps you; not writing loses context
 
 **Lifecycle**: plan_create → plan_update(step_doing) → plan_update(notes="...") during work → plan_update(step_done) → ... → plan_update(complete)
 
-**Verification discipline**: When completing complex steps, verify the goal was achieved before step_done.
+**Acceptance & Verification — structured quality gates**:
+- Define **acceptance criteria** when creating steps: `plan_create("Task", [{{"title": "Step A", "acceptance": ["A1", "A2"]}}])`
+- Acceptance = WHAT must be true when the step is done (observable, verifiable conditions)
+- When step_done, provide **verification evidence**: `plan_update(step_done, step_id=1, verification=["proof A1", "proof A2"])`
+- Verification = HOW you confirmed each acceptance criterion
 
-Don't assume "should be fine". VerificationGuard will require evidence at step_done.
+**Two verification modes**:
+1. **Structured** (step has acceptance): Must provide `verification=["..."]` list matching acceptance criteria
+2. **Override** (simple step, no acceptance): Must provide `_override_reason="checked X, confirmed Y"`
+
+**Examples**:
+```python
+# Mode 1: Structured (step has acceptance)
+plan_create("Refactor", [
+    {{"title": "Remove dead code", "acceptance": ["no import errors", "all tests pass", "git grep confirms removal"]}}
+])
+# ... work ...
+plan_update(step_done, step_id=1, verification=[
+    "python -m py_compile flagscale_agent/**/*.py → no errors",
+    "pytest tests/ → 784 passed",
+    "grep -r 'old_function' → no matches"
+])
+
+# Mode 2: Override (simple step)
+plan_create("Quick fix", ["Update README"])
+# ... work ...
+plan_update(step_done, step_id=1, _override_reason="checked file, typo fixed")
+```
+
+**Verification discipline**: VerificationGuard enforces this at step_done. Don't assume "should be fine" — verify first, then step_done.
 
 ## Memory
 

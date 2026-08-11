@@ -19,6 +19,13 @@ Usage:
     flagscale-agent --provider openai        # use OpenAI provider
     flagscale-agent --model gpt-4o           # specify model
     flagscale-agent "train qwen3 0.6b"       # single-shot query
+
+Environment variables:
+    ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN  # Anthropic API key
+    ANTHROPIC_MODEL                           # Default Anthropic model (e.g., claude-opus-4-20250514)
+    OPENAI_API_KEY                            # OpenAI API key
+    OPENAI_DEFAULT_MODEL                      # Default OpenAI model (e.g., gpt-4o-mini)
+    OPENAI_BASE_URL / ANTHROPIC_BASE_URL      # Custom API endpoints
 """
 
 from pathlib import Path
@@ -57,20 +64,16 @@ def main(
 
     from flagscale_agent.react.config import AgentConfig
     from flagscale_agent.react.agent import WorkerAgent
-
     if config:
         cfg = AgentConfig.from_yaml(str(config))
-        if provider != "anthropic":
-            cfg.provider = provider
+        # Always apply CLI overrides
+        cfg.provider = provider
         if model:
             cfg.model = model
         if base_url:
             cfg.base_url = base_url
     else:
         cfg = AgentConfig.auto_load(provider=provider, model=model, base_url=base_url)
-
-    if query:
-        cfg.confirm_commands = False
 
     agent_instance = WorkerAgent(cfg)
 

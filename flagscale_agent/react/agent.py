@@ -236,7 +236,7 @@ class WorkerAgent:
         # Knowledge-first guard (always active, inject-only)
         guard_registry.register(KnowledgeSkillGuard())
         # Verification discipline guard (always active, block on step_done without evidence)
-        guard_registry.register(VerificationGuard())
+        guard_registry.register(VerificationGuard(plan=self.task_plan))
 
         deps = KernelDeps(
             provider=self.provider,
