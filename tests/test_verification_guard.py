@@ -48,7 +48,8 @@ class TestVerificationGuard:
                 "action": "step_done",
                 "step_id": 3,
                 "_override_reason": "grep shows no conflicts, files parseable"
-            }
+            },
+            override_reason="grep shows no conflicts, files parseable"
         )
         verdict = guard.check_pre(ctx)
         

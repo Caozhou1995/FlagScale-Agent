@@ -54,16 +54,26 @@ class PlanUpdateTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "complete", "abandon", "deactivate", "reactivate", "batch"],
-                "description": "What to do: step_done/step_doing/step_skip (update a step), add_steps (insert new steps), complete/abandon (finish the plan), deactivate (pause current plan), reactivate (resume a paused plan by id), batch (update multiple steps at once).",
+                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "update_acceptance", "complete", "abandon", "deactivate", "reactivate", "batch"],
+                "description": "What to do: step_done/step_doing/step_skip (update a step), add_steps (insert new steps), update_acceptance (modify step acceptance criteria), complete/abandon (finish the plan), deactivate (pause current plan), reactivate (resume a paused plan by id), batch (update multiple steps at once).",
             },
             "step_id": {
                 "type": "integer",
-                "description": "Step number to update (for step_done/step_doing/step_skip).",
+                "description": "Step number to update (for step_done/step_doing/step_skip/update_acceptance).",
             },
             "notes": {
                 "type": "string",
                 "description": "Append a note to this step (scratchpad). Use freely to record: attempts, failures, key decisions, things to remember. Each call appends a new line — previous notes are preserved.",
+            },
+            "verification": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Verification evidence for step_done: what was checked, test results, output samples.",
+            },
+            "acceptance": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "New acceptance criteria (for update_acceptance action).",
             },
             "new_steps": {
                 "type": "array",
@@ -105,7 +115,8 @@ class PlanUpdateTool(Tool):
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
                     return "ERROR: step_id required for step_done (integer or 'step_N' format)."
-                self._plan.update_step(step_id, "done", kwargs.get("notes", ""))
+                verification = kwargs.get("verification", [])
+                self._plan.update_step(step_id, "done", kwargs.get("notes", ""), verification=verification)
             elif action == "step_doing":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
@@ -122,6 +133,14 @@ class PlanUpdateTool(Tool):
                     return "ERROR: new_steps required for add_steps."
                 after = _parse_step_id(kwargs.get("after_step_id"))
                 self._plan.add_steps(new_steps, after)
+            elif action == "update_acceptance":
+                step_id = _parse_step_id(kwargs.get("step_id"))
+                if not step_id:
+                    return "ERROR: step_id required for update_acceptance."
+                acceptance = kwargs.get("acceptance", [])
+                if not acceptance:
+                    return "ERROR: acceptance required for update_acceptance."
+                self._plan.update_acceptance(step_id, acceptance)
             elif action == "complete":
                 self._plan.complete()
             elif action == "abandon":

@@ -15,36 +15,49 @@
 """VerificationGuard — requires verification evidence when marking steps complete.
 
 Design principles:
-- Block plan_update(action="step_done") if no _override_reason provided
+- Block plan_update(action="step_done") if:
+  * Step has acceptance criteria AND no verification provided
+  * Step is complex (no acceptance defined) AND no _override_reason provided
 - Other tool calls (read_file/shell/grep) are completely unaffected
 - LLM can freely perform verification operations after being blocked
-- Once verified, LLM calls plan_update(step_done, _override_reason="...") to pass
-- Does not check override_reason content — any non-empty reason passes
-- Uses existing override mechanism — LLM already knows this pattern
+- Once verified, LLM calls with verification=["..."] or _override_reason to pass
+- Does not check verification content — any non-empty list passes
+
+Two verification modes:
+1. Structured: step has acceptance → must provide verification=["proof1", "proof2"]
+2. Override: no acceptance (simple step) → must provide _override_reason="checked X"
 
 Why this works:
-- To pass the block, LLM must write override_reason
-- Writing override_reason forces LLM to reflect "how do I know this step is done?"
-- The reflection itself improves verification discipline
+- Acceptance criteria define WHAT to verify
+- Verification list records HOW it was verified
+- Override_reason for simple steps maintains backward compatibility
 
-Execution flow:
+Execution flow (structured):
 1. LLM: plan_update(action="step_done", step_id=3)
-2. Guard: BLOCK - verification evidence required
+2. Guard: BLOCK - step has acceptance, verification required
 
-3. LLM: OK, let me verify first
-4. LLM: shell("grep '<<<<<<' -r .")  ← executes normally, not blocked
-5. LLM: read_file("/path/to/__init__.py")  ← executes normally
-6. LLM: shell("python -m py_compile *.py")  ← executes normally
+3. LLM: OK, let me verify acceptance criteria
+4. LLM: shell("pytest tests/")  ← executes normally
+5. LLM: read_file("output.log")  ← executes normally
 
-7. LLM: Verified, now I can step_done
-8. LLM: plan_update(action="step_done", step_id=3, _override_reason="grep shows no conflicts, files complete, parseable")
-9. Guard: Has override_reason, allow ✓
+6. LLM: plan_update(action="step_done", step_id=3, verification=["all tests passed", "log shows no errors"])
+7. Guard: Has verification, allow ✓
 """
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
-_VERIFICATION_REQUIRED = """[VerificationGuard] Step completion blocked — verification required.
+_VERIFICATION_REQUIRED_WITH_ACCEPTANCE = """[VerificationGuard] Step completion blocked — verification required.
+
+This step has acceptance criteria. Provide verification evidence matching each criterion.
+
+Example: plan_update(action="step_done", step_id=1, verification=["criterion 1 verified: ...", "criterion 2 verified: ..."])
+
+Acceptance criteria for this step:
+{acceptance}
+"""
+
+_VERIFICATION_REQUIRED_NO_ACCEPTANCE = """[VerificationGuard] Step completion blocked — verification required.
 
 To proceed, verify the step goal was achieved, then retry with _override_reason.
 
@@ -66,9 +79,11 @@ class VerificationGuard(Guard):
     
     Key design:
     - Only blocks plan_update(action="step_done"), other tool calls unaffected
+    - Two modes:
+      * Step has acceptance → must provide verification=["..."]
+      * Step has no acceptance → must provide _override_reason="..."
     - LLM can freely execute verification operations after being blocked
-    - Once verified, LLM calls with _override_reason to pass
-    - Does not check override_reason content
+    - Does not check verification/override_reason content
     
     Also injects a reminder after hard_reset recovery.
     """
@@ -76,7 +91,8 @@ class VerificationGuard(Guard):
     name = "verification"
     priority = 55
     
-    def __init__(self):
+    def __init__(self, plan=None):
+        self._plan = plan
         self._post_recovery = False
         self._recovery_reminded = False
     
@@ -87,16 +103,48 @@ class VerificationGuard(Guard):
             
             # Only check on step_done, other actions (step_doing/add_steps) pass through
             if action == "step_done":
-                override_reason = ctx.tool_args.get("_override_reason", "").strip()
+                step_id = ctx.tool_args.get("step_id")
+                verification = ctx.tool_args.get("verification", [])
+                override_reason = ctx.override_reason.strip()  # Use ctx.override_reason, not tool_args
                 
-                if not override_reason:
-                    return GuardVerdict.block(
-                        message=_VERIFICATION_REQUIRED,
-                        reason="step_done_no_verification",
-                        category="verification_required"
-                    )
-                # Has override_reason, allow — don't check content
-                return None
+                # Get step's acceptance criteria if plan is available
+                acceptance = []
+                if self._plan and step_id:
+                    try:
+                        plan_data = self._plan.get_active()
+                        if plan_data:
+                            for step in plan_data.get("steps", []):
+                                if step.get("id") == step_id:
+                                    acceptance = step.get("acceptance", [])
+                                    break
+                    except Exception:
+                        # If plan lookup fails, fall back to simple check
+                        pass
+                
+                # Mode 1: Step has acceptance → require verification list
+                if acceptance:
+                    if not verification:
+                        msg = _VERIFICATION_REQUIRED_WITH_ACCEPTANCE.format(
+                            acceptance="\n".join(f"  • {a}" for a in acceptance)
+                        )
+                        return GuardVerdict.block(
+                            message=msg,
+                            reason="step_done_with_acceptance_no_verification",
+                            category="verification_required"
+                        )
+                    # Has verification, allow
+                    return None
+                
+                # Mode 2: No acceptance (simple step) → require override_reason
+                else:
+                    if not override_reason:
+                        return GuardVerdict.block(
+                            message=_VERIFICATION_REQUIRED_NO_ACCEPTANCE,
+                            reason="step_done_no_verification",
+                            category="verification_required"
+                        )
+                    # Has override_reason, allow
+                    return None
         
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:

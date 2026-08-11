@@ -99,7 +99,17 @@ class TaskPlan:
         with open(active_path, "w", encoding="utf-8") as f:
             yaml.dump({"active_id": plan_id}, f)
 
-    def create(self, title: str, steps: List[str], session_id: str = "") -> dict:
+    def create(self, title: str, steps: List, session_id: str = "") -> dict:
+        """Create a new plan.
+        
+        Args:
+            title: Plan title
+            steps: List[str] or List[dict]. Each dict can have:
+                   - title: str (required)
+                   - acceptance: List[str] (optional)
+                   - other fields ignored for now
+            session_id: Session identifier
+        """
         with self._lock:
             # Pause any existing active plan (check both active.yaml and scan files)
             old = self.get_active()
@@ -114,14 +124,31 @@ class TaskPlan:
 
             plan_id = f"plan_{uuid.uuid4().hex[:8]}"
             step_list = []
-            for i, desc in enumerate(steps, 1):
-                step_list.append({
-                    "id": i,
-                    "title": desc,
-                    "status": "pending",
-                    "notes": "",
-                    "depends_on": [i - 1] if i > 1 else [],
-                })
+            for i, step_input in enumerate(steps, 1):
+                # Support both List[str] and List[dict]
+                if isinstance(step_input, str):
+                    step_dict = {
+                        "id": i,
+                        "title": step_input,
+                        "status": "pending",
+                        "notes": "",
+                        "depends_on": [i - 1] if i > 1 else [],
+                        "acceptance": [],
+                        "verification": [],
+                    }
+                elif isinstance(step_input, dict):
+                    step_dict = {
+                        "id": i,
+                        "title": step_input.get("title", f"Step {i}"),
+                        "status": "pending",
+                        "notes": "",
+                        "depends_on": [i - 1] if i > 1 else [],
+                        "acceptance": step_input.get("acceptance", []),
+                        "verification": [],
+                    }
+                else:
+                    raise ValueError(f"Step must be str or dict, got {type(step_input)}")
+                step_list.append(step_dict)
 
             plan = {
                 "id": plan_id,
@@ -178,7 +205,15 @@ class TaskPlan:
         except Exception:
             return None
 
-    def update_step(self, step_id: int, status: str, notes: str = "") -> dict:
+    def update_step(self, step_id: int, status: str, notes: str = "", verification: Optional[List[str]] = None) -> dict:
+        """Update step status, notes, and/or verification.
+        
+        Args:
+            step_id: Step to update
+            status: New status
+            notes: Notes to append
+            verification: Verification evidence (replaces existing)
+        """
         with self._lock:
             plan = self.get_active()
             if not plan:
@@ -195,6 +230,10 @@ class TaskPlan:
                     step["notes"] = existing + "\n" + notes
                 else:
                     step["notes"] = notes
+            
+            # Update verification if provided
+            if verification is not None:
+                step["verification"] = verification
 
             if status in ("done", "skipped"):
                 for s in plan["steps"]:
@@ -210,7 +249,41 @@ class TaskPlan:
             self._save(plan)
             return plan
 
-    def add_steps(self, steps: List[str], after_step_id: Optional[int] = None) -> dict:
+    def update_acceptance(self, step_id: int, acceptance: List[str]) -> dict:
+        """Update acceptance criteria for a step.
+        
+        Args:
+            step_id: Step to update
+            acceptance: New acceptance criteria (replaces existing)
+        """
+        with self._lock:
+            plan = self.get_active()
+            if not plan:
+                raise ValueError("No active plan")
+            
+            step = self._find_step(plan, step_id)
+            old_acceptance = step.get("acceptance", [])
+            step["acceptance"] = acceptance
+            
+            # Auto-append note about acceptance change
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            change_note = f"[Acceptance updated at {timestamp}]"
+            existing_notes = step.get("notes", "")
+            if existing_notes:
+                step["notes"] = existing_notes + "\n" + change_note
+            else:
+                step["notes"] = change_note
+            
+            self._save(plan)
+            return plan
+
+    def add_steps(self, steps: List, after_step_id: Optional[int] = None) -> dict:
+        """Add steps to active plan.
+        
+        Args:
+            steps: List[str] or List[dict]
+            after_step_id: Insert after this step (None = append at end)
+        """
         with self._lock:
             plan = self.get_active()
             if not plan:
@@ -220,15 +293,30 @@ class TaskPlan:
             next_id = max(existing_ids) + 1 if existing_ids else 1
 
             new_steps = []
-            for i, desc in enumerate(steps):
+            for i, step_input in enumerate(steps):
                 sid = next_id + i
-                new_steps.append({
-                    "id": sid,
-                    "title": desc,
-                    "status": "pending",
-                    "notes": "",
-                    "depends_on": [],
-                })
+                if isinstance(step_input, str):
+                    new_steps.append({
+                        "id": sid,
+                        "title": step_input,
+                        "status": "pending",
+                        "notes": "",
+                        "depends_on": [],
+                        "acceptance": [],
+                        "verification": [],
+                    })
+                elif isinstance(step_input, dict):
+                    new_steps.append({
+                        "id": sid,
+                        "title": step_input.get("title", f"Step {sid}"),
+                        "status": "pending",
+                        "notes": "",
+                        "depends_on": [],
+                        "acceptance": step_input.get("acceptance", []),
+                        "verification": [],
+                    })
+                else:
+                    raise ValueError(f"Step must be str or dict, got {type(step_input)}")
 
             if after_step_id is not None:
                 idx = next(
@@ -369,6 +457,22 @@ class TaskPlan:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"{s['id']}. [{icon}] {s['title']}"
             lines.append(line)
+            
+            # Show acceptance criteria
+            acceptance = s.get("acceptance", [])
+            if acceptance:
+                lines.append("   验收:")
+                for item in acceptance:
+                    lines.append(f"     • {item}")
+            
+            # Show verification evidence
+            verification = s.get("verification", [])
+            if verification:
+                lines.append("   产出:")
+                for item in verification:
+                    lines.append(f"     ✓ {item}")
+            
+            # Show notes
             if s.get("notes"):
                 for note_line in s["notes"].split("\n"):
                     lines.append(f"   📝 {note_line}")
@@ -384,9 +488,26 @@ class TaskPlan:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"  {s['id']}. [{icon}] {s['title']}"
             lines.append(line)
+            
+            # Show acceptance criteria
+            acceptance = s.get("acceptance", [])
+            if acceptance:
+                lines.append("      验收:")
+                for item in acceptance:
+                    lines.append(f"        • {item}")
+            
+            # Show verification evidence
+            verification = s.get("verification", [])
+            if verification:
+                lines.append("      产出:")
+                for item in verification:
+                    lines.append(f"        ✓ {item}")
+            
+            # Show notes
             if s.get("notes"):
                 for note_line in s["notes"].split("\n"):
                     lines.append(f"      📝 {note_line}")
+        
         done = sum(1 for s in plan["steps"] if s["status"] in ("done", "skipped"))
         lines.append(f"Progress: {done}/{len(plan['steps'])}")
         return "\n".join(lines)

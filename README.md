@@ -147,7 +147,7 @@ memory_write(
 ### Plans
 Multi-step tasks can be tracked with plans:
 ```bash
-# Agent creates a plan
+# Simple plan with string steps
 plan_create(
     title="Setup FlagScale training environment",
     steps=[
@@ -158,7 +158,36 @@ plan_create(
         "Launch training and monitor"
     ]
 )
-# Agent auto-continues to next step after each completion
+
+# Structured plan with acceptance criteria (recommended for complex tasks)
+plan_create(
+    title="Port Qwen2.5 to Megatron-LM-FL",
+    steps=[
+        {
+            "title": "Analyze Qwen2.5 architecture",
+            "acceptance": [
+                "Document all layer types and dimensions",
+                "Identify differences from standard Transformer",
+                "List required Megatron modules"
+            ]
+        },
+        {
+            "title": "Implement model in Megatron",
+            "acceptance": [
+                "All layers compile without errors",
+                "Forward pass shape matches reference",
+                "Unit tests pass"
+            ]
+        }
+    ]
+)
+
+# When completing steps with acceptance criteria, provide verification
+plan_update(step_done, step_id=1, verification=[
+    "Created docs/qwen25_architecture.md with full layer breakdown",
+    "Compared with LLaMA: uses RoPE, no bias in QKV",
+    "Listed modules: GPTModel, TransformerLayer, Attention, MLP"
+])
 ```
 
 ---
