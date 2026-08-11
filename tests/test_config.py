@@ -23,7 +23,7 @@ from flagscale_agent.react.config import AgentConfig
 # Env vars that AgentConfig reads — clear them so tests are deterministic
 _AGENT_ENV_VARS = [
     "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
-    "OPENAI_API_KEY", "OPENAI_BASE_URL", "FLAGSCALE_AGENT_CONFIG",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_DEFAULT_MODEL", "FLAGSCALE_AGENT_CONFIG",
 ]
 
 
@@ -80,6 +80,18 @@ class TestAgentConfig:
         monkeypatch.setenv("ANTHROPIC_MODEL", "claude-custom-model")
         cfg = AgentConfig(provider="anthropic")
         assert cfg.model == "claude-custom-model"
+
+    def test_openai_model_from_env(self, monkeypatch):
+        """OPENAI_DEFAULT_MODEL should set the default model for OpenAI."""
+        monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
+        cfg = AgentConfig(provider="openai")
+        assert cfg.model == "gpt-4o-mini"
+
+    def test_openai_model_cli_overrides_env(self, monkeypatch):
+        """CLI --model arg should override OPENAI_DEFAULT_MODEL env var."""
+        monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
+        cfg = AgentConfig(provider="openai", model="gpt-3.5-turbo")
+        assert cfg.model == "gpt-3.5-turbo"
 
     def test_from_yaml(self, tmp_path):
         f = tmp_path / "config.yaml"

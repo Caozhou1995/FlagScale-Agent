@@ -97,7 +97,12 @@ class AgentConfig:
 
     def __post_init__(self):
         if self.model is None:
-            env_model = os.environ.get("ANTHROPIC_MODEL") if self.provider == "anthropic" else None
+            if self.provider == "anthropic":
+                env_model = os.environ.get("ANTHROPIC_MODEL")
+            elif self.provider == "openai":
+                env_model = os.environ.get("OPENAI_DEFAULT_MODEL")
+            else:
+                env_model = None
             self.model = env_model or DEFAULT_MODELS.get(self.provider, "claude-sonnet-4-20250514")
 
         # Auto-detect context window from model if not explicitly set
