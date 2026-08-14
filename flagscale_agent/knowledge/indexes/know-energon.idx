@@ -2,6 +2,9 @@
 # Megatron-Energon数据加载：架构总览、WebDataset存储索引、TaskEncoder编码、Metadataset混合、Wrappers组合、分布式断点恢复
 # Source: Megatron-Energon @ bef8be2
 
+# To read a section: load_knowledge(name='know-energon', doc='<path below>', start_line=<L>, end_line=<L>)
+# Do NOT pass these doc paths to read_file — they are knowledge-internal.
+
 ## megatron_energon/01_architecture_overview.md (370 lines)
 L1: 第1章：Megatron-Energon 架构总览与数据管道设计
   L3: 1. 概述与设计动机
