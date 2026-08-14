@@ -2,6 +2,9 @@
 # Megatron训练循环：初始化、forward/backward、optimizer step、checkpoint保存恢复
 # Source: Megatron-LM-FL @ c024887
 
+# To read a section: load_knowledge(name='know-megatron-training', doc='<path below>', start_line=<L>, end_line=<L>)
+# Do NOT pass these doc paths to read_file — they are knowledge-internal.
+
 ## megatron_lm_fl/09_optimizer.md (598 lines)
 L1: 第9章：优化器系统 (Optimizer System) 源码深度解析
   L3: 1. 概述与源码定位

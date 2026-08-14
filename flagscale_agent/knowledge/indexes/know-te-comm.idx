@@ -2,6 +2,9 @@
 # TransformerEngine通信优化：Userbuffers comm-gemm overlap、TP集成、CPU offload
 # Source: TransformerEngine-FL @ 2cb485f
 
+# To read a section: load_knowledge(name='know-te-comm', doc='<path below>', start_line=<L>, end_line=<L>)
+# Do NOT pass these doc paths to read_file — they are knowledge-internal.
+
 ## transformerengine_fl/05_userbuffers_comm_gemm_overlap.md (559 lines)
 L1: 第五章：Userbuffers & Comm-GEMM Overlap 系统深度源码分析
   L3: 1. 概述与源文件定位
