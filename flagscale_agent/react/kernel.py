@@ -363,22 +363,6 @@ class AgentKernel:
                 self._last_turn_had_tools = True
                 result.iterations = iteration + 1
 
-                # ── Self-modification detection ──
-                # If any file tool modified flagscale_agent/ source, stop and ask for /reload
-                if self._detect_self_modification(tool_calls):
-                    # Inject a notice to the assistant so it knows to stop
-                    d.history.append({"role": "user", "content": (
-                        "[system: You just modified FlagScale Agent's own source code "
-                        "(flagscale_agent/). These changes require /reload to take effect. "
-                        "STOP here and tell the user to run /reload. Do NOT continue other work.]"
-                    )})
-                    # Do one more LLM call to let it produce the stop message
-                    response, usage = d.stream_fn(d.history.get_messages())
-                    if d.append_response_fn:
-                        d.append_response_fn(response)
-                    result.stop_reason = "self_modification_reload_needed"
-                    break
-
         finally:
             signal.signal(signal.SIGINT, _prev_handler)
 
@@ -462,32 +446,7 @@ class AgentKernel:
             display.guard_inject(verdict.message)
         return False
 
-    def _detect_self_modification(self, tool_calls: list) -> bool:
-        """Check if any tool call modified flagscale_agent/ source files.
-        
-        Detects write_file/edit_file operations targeting the agent's own code,
-        which require a /reload to take effect.
-        """
-        SELF_PATHS = ("flagscale_agent/", "flagscale_agent\\")
-        FILE_TOOLS = ("write_file", "edit_file")
-        
-        for tc in tool_calls:
-            name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-            if name not in FILE_TOOLS:
-                continue
-            # Extract path from tool call input
-            inp = tc.get("input", {}) if isinstance(tc, dict) else getattr(tc, "input", {})
-            if isinstance(inp, str):
-                try:
-                    import json
-                    inp = json.loads(inp)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            path = inp.get("path", "") if isinstance(inp, dict) else ""
-            # Check if path touches agent source
-            if any(seg in path for seg in SELF_PATHS):
-                return True
-        return False
+
 
     def _get_last_assistant_text(self) -> str:
         """Get the text content of the last assistant message."""

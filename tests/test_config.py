@@ -39,7 +39,7 @@ class TestAgentConfig:
         cfg = AgentConfig()
         assert cfg.provider == "anthropic"
         assert "claude" in cfg.model
-        assert cfg.max_iterations == 200
+        assert cfg.max_iterations == 2000
         assert cfg.max_context_tokens == 200000
         assert cfg.shell_remind_interval == 60
 

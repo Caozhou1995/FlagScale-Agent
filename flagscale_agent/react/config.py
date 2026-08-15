@@ -77,7 +77,7 @@ class AgentConfig:
     model: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
-    max_iterations: int = 200
+    max_iterations: int = 2000
     max_context_tokens: int = 0  # 0 = auto-detect from model
     shell_remind_interval: int = 60
     max_output_tokens: int = 8192

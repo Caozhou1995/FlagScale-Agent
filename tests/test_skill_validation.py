@@ -44,6 +44,8 @@ EXPECTED_SKILLS = {
     "infer-model-adapt",
     "infer-precision-check",
     "infer-plugin-upgrade",
+    "te-upstream-sync",
+    "mg-fl-upstream-sync",
 }
 
 REQUIRED_FRONTMATTER_FIELDS = {"name", "description"}
