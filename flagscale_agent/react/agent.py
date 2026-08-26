@@ -24,6 +24,7 @@ import atexit
 import json
 import os
 import re
+import signal
 import sys
 import time
 import uuid
@@ -136,6 +137,7 @@ class WorkerAgent:
         self.provider = _provider or get_provider(
             config.provider, config.model, config.api_key,
             config.base_url, config.max_output_tokens,
+            thinking_budget=config.thinking_budget,
         )
 
         self.history = HistoryManager(max_context_tokens=config.max_context_tokens)
@@ -172,6 +174,7 @@ class WorkerAgent:
 
         self._init_runtime_state()
         atexit.register(self._atexit_hook)
+        self._install_signal_handlers()
 
     def _init_runtime_state(self):
         """Initialize mutable per-session state. Called from __init__.
@@ -220,7 +223,8 @@ class WorkerAgent:
         guard_registry.register(ContextPressureGuard(
             working_window_tokens=self.history.working_window if self.history else 0
         ))
-        guard_registry.register(PlanGuard(task_plan=self.task_plan))
+        self._plan_guard = PlanGuard(task_plan=self.task_plan)
+        guard_registry.register(self._plan_guard)
 
         # Plan enforcement guard
         from flagscale_agent.react.guard.plan_update import PlanUpdateGuard
@@ -331,8 +335,50 @@ class WorkerAgent:
     # ── Health judge (delegates to unified Judge) ───────────────────────────
 
     def _health_judge(self, command: str, recent_output: str, elapsed: str,
-                      output_changed: bool = True, stall_count: int = 0) -> dict:
-        return self.judge.health(command, recent_output, elapsed, output_changed, stall_count)
+                      output_changed: bool = True, stall_count: int = 0,
+                      activity: str = "") -> dict:
+        expectation = self._current_expectation_anchor()
+        return self.judge.health(
+            command, recent_output, elapsed, output_changed, stall_count,
+            expectation=expectation, activity=activity,
+        )
+
+    def _current_expectation_anchor(self) -> str:
+        """Assemble an expectation anchor from the active plan's current step.
+
+        The anchor is whatever the agent declared for the step it is executing —
+        its title, scratchpad notes, and acceptance criteria. This is where the
+        agent states intent BEFORE acting, so the health judge can test the live
+        run against it. Returns "" when there is no active plan or no in-progress
+        step, which keeps health monitoring in its generic no-anchor mode.
+        """
+        try:
+            plan = self.task_plan.get_active()
+        except Exception:
+            return ""
+        if not plan:
+            return ""
+        steps = plan.get("steps") or []
+        # Prefer the step currently marked "doing"; fall back to the first
+        # pending step so the anchor still reflects imminent intent.
+        current = next((s for s in steps if s.get("status") == "doing"), None)
+        if current is None:
+            current = next((s for s in steps if s.get("status") == "pending"), None)
+        if current is None:
+            return ""
+        parts = []
+        title = (current.get("title") or "").strip()
+        if title:
+            parts.append(f"Current step: {title}")
+        notes = (current.get("notes") or "").strip()
+        if notes:
+            parts.append(f"Notes: {notes}")
+        acceptance = current.get("acceptance") or []
+        if acceptance:
+            joined = "; ".join(str(a).strip() for a in acceptance if str(a).strip())
+            if joined:
+                parts.append(f"Acceptance: {joined}")
+        return "\n".join(parts)
 
     def _judge_confirm(self, category: str, matched_text: str, context: str = "") -> bool:
         return self.judge.classify(category, {"text": matched_text, "context": context}, default=True)
@@ -344,6 +390,43 @@ class WorkerAgent:
             self._save_conversation(completed=False)
         except Exception:
             pass
+
+    def _install_signal_handlers(self):
+        """Persist the trajectory on termination signals.
+
+        atexit does NOT run on SIGTERM (default disposition terminates the
+        process without stack unwinding, so no atexit and no finally:) nor on
+        SIGKILL. Harbor / Terminal-Bench enforces timeouts by sending SIGTERM
+        first, then SIGKILL after a grace period. SIGKILL is uncatchable, but
+        SIGTERM is — installing a handler lets us flush conversation/memory to
+        disk before the process dies, covering the common timeout case.
+
+        signal.signal() only works on the main thread; in worker threads or
+        embedded contexts it raises ValueError, which we swallow (atexit +
+        the single-shot finally: still apply there).
+        """
+        def _handler(signum, frame):
+            try:
+                self._save_conversation(completed=False)
+            except Exception:
+                pass
+            # Restore the default disposition and re-raise so the process
+            # exits with the correct signal status instead of swallowing the
+            # termination request.
+            try:
+                signal.signal(signum, signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+            except Exception:
+                # Last resort: exit with the conventional 128+signum code.
+                os._exit(128 + signum)
+
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(_sig, _handler)
+            except (ValueError, OSError):
+                # Not on the main thread, or signal unsupported on this
+                # platform — rely on atexit / finally fallbacks instead.
+                pass
 
     def _save_conversation(self, completed: bool = False, session_summary: str = None):
         if not self.history.messages:
@@ -485,12 +568,21 @@ class WorkerAgent:
                     "is being compacted to free up context space. Summarize the FULL work "
                     "state in a structured format that will allow seamless continuation.\n\n"
                     "Include:\n"
-                    "1. TASK: What is being worked on (one paragraph)\n"
+                    "1. TASK: What is being worked on (one paragraph). State the task's "
+                    "hard constraints VERBATIM (exact version, tool, format, method the task "
+                    "named) — these are the task's identity and must survive compaction intact.\n"
                     "2. PROGRESS: Key steps completed, decisions made, paths/values discovered\n"
                     "3. CURRENT STATE: What was just happening, any pending operations\n"
                     "4. NEXT STEPS: What to do next\n"
                     "5. CRITICAL CONTEXT: File paths, configs, error messages, any values "
-                    "that would be lost without this summary\n\n"
+                    "that would be lost without this summary\n"
+                    "6. CONSTRAINTS & RULED-OUT APPROACHES: Every approach ALREADY TRIED AND "
+                    "REJECTED and WHY (e.g. 'downgrading to v3.7 is NOT acceptable — task "
+                    "requires v2.2', 'config X deadlocks', 'path Y is a dead end'). This is the "
+                    "MOST easily lost and MOST damaging to lose: after compaction you will "
+                    "re-infer the task from leftover files and risk reverting to a degraded "
+                    "approach you already proved wrong. Preserve these negative constraints "
+                    "explicitly — a ruled-out approach stays ruled out after compaction.\n\n"
                     f"{plan_info}\n\n"
                     "Be comprehensive but concise. This summary replaces the full conversation "
                     "history. Output the summary directly, no preamble."
@@ -544,6 +636,13 @@ class WorkerAgent:
         parts.append(f"Reset count: {self.history._reset_count}")
         parts.append(f"Full conversation log: {self._session_dir}/conversation_full.json")
         parts.append("\nUse read_file on conversation_full.json or memory_list() for more context.")
+        parts.append(
+            "\n[!] CONSTRAINTS WARNING: This compaction may have dropped the task's hard "
+            "constraints and the approaches you already ruled out. Before acting, recover them "
+            "from plan notes and memory (memory_read/memory_list) — do NOT re-infer the task "
+            "from leftover files in the workdir and revert to a degraded approach you already "
+            "rejected. A ruled-out approach stays ruled out."
+        )
 
         return "\n".join(parts)
 
@@ -698,12 +797,24 @@ class WorkerAgent:
 
 
     def _run_single_shot(self, query: str):
+        # Unsupervised run: the plan (with acceptance/verification) stands in
+        # for the absent human supervisor, so PlanGuard enforces it (block
+        # after an observation budget) rather than merely reminding.
+        if getattr(self, "_plan_guard", None) is not None:
+            self._plan_guard.set_single_shot(True)
         self._inject_context()
         self.history.append({"role": "user", "content": query})
         try:
             self._react_loop()
         except Exception:
             display.warn("WorkerAgent._run_single_shot() react loop failed")
+        finally:
+            # Headless single-shot has no per-turn REPL save (unlike the
+            # interactive loop), so persist explicitly here to guarantee a
+            # normally-completed run is durable. A harness timeout that kills
+            # the process mid-run is handled separately by the SIGTERM handler
+            # installed in _install_signal_handlers().
+            self._auto_save()
 
     def _restore_session(self, data: dict, session_dir: str):
         """Restore a previous session - take over its session_id and dir."""
@@ -1106,6 +1217,7 @@ class WorkerAgent:
         thinking_cleared = False
         streaming_trailing_newlines = 0
         streaming_started = False
+        sentinel_stripper = display.SentinelStripper()
 
         def compress_newlines(text, trailing_from_prev, is_first):
             if not text:
@@ -1143,7 +1255,15 @@ class WorkerAgent:
                         display.thinking_done()
                         thinking_cleared = True
                     if event["type"] == "text":
-                        text = event["content"]
+                        # Keep the RAW text for the kernel's completion gate...
+                        content_parts.append(event["content"])
+                        # ...but strip completion sentinels from what reaches the
+                        # screen, so a gate-blocked [TASK_COMPLETE] never shows up
+                        # with authority before the gate runs (kernel prints the
+                        # authoritative marker only once completion is accepted).
+                        text = sentinel_stripper.feed(event["content"])
+                        if not text:
+                            continue
                         text, streaming_trailing_newlines = compress_newlines(
                             text, streaming_trailing_newlines, not streaming_started)
                         if text:
@@ -1159,7 +1279,6 @@ class WorkerAgent:
                             if fence_count % 2 == 1:
                                 self._streaming_in_code_block = not self._streaming_in_code_block
                         display._write(text)
-                        content_parts.append(event["content"])
                     elif event["type"] == "tool_start":
                         # Clear thinking spinner on first tool call
                         if not thinking_cleared:
@@ -1215,6 +1334,16 @@ class WorkerAgent:
                     )
                     continue
                 raise
+
+        # Flush any residual held-back text (a partial that never completed into
+        # a sentinel, e.g. from a truncated stream) — it is genuine text.
+        residual = sentinel_stripper.flush()
+        if residual:
+            residual, streaming_trailing_newlines = compress_newlines(
+                residual, streaming_trailing_newlines, not streaming_started)
+            if residual:
+                streaming_started = True
+                display._write(display.blue(residual) if display._use_color() else residual)
 
         if content_parts:
             if streaming_trailing_newlines > 1 and display._use_color():

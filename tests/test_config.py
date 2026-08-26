@@ -126,3 +126,17 @@ class TestAgentConfig:
     def test_skill_dirs_default(self):
         cfg = AgentConfig()
         assert len(cfg.skill_dirs) == 2  # builtin + ~/.flagscale/skills
+
+    def test_thinking_budget_default(self):
+        """thinking_budget defaults to 0 (disabled)."""
+        cfg = AgentConfig()
+        assert cfg.thinking_budget == 0
+
+    def test_thinking_budget_from_yaml(self, tmp_path, monkeypatch):
+        """thinking_budget can be set via YAML config."""
+        f = tmp_path / "config.yaml"
+        f.write_text("provider: anthropic\nthinking_budget: 12288\nmax_output_tokens: 20480\n")
+        monkeypatch.setenv("FLAGSCALE_AGENT_CONFIG", str(f))
+        cfg = AgentConfig.auto_load()
+        assert cfg.thinking_budget == 12288
+        assert cfg.max_output_tokens == 20480

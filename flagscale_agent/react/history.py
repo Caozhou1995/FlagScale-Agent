@@ -21,8 +21,8 @@ No automatic aging, truncation, or compaction.
 import json
 from typing import Any, Dict, List, Optional
 
-# Working window ratio: 60% of max_context_tokens
-WORKING_WINDOW_RATIO = 0.60
+# Working window ratio: 75% of max_context_tokens
+WORKING_WINDOW_RATIO = 0.75
 # Fallback if not dynamically set
 WORKING_WINDOW_TOKENS = 120_000
 

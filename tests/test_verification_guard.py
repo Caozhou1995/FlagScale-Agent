@@ -24,9 +24,12 @@ class TestVerificationGuard:
     """Test VerificationGuard blocks step_done without override_reason."""
 
     def test_blocks_step_done_without_override_reason(self):
-        """step_done without _override_reason should be blocked."""
+        """step_done without _override_reason should be blocked (Mode 2)."""
         guard = VerificationGuard()
-        
+        # isolate the Mode 2 evidence check: consume the one-shot premise re-check
+        # block that now fires ahead of it on the first step_done of the run.
+        guard._step_done_recheck_reminded = True
+
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={"action": "step_done", "step_id": 3}
@@ -35,7 +38,9 @@ class TestVerificationGuard:
         
         assert verdict is not None
         assert verdict.action == "block"
-        assert "verification required" in verdict.message.lower()
+        # reconstructed message poses a self-check question (what did you OBSERVE)
+        # rather than the old "verification required" assertion-style phrasing.
+        assert "observe" in verdict.message.lower()
         assert verdict.reason == "step_done_no_verification"
 
     def test_allows_step_done_with_override_reason(self):
@@ -76,7 +81,9 @@ class TestVerificationGuard:
         """Other plan_update actions (step_doing, add_steps, etc.) should pass."""
         guard = VerificationGuard()
         
-        actions = ["step_doing", "step_skip", "add_steps", "complete", "abandon"]
+        # "complete" now has its own one-shot re-check block (see
+        # TestTaskCompleteRecheck), so it is intentionally excluded here.
+        actions = ["step_doing", "step_skip", "add_steps", "abandon"]
         
         for action in actions:
             ctx = GuardContext(
@@ -99,6 +106,79 @@ class TestVerificationGuard:
             ctx = GuardContext(tool_name=tool, tool_args={})
             verdict = guard.check_pre(ctx)
             assert verdict is None, f"Tool {tool} should not be blocked"
+
+    def test_first_step_done_blocks_for_premise_recheck(self):
+        """The first step_done of a run is blocked once for a premise re-check,
+        even when the agent already supplied verification. This is the finalize-time
+        counterpart to the plan_create qualifier block: it forces the agent to
+        re-examine the premises it operated under (a convenient reading of a term,
+        a "close enough", a value taken as given) before any evidence is accepted —
+        the exact blind spot that a plan-time block cannot reach, because a premise
+        is re-interpreted during execution and only surfaces at completion."""
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "step_done",
+                "step_id": 1,
+                "verification": ["did the thing"],
+            },
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "step_done_premise_recheck"
+
+    def test_premise_recheck_released_by_override_then_fires_evidence_check(self):
+        """Override releases the premise re-check, but the step must STILL carry
+        evidence — the re-check does not exempt the step from the Mode 1/2 checks.
+        A second step_done no longer hits the premise block (fires once per run)."""
+        guard = VerificationGuard()
+        # first step_done: override releases the premise re-check, then falls through
+        # to Mode 2 (no acceptance) which is satisfied by the same override_reason.
+        ctx1 = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "step_done",
+                "step_id": 1,
+                "_override_reason": "re-read criteria, re-examined premises",
+            },
+            override_reason="re-read criteria, re-examined premises",
+        )
+        assert guard.check_pre(ctx1) is None
+        assert guard._step_done_recheck_reminded is True
+
+        # second step_done without override: premise block is spent, so this now
+        # falls straight to the Mode 2 evidence check and is blocked for THAT reason.
+        ctx2 = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "step_done", "step_id": 2},
+        )
+        verdict2 = guard.check_pre(ctx2)
+        assert verdict2 is not None
+        assert verdict2.reason == "step_done_no_verification"
+
+    def test_premise_recheck_reminder_is_task_agnostic_and_premise_focused(self):
+        """The reminder must target premise re-examination in general terms, never
+        naming a specific constraint kind (time/version/subset) — that would read as
+        case-by-case gaming rather than a general finalize discipline."""
+        from flagscale_agent.react.guard.verification import _STEP_DONE_RECHECK_REMINDER
+        low = _STEP_DONE_RECHECK_REMINDER.lower()
+        # names the core move: test belief against result, not restate it
+        assert "premise" in low
+        assert "restating" in low or "repeats the assumptions" in low
+        # names convenience-premise as the trap
+        assert "convenience" in low
+        # points back at the user's actual ask — off-target competence still misses
+        assert "user actually asked" in low or "the user actually asked" in low
+        assert "off-target" in low
+        assert "wording wins" in low
+        # forcing checkpoint, not content check
+        assert "not a content check" in low
+        assert "_override_reason" in _STEP_DONE_RECHECK_REMINDER
+        # no task specifics, no case-by-case constraint kinds
+        for w in ("august", "mteb", "scandinavian", "leaderboard", "time boundary"):
+            assert w not in low
 
     def test_post_recovery_inject_on_first_step_doing(self):
         """After notify_recovery(), should inject reminder on first step_doing."""
@@ -147,7 +227,9 @@ class TestVerificationGuard:
         guard = VerificationGuard()
         
         guard.notify_recovery()
-        
+        # isolate the Mode 2 evidence check from the one-shot premise re-check block
+        guard._step_done_recheck_reminded = True
+
         # step_done without override_reason should still be blocked
         ctx = GuardContext(
             tool_name="plan_update",
@@ -158,3 +240,945 @@ class TestVerificationGuard:
         assert verdict is not None
         assert verdict.action == "block"
         assert verdict.reason == "step_done_no_verification"
+
+
+class TestConstraintGuidanceBlockedComputation:
+    """Regression: mode I guidance must name a blocked/no-progress run as the
+    wall signal, so the agent interrupts and re-derives instead of waiting out a
+    brute-force search whose progress counter never advances until it times out."""
+
+    def test_guidance_names_no_progress_run_as_the_wall(self):
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        # the running computation with no progress is itself the wall/signal
+        assert "no visible progress" in low or "no progress" in low
+        assert "progress indicator" in low
+        # prescribes interrupt + re-derive, not tuning in place
+        assert "interrupt" in low
+        assert "re-derive" in low
+
+    def test_guidance_names_byte_immutability_undo_trap(self):
+        # Regression: a task passed perf+correctness but failed a "do not modify X"
+        # check — the agent added an internal structure to a graded resource then
+        # removed it to "restore" it, but the file's bytes (hence checksum) changed.
+        # Guidance must say: reverting a change is NOT the same as never changing a
+        # byte/hash-checked resource; restore from backup or never touch it.
+        # MUST stay task-agnostic: the concrete DB/index/hash mechanism is a specific
+        # task's trap and must NOT leak into the guidance text.
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        # names the "must stay unchanged" constraint checked by hash/checksum/bytes
+        assert "unchanged" in low
+        assert "hash" in low or "checksum" in low
+        # names that revert/undo is not the same as never-changed (abstract wording)
+        assert "reverting your change is not the same as never changing it" in low
+        # names the abstract edit-then-undo trap without leaking the concrete mechanism
+        assert "adding an" in low and "internal structure and then removing it" in low
+        # the safe resolutions: restore from a pre-touch backup, or never mutate it
+        assert "pre-touch backup" in low
+        assert "added it then removed it" in low
+        # leak guard: no specific-task nouns/mechanisms in the guidance text.
+        # Use word boundaries so generic English (wall, index-of-...) doesn't false-hit;
+        # the concern is the concrete DB/hash mechanism of one task.
+        import re
+        for w in ("sqlite", "wal", "sqlite_master", "sha256", "pixel", "ffmpeg"):
+            assert not re.search(r"\b" + w + r"\b", low), f"leaked task-specific term: {w!r}"
+
+    def test_guidance_names_reloaded_artifact_vs_inmemory_proxy(self):
+        # Regression: tune-mjcf passed correctness but failed speed — the agent
+        # tuned by mutating a live model object (model.opt.solver/iterations/...) in
+        # its own session and measured THAT (ratio ~0.43), but the delivered
+        # model.xml, reloaded cold by the verifier, gave ratio ~1.07 and a
+        # near-zero state diff (i.e. the runtime settings never serialized into the
+        # file). Guidance must say: measure the delivered artifact reloaded fresh
+        # from the delivery path, not the in-memory/in-session object you configured.
+        # MUST stay task-agnostic: no mujoco/model.xml/solver nouns may leak.
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        # names the proxy trap: in-memory / in-session object configured programmatically
+        assert "in-memory" in low or "in-session" in low
+        # names the fix: reload the delivered artifact fresh from disk / new process
+        assert "reload" in low or "reloaded" in low
+        assert "fresh" in low
+        assert "cold" in low
+        # names the round-trip / serialization concern in the abstract
+        assert "serialize" in low or "serialized" in low or "round-trip" in low
+        # leak guard: no specific-task nouns from this task
+        import re
+        for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
+
+    def test_guidance_names_noisy_threshold_margin_over_own_measure(self):
+        # Regression: tune-mjcf rerun — agent's own one-shot timing measured the
+        # speed ratio at 0.5979 (under the 0.60 bar), but the verifier's rigorous
+        # measurement (many runs + drop 5/95 percentiles + mean) gave 0.6016, just
+        # OVER the bar → reward 0. Correctness passed; only speed failed by 0.16pt.
+        # The two numbers differ only by the disagreement between measuring
+        # instruments. Guidance must say: on a noisy pass/fail metric with a hidden
+        # judge measurement, measure the artifact the judge's way (repeat + trim +
+        # central statistic) and demand MARGIN over the bar, not a hair.
+        # MUST stay task-agnostic: no mujoco/speed-ratio task nouns may leak.
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        # names the noisy-metric / hidden-measurement setting
+        assert "noisy" in low
+        assert "hidden" in low
+        # names that own-measurement passing by a hair is not passing
+        assert "hair" in low
+        assert "margin" in low
+        # names the robust re-measurement recipe: repeats + outlier/percentile trim
+        assert "repeat" in low
+        assert "percentile" in low or "outlier" in low or "trim" in low
+        # names run-to-run / instrument variance as the reason margin is needed
+        assert "variance" in low or "run-to-run" in low or "instrument" in low
+        # leak guard: no specific-task nouns from this task
+        import re
+        for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian", "0.60", "0.5979"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
+
+    def test_guidance_names_best_so_far_writethrough_to_delivery_path(self):
+        # Regression: tune-mjcf 3rd rerun — the agent DID adopt robust grader-like
+        # measurement and DID find better-and-valid candidates during 15 min of
+        # open-ended search, but held every candidate only as an in-memory string
+        # (never wrote a winner to the delivery path mid-search). When the agent
+        # timed out (900s), the verifier read whatever intermediate version was on
+        # disk (60.98%, over the 60.00% bar) → reward 0, even though a better
+        # measured version had existed in memory. Guidance must say: the moment a
+        # candidate measures better-and-valid, WRITE IT THROUGH to the delivery path
+        # right then; best-so-far lives on disk, never only in memory.
+        # MUST stay task-agnostic: no mujoco/model.xml/timeout-second nouns may leak.
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        # names the open-ended search / iterate-over-candidates setting
+        assert "open-ended search" in low
+        # names the trap: a winner held only in memory is not banked
+        assert "only in memory" in low
+        assert "banked" in low
+        # names that the judge reads the delivery path, not process memory
+        assert "delivery path" in low
+        assert "process memory" in low
+        # names the fix: write it through the moment it measures better-and-valid
+        assert "write-through" in low or "write it through" in low
+        assert "best-so-far" in low
+        # names being stopped (timeout/kill/budget) as when this bites
+        assert "timeout" in low or "budget exhaustion" in low or "stopped" in low
+        # leak guard: no specific-task nouns from this task
+        import re
+        for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian", "0.60", "60.98", "900s"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
+
+    def test_guidance_names_exact_contents_and_shown_command_byproduct(self):
+        # Regression: a single-file-delivery task (deliver exactly ONE source file at
+        # a fixed path) scored 0 because the agent self-verified by running the
+        # example command the TASK SHOWED verbatim — that command compiled the source
+        # and, per the shown example, wrote the build output INTO the delivery
+        # directory. The verifier asserted the directory contained EXACTLY the one
+        # named file; the leftover build artifact made it two → silent fail even
+        # though the real deliverable was present and correct. Guidance must teach:
+        # (1) an exact-contents contract means the location holds the named set and
+        # NOTHING more — a stray sibling fails as hard as a missing deliverable;
+        # (2) a command the task SHOWS is the consumer's action, not a spec for where
+        # your own byproducts go; running it verbatim can deposit strays in the
+        # delivery path; self-verify with byproducts redirected outside, or clean them
+        # up before finishing.
+        # MUST stay task-agnostic: no polyglot/gcc/main.py.c/fibonacci nouns may leak.
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        # names the exact-contents contract and the silent-fail nature
+        assert "exact set" in low or "exact-contents" in low
+        assert "nothing more" in low
+        assert "stray sibling" in low
+        assert "silently" in low
+        # names the shown-command-byproduct trap and its fix
+        assert "shows you" in low
+        assert "byproduct" in low
+        assert "verbatim" in low
+        assert "scratch" in low or "outside the delivery" in low
+        # leak guard: no nouns from the originating task
+        import re
+        for w in ("polyglot", "cmain", "main.py.c", "fibonacci", ".py.c"):
+            assert w not in low, f"leaked task-specific term: {w!r}"
+
+    def test_guidance_names_measure_requires_write_backup_rollback(self):
+        # Regression: tune-mjcf 4th rerun — the write-through guidance was live and
+        # the agent DID write candidates to the delivery path. But this task's
+        # measurement reads the artifact AT the delivery path, so the agent was
+        # forced to overwrite-then-measure: it wrote a candidate over its verified
+        # best, measured it WORSE, and moved on WITHOUT restoring — leaving a
+        # regression at the delivery path. On timeout, that regression shipped.
+        # Guidance must cover the overwrite-then-measure case: keep a side backup of
+        # the current best and ROLL BACK the delivery path when a new candidate is
+        # not strictly better, so the delivery path always holds the verified best.
+        # MUST stay task-agnostic: no mujoco/model.xml/timeout-second nouns may leak.
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        # names the forcing condition: the delivery path itself is what gets measured
+        assert "overwrite-then-measure" in low
+        # names the mechanism: backup + rollback / restore
+        assert "backup" in low
+        assert "rollback" in low or "roll back" in low
+        assert "restore" in low
+        # names the delivery path invariant it protects
+        assert "delivery path" in low
+        # names the failure it prevents: a worse/unconfirmed candidate left behind
+        assert "strictly better" in low
+        assert "regression" in low
+        # leak guard: no specific-task nouns from this task
+        import re
+        for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian", "0.60", "64.49", "900s"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
+
+    def test_qualifier_reminder_separates_subject_from_boundary(self):
+        # Regression: a task asked for the best model "as of" a past date; the
+        # agent did solid work on the subject (correct benchmark, correct metric)
+        # but silently dropped the time qualifier and answered from the current
+        # full snapshot — the run completed and returned a confident, out-of-bounds
+        # answer. The qualifier guidance now lives in _QUALIFIER_EXTRACTION in
+        # plan.py (delivered at plan-framing time via PlanGuard, not post) and must
+        # name qualifiers (time point / version / subset / metric definition) as
+        # first-class constraints and forbid substituting most-available/current data.
+        from flagscale_agent.react.guard.plan import _QUALIFIER_EXTRACTION
+        low = _QUALIFIER_EXTRACTION.lower()
+        # separates the subject/thing-to-produce from its bounding qualifier
+        assert "subject" in low and "qualifier" in low
+        # names qualifier categories in the abstract, not any task-specific value
+        assert "point in time" in low
+        assert "version" in low
+        assert "subset" in low
+        # the danger: work completes and yields a confident yet out-of-bounds answer
+        assert "confident answer" in low
+        # forbids letting the most available / most current data stand in
+        assert "most available" in low or "most up-to-date data" in low
+        # must fold qualifiers into the plan while framing, not after
+        assert "plan" in low
+        # must not hardcode the originating task's specifics
+        assert "august" not in low
+        assert "mteb" not in low
+
+    def test_qualifier_reminder_demands_correct_interpretation_not_just_extraction(self):
+        # Regression: the block forced the agent to extract the time qualifier into
+        # the plan, but the agent then read a past-point time bound as "data recent
+        # enough" and used the latest snapshot — extracting a qualifier is not the
+        # same as reading its boundary in the direction the task means. Guidance
+        # must demand interpreting the boundary, name the "newest/most available is
+        # best" bias as the trap, and flag the two-way ambiguity of a time bound
+        # (state at a past point vs state now). Stays task-agnostic and must NOT
+        # quote the originating task's phrasing (e.g. "as of") — that reads like
+        # leaderboard-gaming rather than general guidance.
+        from flagscale_agent.react.guard.plan import _QUALIFIER_EXTRACTION
+        low = _QUALIFIER_EXTRACTION.lower()
+        # extraction is only half — must read the boundary the task means
+        assert "only half" in low
+        assert "boundary" in low
+        # state each qualifier's meaning before building on it
+        assert "in your own words" in low
+        # names the convenience/recency bias as the failure mode
+        assert "convenient" in low
+        assert "newest" in low or "most available is best" in low
+        # a time bound is two-way: state at a past point vs state now
+        assert "bound on time" in low
+        assert "as it stood at a" in low
+        assert "the state right now" in low
+        assert "came later out of scope" in low
+        # must not default to the freshest data
+        assert "most up-to-date data" in low
+        # still no task specifics AND no verbatim task phrasing that reads as gaming
+        assert "as of" not in low
+        assert "august" not in low
+        assert "scandinavian" not in low
+
+    def test_qualifier_content_moved_out_of_acceptance_guidance(self):
+        # The qualifier-extraction guidance must NOT remain in the post-timing
+        # _ACCEPTANCE_GUIDANCE — its useful moment is at plan framing (pre), and
+        # duplicating it would fire it too late again. This asserts the move was
+        # clean (no stale copy left behind).
+        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
+        low = _ACCEPTANCE_GUIDANCE.lower()
+        assert "qualifier" not in low
+        assert "scandinavian" not in low
+
+
+class TestTaskCompleteRecheck:
+    """The first plan_update(action="complete") of a run is blocked once for a
+    task-completion re-check: classify the task (binary pass/fail vs open-ended
+    optimization) and confirm the result meets the matching standard. Fires once,
+    any override_reason releases it, content is not checked."""
+
+    def test_first_complete_blocks_for_recheck(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete"},
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_premise_recheck"
+
+    def test_complete_released_by_override_and_fires_once(self):
+        guard = VerificationGuard()
+        # first complete with override → released for good
+        ctx1 = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "complete",
+                "_override_reason": "open-ended: compared two distinct methods, this is fastest measured",
+            },
+            override_reason="open-ended: compared two distinct methods, this is fastest measured",
+        )
+        assert guard.check_pre(ctx1) is None
+        assert guard._complete_recheck_reminded is True
+        # second complete without override → block is spent, passes through
+        ctx2 = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete"},
+        )
+        assert guard.check_pre(ctx2) is None
+
+    def test_complete_recheck_covers_both_task_kinds_generically(self):
+        """The reminder must handle BOTH pass/fail and open-ended tasks, without
+        hardcoding 'optimize more' (which would be noise on a binary task) and
+        without naming any specific task domain (no case-by-case)."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        # names the binary pass/fail branch
+        assert "pass/fail" in low
+        # names the open-ended optimization branch
+        assert "open-ended" in low
+        # forces the agent to classify rather than assume one kind
+        assert "which kind" in low
+        # the open-ended standard: distinct methods compared, not first-improvement
+        assert "distinct" in low
+        assert "_override_reason" in _TASK_COMPLETE_RECHECK_REMINDER
+        # no case-by-case task specifics leaked in
+        assert "sql" not in low
+        assert "compcert" not in low
+        assert "chess" not in low
+
+    def test_complete_recheck_closes_with_three_orthogonal_axes(self):
+        """The closing self-check must ask THREE orthogonal questions — optimized,
+        general, generalizes — against the task's REAL purpose, not against any
+        imagined check/grader (naming the grade would invite overfitting). The axes
+        must be declared independent so a strong yes on one cannot stand in for the
+        others. Task-agnostic; no scoring vocabulary."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        full = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        # scope the scoring-vocab ban to the CLOSING three-axis block only — the
+        # earlier pass/fail branch legitimately discusses the grader/clean-env gap.
+        anchor = "run these orthogonal"
+        assert anchor in full, "closing three-axis block missing"
+        low = full[full.index(anchor):]
+        # the three axes are each named as a distinct check
+        assert "optimized" in low
+        assert "general" in low
+        assert "generalizes" in low
+        # the axes are declared independent / orthogonal, not interchangeable
+        assert "orthogonal" in low
+        assert "independent" in low
+        # checks are against the real purpose, NOT against a guessed check/grader
+        assert "real purpose" in low
+        # the closing self-check must NOT frame itself around scoring — naming the
+        # grade would invite the agent to overfit to the check instead of the purpose
+        for banned in ("grader", "verifier", "scored", "scoring", " grade "):
+            assert banned not in low, f"scoring vocab leaked into closing: {banned!r}"
+        # generalizes axis names the observe-vs-real-use gap and reproducing it
+        assert "gap" in low
+        assert "reproduce" in low or "reproduced" in low
+        # still routes through the override checkpoint answering all three
+        assert "_override_reason" in _TASK_COMPLETE_RECHECK_REMINDER
+        assert "all three" in low
+        # no case-by-case task specifics
+        for dom in ("sql", "sparql", "compcert", "chess", "fasttext"):
+            assert dom not in low, f"task-specific leak: {dom!r}"
+
+    def test_complete_recheck_reanchors_on_user_ask_before_kind(self):
+        """Before classifying task kind, the reminder must force a re-anchor on the
+        USER's stated ask — catching confident competence aimed at a nearby problem
+        the agent's own framing substituted. Must name the upstream-premise drift and
+        that plain wording beats the agent's interpretation. Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        # re-anchor on the user's ask, framed as answering THAT not a nearby question
+        assert "as the user stated it" in low or "user stated it" in low
+        assert "nearby question" in low
+        # names the mechanism: an early/upstream premise going unquestioned
+        assert "upstream premise" in low or "early premise" in low
+        # names that thorough downstream checking builds false confidence
+        assert "false confidence" in low
+        # plain need beats agent's self-serving reinterpretation
+        assert "the need wins" in low
+        # this re-anchor comes BEFORE the kind classification
+        assert low.index("nearby question") < low.index("what kind of task")
+
+    def test_complete_recheck_traces_answer_provenance(self):
+        """The reminder must ask WHERE the answer came from — observed (read from a
+        tool output / stdout / opened file) vs inferred from prior expectation. If the
+        task handed an artifact to read from, the answer must trace to a tool call that
+        transformed/inspected it; a value that never appeared in any output but is
+        "known" from experience is a guess. Legitimately-computed answers count as
+        observed. Task-agnostic — no decode/render/ocr specifics."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        # names the observe-vs-infer distinction for the answer's origin
+        assert "where your answer came from" in low or "trace where your answer" in low
+        assert "did i observe this" in low
+        assert "infer" in low
+        # prior knowledge is plausibility, not what is actually there
+        assert "plausible" in low and "actually there" in low
+        # computed answers are legitimately observed (no false positive on math tasks)
+        assert "computed" in low
+        # this trace comes BEFORE the kind classification (it's part of the opening)
+        assert low.index("did i observe this") < low.index("what kind of task")
+        # no task-specific leak
+        for w in ("gcode", "g-code", "render", "ocr", "tesseract", "bitmap"):
+            assert w not in low
+
+    def test_complete_recheck_forbids_disguised_substitute_on_passfail(self):
+        """The pass/fail branch must close the constraint-substitution loophole:
+        when a named non-negotiable specific cannot be obtained, 'done' is NOT
+        reachable by delivering a near-equivalent and dressing the surface to pass
+        the check, and disclosing the swap in override_reason does not legalize it.
+        The only honest closes are keep-searching or BLOCKED. Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        # names the counterfeit-appearance trap generically
+        assert "substitute" in low
+        assert "proxy" in low
+        # disclosing the swap is not permission
+        assert "honesty is not permission" in low
+        # the two legal closes
+        assert "keep searching" in low
+        assert "blocked" in low
+        # empty-honest beats populated-fake
+        assert "empty honest blocked" in low
+        # still no case-by-case task specifics
+        for w in ("povray", "pov-ray", "2.2", "wrapper script"):
+            assert w not in low
+
+    def test_complete_recheck_flags_self_contaminated_verify_environment(self):
+        """The pass/fail branch must catch environmental near/far confusion: a
+        green result produced in the agent's own working environment (loaded with
+        locally-installed packages, env vars, helper files, services) does not
+        prove the deliverable works in the clean consumer environment. The
+        deliverable must carry deps inside or use only target-guaranteed tools;
+        a shipped script must not import a locally pip-installed library.
+        Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        assert "clean environment that will actually consume it" in low
+        assert "import a library you pip-installed only locally" in low
+        assert "carry its dependencies inside itself" in low
+        # no case-by-case specifics
+        for w in ("cryptography", "openssl", "check_cert"):
+            assert w not in low
+
+    def test_complete_recheck_flags_deliverable_addressing_invocation(self):
+        """The pass/fail branch must catch a DISTINCT flavor of the environmental
+        near/far trap: not what the agent ADDED but HOW the deliverable gets
+        addressed. The agent's interactive/login shell resolves the artifact via
+        PATH/rc/alias/cwd; the consumer invokes it bare as a non-login
+        non-interactive subprocess running the plain command by name. "Runs when I
+        TYPE it" != "runs when a PROGRAM calls it"; a found-by-name artifact must
+        live in the target's standard install location, checked by re-running the
+        bare way the consumer will. Task-agnostic (no sqlite/.bashrc/symlink)."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        assert "how the deliverable gets" in low
+        assert 'is not "it runs when a program calls it"' in low
+        assert "standard install location" in low
+        assert "primed to find it" in low
+        for w in ("sqlite", ".bashrc", "profile.d", "symlink", "/usr/local/bin"):
+            assert w not in low
+
+    def test_complete_recheck_forbids_widening_exemption_and_unverified_attribution(self):
+        """The pass/fail branch must catch two related self-deceptions: (1) a precise
+        list of exceptions is a CLOSED constraint — widening the carve-out to swallow a
+        failure you could not fix is rewriting the acceptance bar; (2) 'pre-existing /
+        external library / unrelated to my change' is a claim needing evidence, not a
+        default exit when stuck. Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        assert "closed constraint" in low
+        assert "does not earn a place on it" in low
+        assert "is a claim that needs evidence" in low
+        assert "outside the exemption list still fails" in low
+        for w in ("pyknotid", "planarity", "cython"):
+            assert w not in low
+
+    def test_complete_recheck_flags_single_sample_overfit_magic_constants(self):
+        """The pass/fail branch must catch single-sample overfitting: developing
+        against one visible example but graded on hidden inputs — passing the sample
+        is the floor, not generalization. Magic constants tuned to the sample are the
+        tell; prefer relative/normalized/structure-derived judgments. Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        assert "passing on that sample is the floor" in low
+        assert "magic constants" in low
+        assert "audit every hardcoded number" in low
+        assert "cannot confirm generalization by testing" in low
+        for w in ("jump", "hurdle", "takeoff", "jump_analyzer"):
+            assert w not in low
+        # magic-constant example must stay abstract — no specific tuned digits that
+        # re-leak one task's concrete pipeline (threshold of 25 / cutoff of 2000 / etc.)
+        for _lit in ("threshold of 25", "cutoff of 2000", "exceeds 40", "rises more than 40"):
+            assert _lit not in low, f"leaked concrete tuned magic number: {_lit!r}"
+
+    def test_open_ended_depth_vs_breadth_discriminator(self):
+        """Open-ended branch must teach how to judge whether 'distinct' attempts
+        were actually distinct: a clustered/near-tie spread across attempts means
+        depth limit of ONE method-family, and the response is to widen to a
+        STRUCTURALLY different family, not to stop. Must NOT rely on knowing the
+        target's absolute best (agent cannot see the grader/reference)."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        # reads the spread of measured results as the signal
+        assert "spread" in low
+        # a near-tie / same order of magnitude means same method-family
+        assert "same order of magnitude" in low
+        assert "method-family" in low
+        # names the correct diagnosis: depth limit of one family, not global best
+        assert "depth limit" in low
+        # prescribes widening to a structurally different family
+        assert "structurally different" in low
+        # explicitly does not require knowing the absolute best target
+        assert "do not need to know the target's absolute best" in low
+        # guards against calling one family's limit the task's limit
+        assert "one family's limit and called it the task's" in low
+
+
+class TestTaskCompleteObservationGate:
+    """Second task-complete gate: when the first gate's release reason only ARGUES
+    the method is sound (method-defence vocabulary, no observation), bite once more
+    and demand a concrete observation. Runtime form of the prompt's
+    observation-vs-argument litmus. Task-agnostic."""
+
+    def _complete(self, reason):
+        return GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete", "_override_reason": reason},
+            override_reason=reason,
+        )
+
+    def test_pure_argument_reason_blocked_by_second_gate(self):
+        guard = VerificationGuard()
+        # first gate releases (override present), second gate bites: pure argument
+        # (no observation marker → inclusion gate demands one)
+        verdict = guard.check_pre(
+            self._complete("thresholds are conservative and should generalize to hidden inputs")
+        )
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_observation_demand"
+        assert guard._complete_recheck_reminded is True
+        assert guard._complete_observation_demanded is True
+
+    def test_observation_reason_releases_both_gates(self):
+        guard = VerificationGuard()
+        # reason reports an actual observation → second gate does not fire
+        verdict = guard.check_pre(
+            self._complete("I ran it on the sample and the output matched the known answer")
+        )
+        assert verdict is None
+        assert guard._complete_recheck_reminded is True
+        assert guard._complete_observation_demanded is False
+
+    def test_neutral_assertion_now_blocked_by_inclusion_gate(self):
+        # Inclusion flip: a confidently-wrong reason that merely ASSERTS the result
+        # is correct — no argument marker, no observation marker — used to fall in
+        # the gap between marker sets and pass the old EXCLUSION filter. Now the
+        # default posture is positive: without a run+read signal, the gate bites.
+        guard = VerificationGuard()
+        verdict = guard.check_pre(self._complete("re-checked each acceptance criterion"))
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_observation_demand"
+        assert guard._complete_observation_demanded is True
+
+    def test_bare_correctness_claim_blocked_by_inclusion_gate(self):
+        # The sparql pathology in one line: a clean plausible assertion with zero
+        # observation vocabulary. Under exclusion it passed; under inclusion it is
+        # forced to run+read.
+        guard = VerificationGuard()
+        verdict = guard.check_pre(
+            self._complete("the query returns the correct set of professors")
+        )
+        assert verdict is not None
+        assert verdict.reason == "task_complete_observation_demand"
+
+    def test_second_gate_fires_at_most_once(self):
+        guard = VerificationGuard()
+        # first complete: no observation → second gate blocks
+        v1 = guard.check_pre(self._complete("the approach is principled and should work"))
+        assert v1 is not None and v1.reason == "task_complete_observation_demand"
+        # agent re-issues, still no observation → gate is spent, passes through
+        # (honest escape: "nothing runnable to check" said on the retry releases it)
+        v2 = guard.check_pre(self._complete("still principled, nothing runnable to check"))
+        assert v2 is None
+
+    def test_second_gate_message_teaches_observation_not_argument(self):
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_OBSERVATION_DEMAND
+        low = " ".join(_TASK_COMPLETE_OBSERVATION_DEMAND.lower().split())
+        assert "observation" in low
+        assert "argument" in low
+        # prescribes concrete moves: run the sample / compare to known answer / perturb
+        assert "compare" in low
+        assert "known answer" in low
+        assert "perturb" in low
+        assert "_override_reason" in _TASK_COMPLETE_OBSERVATION_DEMAND
+        # releases if genuinely nothing to run — not a hard block
+        assert "fires once" in low
+        # no case-by-case task specifics leaked in
+        for w in ("jump", "takeoff", "chess", "sql", "povray", "video"):
+            assert w not in low
+
+    def test_classifier_requires_both_argument_and_no_observation(self):
+        from flagscale_agent.react.guard.verification import _is_pure_argument
+        # argument + observation → not pure argument (observation wins)
+        assert _is_pure_argument("conservative but I compared output to ground truth") is False
+        # argument only → pure argument
+        assert _is_pure_argument("this is reasonable and robust") is True
+        # observation only → not argument
+        assert _is_pure_argument("ran pytest, tests passed") is False
+        # empty → not argument
+        assert _is_pure_argument("") is False
+
+    def test_has_observation_inclusion_predicate(self):
+        from flagscale_agent.react.guard.verification import _has_observation
+        # concrete run/read/compare signals → True
+        assert _has_observation("ran pytest, tests passed") is True
+        assert _has_observation("I compared output to the known answer") is True
+        assert _has_observation("the result was 42, matches expected value") is True
+        assert _has_observation("diff shows no changes, exit code 0") is True
+        # bare assertion, no run+read → False (this is the gap the flip closes)
+        assert _has_observation("the query returns the correct set") is False
+        assert _has_observation("re-checked each acceptance criterion") is False
+        assert _has_observation("this is reasonable and should generalize") is False
+        # empty → False
+        assert _has_observation("") is False
+
+    def test_inclusion_gate_uses_has_observation_not_is_pure_argument(self):
+        # Regression guard for the exclusion→inclusion flip: a reason that is
+        # NEITHER argument NOR observation (the sparql-style bare assertion) must
+        # now block. Under the old _is_pure_argument filter it would have passed.
+        from flagscale_agent.react.guard.verification import (
+            _is_pure_argument,
+            _has_observation,
+        )
+        bare = "the output is correct for all cases"
+        assert _is_pure_argument(bare) is False  # old filter: would NOT block
+        assert _has_observation(bare) is False    # new gate: WILL block
+
+
+class TestTaskCompleteGeneralizationGate:
+    """Third complete-gate: a TRUE observation confined to the one development
+    sample (tuned to it, no generalization signal) is still overfit. It fires
+    after the second gate, at most once, and any override releases it."""
+
+    def _complete(self, reason):
+        return GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete", "_override_reason": reason},
+            override_reason=reason,
+        )
+
+    def test_sample_local_only_reason_blocked_by_third_gate(self):
+        guard = VerificationGuard()
+        # observation present (passes gate 2) but confined to the sample + tuned to it
+        verdict = guard.check_pre(
+            self._complete(
+                "I ran it on the example and tuned the threshold until the output "
+                "matched the expected value"
+            )
+        )
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_generalization_demand"
+        assert guard._complete_observation_demanded is False
+        assert guard._complete_generalization_demanded is True
+
+    def test_generalization_reason_releases_all_gates(self):
+        guard = VerificationGuard()
+        # observation on a perturbed/other input → third gate does not fire
+        verdict = guard.check_pre(
+            self._complete(
+                "I ran it on the sample, then wrote a rescaled perturbed variant to "
+                "disk and ran that too; the output stayed stable"
+            )
+        )
+        assert verdict is None
+        assert guard._complete_generalization_demanded is False
+
+    def test_pure_argument_routes_to_second_gate_not_third(self):
+        guard = VerificationGuard()
+        # pure argument → second gate claims it; third never sees it this call
+        verdict = guard.check_pre(
+            self._complete("the thresholds are relative and should generalize")
+        )
+        assert verdict is not None
+        assert verdict.reason == "task_complete_observation_demand"
+        assert guard._complete_generalization_demanded is False
+
+    def test_neutral_reason_not_false_positived_by_third_gate(self):
+        guard = VerificationGuard()
+        # carries an observation (passes gate2) but no sample-local/tuning tell →
+        # gate3 must not false-positive
+        verdict = guard.check_pre(
+            self._complete("I ran the full suite and every test passed")
+        )
+        assert verdict is None
+        assert guard._complete_generalization_demanded is False
+
+    def test_third_gate_fires_at_most_once(self):
+        guard = VerificationGuard()
+        v1 = guard.check_pre(
+            self._complete("tuned it on the example until it got it right")
+        )
+        assert v1 is not None and v1.reason == "task_complete_generalization_demand"
+        # re-issue, still sample-local-only → gate spent, passes through
+        v2 = guard.check_pre(
+            self._complete("still tuned to the sample, got it right")
+        )
+        assert v2 is None
+
+    def test_third_gate_message_is_generic_and_prescribes_stress_input(self):
+        from flagscale_agent.react.guard.verification import (
+            _TASK_COMPLETE_GENERALIZATION_DEMAND,
+        )
+        low = " ".join(_TASK_COMPLETE_GENERALIZATION_DEMAND.lower().split())
+        assert "stress input" in low
+        assert "perturb" in low
+        assert "generaliz" in low
+        # names the develop-vs-grade gap and demands an OTHER input observation
+        assert "gap" in low
+        assert "_override_reason" in _TASK_COMPLETE_GENERALIZATION_DEMAND
+        assert "fires once" in low
+        # no case-by-case task specifics leaked in
+        for w in ("jump", "takeoff", "chess", "sql", "povray", "video", "hurdle"):
+            assert w not in low
+
+    def test_is_sample_local_only_boundaries(self):
+        from flagscale_agent.react.guard.verification import _is_sample_local_only
+        # sample-local + tuned, no generalization → True
+        assert _is_sample_local_only(
+            "tuned the constants on the example until it matched"
+        ) is True
+        # sample-local but generalization signal present → False
+        assert _is_sample_local_only(
+            "tuned on the sample then ran a perturbed variant"
+        ) is False
+        # generalization only → False
+        assert _is_sample_local_only("ran it on a hidden held-out input") is False
+        # neither → False
+        assert _is_sample_local_only("re-checked each criterion") is False
+        # empty → False
+        assert _is_sample_local_only("") is False
+
+
+class TestTaskCompleteSubstitutionGate:
+    """Fourth complete-gate: the prior gates check whether the result is verified
+    and generalizes; this checks whether it is even the thing the task NAMED. A
+    reason that discloses delivering a substitute for a GIVEN value (near-equivalent
+    / successor / different version) without reporting BLOCKED is caught once.
+    Runtime form of the prompt's CONSTRAINT LOYALTY / GIVEN-vs-RANGE rule.
+    Task-agnostic."""
+
+    def _complete(self, reason):
+        return GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete", "_override_reason": reason},
+            override_reason=reason,
+        )
+
+    def test_disclosed_substitution_blocked_by_fourth_gate(self):
+        guard = VerificationGuard()
+        # carries an observation (clears gate2), no tuning (clears gate3), reaches
+        # gate4: discloses delivering a substitute for a GIVEN
+        verdict = guard.check_pre(
+            self._complete(
+                "ran the build and it is in place, but I could not obtain 2.2 from "
+                "any mirror; delivered the backward-compatible successor instead"
+            )
+        )
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_substitution_demand"
+        assert guard._complete_substitution_demanded is True
+
+    def test_blocked_report_releases_fourth_gate(self):
+        guard = VerificationGuard()
+        # observation present + discloses inability but frames it as BLOCKED
+        verdict = guard.check_pre(
+            self._complete(
+                "ran the check; could not obtain the named version anywhere; reporting "
+                "BLOCKED, delivered no artifact and not delivering a substitute"
+            )
+        )
+        assert verdict is None
+        assert guard._complete_substitution_demanded is False
+
+    def test_exact_artifact_reason_releases_fourth_gate(self):
+        guard = VerificationGuard()
+        # reports obtaining the exact named thing, observation present → no gate fires
+        verdict = guard.check_pre(
+            self._complete(
+                "built the exact named version from source, ran it and the output "
+                "matched the expected value"
+            )
+        )
+        assert verdict is None
+        assert guard._complete_substitution_demanded is False
+
+    def test_neutral_reason_not_false_positived_by_fourth_gate(self):
+        guard = VerificationGuard()
+        # observation present, no substitution vocabulary → gate4 must not fire
+        verdict = guard.check_pre(
+            self._complete("I ran the suite and every test passed")
+        )
+        assert verdict is None
+        assert guard._complete_substitution_demanded is False
+
+    def test_pure_argument_routes_to_second_gate_not_fourth(self):
+        guard = VerificationGuard()
+        # pure argument → second gate claims it; fourth never sees it this call
+        verdict = guard.check_pre(
+            self._complete("the successor is reasonable and should work just as well")
+        )
+        assert verdict is not None
+        assert verdict.reason == "task_complete_observation_demand"
+        assert guard._complete_substitution_demanded is False
+
+    def test_fourth_gate_fires_at_most_once(self):
+        guard = VerificationGuard()
+        # observation present so gate2 releases; disclosed substitution → gate4 bites
+        v1 = guard.check_pre(
+            self._complete(
+                "ran it and read the output; the required version was unavailable so "
+                "I used a newer version"
+            )
+        )
+        assert v1 is not None and v1.reason == "task_complete_substitution_demand"
+        # re-issue, still a disclosed substitution → gate spent, passes through
+        v2 = guard.check_pre(
+            self._complete("ran it again, still used the newer version, it was unavailable")
+        )
+        assert v2 is None
+
+    def test_fourth_gate_message_is_generic_and_teaches_given_vs_range(self):
+        from flagscale_agent.react.guard.verification import (
+            _TASK_COMPLETE_SUBSTITUTION_DEMAND,
+        )
+        low = " ".join(_TASK_COMPLETE_SUBSTITUTION_DEMAND.lower().split())
+        assert "given" in low
+        assert "zero tolerance" in low
+        assert "blocked" in low
+        assert "substitut" in low
+        assert "_override_reason" in _TASK_COMPLETE_SUBSTITUTION_DEMAND
+        assert "fires once" in low
+        # no case-by-case task specifics leaked in
+        for w in ("jump", "takeoff", "chess", "sql", "video", "hurdle"):
+            assert w not in low
+
+    def test_is_disclosed_substitution_boundaries(self):
+        from flagscale_agent.react.guard.verification import _is_disclosed_substitution
+        # substitution disclosed, no BLOCKED → True
+        assert _is_disclosed_substitution(
+            "used the backward-compatible successor instead"
+        ) is True
+        # substitution language but framed as BLOCKED → False
+        assert _is_disclosed_substitution(
+            "the successor was unavailable too; reporting BLOCKED"
+        ) is False
+        # exact artifact, no substitution language → False
+        assert _is_disclosed_substitution("built the exact version from source") is False
+        # neutral → False
+        assert _is_disclosed_substitution("re-checked each criterion") is False
+        # empty → False
+        assert _is_disclosed_substitution("") is False
+
+
+class TestMagicAssumptionGate:
+    """Third complete-gate extension: the NUMBER-FREE overfit. A reason that keys a
+    filter/match on the one concrete FORM a categorical value took in the sample
+    (a fixed prefix, "always starts with X", an exact-form match) with NO sign the
+    agent enumerated the field's real value universe is sample-local overfitting
+    even though it contains no fitting/tuning word and no magic number. The escape
+    is value-universe exploration (DISTINCT / GROUP BY / enumerated values), which
+    is now a generalization marker."""
+
+    def _complete(self, reason):
+        return GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete", "_override_reason": reason},
+            override_reason=reason,
+        )
+
+    def test_magic_assumption_reason_blocked_by_third_gate(self):
+        guard = VerificationGuard()
+        # observation present (passes gate2), no tuning word, but binds concept to
+        # sample's concrete form and never explored the value universe
+        verdict = guard.check_pre(
+            self._complete(
+                "The role always starts with Professor, so I used a starts-with "
+                "filter and ran it on the sample: got 3 rows"
+            )
+        )
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_generalization_demand"
+        assert guard._complete_generalization_demanded is True
+
+    def test_value_universe_exploration_releases_gate(self):
+        guard = VerificationGuard()
+        # same shape but the agent DID enumerate the real distinct values first →
+        # calibrated to the concept boundary, not the sample's form → passes
+        verdict = guard.check_pre(
+            self._complete(
+                "Ran SELECT DISTINCT role first to see the value universe; it had "
+                "Professor and Full Professor, so I used set-membership; got 4 rows"
+            )
+        )
+        assert verdict is None
+        assert guard._complete_generalization_demanded is False
+
+    def test_plain_observation_not_false_positived(self):
+        guard = VerificationGuard()
+        # a genuine observation with neither a form-assumption tell nor a number →
+        # must not trip the magic-assumption markers
+        verdict = guard.check_pre(
+            self._complete("Ran the query and compared output to the expected answer; matched")
+        )
+        assert verdict is None
+        assert guard._complete_generalization_demanded is False
+
+    def test_is_sample_local_only_magic_assumption_boundaries(self):
+        from flagscale_agent.react.guard.verification import _is_sample_local_only
+        # form-assumption, no universe exploration → True
+        assert _is_sample_local_only(
+            "assumed the format is a fixed prefix and matched on it"
+        ) is True
+        assert _is_sample_local_only(
+            "used a hardcoded prefix; it always starts with the same string"
+        ) is True
+        # form-assumption BUT explored the value universe → False (escape)
+        assert _is_sample_local_only(
+            "it always starts with Professor in the sample, but I ran a distinct "
+            "query over all the forms and used set-membership"
+        ) is False
+        # generic mention of a string/filter with no assumption tell → False
+        assert _is_sample_local_only("wrote a filter on the role column") is False
+
+    def test_generalization_message_names_magic_assumption_and_universe(self):
+        from flagscale_agent.react.guard.verification import (
+            _TASK_COMPLETE_GENERALIZATION_DEMAND,
+        )
+        low = " ".join(_TASK_COMPLETE_GENERALIZATION_DEMAND.lower().split())
+        assert "magic assumption" in low
+        assert "value universe" in low
+        assert "distinct" in low
+        # still generic — no task specifics leaked
+        for w in ("jump", "takeoff", "chess", "povray", "video", "hurdle"):
+            assert w not in low
