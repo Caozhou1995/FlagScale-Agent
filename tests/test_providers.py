@@ -132,6 +132,30 @@ class TestAnthropicProvider:
         assert len(result["tool_calls"]) == 1
         assert result["tool_calls"][0]["name"] == "shell"
 
+    def test_thinking_budget_disabled_by_default(self):
+        """Without thinking_budget, _build_kwargs should NOT include thinking key."""
+        with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
+            mock_mod.Anthropic.return_value = MagicMock()
+            from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
+            p = AnthropicProvider(model="test", api_key="key", max_tokens=8192)
+            kwargs = p._build_kwargs(
+                [{"role": "user", "content": "hi"}], tools=[]
+            )
+            assert "thinking" not in kwargs
+
+    def test_thinking_budget_enabled(self):
+        """With thinking_budget > 0, _build_kwargs should include thinking config."""
+        with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
+            mock_mod.Anthropic.return_value = MagicMock()
+            from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
+            p = AnthropicProvider(model="test", api_key="key", max_tokens=20480, thinking_budget=12288)
+            kwargs = p._build_kwargs(
+                [{"role": "user", "content": "hi"}], tools=[]
+            )
+            assert "thinking" in kwargs
+            assert kwargs["thinking"]["type"] == "enabled"
+            assert kwargs["thinking"]["budget_tokens"] == 12288
+
 
 class TestOpenAIProvider:
     @pytest.fixture

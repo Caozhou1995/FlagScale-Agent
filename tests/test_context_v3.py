@@ -832,6 +832,45 @@ class TestPromptIntegrity:
         assert "memory_read" in SYSTEM_PROMPT_STATIC
         assert "cross-session knowledge" in SYSTEM_PROMPT_STATIC
 
+    def test_plan_gated_by_acting_not_difficulty(self):
+        """Plan guidance must state plan is gated by whether you ACT, not by
+        task difficulty, so 'simple' tasks are never a license to skip the plan."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "not gated by task difficulty" in SYSTEM_PROMPT_STATIC
+        assert "no such thing as a task too simple to plan" in SYSTEM_PROMPT_STATIC
+
+    def test_plan_guards_wired_to_lifecycle_rationale(self):
+        """Prompt must explain WHY skipping a plan is dangerous: runtime guards
+        (stall/verification) are wired to the plan lifecycle and cannot fire
+        without an active plan."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "wired to the plan lifecycle" in SYSTEM_PROMPT_STATIC
+        assert "With no active plan, none of them can fire" in SYSTEM_PROMPT_STATIC
+
+    def test_method_switch_cannot_retarget_easier_goal(self):
+        """Method-switch must not be usable to disguise lowering the bar /
+        substituting a reachable target for the constrained one (pov-ray class)."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "change HOW you solve the problem the task set — never WHAT problem that is" in SYSTEM_PROMPT_STATIC
+        assert "wearing the vocabulary of Principle 3 as a disguise" in SYSTEM_PROMPT_STATIC
+        assert "never a license to retarget an easier goal" in SYSTEM_PROMPT_STATIC
+
+    def test_verify_output_not_method_rationale(self):
+        """Verification must reject arguing the method is sound in place of
+        checking the output against ground truth (video-processing class)."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "arguing that your METHOD is sound in place of checking that your OUTPUT is correct" in SYSTEM_PROMPT_STATIC
+        assert "A confident rationale for a wrong answer is still a wrong answer" in SYSTEM_PROMPT_STATIC
+
+    def test_established_constraint_must_be_durable(self):
+        """A load-bearing constraint must be written to memory immediately so it
+        survives context eviction (build-pov-ray class: agent held the 2.2
+        constraint 19min, lost it to eviction, reverted to the rejected 3.7)."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        assert "This list must be DURABLE, not held in working context" in SYSTEM_PROMPT_STATIC
+        assert "re-inferring \"what was I even asked to do?\" from environmental scraps" in SYSTEM_PROMPT_STATIC
+        assert "recover the constraint from memory before acting" in SYSTEM_PROMPT_STATIC
+
 
 class TestNoUnnecessaryTruncation:
     """Regression test: ensure no truncation patterns sneak back in key display paths."""

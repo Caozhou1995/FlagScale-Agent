@@ -23,6 +23,7 @@ from flagscale_agent.react.guard.context_pressure import ContextPressureGuard
 from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.plan import PlanGuard
 from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
+from flagscale_agent.react.kernel import AgentKernel
 from flagscale_agent.react.judge import Judge
 
 
@@ -162,9 +163,60 @@ class TestContextPressureGuard:
 class TestPlanGuard:
     def test_allows_plan_tools(self):
         g = PlanGuard()
+        # First plan_create is the plan-framing moment: PlanGuard injects the
+        # qualifier-extraction reminder once (never blocks). It is advisory —
+        # the tool still proceeds.
         ctx = _ctx("plan_create", {})
         result = g.check_pre(ctx)
-        assert result is None
+        assert result is not None
+        assert result.action == "inject"
+        assert result.reason == "qualifier_extraction"
+        # Subsequent plan tools pass through cleanly.
+        assert g.check_pre(_ctx("plan_create", {})) is None
+        assert g.check_pre(_ctx("plan_update", {})) is None
+        assert g.check_pre(_ctx("plan_status", {})) is None
+
+    def test_planframing_injects_problem_class_selfcheck(self):
+        """Plan-framing injection must pose the P1 self-check questions — name the
+        known problem CLASS and its STANDARD METHOD — not just remind to plan.
+        These have external referents (a class name, an established technique):
+        being unable to answer is the signal the agent has not understood yet."""
+        g = PlanGuard()
+        result = g.check_pre(_ctx("plan_create", {}))
+        assert result is not None and result.action == "inject"
+        m = result.message.lower()
+        assert "class" in m
+        assert "standard method" in m or "standard technique" in m
+        # must flag the brute-force tell as the sign the class is still hidden
+        assert "brute" in m or "enumeration" in m
+
+    def test_planframing_injects_tool_instance_doc_reminder(self):
+        """Plan-framing injection must remind that a qualifier pinning a concrete
+        tool instance (version/revision/named model) requires consulting THAT
+        instance's own documentation before writing the call — the mteb-retrieve
+        failure mode (generic API applied to a specific instance with its own
+        usage rules → silently wrong output). This lives in the qualifier-extraction
+        gate on purpose: it is a plan-framing concern, sharing one override channel,
+        not a content-matching block guard."""
+        g = PlanGuard()
+        result = g.check_pre(_ctx("plan_create", {}))
+        assert result is not None and result.action == "inject"
+        m = result.message.lower()
+        # names the instance-vs-category distinction and the consult-docs action
+        assert "instance" in m
+        assert "documentation" in m or "readme" in m or "model card" in m
+        # flags the silent-wrong-output trap of the generic API shortcut
+        assert "generic" in m
+        # near/far: consulting the doc is not enough — must APPLY what it says.
+        # Guards the deeper mteb-retrieve failure (agent read the doc, saw the
+        # requirement, then skipped it as "not explicitly asked"). Assert the
+        # reminder covers the apply-half, not just the consult-half.
+        assert "near half" in m and "far half" in m
+        assert "apply" in m
+        # the reminder must be generic in FORM — not tied to one failure shape
+        # (e.g. only "add a prefix"). It should frame the requirement as taking
+        # ANY form, so the phrasing must not hardcode a single mechanism.
+        assert "any form" in m
 
     def test_reminds_at_threshold(self):
         g = PlanGuard(task_plan=None)
@@ -213,6 +265,174 @@ class TestPlanGuard:
         g.reset_turn()
         assert g._calls_without_plan == 0
 
+
+class TestPlanGuardSingleShot:
+    """Single-shot (unsupervised) mode enforces a plan via block."""
+
+    def test_observation_budget_only_injects(self):
+        # Within the observation budget, no block — at most periodic inject.
+        g = PlanGuard(task_plan=None, single_shot=True)
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD):
+            ctx = _ctx("shell", {"command": f"explore{i}"})
+            result = g.check_pre(ctx)
+            assert result is None or result.action == "inject"
+
+    def test_blocks_after_observation_budget(self):
+        g = PlanGuard(task_plan=None, single_shot=True)
+        # Consume the observation budget.
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD):
+            g.check_pre(_ctx("shell", {"command": f"explore{i}"}))
+        # The next non-plan call must be blocked.
+        result = g.check_pre(_ctx("shell", {"command": "keep_going"}))
+        assert result is not None
+        assert result.action == "block"
+        assert result.category == "plan_required"
+
+    def test_observation_budget_is_generous_for_exploration(self):
+        # Regression: the single-shot budget must stay generous (>=20) so an
+        # unsupervised run can probe the environment before being forced to plan.
+        # Blocking too early forces a plan written before understanding.
+        assert PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD >= 20
+        g = PlanGuard(task_plan=None, single_shot=True)
+        # Exactly at the budget: still no block (at most a periodic inject).
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD):
+            r = g.check_pre(_ctx("shell", {"command": f"probe{i}"}))
+            assert r is None or r.action == "inject"
+        # One past the budget: now it blocks.
+        r = g.check_pre(_ctx("shell", {"command": "one_more"}))
+        assert r is not None and r.action == "block"
+
+    def test_plan_tools_never_blocked(self):
+        g = PlanGuard(task_plan=None, single_shot=True)
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD + 5):
+            g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+        # plan_create itself must always pass through
+        assert g.check_pre(_ctx("plan_create", {})) is None
+
+    def test_no_block_when_plan_exists(self):
+        from unittest.mock import MagicMock
+        task_plan = MagicMock()
+        task_plan.get_active.return_value = {"title": "t", "steps": []}
+        g = PlanGuard(task_plan=task_plan, single_shot=True)
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD + 5):
+            assert g.check_pre(_ctx("shell", {"command": f"c{i}"})) is None
+
+    def test_interactive_mode_never_blocks(self):
+        # Default (interactive) mode: only inject, never block.
+        g = PlanGuard(task_plan=None)
+        actions = set()
+        for i in range(40):
+            r = g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+            if r is not None:
+                actions.add(r.action)
+        assert "block" not in actions
+
+    def test_set_single_shot_runtime_toggle(self):
+        g = PlanGuard(task_plan=None)
+        g.set_single_shot(True)
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD):
+            g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+        result = g.check_pre(_ctx("shell", {"command": "next"}))
+        assert result is not None and result.action == "block"
+
+
+class TestPlanGuardCompletionGate:
+    """Single-shot: [TASK_COMPLETE] is blocked when no plan was ever created."""
+
+    def test_completion_blocked_without_plan_single_shot(self):
+        g = PlanGuard(task_plan=None, single_shot=True)
+        # A few exploration calls, then straight to completion — no plan_create.
+        for i in range(5):
+            g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+        result = g.check_pre(_ctx("", assistant_text="Done. [TASK_COMPLETE]"))
+        assert result is not None
+        assert result.action == "block"
+        assert result.category == "plan_required"
+        assert result.reason == "single_shot_completion_without_plan"
+
+    def test_completion_allowed_after_plan_created(self):
+        g = PlanGuard(task_plan=None, single_shot=True)
+        # plan_create was called at some point this run.
+        g.check_post(_ctx("plan_create", {}))
+        result = g.check_pre(_ctx("", assistant_text="All steps done. [TASK_COMPLETE]"))
+        assert result is None
+
+    def test_completion_not_blocked_interactive(self):
+        # Interactive mode: completion gate never fires, plan or not.
+        g = PlanGuard(task_plan=None, single_shot=False)
+        result = g.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
+        assert result is None
+
+    def test_completion_gate_blocks_every_bare_reemit(self):
+        # A bare re-emit of [TASK_COMPLETE] with no plan and no override reason
+        # must stay blocked EVERY time — never a blanket fire-once release that
+        # lets an unplanned, unverified completion slip through on the 2nd try.
+        g = PlanGuard(task_plan=None, single_shot=True)
+        first = g.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
+        assert first is not None and first.action == "block"
+        second = g.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
+        assert second is not None and second.action == "block"
+        third = g.check_pre(_ctx("", assistant_text="still done [TASK_COMPLETE]"))
+        assert third is not None and third.action == "block"
+
+    def test_completion_gate_ignores_need_user_input(self):
+        # [NEED_USER_INPUT] is not a completion signal; the gate must not fire.
+        g = PlanGuard(task_plan=None, single_shot=True)
+        result = g.check_pre(_ctx("", assistant_text="Need more info. [NEED_USER_INPUT]"))
+        assert result is None
+
+    def test_completion_gate_no_signal_no_block(self):
+        # tool_name=="" but no completion signal in text → no block.
+        g = PlanGuard(task_plan=None, single_shot=True)
+        result = g.check_pre(_ctx("", assistant_text="still working"))
+        assert result is None
+
+    def test_completion_gate_overridable(self):
+        # The block is overridable via GuardRegistry (rare trivial task). The
+        # SAME guard instance must accept the override — no fire-once reliance.
+        reg = GuardRegistry()
+        g = PlanGuard(task_plan=None, single_shot=True)
+        reg.register(g)
+        # No override → block returned.
+        blocked = reg.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
+        assert blocked is not None and blocked.action == "block"
+        # Same guard + a valid override reason → passes through.
+        allowed = reg.check_pre(_ctx(
+            "", assistant_text="[TASK_COMPLETE]",
+            override_reason="genuinely trivial single lookup, nothing to verify",
+        ))
+        assert allowed is None
+        # But after that, a bare re-emit with NO override is blocked again — the
+        # override releases only the call that carried it, not the run.
+        reblocked = reg.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
+        assert reblocked is not None and reblocked.action == "block"
+
+
+class TestKernelTextOverrideExtraction:
+    """kernel._extract_text_override parses the completion-path override channel.
+
+    A [TASK_COMPLETE] signal carries no tool_args, so the completion-gate block
+    is overridden by an inline `_override_reason: <reason>` in the assistant text.
+    """
+
+    f = staticmethod(AgentKernel._extract_text_override)
+
+    def test_bare_completion_no_override(self):
+        assert self.f("The task is done.\n[TASK_COMPLETE]") == ""
+
+    def test_inline_colon_form(self):
+        text = "Trivial lookup.\n_override_reason: single fact lookup, no steps\n[TASK_COMPLETE]"
+        assert self.f(text) == "single fact lookup, no steps"
+
+    def test_equals_quoted_form(self):
+        assert self.f('_override_reason = "checked file, only a typo"') == "checked file, only a typo"
+
+    def test_empty_text(self):
+        assert self.f("") == ""
+
+    def test_bare_keyword_no_reason(self):
+        # Keyword with no substance → empty; accept_override then keeps it blocked.
+        assert self.f("_override_reason:") == ""
 
 
 # ── GuardRegistry ─────────────────────────────────────────────────────────

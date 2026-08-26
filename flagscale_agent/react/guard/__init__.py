@@ -88,6 +88,14 @@ _OVERRIDE_HINT = (
     "DON'T: explain in text. Only _override_reason in tool_args works."
 )
 
+_TEXT_OVERRIDE_HINT = (
+    '\n\n⚠️ OVERRIDE REQUIRED: To override this gate and complete, add an inline '
+    '_override_reason to your [TASK_COMPLETE] message.\n'
+    "DO: re-emit with a reason on the same line or next line:\n"
+    '  [TASK_COMPLETE]\n  _override_reason: <reason why no plan was warranted>\n'
+    "DON'T: re-emit a bare [TASK_COMPLETE] — it will be blocked again."
+)
+
 _ESCALATE_HINT = (
     "\n\n🚫 ESCALATED: This tool call is blocked and cannot be overridden.\n"
     "DO NOT retry the same tool call — it will be blocked again.\n"
@@ -158,9 +166,14 @@ class GuardRegistry:
                 ):
                     display.guard_overridden(guard.name, ctx.override_reason)
                     continue
-                # Add appropriate hint
+                # Add appropriate hint. A text-only completion signal (no
+                # tool_name) cannot carry tool_args, so it needs the text-inline
+                # override hint instead of the tool-arg hint.
                 if verdict.action == "block" and not ctx.override_reason:
-                    verdict.message += _OVERRIDE_HINT
+                    if not ctx.tool_name:
+                        verdict.message += _TEXT_OVERRIDE_HINT
+                    else:
+                        verdict.message += _OVERRIDE_HINT
                 elif verdict.action == "escalate":
                     verdict.message += _ESCALATE_HINT
                 return verdict

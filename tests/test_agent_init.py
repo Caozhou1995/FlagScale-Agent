@@ -137,3 +137,70 @@ def test_agent_construction_smoke(tmp_path, monkeypatch):
     # Verify context_manager has access to its dependencies
     assert agent.context_manager.history is agent.history
 
+
+
+# ── Expectation anchor assembly (agent side) ──────────────────────────────
+
+
+class _FakePlan:
+    def __init__(self, plan):
+        self._plan = plan
+
+    def get_active(self):
+        return self._plan
+
+
+class _Stub:
+    """Minimal object exposing task_plan, to exercise the unbound method."""
+    def __init__(self, plan):
+        self.task_plan = _FakePlan(plan)
+
+
+def _anchor(plan):
+    from flagscale_agent.react.agent import WorkerAgent
+    return WorkerAgent._current_expectation_anchor(_Stub(plan))
+
+
+def test_anchor_empty_when_no_active_plan():
+    assert _anchor(None) == ""
+
+
+def test_anchor_empty_when_no_doing_or_pending_step():
+    plan = {"steps": [{"status": "done", "title": "old", "notes": "", "acceptance": []}]}
+    assert _anchor(plan) == ""
+
+
+def test_anchor_prefers_doing_step():
+    plan = {"steps": [
+        {"status": "done", "title": "s1", "notes": "n1", "acceptance": []},
+        {"status": "doing", "title": "train model", "notes": "expect acc>=0.62 in 10min",
+         "acceptance": ["acc>=0.62"]},
+        {"status": "pending", "title": "s3", "notes": "", "acceptance": []},
+    ]}
+    a = _anchor(plan)
+    assert "train model" in a
+    assert "expect acc>=0.62 in 10min" in a
+    assert "acc>=0.62" in a
+    assert "s3" not in a  # did not pick the pending one
+
+
+def test_anchor_falls_back_to_first_pending():
+    plan = {"steps": [
+        {"status": "done", "title": "s1", "notes": "", "acceptance": []},
+        {"status": "pending", "title": "next thing", "notes": "plan notes", "acceptance": []},
+    ]}
+    a = _anchor(plan)
+    assert "next thing" in a
+    assert "plan notes" in a
+
+
+def test_anchor_survives_broken_plan_manager():
+    class _Boom:
+        def get_active(self):
+            raise RuntimeError("boom")
+
+    class _S:
+        task_plan = _Boom()
+
+    from flagscale_agent.react.agent import WorkerAgent
+    assert WorkerAgent._current_expectation_anchor(_S()) == ""

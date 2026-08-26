@@ -194,38 +194,96 @@ class ShellTool(Tool):
 
             # --- Long-command monitoring loop ---
             start = time.time()
-            next_check = min(15, self._remind_interval)
+            # Default cadence is 30s; honor a smaller remind_interval so callers
+            # (and tests) can request tighter checks. With the default
+            # remind_interval (120) this is 30s.
+            check_interval = min(30, self._remind_interval)
+            next_check = check_interval
             last_output_snapshot = ""
             stall_count = 0
             health_reason = ""
             _streams_done_at = None
             _STREAM_EOF_GRACE_SECS = 3
+            _had_children = False  # Track if process ever had children
+            _prev_num_children = 0  # Track child count drops (OOM signal)
 
             while proc.poll() is None:
                 elapsed = time.time() - start
 
                 if elapsed > next_check:
-                    next_check = elapsed + self._remind_interval
+                    next_check = elapsed + check_interval
                     mins = int(elapsed) // 60
                     secs = int(elapsed) % 60
                     time_str = f"{mins}m{secs}s" if mins > 0 else f"{secs}s"
                     recent_text = "".join(stdout_chunks[-20:] + stderr_chunks[-20:])
                     current_snapshot = "".join(stdout_chunks[-10:] + stderr_chunks[-10:])
 
-                    # Track output changes
-                    output_changed = not current_snapshot or current_snapshot != last_output_snapshot
+                    # Track output changes. Empty output counts as a STALL,
+                    # not as "changed" — otherwise commands that never stream
+                    # output (piped through tail/grep, silent network waits)
+                    # look permanently healthy and stall indicators never fire.
+                    output_changed = bool(current_snapshot) and current_snapshot != last_output_snapshot
                     if not output_changed:
                         stall_count += 1
                     else:
                         stall_count = 0
                     last_output_snapshot = current_snapshot
 
-                    # Health judge decides kill/continue
+                    # Hard-indicator check (priority)
+                    from flagscale_agent.react.tools.process_health import (
+                        get_process_health,
+                        detect_output_anomalies,
+                        should_kill_process,
+                    )
+
+                    proc_health = get_process_health(proc.pid)
+                    output_anomalies = detect_output_anomalies(recent_text)
+                    
+                    # Track if we ever had children
+                    if proc_health['num_children'] > 0:
+                        _had_children = True
+
+                    should_kill, kill_reason = should_kill_process(
+                        elapsed, output_changed, stall_count,
+                        proc_health, output_anomalies, _had_children,
+                        _prev_num_children
+                    )
+                    
+                    # Update child count for next iteration
+                    _prev_num_children = proc_health['num_children']
+
+                    if should_kill:
+                        proc.kill()
+                        t_out.join(timeout=2)
+                        t_err.join(timeout=2)
+                        partial = "".join(stdout_chunks) + "".join(stderr_chunks)
+                        return (
+                            f"TERMINATED: {kill_reason} (after {time_str}).\n"
+                            f"This was stopped by the health monitor, not by "
+                            f"the command itself. Do not relaunch a variant of "
+                            f"the same approach — treat the reason above as a "
+                            f"redirection and change your method class before "
+                            f"running anything similar again.\n"
+                            f"Output:\n{partial}"
+                        )
+
+                    # Fallback: LLM judge (if hard indicators passed).
+                    # Pass the live resource signals so the judge can tell a
+                    # genuinely hung process (no output + no CPU/child work)
+                    # apart from a healthy silent one (no output but actively
+                    # computing) instead of guessing from silence alone.
                     if self._health_judge_fn:
+                        activity = (
+                            f"CPU {proc_health['cpu_percent']:.0f}%, "
+                            f"memory {proc_health['memory_mb']:.0f} MB, "
+                            f"live child processes {proc_health['children_alive']}"
+                            f" of {proc_health['num_children']}"
+                        )
                         decision = self._health_judge_fn(
                             command, recent_text, time_str,
                             output_changed=output_changed,
                             stall_count=stall_count,
+                            activity=activity,
                         )
                         if decision.get("kill"):
                             proc.kill()
@@ -235,6 +293,11 @@ class ShellTool(Tool):
                             reason = decision.get("reason", "Unhealthy command")
                             return (
                                 f"TERMINATED: {reason} (after {time_str}).\n"
+                                f"This was stopped by the health monitor, not by "
+                                f"the command itself. Do not relaunch a variant of "
+                                f"the same approach — treat the reason above as a "
+                                f"redirection and change your method class before "
+                                f"running anything similar again.\n"
                                 f"Output:\n{partial}"
                             )
                         else:
@@ -244,12 +307,6 @@ class ShellTool(Tool):
                                 from flagscale_agent.react import display
                                 if hasattr(display, '_active_spinner') and display._active_spinner:
                                     display._active_spinner.set_hint(f"🩺 {reason}")
-                            # LLM decides next check interval
-                            ncs = decision.get("next_check_seconds")
-                            if isinstance(ncs, (int, float)) and 10 <= ncs <= 300:
-                                next_check = elapsed + ncs
-                            else:
-                                next_check = elapsed + self._remind_interval
 
                     # Display progress for long-running commands
                     if not quiet:

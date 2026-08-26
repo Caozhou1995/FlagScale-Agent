@@ -287,6 +287,77 @@ class TestMemoryWriteTool:
         assert "ERROR" not in result
         assert "Superseded" not in result
 
+    # --- semantic-uniqueness gate (list-before-write) ---
+
+    def test_near_duplicate_key_blocked(self, tmp_path):
+        mem, tool = self._make_tool(tmp_path)
+        mem.put("fact/tbench/mjcf_relaunch_0824_1056", "fact", "first", "s1")
+        result = tool.execute(
+            key="fact/tbench/mjcf_relaunch_0824_1139", type="fact",
+            content="second"
+        )
+        assert result.startswith("BLOCKED")
+        assert "mjcf_relaunch_0824_1056" in result
+        # nothing written
+        assert mem.get("fact/tbench/mjcf_relaunch_0824_1139") is None
+
+    def test_force_new_bypasses_gate(self, tmp_path):
+        mem, tool = self._make_tool(tmp_path)
+        mem.put("fact/tbench/mjcf_relaunch_0824_1056", "fact", "first", "s1")
+        result = tool.execute(
+            key="fact/tbench/mjcf_relaunch_0824_1139", type="fact",
+            content="second", force_new=True
+        )
+        assert "Memorized" in result
+        assert mem.get("fact/tbench/mjcf_relaunch_0824_1139") is not None
+
+    def test_exact_key_update_not_blocked(self, tmp_path):
+        mem, tool = self._make_tool(tmp_path)
+        mem.put("fact/tbench/mjcf_relaunch_0824_1056", "fact", "first", "s1")
+        result = tool.execute(
+            key="fact/tbench/mjcf_relaunch_0824_1056", type="fact",
+            content="updated"
+        )
+        assert "Memorized" in result
+        assert mem.get("fact/tbench/mjcf_relaunch_0824_1056")["content"] == "updated"
+
+    def test_distinct_concept_not_blocked(self, tmp_path):
+        mem, tool = self._make_tool(tmp_path)
+        mem.put("fact/tbench/mjcf_relaunch_0824_1056", "fact", "x", "s1")
+        # different domain, no shared meaningful tokens
+        result = tool.execute(
+            key="fact/nccl/nic_exclude_syntax", type="fact", content="y"
+        )
+        assert "Memorized" in result
+
+    def test_supersedes_bypasses_gate(self, tmp_path):
+        mem, tool = self._make_tool(tmp_path)
+        mem.put("fact/tbench/mjcf_relaunch_0824_1056", "fact", "x", "s1")
+        result = tool.execute(
+            key="fact/tbench/mjcf_relaunch_0824_1307", type="fact", content="z",
+            supersedes=["fact/tbench/mjcf_relaunch_0824_1056"]
+        )
+        assert "Memorized" in result
+        assert "Superseded" in result
+
+    def test_single_meaningful_token_not_blocked(self, tmp_path):
+        # only one shared meaningful token and neither is a subset -> distinct
+        mem, tool = self._make_tool(tmp_path)
+        mem.put("fact/tbench/mjcf_relaunch_cmd", "fact", "x", "s1")
+        result = tool.execute(
+            key="fact/tbench/mjcf_task_contract", type="fact", content="y"
+        )
+        assert "Memorized" in result
+
+    def test_subset_token_relationship_blocked(self, tmp_path):
+        # new key's tokens are a superset of existing -> containment -> block
+        mem, tool = self._make_tool(tmp_path)
+        mem.put("fact/tbench/fasttext_relaunch", "fact", "x", "s1")
+        result = tool.execute(
+            key="fact/tbench/fasttext_relaunch_cmd", type="fact", content="y"
+        )
+        assert result.startswith("BLOCKED")
+
 
 class TestMemoryReadTool:
     """MemoryReadTool reads by exact key or prefix."""
