@@ -67,10 +67,21 @@ class GuardVerdict:
     message: str
     reason: str
     category: str  # For inject deduplication
+    # A block is overridable by default (_override_reason releases it). Set
+    # overridable=False for a block that must be released by a concrete corrective
+    # ACTION (a specific tool call), not by a text/tool-arg override. Unlike
+    # escalate (a dead-end that tells the agent to stop and ask the user), a
+    # non-overridable block RE-PROMPTS: the agent can recover on its own by taking
+    # the required action. Used by the single-shot completion gate, whose only exit
+    # is calling plan_create — a text-inline override the model cannot reliably
+    # emit was letting bare [TASK_COMPLETE] livelock the loop.
+    overridable: bool = True
 
     @classmethod
-    def block(cls, message: str, reason: str, category: str) -> GuardVerdict:
-        return cls(action="block", message=message, reason=reason, category=category)
+    def block(cls, message: str, reason: str, category: str,
+              overridable: bool = True) -> GuardVerdict:
+        return cls(action="block", message=message, reason=reason,
+                   category=category, overridable=overridable)
 
     @classmethod
     def inject(cls, message: str, reason: str, category: str) -> GuardVerdict:
@@ -158,9 +169,13 @@ class GuardRegistry:
                 continue
 
             if verdict.action in ("block", "escalate"):
-                # Override mechanism: only block is overridable
+                # Override mechanism: only an OVERRIDABLE block is released by a
+                # valid _override_reason. A non-overridable block (verdict.
+                # overridable is False) ignores the override text — its only exit
+                # is the corrective ACTION named in its message (e.g. plan_create).
                 if (
                     verdict.action == "block"
+                    and verdict.overridable
                     and ctx.override_reason
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
@@ -168,8 +183,10 @@ class GuardRegistry:
                     continue
                 # Add appropriate hint. A text-only completion signal (no
                 # tool_name) cannot carry tool_args, so it needs the text-inline
-                # override hint instead of the tool-arg hint.
-                if verdict.action == "block" and not ctx.override_reason:
+                # override hint instead of the tool-arg hint. A non-overridable
+                # block gets no override hint — its message already names the
+                # required action.
+                if verdict.action == "block" and verdict.overridable and not ctx.override_reason:
                     if not ctx.tool_name:
                         verdict.message += _TEXT_OVERRIDE_HINT
                     else:
@@ -211,12 +228,13 @@ class GuardRegistry:
             if verdict.action in ("block", "escalate"):
                 if (
                     verdict.action == "block"
+                    and verdict.overridable
                     and ctx.override_reason
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
                     display.guard_overridden(guard.name, ctx.override_reason)
                     continue
-                if verdict.action == "block" and not ctx.override_reason:
+                if verdict.action == "block" and verdict.overridable and not ctx.override_reason:
                     verdict.message += _OVERRIDE_HINT
                 return verdict
 

@@ -98,6 +98,11 @@ def _make_kernel(llm_responses, single_shot=True, max_iter=2000):
         is_context_limit_error_fn=lambda e: False,
         call_llm_fn=call_llm_fn,
     )
+    # execute_tools_fn must return one result per tool call so the kernel's
+    # zip(tool_calls, results) pairing (and PlanGuard.check_post on plan_create)
+    # runs. The default lambda above returns [] which drops single tool calls;
+    # override with a length-matching stub.
+    deps.execute_tools_fn = lambda tcs: ["ok"] * len(tcs)
     kernel = AgentKernel(deps)
     kernel._call_count = call_count
     return kernel
@@ -117,18 +122,41 @@ def test_bare_task_complete_breaks_before_max_iter():
     assert kernel._call_count["n"] < 50
 
 
-def test_inline_override_releases_without_livelock():
-    """A [TASK_COMPLETE] carrying an inline _override_reason releases normally."""
+def test_inline_override_does_NOT_release_gate():
+    """The single-shot completion gate is NON-OVERRIDABLE: an inline
+    _override_reason no longer releases it. Only a real plan_create tool call
+    does. A [TASK_COMPLETE] carrying an inline override still gets blocked and
+    eventually hits the livelock breaker (the model must call plan_create).
+
+    Regression: the text-inline override was the escape the model could not
+    reliably emit, so bare [TASK_COMPLETE] livelocked. Forcing plan_create as
+    the sole exit structurally breaks the text-only spin.
+    """
     kernel = _make_kernel(
         [{"content": "[TASK_COMPLETE]\n_override_reason: trivial one-line lookup, no plan needed",
           "tool_calls": []}],
         single_shot=True,
     )
     result = kernel.run_turn()
+    assert result.stop_reason.startswith("completion_gate_livelock"), result.stop_reason
+    kernel.deps.display.completion_signal.assert_not_called()
+
+
+def test_plan_create_releases_gate():
+    """Calling plan_create sets _plan_ever_created; the SUBSEQUENT
+    [TASK_COMPLETE] then passes the gate and completes normally."""
+    kernel = _make_kernel(
+        [
+            {"content": "framing", "tool_calls": [
+                {"id": "t1", "name": "plan_create",
+                 "arguments": {"title": "T", "steps": ["a"]}}]},
+            {"content": "done [TASK_COMPLETE]", "tool_calls": []},
+        ],
+        single_shot=True,
+    )
+    result = kernel.run_turn()
     assert result.stop_reason == "explicit_signal", result.stop_reason
-    # Released on the first completion attempt — no repeated blocks.
-    assert kernel._call_count["n"] == 1
-    assert kernel._consecutive_completion_blocks == 0
+    kernel.deps.display.completion_signal.assert_called_once_with("[TASK_COMPLETE]")
 
 
 def test_interactive_mode_never_blocks_completion():
@@ -166,10 +194,15 @@ def test_blocked_completion_never_prints_marker():
 
 
 def test_accepted_completion_prints_marker_once():
-    """A gate-approved completion prints the authoritative marker exactly once."""
+    """A gate-approved completion (released by plan_create) prints the
+    authoritative marker exactly once."""
     kernel = _make_kernel(
-        [{"content": "[TASK_COMPLETE]\n_override_reason: trivial lookup, no plan needed",
-          "tool_calls": []}],
+        [
+            {"content": "framing", "tool_calls": [
+                {"id": "t1", "name": "plan_create",
+                 "arguments": {"title": "T", "steps": ["a"]}}]},
+            {"content": "[TASK_COMPLETE]", "tool_calls": []},
+        ],
         single_shot=True,
     )
     result = kernel.run_turn()
@@ -199,46 +232,47 @@ def test_need_user_input_prints_that_marker():
     kernel.deps.display.completion_signal.assert_called_once_with("[NEED_USER_INPUT]")
 
 
-def test_bare_completion_shows_text_override_hint():
-    """A blocked text-only [TASK_COMPLETE] must show the TEXT override hint,
-    not the tool-arg hint.
+def test_bare_completion_message_directs_plan_create_no_override_hint():
+    """A blocked text-only [TASK_COMPLETE] must direct the agent to call
+    plan_create and must NOT offer any override hint.
 
-    Regression (polyglot-c-py single-shot run): the guard appended the
-    tool-arg _OVERRIDE_HINT ("Add _override_reason to your next tool call"),
-    but [TASK_COMPLETE] has no tool call — the agent could not follow the
-    instruction and re-emitted bare [TASK_COMPLETE] until livelock. The fix
-    selects _TEXT_OVERRIDE_HINT when tool_name is empty, telling the agent
-    to use the inline `_override_reason: <reason>` form instead.
+    The gate is now non-overridable: neither the tool-arg _OVERRIDE_HINT
+    ("Add _override_reason to your next tool call") nor the text-inline
+    override hint should appear. The message's sole instruction is to call
+    plan_create — a real tool call is the only exit, which structurally
+    breaks the text-only livelock.
     """
-    from flagscale_agent.react.guard import _OVERRIDE_HINT, _TEXT_OVERRIDE_HINT
     kernel = _make_kernel([{"content": "[TASK_COMPLETE]", "tool_calls": []}])
     result = kernel.run_turn()
     assert result.stop_reason.startswith("completion_gate_livelock")
-    # The guard message injected into history should contain the text hint,
-    # not the tool-arg hint.
     guard_msgs = [m for m in kernel.deps.history.messages
                   if isinstance(m.get("content"), str)
-                  and "_override_reason" in m["content"].lower()]
-    assert len(guard_msgs) > 0, "Expected at least one guard message with override hint"
-    # Tool-arg hint says "to your next tool call" — text hint does NOT.
+                  and "plan_create" in m["content"]]
+    assert len(guard_msgs) > 0, "Expected a guard message directing plan_create"
     combined = " ".join(m["content"] for m in guard_msgs)
+    # No override hint of either flavour should be appended.
     assert "to your next tool call" not in combined, (
-        "Should show text-inline override hint, not tool-arg hint"
+        "Non-overridable gate must not show the tool-arg override hint"
     )
-    assert "_override_reason:" in combined or "_override_reason =" in combined, (
-        "Should show inline _override_reason format"
+    assert "OVERRIDE REQUIRED" not in combined, (
+        "Non-overridable gate must not show any override hint"
     )
+    assert "plan_create" in combined
 
 
-def test_text_override_hint_shows_format_example():
-    """The _TEXT_OVERRIDE_HINT must include a concrete format example so the
-    agent knows exactly how to write the override."""
-    from flagscale_agent.react.guard import _TEXT_OVERRIDE_HINT
-    assert "[TASK_COMPLETE]" in _TEXT_OVERRIDE_HINT
-    assert "_override_reason:" in _TEXT_OVERRIDE_HINT
-    assert "bare" in _TEXT_OVERRIDE_HINT.lower() or "blocked again" in _TEXT_OVERRIDE_HINT.lower(), (
-        "Should warn that bare re-emit will be blocked again"
+def test_completion_gate_verdict_is_non_overridable():
+    """The completion-gate verdict must carry overridable=False so a text or
+    tool-arg _override_reason cannot release it."""
+    from flagscale_agent.react.guard import GuardContext
+    guard = PlanGuard(task_plan=None, single_shot=True)
+    ctx = GuardContext(
+        tool_name="", tool_args={}, tool_result=None,
+        assistant_text="[TASK_COMPLETE]",
     )
+    verdict = guard.check_pre(ctx)
+    assert verdict is not None and verdict.action == "block"
+    assert verdict.overridable is False
+    assert verdict.reason == "single_shot_completion_without_plan"
 
 
 def test_trailing_sentinel_wins_over_earlier_mention():

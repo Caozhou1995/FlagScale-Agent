@@ -227,16 +227,24 @@ class AgentKernel:
 
                     # ── Empty output defense: auto-retry up to 3 times ──
                     if not assistant_text.strip():
+                        was_reasoning_only = response.get("reasoning_only", False)
                         empty_retries = getattr(self, "_empty_output_retries", 0)
                         if empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
-                            d.display.warn(f"Empty LLM output (retry {empty_retries + 1}/3), auto-continuing...")
+                            if was_reasoning_only:
+                                d.display.warn(f"Reasoning produced content but no visible output (retry {empty_retries + 1}/3), continuing...")
+                            else:
+                                d.display.warn(f"Empty LLM output (retry {empty_retries + 1}/3), auto-continuing...")
                             # Remove the empty assistant message we just appended
                             msgs = d.history.get_messages()
                             if msgs and msgs[-1].get("role") == "assistant":
                                 msgs.pop()
-                            # Inject a nudge
-                            d.history.append({"role": "user", "content": "[system: empty response detected, please continue your work]"})
+                            # Inject a targeted nudge
+                            if was_reasoning_only:
+                                nudge = "[system: your reasoning was generated but produced no visible output. Output your answer or next action directly — do not repeat the reasoning.]"
+                            else:
+                                nudge = "[system: empty response detected, please continue your work]"
+                            d.history.append({"role": "user", "content": nudge})
                             continue
                         else:
                             self._empty_output_retries = 0
