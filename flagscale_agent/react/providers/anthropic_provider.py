@@ -73,9 +73,39 @@ class AnthropicProvider(LLMProvider):
         if self._thinking_budget and self._thinking_budget > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": self._thinking_budget}
         if system:
-            kwargs["system"] = system
+            # Split static body from dynamic dashboard for prompt caching.
+            # The dashboard (Turn counter, memory keys) changes every turn and
+            # must be AFTER the cache_control breakpoint to avoid invalidating
+            # the cached static body (~22K chars / ~5.5K tokens).
+            sep = "\n---\n["
+            idx = system.find(sep)
+            if idx >= 0:
+                kwargs["system"] = [
+                    {"type": "text", "text": system[:idx], "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": system[idx:]},
+                ]
+            else:
+                kwargs["system"] = [
+                    {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+                ]
         if tools:
             kwargs["tools"] = tools
+        # Add cache_control to the last message to cache conversation prefix.
+        # Copy to avoid mutating shared message references from history.
+        if chat_messages:
+            last = chat_messages[-1]
+            last_copy = dict(last)
+            content = last.get("content")
+            if isinstance(content, str):
+                last_copy["content"] = [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}},
+                ]
+            elif isinstance(content, list):
+                content_copy = [dict(b) if isinstance(b, dict) else b for b in content]
+                if content_copy and isinstance(content_copy[-1], dict):
+                    content_copy[-1]["cache_control"] = {"type": "ephemeral"}
+                last_copy["content"] = content_copy
+            chat_messages[-1] = last_copy
         return kwargs
 
     def chat(self, messages: List[Dict[str, Any]], tools: List[dict]) -> Dict[str, Any]:

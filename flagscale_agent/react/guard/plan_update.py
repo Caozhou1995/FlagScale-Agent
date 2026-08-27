@@ -14,59 +14,29 @@
 
 """PlanUpdateGuard — detects being stuck on one step and prompts self-diagnosis.
 
-Framing: many iterations on the SAME step without progress is the runtime
-signature of a stall — oscillating, re-deriving the same sub-problem, or tuning
-variants of an approach that already failed. This guard is the runtime trigger
-for the "stalling is a failure mode" discipline in the system prompt (escape
-DOWNWARD to a smaller experiment or UPWARD to a different method-class, never
-SIDEWAYS to another variant). It fires on that timing to prompt the agent to
-stop and diagnose, not merely to remember to bookkeep the plan.
+Many iterations on the SAME step without progress is the runtime signature of a
+stall. This guard fires on that timing to prompt diagnosis: escape DOWNWARD (smaller
+experiment) or UPWARD (different method-class), never SIDEWAYS (another variant).
 
-Two orthogonal stall signals, either one fires the same reminder:
-- COUNT: tool calls (iterations) since last plan_update. First reminder at
-  FIRST_REMIND (fire early — a stall caught early is cheap), then periodically
-  every REMIND_INTERVAL after. Catches DENSE stalls (many quick tool calls
-  thrashing variants).
-- TIME: wall-clock elapsed since last plan_update. Reminder every
-  TIME_REMIND_SECONDS. Catches SPARSE stalls (few tool calls but each preceded
-  by a long think — the count signal is blind to these because it only counts
-  actions, not how long each took). A sparse stall looks exactly like this:
-  long per-call thinks (hundreds of seconds each) between tool calls, so many
-  wall-clock minutes elapse before the count signal ever reaches its threshold.
+Two orthogonal signals, either fires the same reminder:
+- COUNT: tool calls since last plan_update. First at FIRST_REMIND, then every
+  REMIND_INTERVAL. Catches DENSE stalls (many quick thrashing calls).
+- TIME: wall-clock since last plan_update, every TIME_REMIND_SECONDS. Catches
+  SPARSE stalls (few calls but long thinks between them).
 
-The two are orthogonal coverage: count is sensitive to action frequency, time
-is sensitive to per-action duration. Together they cover both thrash modes.
+Escalation: every ESCALATE_AFTER-th reminder (across both signals) becomes a BLOCK
+instead of inject, then the counter resets: inject, inject, block, repeat. A block
+forces a substantive plan_update (or override) before continuing. Counters reset
+on plan_update/plan_create. Meta tools (plan_status, evict, memory_read, ...) don't
+count and don't tick.
 
-Escalation: a reminder can be read and ignored. To keep an ignored stall from
-running unbounded (an ignored stall can otherwise burn every reminder and run
-straight to the hard timeout), reminders escalate. Every ESCALATE_AFTER-th reminder (counted across BOTH signals,
-since the agent just perceives "I've been nudged N times") becomes a BLOCK instead
-of an advisory inject, then the counter resets: inject, inject, block, inject,
-inject, block. A block forces the agent to stop and plan_update (or justify an
-override) before continuing. The count resets on plan_update/plan_create, so only
-CONSECUTIVE ignored reminders accumulate — responding earns a clean slate.
-
-Side-channel guard on the block's clearance bar: the block is cleared by naming
-a "concrete falsifiable fact", but a subtle stall can satisfy that bar while
-never making real progress. On tasks with a real deliverable and a score/
-similarity threshold, the agent can keep producing genuinely-new facts DERIVED
-in a scratch script / prototype / on paper (path-tracing: re-derived the sphere-
-tangent formula, then the shadow equation, then ...) — each clears the block,
-resets the count, and sends it back into the same paper-derivation method-class
-without ever editing+re-measuring the deliverable. So the block message
-additionally requires: for deliverable+threshold tasks, a fact only counts if it
-was OBSERVED AT THE DELIVERABLE (edited it, re-ran, measured the score move
-before/after) — a derivation that never touched the graded artifact is side-
-channel work, not progress. This wires PRINCIPLE 2 ("verify where the real
-consumer observes the result") into the stall clearance bar.
-
-Reset: counters/anchors AND the escalation count reset on plan_update/plan_create.
-Meta tools (plan_status, evict, memory_read, ...) don't count and don't tick.
+Side-channel guard: on deliverable+threshold tasks, a fact only clears a block if
+OBSERVED AT THE DELIVERABLE (edit + re-run + measure), not derived in scratch/prototype/
+on paper. This wires PRINCIPLE 2 into the stall clearance bar.
 
 Mechanism limit: guards run in check_post (AFTER a tool call). If the agent goes
-silent in pure thinking with NO tool calls at all, the guard is never invoked;
-the time reminder lands on the NEXT tool call. In practice thrash always emits
-tool calls (think -> write -> compile -> think), so the signal still fires.
+silent with no tool calls, the guard never fires until the next call. In practice
+thrash always emits tool calls, so the signal still fires.
 """
 
 import time
@@ -214,19 +184,14 @@ class PlanUpdateGuard(Guard):
                 return GuardVerdict.block(
                     message=(
                         "[PlanUpdate] This plan_update does not clear the pending "
-                        "stall block: it changed no step state and carries no "
-                        "notes, so it is an empty guard-clearing ping — exactly the "
-                        "move the block exists to stop. To continue you must make a "
-                        "SUBSTANTIVE response: (a) mark the stalled step done/skipped "
-                        "(if it is genuinely finished or abandoned), or (b) call "
-                        "plan_update with a note naming ONE concrete, falsifiable "
-                        "fact your last experiment produced (a value measured, an "
-                        "assumption confirmed/refuted, a candidate eliminated) plus "
-                        "the next method-class to try. If the task names a required "
-                        "output that still does not exist on disk, the substantive "
-                        "move is to write the crudest complete-but-valid version to "
-                        "that exact path now, then note that you did. If you truly "
-                        "cannot name a fact, that is the proof you are looping — "
+                        "stall block: no step state changed and no notes recorded — "
+                        "an empty guard-clearing ping. To continue: (a) mark the stalled "
+                        "step done/skipped, or (b) plan_update with a note naming ONE "
+                        "concrete, falsifiable fact (value measured, assumption "
+                        "confirmed/refuted, candidate eliminated) plus the next "
+                        "method-class. If the task requires an output that does not "
+                        "exist on disk, write the crudest valid version to the path "
+                        "now. If you cannot name a fact, that proves you are looping — "
                         "switch method-class, do not ping again."
                     ),
                     reason="empty_ping_does_not_clear_block",
@@ -289,93 +254,59 @@ class PlanUpdateGuard(Guard):
                 escalate = self._stall_trigger_count % self.ESCALATE_AFTER == 0
 
                 body = (
-                    f"[PlanUpdate] {sig} on step {step_id} with no plan "
-                    f"update — the runtime signature of a stall. Before anything "
-                    f"else, answer one question concretely: WHAT did the last round "
-                    f"tell you that you did not already know one round ago? Name the "
-                    f"specific fact — a value you measured, an assumption you "
-                    f"confirmed or refuted, a candidate you eliminated. If your "
-                    f"honest answer is \"nothing new\" / \"same as I expected\" / "
-                    f"\"still don't know why\", that is not a phrasing problem — it "
-                    f"is the proof your information gain is zero and you are looping, "
-                    f"however much reasoning you produced. You cannot fix a stall by "
-                    f"thinking harder in the same place; only a new fact moves you. "
-                    f"The escape is NOT another "
-                    f"variant of what just failed (parallelizing, retuning params, a "
-                    f"faster rewrite are all SIDEWAYS — same method-class). Escape "
-                    f"DOWNWARD: write the smallest experiment that isolates which "
-                    f"assumption is wrong. Or UPWARD: switch to a different "
-                    f"method-class for this problem. Then record the shift in notes "
-                    f"(\"tried X → failed because Y → now trying Z\") so you don't "
-                    f"re-walk the dead path. There is also a THIRD escape people miss "
-                    f"on optimization/improvement steps: maybe nothing is wrong and you "
-                    f"are simply DONE. If your recent rounds are oscillating — a metric "
-                    f"wobbling around a plateau, a value nudged up then reverted, each "
-                    f"round ending \"slightly worse, let me revert\" — that is not a "
-                    f"stall to escape, it is the signal that distinct methods have "
-                    f"stopped yielding gains and you are now burning budget on variance. "
-                    f"Stop tuning, deliver the best version you already measured, and "
-                    f"mark the step done — one more turn of the same dial is not "
-                    f"progress. And if the step is genuinely finished or abandoned, "
-                    f"mark it done/skipped. A FOURTH escape applies when the task "
-                    f"names a required output (a file/artifact at a specific path) "
-                    f"and it does not exist on disk yet: if these stalled rounds have "
-                    f"been spent thinking, exploring, or perfecting one part while the "
-                    f"required output still is not written anywhere, STOP — your "
-                    f"finite budget can run out and whatever sits at that path is ALL "
-                    f"that gets scored. The escape is BUDGET ORDER: write the crudest "
-                    f"complete-but-valid version of the required output to the exact "
-                    f"path RIGHT NOW (a stub, a naive result, a hardcoded-but-"
-                    f"well-formed output), confirm it exists, THEN resume improving "
-                    f"it. A rough answer that actually exists beats a perfect one that "
-                    f"never got written."
+                    f"[PlanUpdate] {sig} on step {step_id} with no plan update — "
+                    f"the runtime signature of a stall. First, answer concretely: "
+                    f"what did the last round tell you that you did not already know? "
+                    f"Name the specific fact — a value measured, an assumption "
+                    f"confirmed or refuted, a candidate eliminated. If your honest "
+                    f"answer is \"nothing new\" / \"same as expected\" / \"still don't "
+                    f"know why\", that is proof your information gain is zero and you "
+                    f"are looping — not a phrasing problem. You cannot fix a stall by "
+                    f"thinking harder in the same place; only a new fact moves you.\n\n"
+                    f"Escape routes (pick one):\n"
+                    f"— DOWNWARD: smallest experiment isolating which assumption is "
+                    f"wrong.\n"
+                    f"— UPWARD: switch to a different method-class.\n"
+                    f"— NOT another variant of what failed (parallelizing, retuning, "
+                    f"faster rewrite are all SIDEWAYS — same class).\n"
+                    f"— THIRD escape: if rounds are oscillating — a metric wobbling "
+                    f"around a plateau, each ending \"slightly worse, revert\" — you "
+                    f"are burning budget on variance, not progressing. Stop tuning, "
+                    f"deliver the best version you already measured, mark done.\n"
+                    f"— FOURTH escape: if the task names a required output that does not "
+                    f"exist on disk yet, STOP perfecting — BUDGET ORDER: write the "
+                    f"crudest complete-but-valid version to the exact path now, confirm "
+                    f"it exists, then resume improving. A rough answer that exists "
+                    f"beats a perfect one that never got written.\n"
+                    f"Record your shift in notes (\"tried X → failed because Y → now "
+                    f"trying Z\") so you don't re-walk the dead path. If the step is "
+                    f"genuinely finished or abandoned, mark it done/skipped."
                 )
 
                 if escalate:
                     # Advisory nudges were ignored this many times — force a stop.
-                    # Latch the block so an empty guard-clearing ping cannot pass;
-                    # only a substantive plan response clears it (see reset branch).
                     self._block_pending = True
                     return GuardVerdict.block(
                         message=(
                             body
                             + f"\n\nThat is {self._stall_trigger_count} stall "
-                            f"reminders on this step with no plan_update in between — "
-                            f"the earlier advisories had no effect, so this one BLOCKS. "
-                            f"A vague 'I am making progress' does NOT clear this block — "
-                            f"only a concrete, falsifiable fact does. You cannot continue "
-                            f"until you either (a) call plan_update whose note names ONE "
-                            f"specific assumption your last experiment tested and states "
-                            f"the concrete result that confirmed or REFUTED it (e.g. "
-                            f"'assumed F is linear → measured output, it is NOT, so the "
-                            f"linear-approx method-class is dead'), plus the next "
-                            f"method-class to try — or, on an optimization step where "
-                            f"your attempts are oscillating around a plateau, mark it "
-                            f"done after delivering the best version you already "
-                            f"measured (\"gains stopped at 0.988, further tuning only "
-                            f"adds variance, shipping best\"); or "
-                            f"(b) override with _override_reason that states the concrete "
-                            f"new fact the last round produced (a value measured, a "
-                            f"hypothesis eliminated, a bug found) — not that you 'feel' "
-                            f"you are progressing. If you cannot name a specific fact the "
-                            f"last few rounds produced, that is itself the proof you are "
-                            f"looping: stop and switch method-class. One more trap, "
-                            f"specific to tasks with a real deliverable and a "
-                            f"score/similarity threshold: a 'concrete fact' only clears "
-                            f"this block if it was OBSERVED AT THE DELIVERABLE ITSELF — "
-                            f"you edited the deliverable, re-ran it, and measured the "
-                            f"score move (before/after). A fact DERIVED in a scratch "
-                            f"script, a prototype, or on paper (e.g. 'I re-derived the "
-                            f"sphere-tangent formula', 'the shadow equation should be X') "
-                            f"is NOT progress however concrete it sounds — it is "
-                            f"side-channel work that never touched the thing being graded. "
-                            f"If your recent rounds each produced a new derivation but the "
-                            f"deliverable's measured score has not moved (or you never "
-                            f"re-measured it), THAT is the stall: you are optimizing the "
-                            f"wrong medium. Escape by landing the next change in the "
-                            f"deliverable and measuring it; if error persists, decompose "
-                            f"the error by region/component to find the largest "
-                            f"contributor before deriving anything further."
+                            f"reminders with no plan_update — earlier advisories had no "
+                            f"effect, so this one BLOCKS. A vague 'I am making progress' "
+                            f"does NOT clear this — only a concrete, falsifiable fact does. "
+                            f"To continue: (a) plan_update whose note names ONE assumption "
+                            f"your last experiment tested and the result that REFUTED or "
+                            f"confirmed it, plus the next method-class to try — or, if "
+                            f"oscillating around a plateau, mark done after shipping best "
+                            f"(\"gains stopped, further tuning adds variance\"); or "
+                            f"(b) override with _override_reason stating the concrete new "
+                            f"fact produced (value measured, hypothesis eliminated, bug "
+                            f"found). For deliverable+threshold tasks: a fact only clears "
+                            f"this block if OBSERVED AT THE DELIVERABLE — edited it, "
+                            f"re-ran, measured score before/after. Derivation in a scratch "
+                            f"script, prototype, or on paper is side-channel work, not "
+                            f"progress — if the deliverable's score hasn't moved, you are "
+                            f"optimizing the wrong medium. Land the next change in the "
+                            f"deliverable and measure it."
                         ),
                         reason="repeated_stall_ignored",
                         category="plan_update",

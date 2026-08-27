@@ -243,190 +243,108 @@ class TestVerificationGuard:
 
 
 class TestConstraintGuidanceBlockedComputation:
-    """Regression: mode I guidance must name a blocked/no-progress run as the
-    wall signal, so the agent interrupts and re-derives instead of waiting out a
-    brute-force search whose progress counter never advances until it times out."""
-
-    def test_guidance_names_no_progress_run_as_the_wall(self):
-        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
-        low = _ACCEPTANCE_GUIDANCE.lower()
-        # the running computation with no progress is itself the wall/signal
-        assert "no visible progress" in low or "no progress" in low
-        assert "progress indicator" in low
-        # prescribes interrupt + re-derive, not tuning in place
-        assert "interrupt" in low
-        assert "re-derive" in low
+    """Regression: the six SITUATIONAL delivery traps (byte-immutability,
+    reloaded-artifact, noisy-margin, best-so-far write-through, exact-contents,
+    backup/rollback) were moved OUT of _ACCEPTANCE_GUIDANCE (plan-time) and into
+    _TASK_COMPLETE_DELIVERY_HYGIENE (completion-time), where they are actionable.
+    These tests assert each concept survives in the completion-gate text and no
+    task-specific noun leaks in. The old mode-I 'no-progress run' bullet was
+    deleted (compute-as-defined guidance retired), so no test asserts it."""
 
     def test_guidance_names_byte_immutability_undo_trap(self):
         # Regression: a task passed perf+correctness but failed a "do not modify X"
         # check — the agent added an internal structure to a graded resource then
         # removed it to "restore" it, but the file's bytes (hence checksum) changed.
-        # Guidance must say: reverting a change is NOT the same as never changing a
-        # byte/hash-checked resource; restore from backup or never touch it.
-        # MUST stay task-agnostic: the concrete DB/index/hash mechanism is a specific
-        # task's trap and must NOT leak into the guidance text.
-        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
-        low = _ACCEPTANCE_GUIDANCE.lower()
-        # names the "must stay unchanged" constraint checked by hash/checksum/bytes
+        # MUST stay task-agnostic: the concrete DB/index/hash mechanism must NOT leak.
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
         assert "unchanged" in low
         assert "hash" in low or "checksum" in low
-        # names that revert/undo is not the same as never-changed (abstract wording)
-        assert "reverting your change is not the same as never changing it" in low
-        # names the abstract edit-then-undo trap without leaking the concrete mechanism
-        assert "adding an" in low and "internal structure and then removing it" in low
-        # the safe resolutions: restore from a pre-touch backup, or never mutate it
+        assert "reverting a change is not never changing it" in low
+        assert "add-then-remove" in low
         assert "pre-touch backup" in low
-        assert "added it then removed it" in low
-        # leak guard: no specific-task nouns/mechanisms in the guidance text.
-        # Use word boundaries so generic English (wall, index-of-...) doesn't false-hit;
-        # the concern is the concrete DB/hash mechanism of one task.
         import re
         for w in ("sqlite", "wal", "sqlite_master", "sha256", "pixel", "ffmpeg"):
             assert not re.search(r"\b" + w + r"\b", low), f"leaked task-specific term: {w!r}"
 
     def test_guidance_names_reloaded_artifact_vs_inmemory_proxy(self):
         # Regression: tune-mjcf passed correctness but failed speed — the agent
-        # tuned by mutating a live model object (model.opt.solver/iterations/...) in
-        # its own session and measured THAT (ratio ~0.43), but the delivered
-        # model.xml, reloaded cold by the verifier, gave ratio ~1.07 and a
-        # near-zero state diff (i.e. the runtime settings never serialized into the
-        # file). Guidance must say: measure the delivered artifact reloaded fresh
-        # from the delivery path, not the in-memory/in-session object you configured.
-        # MUST stay task-agnostic: no mujoco/model.xml/solver nouns may leak.
-        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
-        low = _ACCEPTANCE_GUIDANCE.lower()
-        # names the proxy trap: in-memory / in-session object configured programmatically
+        # measured a live in-session object, but the delivered file reloaded cold
+        # behaved differently. MUST stay task-agnostic: no mujoco/model.xml leak.
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
         assert "in-memory" in low or "in-session" in low
-        # names the fix: reload the delivered artifact fresh from disk / new process
         assert "reload" in low or "reloaded" in low
         assert "fresh" in low
         assert "cold" in low
-        # names the round-trip / serialization concern in the abstract
         assert "serialize" in low or "serialized" in low or "round-trip" in low
-        # leak guard: no specific-task nouns from this task
         import re
         for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian"):
             assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
                 f"leaked task-specific term: {w!r}")
 
     def test_guidance_names_noisy_threshold_margin_over_own_measure(self):
-        # Regression: tune-mjcf rerun — agent's own one-shot timing measured the
-        # speed ratio at 0.5979 (under the 0.60 bar), but the verifier's rigorous
-        # measurement (many runs + drop 5/95 percentiles + mean) gave 0.6016, just
-        # OVER the bar → reward 0. Correctness passed; only speed failed by 0.16pt.
-        # The two numbers differ only by the disagreement between measuring
-        # instruments. Guidance must say: on a noisy pass/fail metric with a hidden
-        # judge measurement, measure the artifact the judge's way (repeat + trim +
-        # central statistic) and demand MARGIN over the bar, not a hair.
-        # MUST stay task-agnostic: no mujoco/speed-ratio task nouns may leak.
-        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
-        low = _ACCEPTANCE_GUIDANCE.lower()
-        # names the noisy-metric / hidden-measurement setting
+        # Regression: tune-mjcf — own one-shot timing passed by a hair but the
+        # verifier's rigorous measurement flipped the verdict. MUST stay task-agnostic.
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
         assert "noisy" in low
-        assert "hidden" in low
-        # names that own-measurement passing by a hair is not passing
         assert "hair" in low
         assert "margin" in low
-        # names the robust re-measurement recipe: repeats + outlier/percentile trim
         assert "repeat" in low
-        assert "percentile" in low or "outlier" in low or "trim" in low
-        # names run-to-run / instrument variance as the reason margin is needed
+        assert "outlier" in low or "trim" in low or "central statistic" in low
         assert "variance" in low or "run-to-run" in low or "instrument" in low
-        # leak guard: no specific-task nouns from this task
         import re
         for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian", "0.60", "0.5979"):
             assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
                 f"leaked task-specific term: {w!r}")
 
     def test_guidance_names_best_so_far_writethrough_to_delivery_path(self):
-        # Regression: tune-mjcf 3rd rerun — the agent DID adopt robust grader-like
-        # measurement and DID find better-and-valid candidates during 15 min of
-        # open-ended search, but held every candidate only as an in-memory string
-        # (never wrote a winner to the delivery path mid-search). When the agent
-        # timed out (900s), the verifier read whatever intermediate version was on
-        # disk (60.98%, over the 60.00% bar) → reward 0, even though a better
-        # measured version had existed in memory. Guidance must say: the moment a
-        # candidate measures better-and-valid, WRITE IT THROUGH to the delivery path
-        # right then; best-so-far lives on disk, never only in memory.
-        # MUST stay task-agnostic: no mujoco/model.xml/timeout-second nouns may leak.
-        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
-        low = _ACCEPTANCE_GUIDANCE.lower()
-        # names the open-ended search / iterate-over-candidates setting
-        assert "open-ended search" in low
-        # names the trap: a winner held only in memory is not banked
+        # Regression: tune-mjcf — a better-and-valid candidate held only in memory
+        # was lost on timeout; the on-disk intermediate shipped. MUST stay task-agnostic.
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
         assert "only in memory" in low
         assert "banked" in low
-        # names that the judge reads the delivery path, not process memory
         assert "delivery path" in low
-        assert "process memory" in low
-        # names the fix: write it through the moment it measures better-and-valid
-        assert "write-through" in low or "write it through" in low
+        assert "write-through" in low or "written through" in low
         assert "best-so-far" in low
-        # names being stopped (timeout/kill/budget) as when this bites
-        assert "timeout" in low or "budget exhaustion" in low or "stopped" in low
-        # leak guard: no specific-task nouns from this task
+        assert "timeout" in low or "kill" in low or "disk" in low
         import re
         for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian", "0.60", "60.98", "900s"):
             assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
                 f"leaked task-specific term: {w!r}")
 
     def test_guidance_names_exact_contents_and_shown_command_byproduct(self):
-        # Regression: a single-file-delivery task (deliver exactly ONE source file at
-        # a fixed path) scored 0 because the agent self-verified by running the
-        # example command the TASK SHOWED verbatim — that command compiled the source
-        # and, per the shown example, wrote the build output INTO the delivery
-        # directory. The verifier asserted the directory contained EXACTLY the one
-        # named file; the leftover build artifact made it two → silent fail even
-        # though the real deliverable was present and correct. Guidance must teach:
-        # (1) an exact-contents contract means the location holds the named set and
-        # NOTHING more — a stray sibling fails as hard as a missing deliverable;
-        # (2) a command the task SHOWS is the consumer's action, not a spec for where
-        # your own byproducts go; running it verbatim can deposit strays in the
-        # delivery path; self-verify with byproducts redirected outside, or clean them
-        # up before finishing.
-        # MUST stay task-agnostic: no polyglot/gcc/main.py.c/fibonacci nouns may leak.
-        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
-        low = _ACCEPTANCE_GUIDANCE.lower()
-        # names the exact-contents contract and the silent-fail nature
+        # Regression: a single-file-delivery task scored 0 because a shown example
+        # command deposited a build byproduct into the exact-contents delivery dir.
+        # MUST stay task-agnostic: no polyglot/gcc nouns may leak.
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
         assert "exact set" in low or "exact-contents" in low
         assert "nothing more" in low
         assert "stray sibling" in low
         assert "silently" in low
-        # names the shown-command-byproduct trap and its fix
         assert "shows you" in low
         assert "byproduct" in low
-        assert "verbatim" in low
         assert "scratch" in low or "outside the delivery" in low
-        # leak guard: no nouns from the originating task
         import re
         for w in ("polyglot", "cmain", "main.py.c", "fibonacci", ".py.c"):
             assert w not in low, f"leaked task-specific term: {w!r}"
 
     def test_guidance_names_measure_requires_write_backup_rollback(self):
-        # Regression: tune-mjcf 4th rerun — the write-through guidance was live and
-        # the agent DID write candidates to the delivery path. But this task's
-        # measurement reads the artifact AT the delivery path, so the agent was
-        # forced to overwrite-then-measure: it wrote a candidate over its verified
-        # best, measured it WORSE, and moved on WITHOUT restoring — leaving a
-        # regression at the delivery path. On timeout, that regression shipped.
-        # Guidance must cover the overwrite-then-measure case: keep a side backup of
-        # the current best and ROLL BACK the delivery path when a new candidate is
-        # not strictly better, so the delivery path always holds the verified best.
-        # MUST stay task-agnostic: no mujoco/model.xml/timeout-second nouns may leak.
-        from flagscale_agent.react.guard.verification import _ACCEPTANCE_GUIDANCE
-        low = _ACCEPTANCE_GUIDANCE.lower()
-        # names the forcing condition: the delivery path itself is what gets measured
+        # Regression: tune-mjcf — overwrite-then-measure left a regression at the
+        # delivery path when a candidate measured worse and was not rolled back.
+        # MUST stay task-agnostic.
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
         assert "overwrite-then-measure" in low
-        # names the mechanism: backup + rollback / restore
         assert "backup" in low
         assert "rollback" in low or "roll back" in low
         assert "restore" in low
-        # names the delivery path invariant it protects
         assert "delivery path" in low
-        # names the failure it prevents: a worse/unconfirmed candidate left behind
         assert "strictly better" in low
         assert "regression" in low
-        # leak guard: no specific-task nouns from this task
         import re
         for w in ("mujoco", "mjcf", "model.xml", "solver", "jacobian", "0.60", "64.49", "900s"):
             assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
@@ -530,9 +448,13 @@ class TestTaskCompleteRecheck:
             },
             override_reason="open-ended: compared two distinct methods, this is fastest measured",
         )
-        assert guard.check_pre(ctx1) is None
+        # gate1 releases (override present) and the reason reports a measurement,
+        # so gates 2-4 pass too; the chain falls through to the unconditional 5th
+        # gate (delivery hygiene), which fires once.
+        v1 = guard.check_pre(ctx1)
+        assert v1 is not None and v1.reason == "task_complete_delivery_hygiene"
         assert guard._complete_recheck_reminded is True
-        # second complete without override → block is spent, passes through
+        # second complete without override → all gates spent, passes through
         ctx2 = GuardContext(
             tool_name="plan_update",
             tool_args={"action": "complete"},
@@ -782,7 +704,10 @@ class TestTaskCompleteObservationGate:
         verdict = guard.check_pre(
             self._complete("I ran it on the sample and the output matched the known answer")
         )
-        assert verdict is None
+        # gate2 does not fire (observation present); the chain falls through to the
+        # terminal unconditional 5th gate (delivery hygiene).
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_recheck_reminded is True
         assert guard._complete_observation_demanded is False
 
@@ -835,17 +760,6 @@ class TestTaskCompleteObservationGate:
         for w in ("jump", "takeoff", "chess", "sql", "povray", "video"):
             assert w not in low
 
-    def test_classifier_requires_both_argument_and_no_observation(self):
-        from flagscale_agent.react.guard.verification import _is_pure_argument
-        # argument + observation → not pure argument (observation wins)
-        assert _is_pure_argument("conservative but I compared output to ground truth") is False
-        # argument only → pure argument
-        assert _is_pure_argument("this is reasonable and robust") is True
-        # observation only → not argument
-        assert _is_pure_argument("ran pytest, tests passed") is False
-        # empty → not argument
-        assert _is_pure_argument("") is False
-
     def test_has_observation_inclusion_predicate(self):
         from flagscale_agent.react.guard.verification import _has_observation
         # concrete run/read/compare signals → True
@@ -860,16 +774,13 @@ class TestTaskCompleteObservationGate:
         # empty → False
         assert _has_observation("") is False
 
-    def test_inclusion_gate_uses_has_observation_not_is_pure_argument(self):
+    def test_inclusion_gate_uses_has_observation(self):
         # Regression guard for the exclusion→inclusion flip: a reason that is
         # NEITHER argument NOR observation (the sparql-style bare assertion) must
-        # now block. Under the old _is_pure_argument filter it would have passed.
-        from flagscale_agent.react.guard.verification import (
-            _is_pure_argument,
-            _has_observation,
-        )
+        # now block. The old exclusion filter would have let it pass; the
+        # inclusion predicate _has_observation correctly returns False → blocks.
+        from flagscale_agent.react.guard.verification import _has_observation
         bare = "the output is correct for all cases"
-        assert _is_pure_argument(bare) is False  # old filter: would NOT block
         assert _has_observation(bare) is False    # new gate: WILL block
 
 
@@ -909,7 +820,10 @@ class TestTaskCompleteGeneralizationGate:
                 "disk and ran that too; the output stayed stable"
             )
         )
-        assert verdict is None
+        # gate3 does not fire (generalization signal present); chain falls through
+        # to the terminal 5th gate (delivery hygiene).
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_generalization_demanded is False
 
     def test_pure_argument_routes_to_second_gate_not_third(self):
@@ -929,7 +843,9 @@ class TestTaskCompleteGeneralizationGate:
         verdict = guard.check_pre(
             self._complete("I ran the full suite and every test passed")
         )
-        assert verdict is None
+        # gate3 does not fire; chain falls through to the terminal 5th gate.
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_generalization_demanded is False
 
     def test_third_gate_fires_at_most_once(self):
@@ -1017,7 +933,10 @@ class TestTaskCompleteSubstitutionGate:
                 "BLOCKED, delivered no artifact and not delivering a substitute"
             )
         )
-        assert verdict is None
+        # gate4 does not fire (framed as BLOCKED); chain falls through to the
+        # terminal 5th gate (delivery hygiene).
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_substitution_demanded is False
 
     def test_exact_artifact_reason_releases_fourth_gate(self):
@@ -1029,7 +948,9 @@ class TestTaskCompleteSubstitutionGate:
                 "matched the expected value"
             )
         )
-        assert verdict is None
+        # gate4 does not fire (exact artifact); chain falls through to the 5th gate.
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_substitution_demanded is False
 
     def test_neutral_reason_not_false_positived_by_fourth_gate(self):
@@ -1038,7 +959,9 @@ class TestTaskCompleteSubstitutionGate:
         verdict = guard.check_pre(
             self._complete("I ran the suite and every test passed")
         )
-        assert verdict is None
+        # gate4 does not fire; chain falls through to the terminal 5th gate.
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_substitution_demanded is False
 
     def test_pure_argument_routes_to_second_gate_not_fourth(self):
@@ -1141,7 +1064,9 @@ class TestMagicAssumptionGate:
                 "Professor and Full Professor, so I used set-membership; got 4 rows"
             )
         )
-        assert verdict is None
+        # magic-assumption gate does not fire; chain falls through to the 5th gate.
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_generalization_demanded is False
 
     def test_plain_observation_not_false_positived(self):
@@ -1151,7 +1076,9 @@ class TestMagicAssumptionGate:
         verdict = guard.check_pre(
             self._complete("Ran the query and compared output to the expected answer; matched")
         )
-        assert verdict is None
+        # magic-assumption gate does not fire; chain falls through to the 5th gate.
+        assert verdict is not None
+        assert verdict.reason == "task_complete_delivery_hygiene"
         assert guard._complete_generalization_demanded is False
 
     def test_is_sample_local_only_magic_assumption_boundaries(self):
@@ -1182,3 +1109,127 @@ class TestMagicAssumptionGate:
         # still generic — no task specifics leaked
         for w in ("jump", "takeoff", "chess", "povray", "video", "hurdle"):
             assert w not in low
+
+
+class TestCompletionDeliveryHygieneGate:
+    """Fifth completion gate: after result-level gates (verified/generalizes/named
+    thing) release, one delivery-hygiene checkpoint fires unconditionally, testing
+    the DELIVERED artifact rather than the process. Honest 'none apply' releases it.
+    Task-agnostic."""
+
+    def _complete(self, reason):
+        return GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete", "_override_reason": reason},
+            override_reason=reason,
+        )
+
+    def test_fifth_gate_fires_after_prior_gates_release(self):
+        guard = VerificationGuard()
+        # observation present (clears gate2), not sample-local (clears gate3), no
+        # substitution (clears gate4) → gate5 bites once
+        verdict = guard.check_pre(
+            self._complete(
+                "ran the full suite on every provided input and read the outputs; "
+                "also ran a perturbed held-out variant and results stayed stable"
+            )
+        )
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_delivery_hygiene"
+        assert guard._complete_delivery_hygiene_demanded is True
+
+    def test_fifth_gate_fires_at_most_once(self):
+        guard = VerificationGuard()
+        reason = (
+            "ran it and read outputs on all inputs; ran a held-out variant, stable"
+        )
+        v1 = guard.check_pre(self._complete(reason))
+        assert v1 is not None and v1.reason == "task_complete_delivery_hygiene"
+        # re-issue → gate spent, passes through
+        v2 = guard.check_pre(self._complete(reason + "; checked reloaded artifact fresh"))
+        assert v2 is None
+
+    def test_fifth_gate_message_names_delivery_traps_and_is_generic(self):
+        from flagscale_agent.react.guard.verification import (
+            _TASK_COMPLETE_DELIVERY_HYGIENE,
+        )
+        low = " ".join(_TASK_COMPLETE_DELIVERY_HYGIENE.lower().split())
+        assert "reloaded" in low or "cold" in low
+        assert "best-so-far" in low or "banked" in low
+        assert "backup" in low
+        assert "exact contents" in low
+        assert "immutab" in low or "byte" in low
+        assert "noisy" in low or "margin" in low
+        assert "_override_reason" in _TASK_COMPLETE_DELIVERY_HYGIENE
+        # generic — no task specifics leaked
+        for w in ("jump", "takeoff", "chess", "povray", "video", "hurdle"):
+            assert w not in low
+
+
+class TestBatchStepDoneGate:
+    """Timing 1b: a batch update marking any step 'done' commits the same claim as
+    step_done and must clear the same bar. Without this, batch is a silent hole
+    that skips every verification check. Non-done batches pass freely."""
+
+    def test_batch_with_done_blocked_without_override(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [
+                    {"step_id": 1, "status": "done"},
+                    {"step_id": 2, "status": "doing"},
+                ],
+            },
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "batch_step_done_no_verification"
+
+    def test_batch_with_done_allowed_with_override(self):
+        guard = VerificationGuard()
+        reason = "each done step re-checked against its acceptance, outputs read"
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{"step_id": 1, "status": "done"}],
+                "_override_reason": reason,
+            },
+            override_reason=reason,
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is None
+
+    def test_batch_without_done_passes_freely(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [
+                    {"step_id": 1, "status": "doing"},
+                    {"step_id": 2, "status": "skipped"},
+                ],
+            },
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is None
+
+    def test_batch_empty_override_still_blocked(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{"step_id": 1, "status": "done"}],
+                "_override_reason": "   ",
+            },
+            override_reason="   ",
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.reason == "batch_step_done_no_verification"

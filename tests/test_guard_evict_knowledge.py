@@ -213,3 +213,208 @@ class TestKnowledgeSkillGuard:
         # reset_turn should NOT reset the counter
         guard.reset_turn()
         assert guard._calls_since_knowledge == 5
+
+    def test_web_fetch_resets(self):
+        """web_fetch fills an external knowledge gap → should reset counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            ctx = _make_ctx(tool_name="shell")
+            guard.check_pre(ctx)
+
+        # web_fetch resets counter
+        ctx = _make_ctx(tool_name="web_fetch")
+        assert guard.check_pre(ctx) is None
+        assert guard._calls_since_knowledge == 0
+
+        # Fresh threshold needed before next reminder
+        for i in range(guard.INJECT_THRESHOLD - 1):
+            ctx = _make_ctx(tool_name="shell")
+            assert guard.check_pre(ctx) is None
+
+    def test_inject_mentions_web_fetch_and_external(self):
+        """Inject text must point at BOTH internal and external channels."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 1):
+            ctx = _make_ctx(tool_name="shell")
+            guard.check_pre(ctx)
+        ctx = _make_ctx(tool_name="shell")
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None and verdict.action == "inject"
+        msg = verdict.message.lower()
+        assert "web_fetch" in msg
+        assert "external" in msg
+        # no-alternative claim is flagged as a knowledge gap
+        assert "no other method" in msg or "knowledge gap" in msg
+
+    def test_block_mentions_web_fetch_and_no_alternative(self):
+        """Block text must cover web_fetch and the no-alternative-claim trap."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.BLOCK_THRESHOLD - 1):
+            ctx = _make_ctx(tool_name="shell")
+            guard.check_pre(ctx)
+        ctx = _make_ctx(tool_name="shell")
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None and verdict.action == "block"
+        msg = verdict.message.lower()
+        assert "web_fetch" in msg
+        assert "no better" in msg or "no other method" in msg
+
+
+# ── KnowledgeSkillGuard single-shot early advisory ──
+
+class TestKnowledgeSkillGuardSingleShot:
+    def test_default_no_early_advisory(self):
+        """Non-single-shot (default) fires no early advisory on first call."""
+        guard = KnowledgeSkillGuard()
+        verdict = guard.check_pre(_make_ctx(tool_name="shell"))
+        # First real call in normal mode: below inject threshold, no verdict.
+        assert verdict is None
+
+    def test_set_single_shot_blocks_persistently(self):
+        """Single-shot re-blocks EVERY real tool call until a knowledge call clears it."""
+        guard = KnowledgeSkillGuard()
+        guard.set_single_shot(True)
+        v1 = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v1 is not None and v1.action == "block"
+        assert v1.overridable is False
+        assert "research" in v1.message.lower()
+        assert "problem class" in v1.message.lower()
+        # Second real call: still blocked (persistent, not fire-once).
+        v2 = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v2 is not None and v2.action == "block"
+        assert v2.overridable is False
+
+    def test_ctor_single_shot_flag(self):
+        """single_shot=True via constructor also arms the early gate."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        v1 = guard.check_pre(_make_ctx(tool_name="edit_file"))
+        assert v1 is not None and v1.action == "block"
+
+    def test_meta_tool_does_not_fire_early(self):
+        """Meta tools (plan/memory) don't consume the early gate."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        assert guard.check_pre(_make_ctx(tool_name="plan_create")) is None
+        assert guard.check_pre(_make_ctx(tool_name="memory_write")) is None
+        # First real call still gets the gate.
+        v = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v is not None and v.action == "block"
+
+    def test_knowledge_tool_satisfies_early(self):
+        """If agent loads knowledge first, no early gate later."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        assert guard.check_pre(_make_ctx(tool_name="web_fetch")) is None
+        # Now a real call: gate already satisfied, stays silent.
+        v = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v is None
+
+    def test_early_gate_non_overridable(self):
+        """The early block is NON-overridable — only a real knowledge call clears it."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        v = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v is not None and v.action == "block"
+        assert v.overridable is False
+
+    def test_early_gate_cleared_only_by_knowledge_tool(self):
+        """After a knowledge call the gate is gone; real calls pass."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        # Blocked before any knowledge call.
+        assert guard.check_pre(_make_ctx(tool_name="shell")).action == "block"
+        # A real knowledge call clears the gate.
+        assert guard.check_pre(_make_ctx(tool_name="load_knowledge")) is None
+        # Now real calls pass (normal counting resumes).
+        assert guard.check_pre(_make_ctx(tool_name="shell")) is None
+
+
+# ── KnowledgeSkillGuard network resilience (check_post) ──
+
+class TestKnowledgeSkillGuardNetworkResilience:
+    def test_no_inject_when_web_fetch_succeeds(self):
+        """No network resilience reminder when web_fetch returns normal content."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="Here is the documentation page content..."
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+
+    def test_inject_on_web_fetch_network_error(self):
+        """Inject network resilience reminder when web_fetch fails with network error."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="[WEB_FETCH_NETWORK_ERROR] Could not retrieve https://example.com: ConnectionError"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is not None
+        assert verdict.action == "inject"
+        assert verdict.category == "network_resilience"
+        msg_lower = verdict.message.lower()
+        # Must mention the key troubleshooting steps from Environment Resilience
+        assert "proxy" in msg_lower or "http_proxy" in msg_lower
+        assert "env -u" in msg_lower or "unset" in msg_lower
+        assert "case" in msg_lower  # case sensitivity
+        assert "mirror" in msg_lower or "alternative" in msg_lower
+        assert "local" in msg_lower or "offline" in msg_lower or "cache" in msg_lower
+
+    def test_inject_case_insensitive_marker(self):
+        """Network error marker match is case-insensitive."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="[web_fetch_network_error] timeout"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is not None
+        assert verdict.action == "inject"
+
+    def test_no_inject_for_other_web_fetch_errors(self):
+        """Non-network errors (blocked, size exceeded) don't trigger resilience reminder."""
+        guard = KnowledgeSkillGuard()
+        # SSRF blocked
+        ctx1 = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="[WEB_FETCH_BLOCKED] Blocked host: localhost"
+        )
+        assert guard.check_post(ctx1) is None
+        
+        # Size exceeded
+        ctx2 = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="[WEB_FETCH_SIZE_EXCEEDED] Response exceeded 5 MB limit..."
+        )
+        assert guard.check_post(ctx2) is None
+        
+        # Low content
+        ctx3 = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="[WEB_FETCH_LOW_CONTENT] returned only 12 chars"
+        )
+        assert guard.check_post(ctx3) is None
+
+    def test_no_inject_for_non_web_fetch_tools(self):
+        """Network resilience only fires for web_fetch, not other tools."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_result="curl: (7) Failed to connect"
+        )
+        assert guard.check_post(ctx) is None
+
+    def test_no_inject_when_tool_result_none(self):
+        """Guard handles missing tool_result gracefully."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(tool_name="web_fetch", tool_result=None)
+        assert guard.check_post(ctx) is None
+
+    def test_network_resilience_mentions_env_resilience_section(self):
+        """Message explicitly references the Environment Resilience section of system prompt."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="[WEB_FETCH_NETWORK_ERROR] ProxyError"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is not None
+        msg_lower = verdict.message.lower()
+        assert "environment resilience" in msg_lower or "system prompt" in msg_lower

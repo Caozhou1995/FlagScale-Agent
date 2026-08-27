@@ -101,6 +101,10 @@ class PlanUpdateTool(Tool):
                 "type": "string",
                 "description": "Plan ID to reactivate (for reactivate action).",
             },
+            "_override_reason": {
+                "type": "string",
+                "description": "Override a guard block with a justification (min 5 chars). Some guard checks (step_done premise re-check, batch marking a step done, task completion re-check) block until you re-issue the same call with this field explaining why proceeding is justified. The reason is recorded, not content-checked.",
+            },
         },
         "required": ["action"],
     }

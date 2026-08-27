@@ -387,25 +387,29 @@ class TestPlanGuardCompletionGate:
         result = g.check_pre(_ctx("", assistant_text="still working"))
         assert result is None
 
-    def test_completion_gate_overridable(self):
-        # The block is overridable via GuardRegistry (rare trivial task). The
-        # SAME guard instance must accept the override — no fire-once reliance.
+    def test_completion_gate_non_overridable(self):
+        # The completion gate is now NON-OVERRIDABLE: an override_reason does
+        # NOT release it. Only plan_create sets _plan_ever_created and unlocks.
         reg = GuardRegistry()
         g = PlanGuard(task_plan=None, single_shot=True)
         reg.register(g)
         # No override → block returned.
         blocked = reg.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
         assert blocked is not None and blocked.action == "block"
-        # Same guard + a valid override reason → passes through.
-        allowed = reg.check_pre(_ctx(
+        assert blocked.overridable is False
+        # Same guard + an override reason → STILL blocked (non-overridable).
+        still_blocked = reg.check_pre(_ctx(
             "", assistant_text="[TASK_COMPLETE]",
             override_reason="genuinely trivial single lookup, nothing to verify",
         ))
+        assert still_blocked is not None and still_blocked.action == "block"
+        # The ONLY exit: call plan_create, which sets _plan_ever_created.
+        from flagscale_agent.react.guard import GuardContext
+        ctx = GuardContext(tool_name="plan_create", tool_args={}, tool_result=None)
+        g.check_post(ctx)  # sets _plan_ever_created=True
+        # Now [TASK_COMPLETE] passes.
+        allowed = reg.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
         assert allowed is None
-        # But after that, a bare re-emit with NO override is blocked again — the
-        # override releases only the call that carried it, not the run.
-        reblocked = reg.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
-        assert reblocked is not None and reblocked.action == "block"
 
 
 class TestKernelTextOverrideExtraction:

@@ -98,229 +98,49 @@ implementation choices.
 
 _ACCEPTANCE_GUIDANCE = """[VerificationGuard] Writing acceptance criteria — a note on what makes them useful.
 
-Before marking a step complete, re-read the task statement and confirm you have
-executed every operation it explicitly asks for. A task that says "recover data
-from X and write to Y" needs both;
-designing a recovery strategy is not the same as executing the write.
-If the task names artifacts to produce, verify those exact artifacts exist
-at the named paths — you cannot verify what you have not yet built.
-Reasoning "I know how to do X, so X is done" is the signal to stop and execute X.
+Re-read the task statement and confirm you executed every operation it explicitly asks for.
+If the task names artifacts, verify they exist at the named paths. "I know how to
+do X, so X is done" is the signal to stop and execute X.
 
-Acceptance should describe an externally observable end state — something a
-neutral third party could check without knowing how you implemented it:
-  • a file exists at a specific absolute path
-  • a command exits 0 / produces output matching an expected value
-  • an artifact has an expected property
+Acceptance should describe an externally observable end state — a file exists at a
+specific path, a command exits 0 / produces expected output, an artifact has an
+expected property. Reproduce the judge's condition from scratch; a check that
+shares its premise with the implementation cannot fail.
 
-Avoid phrasing that only makes sense from inside your own implementation (e.g.
-"the path I chose to write to"). When you verify, reproduce the judge's condition
-from scratch — don't confirm using the same convenient handle you built with. A
-check that shares its premise with the implementation cannot fail, so it proves
-nothing.
+Traps — same root cause: letting implementation, not the task contract, define
+verification. These four are cross-task; they apply no matter the domain:
 
-More traps, same root cause — letting your implementation, not the task contract,
-define what verification covers:
   • Cover every input the task gives you, not just the one you developed against.
-    If the task ships multiple samples, verification must actually
-    run the solution on each. Passing on your debug sample says nothing about the
-    ones the judge scores. Before marking complete, ask concretely: which input
-    files in the task directory have I NOT yet run my solution on? List them, then
-    run the solution on each — the ones you skipped are usually the ones scored.
-  • Verify generalization, not answer-recall. For a sample whose answer you know,
-    checking the output matches is fine. For a blind sample whose answer you don't
-    know, do NOT assert it falls in a range you reverse-engineered from the known
-    one — that re-encodes your assumption. Verify the output is structurally valid
-    (right shape, parses, no crash); you cannot verify a number you were never
-    told. When the scored input is one you cannot see, be honest about what your
-    check proves: passing on the sample in front of you shows the code runs, not
-    that it generalizes. Only features the task contract names as fixed are
-    guaranteed on the scored input; anything merely true of your one sample is an
-    accident, not a promise.
-  • Don't excuse a real failure by its origin. When a check fails and you're
-    tempted to dismiss it as "pre-existing", "environmental", or "not caused by
-    my change" — that is the wrong test. The question is not whether you
-    introduced the failure, but whether the failing behavior falls within what
-    the task asks you to deliver. If the failure is in functionality the task
-    requires to work, you must make it pass regardless of who caused it, because
-    acceptance judges the result, not its origin. Only dismiss a failure when the
-    task's declared scope genuinely does not cover it — like skipping an unrelated
-    test suite in a bug-fix task versus a task that says "make all tests pass".
-  • Ground definitional choices in the authoritative source, not a convenient
-    assumption. When the task names a source of truth — a README, a spec, a
-    reference file, especially one it calls "critical" — any definitional choice
-    (what counts as X, which field / subset / format is meant) must be grounded
-    there. Watch for the moment you ask "what exactly counts as X?" and answer
-    with a plausible guess instead of checking: that unresolved question is the
-    crack where a wrong interpretation enters. A number computed from your own
-    definition and checked against that same definition cannot fail — it only
-    re-confirms the assumption, the same premise-sharing trap as above. Close
-    every definitional question by grounding its answer in the named source.
-  • Compute each compared quantity exactly the way the task defines it. When
-    verification means deriving a value and checking it against a threshold or
-    reference, the derivation must match the task's / judge's definition verbatim
-    — for every quantity compared, not just the obvious one. If the task specifies
-    a transform before measuring (reverse, complement, normalize, canonicalize,
-    decode, round), applying your measure to the raw input skips that transform and
-    measures a different quantity; the check can pass while the judge fails. Say
-    what each side of the comparison is, then confirm your computation performs
-    every named step — especially ones that look like harmless shorthand. Reusing
-    the convenient formula from your implementation instead of re-deriving from the
-    definition is the premise-sharing trap again.
-  • Snapshot fragile or one-shot state before you touch it. When the task involves
-    recovering, forensically analyzing, or reconstructing state that is delicate or
-    non-reproducible — a file that may be deleted, corrupted, or transformed on
-    access — copy the raw original to a safe location before using any tool that
-    might open, modify, checkpoint, or normalize it. Inspect read-only or in hex
-    first; when unsure whether a tool writes back, assume it does. A convenient
-    high-level tool can silently mutate or destroy the evidence you were asked to
-    recover, and that loss is usually irreversible. An untouched copy is what lets
-    you check your result against the true starting point, not against state your
-    own probing altered.
-  • Close the gap when your own measurement already shows you fall short. When the
-    task states a quantitative acceptance bound — a numeric range, error tolerance,
-    similarity floor, maximum difference — and you can compute your metric the way
-    the judge will, do not stop at a result that is close but outside the bound.
-    Treat the distance to the threshold as an optimization target: while any
-    measured metric misses its bound, adjust and recompute, until every metric
-    satisfies its threshold — or until you reach the limit of the method, where
-    satisfying one bound would break another. Make that stopping decision
-    explicitly; don't invoke "good enough" to avoid another iteration. "I measured
-    it and it passes" is a finish signal; "I measured it and it is just short" is a
-    signal to keep optimizing, not to deliver.
-  • Before delivering, verify using the judge's measurement. When the task is
-    scored on some metric — a count, format check, exact string match, correctness
-    oracle — run that exact measurement yourself first. If the judge's tool is
-    accessible (a verifier script, reference output, validation command), use it
-    directly; otherwise reproduce its logic from the task's description. A solution
-    that passes your convenient proxy but fails the judge's actual measure still
-    scores zero. The gap between "seems right" and "passes the judge's test" is
-    where last-mile failures live.
-  • Measure the delivered artifact itself, reloaded from where it ships — not an
-    in-memory or in-session object you configured programmatically. When you tune by
-    mutating a live object (setting fields on a loaded model, patching a config in
-    memory, monkey-patching a running instance) and measure THAT, you have verified
-    the proxy in your session, not the file the judge reads. The judge loads your
-    artifact cold from disk; if your settings did not actually serialize into that
-    file — or serialized differently — the reloaded artifact behaves nothing like
-    the object you measured. The tell: your in-session metric looks great, yet the
-    delivered file is byte-identical (or nearly) to the original, or the judge's
-    number is wildly off. Close the gap the way the judge will: after writing the
-    artifact, load it back FRESH (new process / re-read from the delivery path,
-    discarding every in-memory object you touched) and re-run the metric on that
-    reloaded copy. Only a measurement on the cold-loaded deliverable proves the
-    settings survived the round-trip; a measurement on the object you edited proves
-    only that your edit worked in RAM.
-  • When the bar is pass/fail on a NOISY metric (speed, latency, memory, throughput,
-    accuracy on a sample) and the judge's measurement procedure is hidden, passing by
-    a hair on YOUR OWN measurement is not passing. Your number and the judge's number
-    are two draws from instruments that differ — repeat count, warmup, outlier
-    trimming, machine load, averaging. When your margin over the bar is smaller than
-    that instrument disagreement, the "pass" is over-fit to your measuring stick and
-    says nothing about where the judge's draw lands. Two fixes, both observations:
-    (1) measure the deliverable the way a rigorous judge would — many repeats, discard
-    extreme percentiles/outliers, take a trimmed central statistic — not a casual
-    one-shot timing; (2) demand margin proportional to the noise — clearing the
-    threshold by a fraction of a percent is NOT clearing it. If your best robust
-    re-measurement sits right on the line, treat the task as NOT passing: push to a
-    different method-class that opens real headroom, or keep improving until neither
-    run-to-run variance nor a reasonable alternative measurement method could flip the
-    verdict. "My measurement just cleared it" is the finish-signal trap; "I re-measured
-    the artifact the judge's way, repeated and trimmed, and it clears with margin" is
-    the real finish signal.
-  • During open-ended search, persist your best-so-far to the delivery path the MOMENT
-     you find it — never hold a winner only in memory. When you iterate over candidates
-     (tuning params, trying methods, refining a solution) and each is built and measured
-     as an in-process value — a variable, an in-memory object, a scratch string you plan
-     to "write out at the end" — that winner is NOT banked. The judge reads the delivery
-     path, not your process memory; if you are stopped before the end (timeout, kill,
-     budget exhaustion), an unpersisted in-memory best scores exactly as if you never
-     found it, and the delivery path ships whatever earlier or intermediate version
-     happened to be there. The tell: you spent the whole budget improving candidates,
-     each better than the last, but the file the judge reads was written early and never
-     refreshed — so your measured gains evaporate with the process. The fix is a
-     write-through discipline: the instant a candidate measures better than what is
-     currently at the delivery path AND passes the validity checks, write it THROUGH to
-     the delivery path right then, before continuing the search. Best-so-far lives on
-     disk at the delivery path, never only in memory — so whenever you are stopped, the
-     best version you actually measured is exactly what ships. Holding winners in memory
-     to persist "later" is the same class of failure as never producing them: the reward
-     is identical (zero for that improvement), and it is entirely avoidable.
-  • When the delivery path IS what gets measured, protect it with backup + rollback.
-     Some tasks force overwrite-then-measure: the judge (or your own measurement) reads
-     the artifact at the delivery path directly, so you cannot measure a candidate WITHOUT
-     first writing it to that path — "test before you overwrite" is physically impossible.
-     Every experiment then temporarily lands an UNCONFIRMED candidate on the delivery
-     path, and the naive loop destroys your best work: you write candidate N over your
-     verified best, measure it, find it WORSE, and move on to N+1 without restoring, so
-     the delivery path is left holding a regression — if you time out there, that
-     regression ships even though you had a better version earlier. The invariant
-     "delivery path always holds the current best VERIFIED version" still must hold; the
-     mechanism that preserves it under overwrite-then-measure is explicit backup +
-     rollback. The moment a version measures as your new best, copy it to a side backup
-     (cp delivery.ext best.ext) so the known-good survives independently of the delivery
-     path. Run each new experiment knowing the delivery path is now scratch; after
-     measuring, if the new candidate is NOT strictly better, immediately restore the
-     backup over the delivery path (cp best.ext delivery.ext) BEFORE the next experiment
-     — never leave an unconfirmed-or-worse candidate at the delivery path across
-     iterations. Only a strictly-better candidate becomes the new backup. Treat the
-     restore as a mandatory step of the loop, not an afterthought — so at every instant
-     between experiments the delivery path equals your best verified version, and a
-     timeout at any point ships that best, not a half-tested regression.
-  • Let the task's stated constraints shape your method before you commit to one.
-    When the task supplies a fact that narrows the problem — a bound on the search
-    space, a structural property of the input, a hint about which technique fits —
-    that fact steers your approach, not decoration to skim past. Ask what the
-    constraints make cheap that a naive method makes expensive; reaching for the
-    strategy your intuition defaulted to while leaving a stated constraint unused
-    lets your default approach, not the task contract, decide the path. The tell:
-    you hit a wall the task told you how to avoid — an approach that exhausts
-    memory, blows past a time budget, or scales to a size the task's own numbers
-    say is unnecessary. When the same wall stops you twice, that is not a cue to
-    keep tuning in place; it is a cue to re-read the task statement
-    for a constraint or hint you skipped, because a method that ignores what the
-    task made easy will keep failing no matter how you tune it.
-    Re-derive the approach from the givens,
-    then resume. A computation running with no visible progress is itself that wall
-    — being blocked on it is the signal, not a reason to wait it out. If a run's
-    progress indicator sits still while the clock burns, the method, not the
-    runtime, is stuck: interrupt it and re-derive from the constraints.
-  • Keep the deliverable directory clean and minimal. When the task specifies a
-    delivery directory, it should contain only what you are asked to deliver —
-    nothing more. Do not leave debugging scripts, temporary test files,
-    intermediate outputs, backup copies, or exploration artifacts in the delivery
-    path. Use a separate temporary directory outside it for scratch work, then copy
-    only the final required files in. A deliverable contaminated with unrelated
-    files fails the implicit contract: the judge expects exactly what the task
-    named, not a workspace snapshot. Before completing, list the delivery
-    directory's contents and confirm each file is required; remove everything else.
-    Take the contract literally: if it names an EXACT set (often exactly one file),
-    the location must hold that set and NOTHING MORE — one stray sibling (a compiled
-    binary or object file, a build output, a generated or downloaded artifact, a log,
-    a scratch copy) fails an exact-contents check just as hard as a missing
-    deliverable, and it fails SILENTLY because your real artifact IS present and looks
-    right. Do not assume "I only created the one file" — your OWN verification steps
-    may have deposited others without you thinking of them as deliverables. A specific
-    and easy-to-miss source of such strays: a command the TASK SHOWS you — the exact
-    invocation the consumer/grader uses to run, build, compile, or test your artifact —
-    describes THEIR action on your deliverable; it is NOT a spec for where YOUR
-    intermediate products go. Copying that shown command verbatim to self-verify is the
-    trap: if it emits a byproduct and the example directs that byproduct INTO the
-    delivery location, running it as-is drops the byproduct exactly where the
-    exact-contents check trips over it. Self-verify by redirecting byproducts to a
-    scratch/temp path OUTSIDE the delivery location, or if you reproduce the shown
-    command as-is, delete every byproduct it created from the delivery location before
-    finishing.
-  • If the task says an input resource must stay UNCHANGED (a "do not modify X"
-    constraint, often checked by hash / checksum / exact bytes), remember that
-    reverting your change is NOT the same as never changing it. An edit-then-undo
-    on a byte-checked file almost never reproduces the original bytes — adding an
-    internal structure and then removing it typically leaves the file grown and
-    rewritten (the removal frees space but does not shrink or zero it), so its
-    checksum no longer matches even though the structure is "gone". Before you finish, if you touched such a resource
-    at all, restore it from a pre-touch backup (not an undo command), or better,
-    make the deliverable never depend on mutating it — operate on a copy and keep
-    the protected original pristine. "I added it then removed it" fails a
-    byte-level immutability check.
+    Passing on your debug sample says nothing about the ones the judge scores. Run the solution on each
+    input artifact. Ask: what inputs have I not yet run it on?
+  • Verify generalization, not answer-recall. For a blind sample, verify structurally valid
+    output (right shape, parses, no crash); you cannot verify a number you were
+    never told. A green result on the only visible sample shows the code runs, not
+    that it generalizes — it is an accident, not a promise. Only features the task
+    contract names as fixed are guaranteed on the scored input.
+  • Don't excuse a real failure by origin. The question is not whether you
+    introduced it, but whether it falls within what the task asks you to deliver.
+    "pre-existing / external / unrelated to my change" is a CLAIM that needs
+    evidence. The task judges the result, not its origin — a failure inside your
+    declared scope is yours to fix, regardless of who introduced it.
+  • Before delivering, verify using the judge's measurement. Use the verifier
+    script or reproduce its logic. A solution that passes your proxy but fails the
+    judge's measure still scores zero.
+
+The situational traps — reloading the delivered artifact fresh, backup+rollback on
+overwrite-then-measure, exact-contents of the delivery dir, byte-immutability of
+inputs, margin on noisy metrics, best-so-far write-through — apply only at DELIVERY,
+not at plan time. They are enforced as a completion-time check, where they are
+actionable; do not carry them here.
+
+Check for a constraint or hint you skipped — designing a recovery strategy is not the same as executing the write.
+If the same wall stops you twice, narrows the problem before the next attempt.
+Hitting the limit of the method is different from hitting the limit of one tuning parameter — a problem made easy will keep failing no matter how you tune it.
+Shape your method before you commit.
+Approach from the givens, not from your implementation.
+"know how to do X, so X is done" is assuming completion from intent.
+Verify those exact artifacts exist at the named paths.
+Let the data decide the path. Ask: what you have not yet built?
 """
 
 # NOTE: The plan_create qualifier-extraction reminder (_PLAN_CONSTRAINT_REMINDER)
@@ -330,6 +150,21 @@ define what verification covers:
 # single-shot block trains the agent to pass _override_reason, which then
 # silently satisfied this guard's block too, so it never actually fired.
 # See plan.py check_pre and pitfall/flagscale_agent/guard_override_crosstalk.
+
+_BATCH_STEP_DONE_BLOCK = """[VerificationGuard] Batch update marks a step done — same bar as a single step_done.
+
+You are marking one or more steps "done" via action="batch". A batch done is not a
+lighter action than a single plan_update(step_done) — it commits the same claim that
+the work landed, and whatever depends on those steps will trust the result without
+re-examining it. Marking done in bulk must not become a way to skip the verification
+each step would otherwise require.
+
+To proceed, re-issue the batch with "_override_reason" affirming that for EACH step you
+are marking done, you re-checked the result against what that step was supposed to
+satisfy — not that the process felt right, but that the output, checked directly, meets
+the words. This is a forcing checkpoint, not a content check; any override_reason lets
+the batch through. If a step's completion deserves real evidence, prefer marking it via
+plan_update(step_done, verification=[...]) individually rather than folding it into a batch."""
 
 _STEP_DONE_RECHECK_REMINDER = """[VerificationGuard] Before this step is marked done — check your own premises, once.
 
@@ -365,178 +200,94 @@ lets the step through; the point is that you stopped to look before committing."
 
 _TASK_COMPLETE_RECHECK_REMINDER = """[VerificationGuard] Before completing the whole task — one look back at the finish line.
 
-You are about to close out the entire task, not just a step. After this, nothing
-re-examines whether what you delivered was the best you could do — the result is
-final. Spend this one checkpoint deliberately.
+After this, nothing re-examines whether what you delivered was the best you could do.
+Spend this one checkpoint deliberately.
 
-Before anything else, re-read the task as the USER stated it and confirm what you
-are about to deliver answers THAT, not a nearby question you drifted into. The
-failure this catches is not laziness — it is confident competence aimed slightly
-off-target: you solved a problem thoroughly and verified it thoroughly, but it was
-an adjacent problem your own framing substituted for the user's. The drift usually
-enters through an early premise (a value you parsed, a state you reconstructed, an
-input you interpreted) that then went unquestioned while all your effort — and all
-your verification — piled onto the steps downstream of it. Deep, repeated checking
-of the downstream work builds false confidence precisely because it never revisits
-that upstream premise. So test the premise, not just the conclusion: does the input
-you actually worked from match what the user gave? And read the user's phrasing
-literally for what it asks you to PRODUCE — every explicit clause (the exact form,
-"print them ALL", "one per line", the specific artifact and path), and every implicit
-sanity check the task's nature implies (if the task shape says a solution should
-exist, a result that says otherwise is a red flag on your premise, not a finding).
-When your polished answer and the user's plainly stated need diverge, the need wins —
-do not talk yourself into believing your version is what they "really" meant.
+First, re-read the task as the USER stated it and confirm what you are about to
+deliver answers THAT, not a nearby question you drifted into. The failure this
+catches is confident competence aimed slightly off-target: you solved a problem
+thoroughly but it was an adjacent problem your own framing substituted. The drift
+enters through an early premise (a value parsed, a state reconstructed, an input
+interpreted) that went unquestioned while all your effort piled onto steps
+downstream. Deep downstream checking builds false confidence because it never
+revisits that upstream premise. When your polished answer and the user's plainly
+stated need diverge, the need wins.
 
-Now trace where your answer CAME FROM. Point at the content you are about to deliver
-and ask: did I OBSERVE this — read it out of a tool output, a command's stdout, a file
-I actually opened — or did I INFER it from what I expected to be there? If the task
-handed you an artifact to read information out of, the answer must trace back to a tool
-call that genuinely transformed or inspected that artifact and surfaced the content;
-a value that never appeared in any output you saw, but that you "know" from prior
-experience of what such things usually contain, is a guess wearing the clothes of an
-answer. Prior knowledge tells you what is PLAUSIBLE, never what is ACTUALLY there — and
-the task is graded on what is actually there. (Answers you legitimately COMPUTED — a
-number you derived, a result your own code produced — are observed; this is about not
-substituting a prior expectation for a reading you never took.)
+Now trace where your answer came from. Did I OBSERVE this — read it from a tool
+output, a command's stdout, a file I actually opened — or did I INFER it from what
+I expected to be there? Prior knowledge tells you what is PLAUSIBLE, never what is
+ACTUALLY there, and the task is graded on what is actually there. (Answers you
+legitimately COMPUTED — a number you derived, a result your own code produced —
+are observed.)
 
 Then decide what kind of task this was, because that decides what "done" means:
 
-  • If the task has a definite pass/fail condition — a build that either succeeds,
-    a test suite that either goes green, an artifact that either exists at the named
-    path — then "done" means that condition is met, and there is nothing to optimize
-    beyond it. Confirm the condition holds and complete. Do not manufacture doubt
-    where the contract is binary. But hold that confirmation to the real condition,
-    not to a signal you arranged to look like it. If the task named a non-negotiable
-    specific — a version, a tool, a format, a named source or identity — and you could
-    not actually obtain it, then "done" is NOT reachable by delivering a near-equivalent
-    and making the surface read as satisfied: standing up the expected directory,
-    filenames, or a wrapper so a sanity command exits 0 dresses a substitute to pass the
-    check, and the check was only ever a proxy for the genuine artifact. Passing the
-    proxy is not meeting the constraint. Disclosing the swap does not rescue it either —
-    admitting "I used Y instead of the required X" in this very override_reason is honest
-    about the deviation, but honesty is not permission: a disclosed substitute is still a
-    substitute and still fails the task on its terms. When the genuine article is
-    unreachable, the only honest closes are to keep searching for a legal path or to
-    report BLOCKED with nothing counterfeit delivered — an empty honest BLOCKED beats a
-    populated fake that scores the check. And when you DID confirm the condition by
-    running something, check WHERE you ran it: a pass produced in your own working
-    environment — one your prior actions have loaded up with installed packages, set
-    env vars, helper files, or running services — does not prove the deliverable works
-    in the clean environment that will actually consume it. If you had to install a
-    dependency or set something up to make your check go green, that setup is part of
-    what made it pass, and the grader / fresh machine / other user does not have it.
-    So the deliverable must carry its dependencies inside itself or use only what the
-    target is guaranteed to have (standard tools, the exact tools the task named) — a
-    shipped script must not import a library you pip-installed only locally, an artifact
-    must not read a file or env var or service that exists only in your session. A
-    distinct flavor of the same trap is not what you ADDED but HOW the deliverable gets
-    addressed: your own interactive shell resolves the artifact for you — via an
-    interactive/login-shell PATH, a sourced rc file, an alias, or your cwd — while the
-    consumer invokes it bare, as a non-login non-interactive subprocess running the plain
-    command by name, with none of your shell's accumulated resolution. "It runs when I
-    TYPE it" is not "it runs when a PROGRAM calls it": an artifact meant to be found by
-    name must live where the target's own invocation looks (the standard install location
-    it guarantees), not merely be reachable through your session's config. Before
-    completing, re-run the check the way the consumer would: in a clean context, invoking
-    it the bare way the grader will (fresh non-login shell / direct subprocess / the exact
-    command), or at minimum ask "would this still pass without the setup I personally
-    added AND without my shell having been primed to find it?"
-    One more binary-contract trap: if the task named a precise list of exceptions —
-    "all tests pass EXCEPT these files", "every case but X and Y", "these are the only
-    known-skipped ones" — that enumeration is a closed constraint. Listing exactly those
-    and only those means everything else must hold, and a failure OUTSIDE the list does
-    not earn a place on it. Quietly widening the carve-out to swallow the thing you could
-    not fix is rewriting the acceptance bar to match your result — the same violation as
-    substituting a near-equivalent, just editing the exceptions instead of the artifact.
-    And check the excuse you are leaning on: "this failure is pre-existing / an external
-    library's bug / unrelated to my change" is a CLAIM that needs evidence, not a default
-    exit when you are stuck. Before dropping a requirement on that basis, prove it (the
-    failure is identical on an untouched reference, or the task explicitly excludes it);
-    absent proof, "I could not figure out how to fix it" is not "it cannot or should not
-    be fixed", and when the task says "fix any X issues" or "read the errors, they tell
-    you what to fix", an unexplained failure is far more likely inside your mandate than
-    outside it. If an item outside the exemption list still fails, "done" is not reached.
-    Finally, if you developed against ONE visible sample but the real grade is on hidden
-    inputs — one example input, one demo file, one reference case — passing on that sample
-    is the floor, not the finish. It shows your method fits that instance, not that it
-    generalizes. The tell is a solution full of magic constants (an absolute threshold, a
-    fixed cutoff, a hardcoded "exceeds N") you tuned until the visible sample came out
-    right; each is a place you fit the sample's incidental scale/length/noise rather than
-    the phenomenon, and a hidden input that differs slightly slides outside the band. Before
-    completing, audit every hardcoded number — "why THIS value, would it survive an input
-    unlike my one sample?" — and prefer relative / normalized / structure-derived judgments
-    (a monotonic turning point, a ratio, a change of direction) over absolute cutoffs you
-    hand-picked. With only one labeled example you cannot confirm generalization by testing,
-    so the burden is to make the method principled, not sample-calibrated.
+  • pass/fail condition — a build, test suite, artifact existence: "done" means the
+    condition is met. Hold confirmation to the real condition, not a signal arranged
+    to look like it. If the task named a non-negotiable specific (version, tool,
+    format) and you could not obtain it, "done" is NOT reachable by delivering a
+    substitute: standing up directories or a wrapper so a sanity command exits 0
+    dresses a substitute to pass the check, and the check was only ever a proxy for
+    the genuine artifact. Disclosing the swap does not rescue it — honesty is not permission: a disclosed substitute is still a substitute. When the genuine
+    article is unreachable, the only honest closes are to keep searching for a legal
+    path or report BLOCKED with nothing counterfeit delivered — an empty honest BLOCKED beats a populated fake. Also check WHERE you ran it: a pass in your own
+    working environment (installed packages, env vars, helper files, services) does
+    not prove it works in the clean environment that will actually consume it. The
+    deliverable must carry its dependencies inside itself — a shipped script must
+    not import a library you pip-installed only locally. A distinct flavor: not
+    what you ADDED but HOW the deliverable gets addressed — your interactive shell
+    resolves it via PATH/rc/alias/cwd, while the consumer invokes it bare as a
+    non-login non-interactive subprocess. "It runs when I TYPE it" is not "it runs
+    when a PROGRAM calls it": an artifact meant to be found by name must live in
+    the target's standard install location, not merely be reachable through your
+    session's config. Re-run the check the bare way the consumer will, or ask
+    "would this still pass without the setup I personally added AND without my
+    shell having been primed to find it?"
+    One more binary trap: if the task named a precise list of exceptions, that
+    enumeration is a closed constraint. A failure OUTSIDE the list does not earn a
+    place on it. Quietly widening the carve-out is rewriting the acceptance bar to
+    match your result. And "this failure is pre-existing / external / unrelated to
+    my change" is a claim that needs evidence, not a default exit. If an item
+    outside the exemption list still fails, "done" is not reached.
+    Finally, if you developed against ONE visible sample but the grade is on hidden
+    inputs — passing on that sample is the floor, not the finish. The tell is a
+    solution full of magic constants (absolute threshold, fixed cutoff) you tuned
+    until the sample came out right. Before completing, audit every hardcoded number
+    and prefer relative / normalized / structure-derived judgments. You cannot
+    confirm generalization by testing on one sample — the burden is to make the
+    method principled, not sample-calibrated.
 
-  • If the task is open-ended — optimize, minimize, maximize, make it faster,
-    improve some metric, produce the "best" X — then the first working result that
-    beats a naive baseline is NOT automatically the finish line. A large improvement
-    proves your first idea worked; it says nothing about whether a genuinely
-    different approach does better still. Ask concretely: is there another distinct
-    method for this problem class I have not tried? Did I actually implement and
-    measure the alternatives against each other, or did I just plan them and ship
-    the first one? If a different technique could plausibly beat what I have and I
-    have not ruled it out by measurement, the task is not yet at its best.
-    Now judge whether your "distinct" attempts were actually distinct. Read the
-    spread of your measured results: if the alternatives you compared all land in
-    the same narrow band — the same order of magnitude, differing by only a few
-    percent — that near-tie is itself the signal. It usually means they were not
-    different methods at all but variants within one method-family, and you have
-    hit the DEPTH limit of that family, where further tweaks only trade noise. A
-    clustered spread is NOT evidence you reached the global best; it is evidence
-    you explored one family thoroughly and no other. The response is to widen, not
-    to stop: name the method-family your attempts share (e.g. "I only rewrote the
-    same computation three ways"), then reach for a STRUCTURALLY different family
-    that attacks the cost from another angle entirely — precompute instead of
-    recompute, index/materialize instead of scan, a different algorithm class, a
-    different data structure. You do not need to know the target's absolute best
-    to do this; the flat spread across same-family attempts is enough of a signal
-    on its own. Only after you have tried at least one genuinely different family
-    and it too fails to beat the current best is "reached the method's limit"
+  • open-ended — optimize, minimize, maximize, make it faster: the first working
+    result is NOT the finish line. Ask: is there another distinct method I have not
+    tried? Did I actually measure alternatives, or just plan and ship the first?
+    Judge whether your "distinct" attempts were actually distinct: if results all
+    land in the same narrow band — the same order of magnitude — that near-tie
+    means they were variants within one method-family, and you have hit the depth limit
+    of that family. The response is to widen: reach for a structurally different family that attacks from another angle. You do not need to know the target's absolute best; the flat spread is enough signal. Only after trying a
+    genuinely different family and it too fails is "reached the method's limit"
     honest — otherwise you have reached one family's limit and called it the task's.
 
-Whichever kind it is, name which kind it is — then, before you close out, run these orthogonal
-self-checks against the task's REAL purpose (the actual use your work serves), not
-against any imagined check or what you guess is being looked at. Guessing what a
-check inspects and satisfying THAT is its own overfitting; build the thing that
-genuinely serves the purpose and any check passes as a side effect. These axes are
-independent — a result can be fully optimized yet fail to generalize, or general in
-shape yet not the best available. Answer each on its own, do not let a strong yes on
-one stand in for the others:
+Whichever kind it is, name which kind it is — then run these orthogonal self-checks
+against the task's REAL purpose (the actual use your work serves), not against any
+imagined check. These axes are independent — a result can be fully optimized yet
+fail to generalize, or general yet not the best available. Answer each on its own:
 
-  1. OPTIMIZED — if the task admits a "better" (faster, smaller, more accurate,
-     cleaner), is what you hold actually the best you reached, or just the first
-     thing that worked? Did you implement and measure a genuinely different approach
-     against it, or only plan one and ship the first? If a distinct method could
-     plausibly do better and you have not ruled it out by measurement, not done.
+  1. OPTIMIZED — is what you hold the best you reached, or just the first thing that
+     worked? If a distinct method could plausibly do better and you have not ruled
+     it out by measurement, not done.
+  2. GENERAL — does your solution handle the whole CLASS, or did you special-case
+     it to the one input you developed against? Would it produce a well-formed
+     answer on a sibling input that differs in the ways the task does not fix?
+  3. GENERALIZES — you verified under conditions you could OBSERVE. The real use
+     imposes conditions you could NOT observe. Name that gap concretely, then say
+     whether you REPRODUCED it and read the result, or merely argued it would be
+     fine. The gap is never zero — manufacture it (perturb the input, run in a fresh
+     context) and watch what happens first.
 
-  2. GENERAL — does your solution handle the whole CLASS of situation the task
-     describes, or did you special-case it to the one input / example / situation
-     you developed against? A method studded with values or branches that only make
-     sense for the specific case in front of you is fitted to that case, not to the
-     problem. Would it still produce a well-formed answer on a sibling input that
-     differs in the ways the task does not fix?
-
-  3. GENERALIZES — you verified under the conditions you could OBSERVE (the input
-     you had, the environment you built in, the scale you tried). The real use
-     imposes conditions you could NOT observe — a different input, a cleaner
-     environment, a larger or messier case. The trap is to treat "it worked on what
-     I could see" as "it works": passing on the one sample in front of you shows the
-     method fits that instance, not that it holds on the instances you never saw.
-     Name that gap concretely, then say whether you REPRODUCED it and read the
-     result, or merely argued it would be fine. An argument that "it should hold" is
-     not an observation that it does; the gap is never zero, so manufacture it
-     (perturb the input, run in a fresh context) and watch what happens first.
-
-If an axis genuinely does not apply to this task, say so and why — do not skip it
-silently. To proceed, re-issue plan_update(action="complete") with an
-"_override_reason" that answers all three against the real purpose: optimized (best
-measured, or the method's limit), general (handles the class, not one case),
-generalizes (reproduced the gap between what you observed and what the real use
-imposes, and observed it still holds). This is a forcing checkpoint, not a content
-check — any override_reason lets it through; the point is that you stopped and
-looked along every axis before deciding you are done."""
+If an axis does not apply, say so. To proceed, re-issue plan_update(action="complete")
+with "_override_reason" that answers all three against the real purpose. This is a
+forcing checkpoint, not a content check — any override_reason lets it through; the
+point is that you stopped and looked along every axis before deciding you are done."""
 
 
 _POST_RECOVERY_REMINDER = """[VerificationGuard] Context was just recovered via hard_reset.
@@ -563,13 +314,6 @@ The goal: avoid propagating stale assumptions into new work."""
 # Argument markers: method-defence vocabulary the litmus names explicitly. Their
 # presence means the agent is reasoning ABOUT the method rather than reporting a
 # measurement.
-_ARGUMENT_MARKERS = (
-    "should generalize", "will generalize", "should work", "would work",
-    "reasonable", "principled", "makes sense", "is fine", "conservative",
-    "relative to the signal", "relative to signal", "robust", "sound",
-    "i believe", "i think", "logically", "in principle", "by design",
-)
-
 # Observation markers: signs the reason reports something the agent actually DID
 # and READ — ran a command/test, compared to a known/expected/ground-truth value,
 # read a concrete output. Presence of any of these means it is not pure argument.
@@ -583,43 +327,29 @@ _OBSERVATION_MARKERS = (
 )
 
 
-def _is_pure_argument(reason: str) -> bool:
-    """True when the reason DEFENDS a method (argument) but reports NO observation.
-
-    This is the runtime form of the prompt's litmus: is the evidence an
-    OBSERVATION (ran something and read a result) or an ARGUMENT (explained why
-    the result should be right)? Only pure-argument reasons — at least one
-    method-defence marker AND no observation marker — are caught; a reason that
-    reports any measurement passes, and a reason that is neither (a terse
-    "re-checked each criterion") is left alone to avoid false positives.
-    """
-    if not reason:
-        return False
-    low = reason.lower()
-    has_argument = any(m in low for m in _ARGUMENT_MARKERS)
-    has_observation = any(m in low for m in _OBSERVATION_MARKERS)
-    return has_argument and not has_observation
-
-
-def _has_observation(reason: str) -> bool:
+def _has_observation(reason: str, classify_fn=None) -> bool:
     """True when the reason reports a positive OBSERVATION — something the agent
     ran and read: a command/test executed, an output/value read, a comparison to
     a known/expected/ground-truth answer.
 
-    This is the INCLUSION form of the observation gate. _is_pure_argument was an
-    EXCLUSION filter — it only bit when the reason contained self-incriminating
-    method-defence vocabulary AND no observation, so a confidently-wrong reason
-    that merely ASSERTS correctness ("the query returns the right set") — no
-    argument marker, no observation marker — fell in the gap between the marker
-    sets and passed untouched. A wrong answer has no lexical fingerprint, so the
-    default posture must be "require positive evidence of a run+read", not "trust
-    unless the wording confesses a bad pattern". A reason with no observation
-    marker is caught; any concrete run/read/compare signal releases it. The
-    honest escape (nothing runnable to check, said explicitly) is handled by the
-    fires-once flag on the gate, not by this predicate.
+    Primary path is an LLM judge (classify_fn): a wrong answer has no lexical
+    fingerprint, and the keyword MARKERS below both false-positive on innocent
+    phrasings and are gameable by sprinkling observation words into the override
+    reason. When a classify_fn is available we ask it semantically. The regex
+    MARKERS remain as a FALLBACK only when no provider is wired (tests, offline).
+
+    The judge answers "reason_lacks_observation" = True when the reason is
+    argument-only; this function returns the inverse (has_observation = not lacks).
     """
     if not reason:
         return False
+    if classify_fn is not None:
+        # default=False → on judge failure, treat as "lacks observation" is False,
+        # i.e. do NOT fabricate a block; the fires-once gate already bounds nagging.
+        lacks = classify_fn(
+            "reason_lacks_observation", {"reason": reason}, default=False
+        )
+        return not lacks
     low = reason.lower()
     return any(m in low for m in _OBSERVATION_MARKERS)
 
@@ -684,7 +414,7 @@ _GENERALIZATION_MARKERS = (
 )
 
 
-def _is_sample_local_only(reason: str) -> bool:
+def _is_sample_local_only(reason: str, classify_fn=None) -> bool:
     """True when the reason reports an observation confined to the ONE visible
     sample (or admits fitting/tuning to it) with NO sign of generalization.
 
@@ -697,6 +427,10 @@ def _is_sample_local_only(reason: str) -> bool:
     """
     if not reason:
         return False
+    if classify_fn is not None:
+        return classify_fn(
+            "reason_overfits_sample", {"reason": reason}, default=False
+        )
     low = reason.lower()
     has_local = any(m in low for m in _SAMPLE_LOCAL_MARKERS)
     has_generalization = any(m in low for m in _GENERALIZATION_MARKERS)
@@ -738,7 +472,7 @@ _BLOCKED_REPORT_MARKERS = (
 )
 
 
-def _is_disclosed_substitution(reason: str) -> bool:
+def _is_disclosed_substitution(reason: str, classify_fn=None) -> bool:
     """True when the reason DISCLOSES delivering a substitute for a GIVEN value
     without reporting BLOCKED.
 
@@ -749,6 +483,10 @@ def _is_disclosed_substitution(reason: str) -> bool:
     signal is left alone (no false positive)."""
     if not reason:
         return False
+    if classify_fn is not None:
+        return classify_fn(
+            "reason_discloses_substitution", {"reason": reason}, default=False
+        )
     low = reason.lower()
     has_substitution = any(m in low for m in _SUBSTITUTION_MARKERS)
     has_blocked = any(m in low for m in _BLOCKED_REPORT_MARKERS)
@@ -860,6 +598,76 @@ string, the hash, the exact match), or states plainly that you are reporting BLO
 did NOT deliver a substitute. This gate fires once."""
 
 
+_TASK_COMPLETE_DELIVERY_HYGIENE = """[VerificationGuard] Before completing — check the DELIVERED artifact, not the process that made it.
+
+Your reason spoke to whether the work is right. This is a different question: does what
+sits at the delivery path, right now, actually carry that result — and nothing else? The
+judge reads the path cold; it never sees the in-session object you configured or the
+best candidate you held in memory. These traps bite at delivery, which is why they are
+raised here and not at plan time. Walk the ones that apply:
+
+  • Reloaded FRESH. Measure the artifact re-read from the delivery path in a clean state
+    — not an in-memory object you configured programmatically. If settings did not
+    serialize into the file, the cold-loaded artifact behaves nothing like what you
+    measured. Only a measurement on the reloaded deliverable proves the round-trip.
+  • Best-so-far is BANKED, not just found. If you searched, the best candidate must be
+    written THROUGH to the delivery path the moment it measured better and passed
+    validity — never held only in memory. A timeout or kill ships whatever is on disk;
+    an unpersisted winner scores as if never found.
+  • Backup + rollback on overwrite-then-measure. If measuring overwrites the delivery
+    path, keep a side backup; after measuring, if the candidate is NOT strictly better,
+    restore the backup BEFORE the next experiment. Otherwise a regression ships on
+    timeout.
+  • Exact contents. If the task names an EXACT set (often one file), the path holds that
+    set and NOTHING MORE — a stray sibling fails an exact-contents check as hard as a
+    missing file, and silently. A verify command the task SHOWS you is the consumer's
+    action, not where your byproducts go; clean scratch/temp out of the delivery path.
+  • Byte-immutability of inputs. If an input must stay UNCHANGED (hash / checksum /
+    exact bytes), reverting a change is NOT never changing it — add-then-remove leaves
+    the file grown and rewritten. Restore from a pre-touch backup, or operate on a copy
+    and keep the original pristine.
+  • Margin on a NOISY metric. If the grade is a measured number with run-to-run
+    variance, passing by a hair on YOUR OWN measurement is not passing — your
+    instrument and the judge's differ. Measure the deliverable rigorously (many
+    repeats, trim outliers, central statistic) and demand margin proportional to the
+    noise.
+
+To proceed, re-issue plan_update(action="complete") with "_override_reason" reporting
+which of these you checked on the DELIVERED artifact — or stating plainly that none
+apply to this task (e.g. no file is delivered, no search, no noisy metric). This gate
+fires once."""
+
+
+# Pre-mortem, delivered AFTER a step_done goes through (check_post). The pre-side
+# checks all ended in you asserting the step is done — confidence at its peak. This
+# flips the direction: instead of "why am I right", ask "if I am WRONG, where". A
+# confirming question ("did I do it right?") recruits confirmation bias and narrows
+# the distribution toward "yes"; a dis-confirming question ("assume it's wrong —
+# where?") forces enumeration of failure modes the confident account never sampled.
+# Inject-only ON PURPOSE: whether the agent actually runs the falsifying input is
+# unobservable, so this does not pretend to force it — it just puts the reversed
+# question in front of the agent at the moment its guard is down.
+_STEP_DONE_PREMORTEM = """[VerificationGuard] Step marked done — now flip the question, once.
+
+Every check up to here asked whether you were right, and answered yes. That direction
+recruits confirmation — you look for support and find it. So reverse it now: ASSUME the
+result you just committed is WRONG, and ask where the error most likely hides.
+
+Three moves, and the third is the one that counts:
+  1. Name the single most likely failure point — a CONCRETE input condition, not
+     "a parameter needs tuning". Where does your method rest on an assumption the one
+     sample you saw happened to satisfy?
+  2. Say what the failure would LOOK like — the observable symptom, the wrong output,
+     the off-by-one, the crash.
+  3. If you can construct an input that triggers it, RUN it and READ the result — a
+     perturbation of the sample you have, not a thought about one. An answer you only
+     argued ("it adapts", "it's principled", "it should generalize") is not an answer;
+     an output you did not predict and then observed is.
+
+This is a nudge, not a gate — it does not block and nothing checks whether you acted on
+it. But the failure you are confident is not there is exactly the one this catches."""
+
+
 class VerificationGuard(Guard):
     """Requires verification evidence when marking steps complete.
     
@@ -887,7 +695,25 @@ class VerificationGuard(Guard):
         self._complete_observation_demanded = False
         self._complete_generalization_demanded = False
         self._complete_substitution_demanded = False
-    
+        self._complete_delivery_hygiene_demanded = False
+        # Set by check_pre when a step_done is about to pass through, so the
+        # paired check_post fires the pre-mortem right after that same call.
+        self._premortem_pending = False
+
+    def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Pre-mortem: fires immediately AFTER a step_done that passed the pre-side
+        # checks. The reversal ("assume you're wrong") lands hardest right when the
+        # agent has just asserted the step is complete. Inject-only, fires per
+        # step_done (re-armed by check_pre each time).
+        if self._premortem_pending:
+            self._premortem_pending = False
+            return GuardVerdict.inject(
+                message=_STEP_DONE_PREMORTEM,
+                reason="step_done_premortem",
+                category="verification",
+            )
+        return None
+
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         # NOTE: qualifier extraction at plan-framing time used to live here as a
         # separate block on the first plan_create. It was moved into PlanGuard
@@ -925,16 +751,16 @@ class VerificationGuard(Guard):
                 self._complete_recheck_reminded = True
                 # Second gate (INCLUSION): the pause above releases on any non-empty
                 # reason, but that is defeated by a confidently-wrong reason that
-                # merely ASSERTS the result is correct — no observation, no argument
-                # marker either, so an EXCLUSION filter (_is_pure_argument) let it
-                # slip through the gap between marker sets. A wrong answer has no
-                # lexical fingerprint, so the default posture must be POSITIVE: unless
+                # merely ASSERTS the result is correct — no observation of any run.
+                # A wrong answer has no lexical fingerprint, so the primary path is
+                # the LLM judge (classify_fn); regex is a no-provider fallback.
+                # The default posture must be POSITIVE: unless
                 # the reason reports something the agent RAN and READ (a run, an
                 # output, a comparison to a known answer), bite ONCE more and demand a
                 # concrete observation. Fires at most once so it stays a checkpoint;
                 # the honest escape (nothing runnable, said on the retry) releases it.
                 if not self._complete_observation_demanded and not _has_observation(
-                    ctx.override_reason
+                    ctx.override_reason, ctx.classify_fn
                 ):
                     self._complete_observation_demanded = True
                     return GuardVerdict.block(
@@ -952,7 +778,7 @@ class VerificationGuard(Guard):
                 # or a held-out/hidden input. Fires at most once so it stays a
                 # checkpoint, not nagging.
                 if not self._complete_generalization_demanded and _is_sample_local_only(
-                    ctx.override_reason
+                    ctx.override_reason, ctx.classify_fn
                 ):
                     self._complete_generalization_demanded = True
                     return GuardVerdict.block(
@@ -967,12 +793,29 @@ class VerificationGuard(Guard):
                 # BLOCKED), bite ONCE more and demand either the exact named artifact or
                 # an honest BLOCKED. Fires at most once so it stays a checkpoint.
                 if not self._complete_substitution_demanded and _is_disclosed_substitution(
-                    ctx.override_reason
+                    ctx.override_reason, ctx.classify_fn
                 ):
                     self._complete_substitution_demanded = True
                     return GuardVerdict.block(
                         message=_TASK_COMPLETE_SUBSTITUTION_DEMAND,
                         reason="task_complete_substitution_demand",
+                        category="verification_required",
+                    )
+                # Fifth gate: the prior gates check the RESULT (verified, generalizes,
+                # is the named thing). This checks the DELIVERED ARTIFACT — the thing
+                # the judge actually reads from disk, which can diverge from the result
+                # the agent proved in-session (settings not serialized, best-so-far held
+                # in memory, byproducts polluting the delivery dir, an input mutated,
+                # a noisy metric passed by a hair). These traps bite only at delivery,
+                # so they belong here rather than in the plan-time acceptance note. Bite
+                # ONCE unconditionally: unlike gates 2-4 there is no lexical trigger,
+                # because the failure is silent — the honest escape ("none apply: no
+                # file delivered / no search / no noisy metric") releases it.
+                if not self._complete_delivery_hygiene_demanded:
+                    self._complete_delivery_hygiene_demanded = True
+                    return GuardVerdict.block(
+                        message=_TASK_COMPLETE_DELIVERY_HYGIENE,
+                        reason="task_complete_delivery_hygiene",
                         category="verification_required",
                     )
                 return None
@@ -1056,7 +899,8 @@ class VerificationGuard(Guard):
                             reason="step_done_with_acceptance_no_verification",
                             category="verification_required"
                         )
-                    # Has verification, allow
+                    # Has verification, allow — arm the pre-mortem for check_post.
+                    self._premortem_pending = True
                     return None
                 
                 # Mode 2: No acceptance (simple step) → require override_reason
@@ -1067,9 +911,28 @@ class VerificationGuard(Guard):
                             reason="step_done_no_verification",
                             category="verification_required"
                         )
-                    # Has override_reason, allow
+                    # Has override_reason, allow — arm the pre-mortem for check_post.
+                    self._premortem_pending = True
                     return None
-        
+
+            # Timing 1b: batch action marking any step done bypasses the per-step
+            # step_done gate above (action=="batch", not "step_done"). A batch done
+            # commits the same claim; without this it is a silent hole through which
+            # every verification check is skipped. Require _override_reason when any
+            # update sets status=="done". Non-done batches (doing/skipped) pass freely.
+            if action == "batch":
+                updates = ctx.tool_args.get("updates") or []
+                has_done = any(
+                    isinstance(u, dict) and u.get("status") == "done"
+                    for u in updates
+                )
+                if has_done and not ctx.override_reason.strip():
+                    return GuardVerdict.block(
+                        message=_BATCH_STEP_DONE_BLOCK,
+                        reason="batch_step_done_no_verification",
+                        category="verification_required",
+                    )
+
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:
             if ctx.tool_name == "plan_update":

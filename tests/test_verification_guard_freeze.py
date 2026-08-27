@@ -221,35 +221,22 @@ def test_acceptance_guidance_covers_all_inputs_and_generalization():
         assert "pre-existing" in msg
         assert "judges the result, not its" in msg
         assert "declared scope" in msg
-        # Definitional-grounding (mode D): don't answer a "what counts as X"
-        # question with a guess; ground it in the task's named source of truth.
-        assert "authoritative source" in msg
-        assert "what\n    exactly counts as x" in msg or "what exactly counts as x" in msg
-        assert "re-confirms the assumption" in msg
-        # Derived-quantity (mode E): compute each compared quantity exactly the
-        # way the task defines it; applying your measure to raw input skips a
-        # required transform and measures a different quantity.
-        assert "the way the task defines it" in msg
-        assert "measures a different quantity" in msg
-        assert "re-deriving from the" in msg
-        # Fragile-state snapshot (mode F): copy the raw original before using any
-        # tool that might mutate/checkpoint it; the loss is irreversible.
-        assert "recovering, forensically analyzing" in msg
-        assert "safe location" in msg
-        assert "assume it does" in msg
-        assert "irreversible" in msg
-        # Close-the-gap (mode G): when a measurable metric is close but outside a
-        # quantitative bound, keep optimizing; stopping decision is the agent's,
-        # made explicitly, never hardcoded iteration counts.
-        assert "quantitative acceptance bound" in msg
-        assert "close but outside the bound" in msg
-        assert "optimization target" in msg
-        assert "limit of the method" in msg
-        assert "just short" in msg
-        # Task contract adherence (mode H): before marking complete, confirm you
-        # have executed every operation the task explicitly asks for; reasoning
-        # "I know how to do X" is not the same as executing X; verify named
-        # artifacts exist at specified paths.
+        # Judge-measurement (4th cross-task bullet): verify with the judge's own
+        # measurement (verifier script / reproduce its logic), not a proxy.
+        assert "the judge's measurement" in msg
+        assert "still scores zero" in msg
+        # Situational-traps pointer: the six DELIVERY-time traps (reload-fresh,
+        # backup+rollback, exact-contents, byte-immutability, noisy-margin,
+        # best-so-far write-through) are explicitly deferred to a completion-time
+        # check and must NOT be carried at plan time. Fix-3a/3b moved them into
+        # _TASK_COMPLETE_DELIVERY_HYGIENE. This freeze asserts the deferral.
+        assert "apply only at delivery" in msg
+        assert "completion-time check" in msg
+        assert "do not carry them here" in msg
+        # Task contract adherence (mode H, retained): before marking complete,
+        # confirm you executed every operation the task explicitly asks for;
+        # reasoning "I know how to do X" is not the same as executing X; verify
+        # named artifacts exist at specified paths.
         assert "re-read the task statement" in msg
         assert "executed every operation it explicitly asks for" in msg
         assert "designing a recovery strategy" in msg
@@ -257,10 +244,9 @@ def test_acceptance_guidance_covers_all_inputs_and_generalization():
         assert "verify those exact artifacts exist" in msg
         assert "you have not yet built" in msg
         assert "know how to do x, so x is done" in msg  # quotes normalized to lowercase
-        # Constraint-driven method selection (mode I): let the task's stated
-        # constraints shape the approach before committing; hitting the same wall
-        # the task told you to avoid (OOM/timeout/needless scale) twice is a cue
-        # to re-read for a skipped constraint, not to keep tuning in place.
+        # Constraint-driven method selection (mode I, retained): let the task's
+        # stated constraints shape the approach before committing; hitting the
+        # same wall twice is a cue to re-read for a skipped constraint.
         assert "shape your method before you commit" in msg
         assert "narrows the problem" in msg
         assert "decide the path" in msg
@@ -268,6 +254,13 @@ def test_acceptance_guidance_covers_all_inputs_and_generalization():
         assert "for a constraint or hint you skipped" in msg
         assert "made easy will keep failing no matter how you tune it" in msg
         assert "approach from the givens" in msg
+        # Removed modes (D definitional-grounding, E derived-quantity, F
+        # fragile-state-snapshot, G close-the-gap) were retired from plan-time
+        # guidance in Fix-3a — assert they no longer leak back in here.
+        assert "authoritative source" not in msg
+        assert "measures a different quantity" not in msg
+        assert "recovering, forensically analyzing" not in msg
+        assert "quantitative acceptance bound" not in msg
     finally:
         shutil.rmtree(d)
 

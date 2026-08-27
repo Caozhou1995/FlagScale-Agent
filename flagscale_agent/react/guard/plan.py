@@ -19,133 +19,74 @@ from __future__ import annotations
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
-# Folded into the plan-framing gate on purpose. Qualifier extraction is a
-# plan-framing concern, and PlanGuard is the guard that actually forces the plan
-# into existence — so the demand to extract qualifiers belongs in the same
-# message that requires the plan, sharing PlanGuard's single override channel.
-# Keeping it as a separate block in another guard caused cross-talk: an
-# override_reason the agent supplied to satisfy *this* plan requirement also
-# silently released the separate qualifier block, so the qualifier demand never
-# actually bit. One gate, one override, no laundering.
+# Folded into the plan-framing gate on purpose: qualifier extraction is a
+# plan-framing concern, and PlanGuard forces the plan into existence. One gate,
+# one override, no laundering — a separate block caused cross-talk where the
+# override_reason for the plan also released the qualifier block.
 _QUALIFIER_EXTRACTION = """
 
-While you frame this plan — extract the task's qualifiers, do not just name its subject.
+While framing this plan — extract the task's qualifiers, not just its subject.
 
-A task names a subject — the thing to compute, find, or build — and usually also
-qualifies it: a point in time the answer is taken at, a version or revision, a
-subset or region, a specific definition of the metric that decides "best". The
-subject is load-bearing and hard to miss; the qualifier is easy to drop, because
-the work runs to completion and yields a confident answer whether or not you
-honored it. A dropped qualifier is dangerous precisely because nothing fails — you
-simply answer a nearby question the task did not ask.
+A task names a subject and usually qualifies it: a point in time, a version, a
+subset, a specific metric definition. The subject is obvious; the qualifier is
+easy to drop — work completes with a confident answer whether or not you honored
+it. A dropped qualifier silently answers a nearby question the task did not ask.
 
-So, before the plan's shape is fixed: re-read the task statement and list every
-qualifier as a first-class item, alongside the subject. Fold them into the plan
-explicitly — as their own steps or as acceptance criteria — so that later, before
-committing to a result, you check that the data you drew from and the answer you
-return sit inside every one of them. A qualifier that is not in the plan is one the
-execution silently skips.
+Re-read the task statement; list every qualifier as a first-class item. Fold each
+into the plan as a step or acceptance criterion. A qualifier not in the plan is one
+execution silently skips. But extraction is only half the job — you must also read
+what boundary each qualifier draws, in the direction the task means. State each
+qualifier's meaning in your own words. The common failure is bending a fixed
+boundary toward what is convenient: widening to the larger, fresher, or more
+available thing. A "newest / most available is best" instinct overwrites a bounded
+qualifier. When the task fixes a boundary, the answer inside it is right even if a
+better candidate exists outside. A bound on time is especially easy to invert: it
+can mean the state as it stood at a given point (with anything that came later out of scope), or the state right now; these select different answers — let the task's words decide, not defaulting to the most up-to-date data.
 
-Extracting a qualifier is only half the job — you must also read what boundary it
-draws, in the direction the task means, not the direction your default preference
-assumes. State each qualifier's meaning in your own words, and watch for the moment
-you translate it into something more convenient. The common failure is bending the
-constraint toward what is easiest to obtain: taking a boundary the task fixed and
-quietly widening it to the larger, fresher, or more available thing on hand —
-reading a bound on time as merely "recent enough", a specific named subset as the
-broader whole, one definition of the metric as whatever number is easiest to
-compute. A "newest / biggest / most available is best" instinct is exactly the bias
-that overwrites a bounded qualifier: when the task fixes a boundary, the answer
-inside it is right even if a fresher or larger candidate exists outside. A bound on
-time is especially easy to invert — it can mean the state as it stood at a given
-point, with anything that came later out of scope, or the state right now; these
-select different answers, so let the task's words decide which, rather than
-defaulting to the most up-to-date data.
+Before committing to shape, answer:
+  1. CLASS — what known problem class is this an instance of? Name it. "It's its
+     own thing" means you haven't placed it yet.
+  2. STANDARD METHOD — the established technique for that class and its first step.
 
-And before you commit to a shape, answer two questions out loud — not "do I
-understand this" (you can answer yes to that without it being true), but two
-questions whose answers point at something outside your own confidence:
+Generic steps ("analyze", "implement", "test") mean the class was never identified.
+A brute-force sweep is the tell you skipped this.
 
-  1. CLASS — what known problem class is this an instance of? Name it (a search,
-     a parse, a constraint-satisfaction, a scheduling, a diff-and-merge, a
-     precision-alignment, ...). "It's its own thing" almost always means you have
-     not placed it yet — keep looking until you can name the class.
-  2. STANDARD METHOD — what is the established technique for that class, and what
-     is the first concrete step it prescribes here?
-
-If you cannot name the class, or cannot state its standard method, that inability
-is the signal — you are not ready to fix the plan's shape yet, you are still
-understanding. Do not paper over it by writing generic steps ("analyze",
-"implement", "test"); those are what a plan looks like when the class was never
-identified. Go find the class first. If you catch yourself about to plan an
-enumeration / brute-force sweep, that is the tell you skipped this — the structure
-the task is built on is still hidden from you.
-
-One more thing to catch while the qualifiers are in front of you: some qualifiers
-do not just narrow the answer, they PIN you to a concrete tool instance rather than
-a category. The tell is a qualifier that carries a precise identifier a whole class
-would not share — a specific version or build number, a revision/commit hash, a
-release tag, a named model or dataset with a version suffix, a pinned dependency.
-A qualifier of that shape is not naming a category (some embedding model, a
-compiler, a library), it is naming ONE artifact, and one artifact often has
-instance-specific usage requirements that differ from the generic API for its
-category — the difference can take ANY form: the correct
-call signature for this version, a required preprocessing or ordering step, a
-default that changed, an expected input format or precision, an extra token or
-prefix the invocation must carry. The trap is to recognize the category, reach for
-the generic call you already know, and never discover the instance had its own
-rules — the code runs, produces a confident output, and is silently wrong. So when
-a qualifier pins you to a named instance, add a plan step (or acceptance criterion)
-to CONSULT THAT INSTANCE'S OWN DOCUMENTATION before writing the call — its README /
-model card / release notes / official example — and confirm how THIS instance is
-meant to be invoked. But consulting is only the near half: the far half is APPLYING
-what the doc says for the use the task puts you in. The task's VERB — what it asks
-you to DO with the instance — selects which documented usage applies; when the doc
-prescribes a specific invocation for that use, the documented way is the DEFAULT and
-the plainer/barer call is the DEVIATION that needs justifying. Do not read the doc,
-see the requirement, and then talk yourself out of it with "the task didn't
-EXPLICITLY ask for that, so the minimal reading is the plain call" — a
-literal-minimal reading is not more faithful, it silently swaps the task for a
-nearby easier one the instance was not built to serve that way. "I read the docs and
-there was genuinely no special requirement for this use" is a valid conclusion; "I
-saw the requirement but skipped it because the task didn't spell it out" is not. The
-judgment of whether a qualifier pins an instance is yours — this only asks you to
-make it while framing the plan, not after the output comes out wrong."""
-
+Some qualifiers pin you to a concrete tool instance (specific version, revision
+hash, named model). That instance may have usage requirements that differ from the
+generic API — the difference can take ANY form (preprocessing, defaults, precision,
+prefix). When pinned, add a step to consult that instance's own documentation
+(README, model card, release notes) before writing the call. But consulting is
+only the near half — the far half is APPLYING what the doc says. The task's VERB
+selects which documented usage applies; the documented way is the DEFAULT, the
+plainer call is the DEVIATION. Don't read the doc, see the requirement, then skip
+it with "the task didn't explicitly ask for that" — a literal-minimal reading
+silently swaps the task for an easier one."""
 
 _COMPLETION_NO_PLAN = (
-    "[Plan] Stop — you are about to signal task completion in an unsupervised "
-    "(single-shot) run, but you never created a plan this run. A run that reached "
-    "completion without ever framing a plan almost always means the task was "
-    "under-analyzed: no structural decomposition, no acceptance criteria naming "
-    "what THIS task required, no verification gate. Before completing:\n"
-    "— If the task had real structure (multiple steps, a deliverable to verify, a "
-    "correctness bar): call plan_create() now, work the steps, and verify each "
-    "acceptance criterion before completing. The plan is the completion gate that "
-    "no human is here to be.\n"
-    "— If the task was genuinely trivial (a single lookup, a one-line answer with "
-    "nothing to verify): override by re-emitting [TASK_COMPLETE] with an inline "
-    "reason, like:\n"
-    "  [TASK_COMPLETE]\n"
-    "  _override_reason: <reason why no plan was warranted>\n"
-    "The judgment is yours; this gate only forces the pause before an unplanned "
-    "completion."
+    "[Plan] BLOCKED — you are trying to complete without ever creating a plan. "
+    "This gate CANNOT be overridden by text. A bare [TASK_COMPLETE] will be "
+    "blocked again, and so will any _override_reason you add inline.\n"
+    "\n"
+    "The ONLY way forward is to call the plan_create() tool now — a real tool "
+    "call, not text. Frame the task as ordered steps with acceptance criteria "
+    "that name what THIS task requires. Even a genuinely small task gets a "
+    "one- or two-step plan: the plan is the structural supervisor for an "
+    "unsupervised run, and completing without one leaves the work ungoverned.\n"
+    "\n"
+    "Do this next: call plan_create(title=..., steps=[...]). After the plan "
+    "exists, your [TASK_COMPLETE] will pass this gate."
 )
 
 
 class PlanGuard(Guard):
     """Nudges (interactive) or requires (single-shot) an active plan.
 
-    Interactive mode: a human supervises the loop, so a plan is optional.
-    After REMIND_THRESHOLD tool calls without an active plan, injects a
+    Interactive: after REMIND_THRESHOLD tool calls without a plan, injects a
     periodic reminder. Never blocks.
 
-    Single-shot mode: no human is in the loop, so the plan (with its
-    acceptance/verification) stands in as the structural supervisor and the
-    completion gate. The agent is still allowed to observe the environment
-    first, but once it has taken SINGLE_SHOT_BLOCK_THRESHOLD tool calls
-    without a plan it is BLOCKED from further non-plan tools until it calls
-    plan_create. Blocking is overridable for the rare genuinely-trivial task.
+    Single-shot: the plan stands in as structural supervisor and completion gate.
+    After SINGLE_SHOT_BLOCK_THRESHOLD calls without a plan, blocks further
+    non-plan tools until plan_create. Overridable for genuinely-trivial tasks.
     """
 
     name = "plan"
@@ -163,18 +104,11 @@ class PlanGuard(Guard):
         self._task_plan = task_plan
         self._calls_without_plan = 0
         self._single_shot = single_shot
-        # Whether plan_create was ever called in this run. The completion gate
-        # (single-shot only) blocks [TASK_COMPLETE] when this is still False:
-        # an unsupervised run that finished without ever framing a plan almost
-        # certainly under-analyzed the task. Distinct from _task_plan.get_active()
-        # — a plan may have been created then deactivated; what matters for the
-        # completion gate is whether the agent ever planned at all.
+        # Whether plan_create was ever called — completion gate checks this
+        # (distinct from get_active(): a plan may be created then deactivated).
         self._plan_ever_created = False
-        # Qualifier extraction must reach the agent exactly once at plan-framing.
-        # It rides the single-shot block when that fires first; but if the agent
-        # is diligent and calls plan_create before the block threshold, the block
-        # never fires, so we also inject it on the first plan_create. This flag
-        # ensures it is delivered once by whichever path happens first.
+        # Qualifier extraction delivered exactly once: rides the single-shot
+        # block or injects on first plan_create, whichever fires first.
         self._qualifier_reminded = False
 
     def set_single_shot(self, enabled: bool = True):
@@ -183,14 +117,15 @@ class PlanGuard(Guard):
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
-            # Completion gate (single-shot only): block a [TASK_COMPLETE] signal
-            # when no plan was ever created this run. Overridable for the rare
-            # genuinely-trivial task via an inline `_override_reason: <reason>` in
-            # the completion message (the text channel kernel extracts, since a
-            # [TASK_COMPLETE] signal carries no tool_args). Blocks EVERY time until
-            # either a plan is created or a valid override reason is supplied — a
-            # bare re-emit of [TASK_COMPLETE] with neither stays blocked. Never
-            # fires in interactive mode (a human supervises).
+            # Completion gate (single-shot): block [TASK_COMPLETE] when no plan
+            # was ever created. NON-OVERRIDABLE — the only exit is an actual
+            # plan_create() tool call, which sets _plan_ever_created and releases
+            # the gate on the next completion attempt. A text-inline
+            # _override_reason no longer releases it: the model could not reliably
+            # emit the inline form, so a bare [TASK_COMPLETE] livelocked the loop
+            # (re-firing this gate on stale text every iteration). Forcing a real
+            # tool call structurally breaks that text-only spin. Never fires in
+            # interactive mode.
             if (self._single_shot
                     and not self._plan_ever_created
                     and ctx.assistant_text
@@ -199,13 +134,13 @@ class PlanGuard(Guard):
                     message=_COMPLETION_NO_PLAN,
                     reason="single_shot_completion_without_plan",
                     category="plan_required",
+                    overridable=False,
                 )
             return None
 
-        # Plan-related tools don't count toward the no-plan budget. But the FIRST
-        # plan_create is the plan-framing moment — if the agent got here without
-        # having been blocked (diligent enough to plan before the threshold), the
-        # qualifier-extraction demand has not yet been delivered, so inject it now.
+        # Plan-related tools don't count toward the no-plan budget. The FIRST
+        # plan_create is the plan-framing moment — inject qualifier-extraction
+        # demand if not yet delivered.
         if ctx.tool_name == "plan_create":
             if not self._qualifier_reminded:
                 self._qualifier_reminded = True
@@ -224,26 +159,22 @@ class PlanGuard(Guard):
 
         self._calls_without_plan += 1
 
-        # Single-shot: after the observation budget, require a plan (block).
+        # Single-shot: after observation budget, require a plan (block).
         if self._single_shot and self._calls_without_plan > self.SINGLE_SHOT_BLOCK_THRESHOLD:
-            # The block carries the qualifier demand too, so an agent that only
-            # sees the block still gets it. Mark it delivered so the subsequent
-            # plan_create (which the agent makes to satisfy this block) does not
-            # inject it a second time.
+            # Block carries the qualifier demand; mark delivered to prevent
+            # double-injection on the subsequent plan_create.
             self._qualifier_reminded = True
             return GuardVerdict.block(
                 message=(
-                    f"[Plan] Pause. You've made {self._calls_without_plan} tool calls "
-                    f"in this unsupervised run without a plan. Stop and decide, deliberately: "
-                    f"do you now understand the problem's structure well enough to plan it?\n"
-                    f"— If yes: call plan_create() now, and hold it to the quality bar — "
-                    f"steps whose boundaries fall on real checkpoints, acceptance criteria "
-                    f"that name what THIS task specifically requires, not generic \"works correctly\".\n"
-                    f"— If no — if you're still genuinely gathering the information needed to "
-                    f"understand the structure: override this and keep investigating. A plan "
-                    f"written before understanding is worse than no plan, because it locks in "
-                    f"a shape you'll have to fight later.\n"
-                    f"The judgment is yours. This gate only forces the pause, not the answer."
+                    f"[Plan] Pause. {self._calls_without_plan} tool calls in this "
+                    f"unsupervised run without a plan. Do you understand the problem's "
+                    f"structure well enough to plan it?\n"
+                    f"— If yes: call plan_create() now. Steps must land on real "
+                    f"checkpoints, acceptance criteria naming what THIS task requires, "
+                    f"not generic \"works correctly\".\n"
+                    f"— If no: override and keep investigating. A plan written before "
+                    f"understanding is worse than no plan — it locks in a shape you'll "
+                    f"fight later."
                     + _QUALIFIER_EXTRACTION
                 ),
                 reason="single_shot_plan_required",

@@ -238,7 +238,8 @@ class WorkerAgent:
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
-        guard_registry.register(KnowledgeSkillGuard())
+        self._knowledge_guard = KnowledgeSkillGuard()
+        guard_registry.register(self._knowledge_guard)
         # Verification discipline guard (always active, block on step_done without evidence)
         guard_registry.register(VerificationGuard(plan=self.task_plan))
 
@@ -802,6 +803,11 @@ class WorkerAgent:
         # after an observation budget) rather than merely reminding.
         if getattr(self, "_plan_guard", None) is not None:
             self._plan_guard.set_single_shot(True)
+        # Same rationale: no human to nudge toward external knowledge, so the
+        # KnowledgeSkill guard fires one early research advisory before the
+        # first real implementation call.
+        if getattr(self, "_knowledge_guard", None) is not None:
+            self._knowledge_guard.set_single_shot(True)
         self._inject_context()
         self.history.append({"role": "user", "content": query})
         try:
@@ -1206,6 +1212,7 @@ class WorkerAgent:
         tool_calls_by_id = {}
         current_tool = None
         stream_truncated = False
+        reasoning_only = False
         usage = {}
         self._streaming_in_code_block = False
 
@@ -1297,6 +1304,9 @@ class WorkerAgent:
                         target = tool_calls_by_id.get(delta_id, current_tool) if delta_id else current_tool
                         if target:
                             target["arguments_json"] += event["arguments_delta"]
+                    elif event["type"] == "reasoning_only":
+                        if not content_parts and not tool_calls:
+                            reasoning_only = True
                     elif event["type"] == "usage":
                         usage = {
                             "input_tokens": event.get("input_tokens"),
@@ -1366,7 +1376,7 @@ class WorkerAgent:
             if not parsed_tool_calls:
                 parsed_tool_calls = None
 
-        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated}, usage
+        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated, "reasoning_only": reasoning_only}, usage
 
     # ── Tool execution (delegated to ToolExecutor) ──────────────────────────
 
