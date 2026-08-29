@@ -16,12 +16,50 @@
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 
 from flagscale_agent.react.tools.base import Tool
+
+
+# Max seconds to wait for the health-judge LLM call before giving up on it for
+# this check. The judge is a best-effort advisory; if the gateway stalls we must
+# NOT let it freeze the monitor loop (which would suppress the heartbeat and the
+# hard-indicator checks). On timeout we treat the judge as "no opinion" and let
+# the loop continue emitting its heartbeat on schedule.
+_HEALTH_JUDGE_TIMEOUT_SECS = 20
+
+# get_process_health walks the entire child-process tree with per-process /proc
+# reads. Under a huge parallel build the tree explodes and a single sample can
+# block for minutes on slow /proc IO. Cap it well under the ~30s check interval so
+# the heartbeat never starves; on timeout we fall back to a neutral reading.
+_PROCESS_HEALTH_TIMEOUT_SECS = 5
+
+
+def _run_health_judge_bounded(fn, args, kwargs, timeout=_HEALTH_JUDGE_TIMEOUT_SECS):
+    """Call the health-judge fn in a worker thread with a hard timeout.
+
+    Returns the judge's decision dict, or None if it timed out / raised. The
+    worker thread is daemonized, so a genuinely wedged LLM call cannot block
+    process exit — it is abandoned, not joined indefinitely.
+    """
+    result = {}
+
+    def _worker():
+        try:
+            result["value"] = fn(*args, **kwargs)
+        except Exception:
+            result["value"] = None
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        return None  # judge stalled — abandon it, keep the loop alive
+    return result.get("value")
 
 
 # --- Self-kill protection ---
@@ -168,16 +206,33 @@ class ShellTool(Tool):
         command, post_fn = _strip_trailing_pipe(command)
 
         try:
-            run_env = {**os.environ, **self._env} if self._env else None
+            run_env = {**os.environ, **self._env} if self._env else dict(os.environ)
+            # Encourage line-buffered output from children so long-running
+            # commands (make/gcc/etc.) stream progress incrementally instead of
+            # full-buffering into the pipe and dumping everything only at exit.
+            run_env.setdefault("PYTHONUNBUFFERED", "1")
+
+            # Prefer `stdbuf -oL -eL` when available: it sets _STDBUF_* / LD_PRELOAD
+            # env vars that propagate to ALL descendants, forcing line-buffered
+            # stdout/stderr transitively (make, gcc, ...). Fall back to a plain
+            # shell=True invocation when stdbuf is missing.
+            stdbuf = shutil.which("stdbuf")
+            if stdbuf:
+                popen_args = [stdbuf, "-oL", "-eL", "/bin/sh", "-c", command]
+                popen_kwargs = {"shell": False}
+            else:
+                popen_args = command
+                popen_kwargs = {"shell": True}
+
             proc = subprocess.Popen(
-                command,
-                shell=True,
+                popen_args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 env=run_env,
+                **popen_kwargs,
             )
 
             stdout_chunks: list = []
@@ -206,6 +261,9 @@ class ShellTool(Tool):
             _STREAM_EOF_GRACE_SECS = 3
             _had_children = False  # Track if process ever had children
             _prev_num_children = 0  # Track child count drops (OOM signal)
+            _prev_cpu_time = None   # Cumulative CPU secs (liveness signal A)
+            _prev_io_bytes = None   # Cumulative IO bytes (liveness signal A)
+            _prev_rss_mb = None     # RSS MB (liveness signal A)
 
             while proc.poll() is None:
                 elapsed = time.time() - start
@@ -236,17 +294,59 @@ class ShellTool(Tool):
                         should_kill_process,
                     )
 
-                    proc_health = get_process_health(proc.pid)
+                    # Bound the health sample. get_process_health walks the whole
+                    # child-process tree (children(recursive=True) + per-proc
+                    # cpu_times()/io_counters() /proc reads). Under a make -j / opam
+                    # coq build the tree explodes to 100s-1000s of short procs and a
+                    # single call can block MINUTES on /proc reads while the disk/CPU
+                    # is saturated — starving the heartbeat (only emitted between
+                    # samples). Cap it like the judge: on timeout, fall back to a
+                    # neutral "alive, working" reading so the loop keeps beating and
+                    # never false-kills on a slow sample.
+                    proc_health = _run_health_judge_bounded(
+                        get_process_health, (proc.pid,), {},
+                        timeout=_PROCESS_HEALTH_TIMEOUT_SECS,
+                    )
+                    if proc_health is None:
+                        # Neutral "alive & working" reading. Bump cpu_time by a
+                        # nonzero amount so the liveness veto (support A) treats a
+                        # slow sample as progress, never as a stall → no false kill.
+                        _base_cpu = _prev_cpu_time if _prev_cpu_time is not None else 0.0
+                        _base_io = _prev_io_bytes if _prev_io_bytes is not None else 0.0
+                        proc_health = {
+                            'alive': True, 'zombie': False,
+                            'cpu_percent': 1.0, 'memory_mb': _prev_rss_mb or 0.0,
+                            'num_children': _prev_num_children,
+                            'children_alive': max(1, _prev_num_children),
+                            'cpu_time': _base_cpu + 1.0, 'io_bytes': _base_io,
+                        }
                     output_anomalies = detect_output_anomalies(recent_text)
                     
                     # Track if we ever had children
                     if proc_health['num_children'] > 0:
                         _had_children = True
 
+                    # Liveness deltas across sampling points (support A):
+                    # cumulative CPU time / IO bytes are monotonic counters, so
+                    # a positive delta proves the process is actually working —
+                    # this vetoes heuristic kills. None on the first sample.
+                    if _prev_cpu_time is None:
+                        progress_signals = None  # no baseline yet
+                    else:
+                        progress_signals = {
+                            'cpu_time_delta': proc_health.get('cpu_time', 0.0) - _prev_cpu_time,
+                            'io_bytes_delta': proc_health.get('io_bytes', 0.0) - _prev_io_bytes,
+                            'rss_delta': (proc_health.get('memory_mb', 0.0) - _prev_rss_mb) * 1024 * 1024,
+                        }
+                    _prev_cpu_time = proc_health.get('cpu_time', 0.0)
+                    _prev_io_bytes = proc_health.get('io_bytes', 0.0)
+                    _prev_rss_mb = proc_health.get('memory_mb', 0.0)
+
                     should_kill, kill_reason = should_kill_process(
                         elapsed, output_changed, stall_count,
                         proc_health, output_anomalies, _had_children,
-                        _prev_num_children
+                        _prev_num_children,
+                        progress_signals=progress_signals,
                     )
                     
                     # Update child count for next iteration
@@ -279,12 +379,19 @@ class ShellTool(Tool):
                             f"live child processes {proc_health['children_alive']}"
                             f" of {proc_health['num_children']}"
                         )
-                        decision = self._health_judge_fn(
-                            command, recent_text, time_str,
-                            output_changed=output_changed,
-                            stall_count=stall_count,
-                            activity=activity,
-                        )
+                        # Bounded call: a stalled LLM gateway must never freeze
+                        # the monitor loop. On timeout we get None and skip the
+                        # judge this round, so the heartbeat below still fires on
+                        # schedule and hard-indicator checks keep running.
+                        decision = _run_health_judge_bounded(
+                            self._health_judge_fn,
+                            (command, recent_text, time_str),
+                            {
+                                "output_changed": output_changed,
+                                "stall_count": stall_count,
+                                "activity": activity,
+                            },
+                        ) or {"kill": False}
                         if decision.get("kill"):
                             proc.kill()
                             t_out.join(timeout=2)
@@ -308,26 +415,37 @@ class ShellTool(Tool):
                                 if hasattr(display, '_active_spinner') and display._active_spinner:
                                     display._active_spinner.set_hint(f"🩺 {reason}")
 
-                    # Display progress for long-running commands
+                    # Display progress for long-running commands.
+                    # The [Xm Ys] heartbeat is emitted UNCONDITIONALLY every
+                    # check_interval — even when there is no output yet — so a
+                    # command that streams nothing (silent compile, network wait)
+                    # still shows it is alive. Recent output lines are appended
+                    # only when available.
                     if not quiet:
+                        from flagscale_agent.react import display
                         recent = stdout_chunks[-5:] + stderr_chunks[-5:]
+                        if hasattr(display, '_active_spinner') and display._active_spinner:
+                            display._active_spinner.stop()
+                        health_note = f"\n   🩺 {health_reason}\n" if health_reason else ""
                         if recent:
-                            from flagscale_agent.react import display
-                            if hasattr(display, '_active_spinner') and display._active_spinner:
-                                display._active_spinner.stop()
-                            health_note = f"\n   🩺 {health_reason}\n" if health_reason else ""
-                            lines_out = [f"\033[2m   ⏳ [{time_str}]{health_note}   Recent output:\033[0m"]
+                            header = f"\033[2m   ⏳ [{time_str}]{health_note}   Recent output:\033[0m"
+                            lines_out = [header]
                             for line in recent[-5:]:
                                 lines_out.append(f"\033[2m   │ {line.rstrip()}\033[0m")
-                            if hasattr(display, '_stdout_lock'):
-                                with display._stdout_lock:
-                                    sys.stdout.write("\n".join(lines_out) + "\n")
-                                    sys.stdout.flush()
-                            else:
+                        else:
+                            lines_out = [
+                                f"\033[2m   ⏳ [{time_str}]{health_note}   "
+                                f"(running, no output yet)\033[0m"
+                            ]
+                        if hasattr(display, '_stdout_lock'):
+                            with display._stdout_lock:
                                 sys.stdout.write("\n".join(lines_out) + "\n")
                                 sys.stdout.flush()
-                            if hasattr(display, '_active_spinner') and display._active_spinner:
-                                display._active_spinner.start()
+                        else:
+                            sys.stdout.write("\n".join(lines_out) + "\n")
+                            sys.stdout.flush()
+                        if hasattr(display, '_active_spinner') and display._active_spinner:
+                            display._active_spinner.start()
 
                 # Ctrl-C handling
                 try:

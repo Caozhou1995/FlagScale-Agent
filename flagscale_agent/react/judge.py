@@ -227,8 +227,44 @@ Phase-specific patience (kill if exceeded with no progress):
 - wget/curl: up to 5 minutes IF progress shown, else 1 minute
 - conda: up to 10 minutes
 
-When uncertain about install/compile: increase next_check_seconds.
+When uncertain about install/compile: do NOT kill — a healthy-but-silent build
+is normal; prefer an advisory (kill=false) and let the fixed-cadence heartbeat
+keep watching.
 When uncertain about network: KILL — network hangs don't self-resolve.
+
+## Compile/build output visibility — redirect to tee EARLY
+
+Compilation is where blind monitoring hurts most: a build can run 10+ minutes and
+then fail, but if its output was swallowed you never saw the error and cannot
+diagnose it. Recognize BUILD/COMPILE commands: make / make -j, cmake --build,
+ninja, direct gcc/g++/clang/nvcc invocations, cargo build, go build, opam install,
+`configure && make`, and pip/conda installs that compile from source.
+
+The trap: a build command whose stdout/stderr is piped through a PAGER or
+TRUNCATOR — `| tail`, `| head`, `| grep`, `| less` — hands you NOTHING useful.
+Those tools buffer their input and emit only at the very end (or a fixed tail), so
+across checks you see the SAME frozen lines while children are alive, and the real
+compile errors appear only after the pipe closes — too late to act on. The command
+also leaves no log on disk, so once it is killed the output is gone for good.
+
+When you observe a build/compile command that (a) pipes its output through
+tail/head/grep/less, OR (b) shows output that stays frozen/identical across several
+checks while child processes are alive (classic pipe/full buffering), AND it does
+NOT already capture full output to a file (no `tee`, no `> file`/`>> file`
+redirect), then REDIRECT IT — and do so EARLY (within the first checks), because
+the compile work discarded by a restart grows with elapsed time; a redirect at 30s
+costs almost nothing, at 12 minutes it is expensive.
+
+Set kill=true with a reason that names the visibility problem and tells the agent to
+re-run the SAME build capturing full output to a file, e.g. append
+`2>&1 | tee /tmp/build.log` (keep a live view AND a persistent log), or redirect
+`> /tmp/build.log 2>&1` and tail the file in a separate step. The point: subprocess
+output must be VISIBLE during the run and must SURVIVE on disk after any kill, so the
+next attempt can read the actual error instead of guessing. Do NOT tell the agent to
+shrink or weaken the build — only to make its output observable.
+
+If the build ALREADY tees / redirects to a file (output is being captured), this
+criterion does not apply — judge it on the normal COMPILING patience rules above.
 
 ## Writing the kill reason (when kill=true)
 
@@ -257,7 +293,7 @@ still meets every requirement the task stated — never to a weaker deliverable.
 If you cannot name a faster method that preserves the task's stated targets,
 prefer an advisory (kill=false) over killing.
 
-Reply ONLY: {{"kill": true/false, "reason": "...", "next_check_seconds": <int 10-300>}}"""
+Reply ONLY: {{"kill": true/false, "reason": "..."}}"""
 
 
 # ── Judge ─────────────────────────────────────────────────────────────────────

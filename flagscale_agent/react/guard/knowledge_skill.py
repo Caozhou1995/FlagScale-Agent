@@ -48,45 +48,171 @@ class KnowledgeSkillGuard(Guard):
         "memory_read", "memory_list", "memory_write",
     ))
 
+    # Single-shot early gate: block after this many non-meta tool calls if
+    # no research call has been made. Set to 3 to avoid collision with
+    # BackupGuard (which blocks the 1st shell and may require a 2nd for backup).
+    SINGLE_SHOT_EARLY_THRESHOLD = 3
+
+    # Network-recovery gate: after web_fetch hits a network error, the agent
+    # must make this many DISTINCT genuine recovery attempts (different URL/case,
+    # proxy toggle, alternative source, offline cache) before it is allowed to
+    # fall back to prior-knowledge work. Info gain from the network is the ONLY
+    # way past a model's own capability ceiling on knowledge-gap tasks, so a mere
+    # "network is restricted" assertion must NOT be an exit — only real attempts.
+    REQUIRED_RECOVERY_ATTEMPTS = 5
+
+    # Tokens that mark a shell command as a genuine network-access attempt.
+    _NETWORK_CMD_TOKENS = (
+        "curl", "wget", "urllib", "requests.get", "requests.post", "requests.head",
+        "http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+        "pip install", "pip download", "apt-get", "apt install",
+        "git clone", "git fetch", "git pull",
+        "nslookup", "dig ", "host ", "ping ", "nc ", "ncat", "telnet",
+        "openssl s_client", "http.client", "socket.", "aiohttp", "httpx", "urlopen",
+    )
+
     def __init__(self, single_shot: bool = False):
         self._calls_since_knowledge = 0
         # Single-shot mode: no human supervisor to nudge toward research, so
-        # fire one early advisory before the agent's first real (non-meta,
-        # non-knowledge) tool call — the moment it is about to commit to an
-        # implementation guessed from the sample instead of the standard method.
+        # block after SINGLE_SHOT_EARLY_THRESHOLD non-meta tool calls if no
+        # research call has been made. Set to 3 to avoid collision with
+        # BackupGuard (which blocks the 1st shell and may require a 2nd).
         self._single_shot = single_shot
+        # Count of non-meta tool calls in single-shot mode (excluding knowledge tools)
+        self._single_shot_call_count = 0
         # Cleared ONLY when a knowledge tool (web_fetch/load_knowledge/load_skill)
         # is actually called — the single-shot early gate re-blocks every real
         # tool call until then.
         self._early_fired = False
+        # Network-recovery gate state. Set True in check_post when web_fetch
+        # reports a network error; while True, substantive non-network work is
+        # blocked until REQUIRED_RECOVERY_ATTEMPTS distinct attempts are made.
+        self._network_error_seen = False
+        # Signatures (url / shell command) of recovery attempts already made this
+        # episode — de-duplicated so re-running the SAME failing command does not
+        # count. Forces genuinely DIFFERENT techniques, not repetition.
+        self._recovery_signatures: set[str] = set()
 
     def set_single_shot(self, enabled: bool = True):
         """Enable single-shot early-advisory at runtime (set once run mode known)."""
         self._single_shot = enabled
 
+    def _recovery_signature(self, ctx: GuardContext) -> str | None:
+        """Return a de-dup signature if this call is a genuine network-recovery
+        attempt, else None.
+
+        A recovery attempt is either:
+          • web_fetch (any URL — retrying with a different/case-flipped URL or a
+            mirror is exactly what we want), signature = "web_fetch:<url>", or
+          • a shell command that actually touches the network (curl/wget/urllib/
+            requests/pip/apt/git-clone/dns tools/proxy toggles), signature =
+            "shell:<normalized-command>".
+        Signatures are normalized so re-running the identical command does not
+        advance the quota — the gate wants DISTINCT techniques.
+        """
+        name = ctx.tool_name
+        args = ctx.tool_args or {}
+        if name == "web_fetch":
+            url = str(args.get("url", "")).strip().lower()
+            return f"web_fetch:{url}"
+        if name == "shell":
+            cmd = str(args.get("command", ""))
+            if any(tok in cmd for tok in self._NETWORK_CMD_TOKENS):
+                # Normalize whitespace so trivial reformatting is not a new sig.
+                norm = " ".join(cmd.split())
+                return f"shell:{norm}"
+        return None
+
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
             return None
 
+        # Meta tools don't count (and don't trigger the early advisory).
+        # Checked FIRST so plan/memory bookkeeping is never blocked by any gate.
+        if ctx.tool_name in self._META_TOOLS:
+            return None
+
+        # Network-recovery gate is checked BEFORE the knowledge-tool branch on
+        # purpose. load_knowledge/load_skill read LOCAL/INTERNAL knowledge and do
+        # NOT touch the network, so they are NOT recovery attempts — yet they used
+        # to slip through the knowledge branch's unconditional `return None`,
+        # letting the agent "escape" a failed web_fetch by falling back to prior
+        # knowledge (the exact wrong reflex on a knowledge-gap task). With the gate
+        # first, only a genuine network attempt (web_fetch retry, or a network
+        # shell cmd) is allowed through while the gate is armed; local knowledge
+        # fallbacks are blocked until the recovery quota is met.
+
+        # Network-recovery gate. Once web_fetch has failed with a network error
+        # (set in check_post), the agent is NOT allowed to walk away and solve the
+        # task from prior knowledge until it has made REQUIRED_RECOVERY_ATTEMPTS
+        # DISTINCT genuine recovery attempts. This targets the exact failure you
+        # cannot fix with a model upgrade: on a knowledge-gap task the model's own
+        # ceiling is the wall, and real info from the network is the only way past
+        # it — so "network is restricted, I'll use what I know" is precisely the
+        # wrong reflex. A network attempt (retry web_fetch with a different
+        # URL/case, or a shell command that actually touches the network) counts
+        # toward the quota and passes through; anything else is blocked.
+        if self._network_error_seen:
+            sig = self._recovery_signature(ctx)
+            if sig is not None:
+                # This IS a genuine, distinct recovery attempt — let it run and
+                # record it. Duplicate attempts (same signature) still pass but
+                # do not advance the quota, so re-running one failing command
+                # neither deadlocks nor cheats the gate.
+                self._recovery_signatures.add(sig)
+                if len(self._recovery_signatures) >= self.REQUIRED_RECOVERY_ATTEMPTS:
+                    # Quota met: the agent genuinely tried. Release the gate so a
+                    # defensible fallback to prior-knowledge work is allowed.
+                    self._network_error_seen = False
+                    self._recovery_signatures = set()
+                # A web_fetch retry is also a research call — reset the knowledge
+                # counters so a genuine network attempt satisfies the early gate.
+                if ctx.tool_name in self._KNOWLEDGE_TOOLS:
+                    self._calls_since_knowledge = 0
+                    self._early_fired = True
+                return None
+            # Not a recovery attempt — the agent is trying to move on to other
+            # work. Block until the quota is met.
+            remaining = self.REQUIRED_RECOVERY_ATTEMPTS - len(self._recovery_signatures)
+            return GuardVerdict.block(
+                "[NetworkResilience] web_fetch hit a NETWORK error and you are about "
+                f"to move on with other work having made only {len(self._recovery_signatures)} "
+                f"genuine recovery attempt(s) — {remaining} more required before you may "
+                "fall back to prior knowledge. On a knowledge-gap task the model's own "
+                "capability has a ceiling; real information from the network is the ONLY "
+                "way past it, so 'the network is restricted, I'll use what I know' is the "
+                "wrong reflex, not a valid exit. Make a DISTINCT recovery attempt now "
+                "(each must differ from the last):\n"
+                "  • Retry web_fetch with a different URL, a mirror, or flipped case.\n"
+                "  • Toggle the proxy in a shell cmd: `env -u HTTP_PROXY -u HTTPS_PROXY "
+                "curl -sSL <url>` (proxy may be the blocker) — or the reverse, ADD a "
+                "proxy if none is set.\n"
+                "  • Use urllib/requests directly in python3 against the URL.\n"
+                "  • Try an alternative source: package mirror, archive, CDN, raw GitHub.\n"
+                "This block releases automatically once you have made "
+                f"{self.REQUIRED_RECOVERY_ATTEMPTS} distinct attempts — the exit is the "
+                "ACTION, not an argument that it is unreachable. If a single attempt "
+                "proved a hard, host-level block (e.g. proxy returns 500 for that exact "
+                "host and a direct connection is refused), state that concrete evidence "
+                "in the override reason.",
+                reason="network_recovery_attempts_incomplete",
+                category="network_resilience",
+            )
+
         # Knowledge/skill loaded — reset counter. In single-shot, mark the early
         # advisory as satisfied: the agent already reached for external knowledge.
+        # Reached only when the network gate is NOT armed (gate above handles the
+        # armed case and only lets genuine network attempts through).
         if ctx.tool_name in self._KNOWLEDGE_TOOLS:
             self._calls_since_knowledge = 0
             self._early_fired = True
             return None
 
-        # Meta tools don't count (and don't trigger the early advisory)
-        if ctx.tool_name in self._META_TOOLS:
-            return None
-
-        # Single-shot early gate: NON-OVERRIDABLE block that PERSISTS until the
-        # agent actually calls a knowledge tool. Note we do NOT set _early_fired
-        # here — only the _KNOWLEDGE_TOOLS branch (above) clears the gate. Every
-        # real (non-meta, non-knowledge) tool call is re-blocked until then, so
-        # the ONLY exit is a genuine research call: web_fetch / load_knowledge /
-        # load_skill. Meta tools (plan/memory/evict) still pass through, so there
-        # is no deadlock — the agent can always plan/record while forced to first
-        # look up the standard technique.
+        # Single-shot early gate: NON-OVERRIDABLE block after
+        # SINGLE_SHOT_EARLY_THRESHOLD non-meta tool calls if no research call has
+        # been made. Set to 3 to avoid collision with BackupGuard (which blocks
+        # the 1st shell and may require a 2nd for backup). This gives the agent
+        # room to satisfy BackupGuard first before the research gate fires.
         #
         # Why non-overridable: an overridable block was released by the agent's
         # own "I have solid prior experience" reason (observed: it named the
@@ -96,31 +222,41 @@ class KnowledgeSkillGuard(Guard):
         # argument — the agent must run a real research call, not merely assert it
         # does not need one.
         if self._single_shot and not self._early_fired:
-            return GuardVerdict.block(
-                "[KnowledgeSkill] First real action of this task is BLOCKED until "
-                "you run a research pass. The ONLY way past this gate is to actually "
-                "CALL one of: web_fetch() (EXTERNAL domain — any field where your "
-                "prior knowledge may not reflect the current standard method), "
-                "load_knowledge() or load_skill() (INTERNAL FlagScale domains). "
-                "This block is NON-OVERRIDABLE: a text/tool-arg override will not "
-                "release it, and neither will meta tools (plan/memory/evict) — only "
-                "a real knowledge call clears it. First name the PROBLEM CLASS, then "
-                "look up its standard technique. Adopting the vocabulary of a "
-                "'structural/principled method' without looking it up is exactly the "
-                "failure this gate targets: the dangerous case is when the example "
-                "looks simple and you feel no gap — that feeling is not evidence you "
-                "hold the general rule, it means you are about to hand-tune to the "
-                "one visible sample. Concluding 'no better method exists' from your "
-                "own memory is an unverified knowledge gap, not a fact. Run the "
-                "lookup now.",
-                reason="single_shot_early_research_gate",
-                category="knowledge_skill",
-                overridable=False,
-            )
+            # Count this call as the (n+1)th for the BLOCK DECISION, but do NOT
+            # persist the increment here — persistence happens in check_post,
+            # AFTER the tool actually executed. This prevents a tool call that is
+            # ultimately blocked (by BackupGuard etc.) or retried from inflating
+            # the count on every check_pre pass. See _persist_pre_effects.
+            projected = self._single_shot_call_count + 1
+            if projected >= self.SINGLE_SHOT_EARLY_THRESHOLD:
+                return GuardVerdict.block(
+                    f"[KnowledgeSkill] {projected} tool calls without "
+                    "a research pass — BLOCKED until you run one. The ONLY way past this "
+                    "gate is to actually CALL one of: web_fetch() (EXTERNAL domain — any "
+                    "field where your prior knowledge may not reflect the current standard "
+                    "method), load_knowledge() or load_skill() (INTERNAL FlagScale domains). "
+                    "This block is NON-OVERRIDABLE: a text/tool-arg override will not "
+                    "release it, and neither will meta tools (plan/memory/evict) — only "
+                    "a real knowledge call clears it. First name the PROBLEM CLASS, then "
+                    "look up its standard technique. Adopting the vocabulary of a "
+                    "'structural/principled method' without looking it up is exactly the "
+                    "failure this gate targets: the dangerous case is when the example "
+                    "looks simple and you feel no gap — that feeling is not evidence you "
+                    "hold the general rule, it means you are about to hand-tune to the "
+                    "one visible sample. Concluding 'no better method exists' from your "
+                    "own memory is an unverified knowledge gap, not a fact. Run the "
+                    "lookup now.",
+                    reason="single_shot_early_research_gate",
+                    category="knowledge_skill",
+                    overridable=False,
+                )
 
-        self._calls_since_knowledge += 1
+        # Read-only projection for the block/inject DECISION. The persistent
+        # increment happens in check_post AFTER the tool executed, so a blocked or
+        # retried call does not inflate the count on every check_pre pass.
+        calls_since = self._calls_since_knowledge + 1
 
-        if self._calls_since_knowledge >= self.BLOCK_THRESHOLD:
+        if calls_since >= self.BLOCK_THRESHOLD:
             # Do NOT reset counter here — only reset in accept_override if override succeeds
             return GuardVerdict.block(
                 f"[KnowledgeSkill] {self.BLOCK_THRESHOLD} tool calls without loading "
@@ -138,9 +274,9 @@ class KnowledgeSkillGuard(Guard):
                 category="knowledge_skill",
             )
 
-        if self._calls_since_knowledge % self.INJECT_THRESHOLD == 0:
+        if calls_since % self.INJECT_THRESHOLD == 0:
             return GuardVerdict.inject(
-                f"[KnowledgeSkill] {self._calls_since_knowledge} tool calls without "
+                f"[KnowledgeSkill] {calls_since} tool calls without "
                 "loading domain knowledge, skills, or external references. Two channels: "
                 "(1) INTERNAL domain → load_knowledge()/load_skill() for FlagScale areas "
                 "(parallelism, training config, NCCL, data pipeline, model porting). "
@@ -159,13 +295,58 @@ class KnowledgeSkillGuard(Guard):
 
         return None
 
+    def _persist_call_count(self, ctx: GuardContext) -> None:
+        """Advance the persistent counters for an ACTUALLY-EXECUTED tool call.
+
+        Mirrors the skip/reset rules of check_pre, but runs post-execution so a
+        blocked or not-yet-run call never advances the counts. Rules:
+          • No tool name → nothing happened, skip.
+          • Result carries the [BLOCKED BY GUARD] marker → the call was prevented,
+            do NOT count it (this is the exact over-count source).
+          • Knowledge tool executed → reset counters + satisfy the early gate.
+          • Meta tool → does not count.
+          • Anything else that ran → advance both counters by one.
+        """
+        name = ctx.tool_name
+        if not name:
+            return
+        result = ctx.tool_result
+        if isinstance(result, str) and "[BLOCKED BY GUARD]" in result:
+            return
+        if name in self._KNOWLEDGE_TOOLS:
+            self._calls_since_knowledge = 0
+            self._early_fired = True
+            return
+        if name in self._META_TOOLS:
+            return
+        # A real, executed tool call.
+        self._calls_since_knowledge += 1
+        if self._single_shot and not self._early_fired:
+            self._single_shot_call_count += 1
+
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Persist the call-count increments HERE — after the tool has actually
+        # executed. check_pre only READS a projected count for its block/inject
+        # decision; doing the increment here means a tool call that was ultimately
+        # blocked (its result carries the [BLOCKED BY GUARD] marker) or retried
+        # does NOT inflate the counters on every check_pre pass. This fixes the
+        # "count lags / over-counts by one" bug where a blocked first shell still
+        # advanced the research/knowledge counters.
+        self._persist_call_count(ctx)
+
         # If web_fetch just failed due to network, inject the Environment Resilience
         # reminder from system prompt to surface network troubleshooting steps.
         if ctx.tool_name == "web_fetch" and ctx.tool_result:
             result_upper = ctx.tool_result.upper()
             # Match web_fetch.py's [WEB_FETCH_NETWORK_ERROR] marker
             if "[WEB_FETCH_NETWORK_ERROR]" in result_upper:
+                # Arm the network-recovery gate: the next substantive non-network
+                # action will be blocked until REQUIRED_RECOVERY_ATTEMPTS distinct
+                # recovery attempts are made. web_fetch itself (this failing call)
+                # is the trigger, not an attempt — the quota counts what comes
+                # AFTER, so a fresh episode starts with an empty signature set.
+                self._network_error_seen = True
+                self._recovery_signatures = set()
                 return GuardVerdict.inject(
                     "[NetworkResilience] web_fetch reported a network error. Before giving up, "
                     "try systematic troubleshooting (these are standard techniques in restricted "
@@ -187,12 +368,54 @@ class KnowledgeSkillGuard(Guard):
                 )
         return None
 
+    # Evidence keywords that make an override reason RELEVANT to the network gate.
+    # The gate only releases on a reason that actually argues network futility —
+    # not on any reason that happens to satisfy some OTHER guard's block in the
+    # same tool call (e.g. a BackupGuard "backup already made" reason). This is
+    # the fix for the override-crosstalk bug: the registry calls EVERY blocking
+    # guard's accept_override with the SAME ctx.override_reason, so a guard must
+    # confirm the reason is aimed at ITS OWN gate before honoring it.
+    _NETWORK_EVIDENCE_TOKENS = (
+        "proxy", "host", "refused", "connection", "unreachable", "dns",
+        "resolve", "timeout", "timed out", "500", "502", "503", "504",
+        "403", "404", "network", "offline", "no route", "firewall",
+        "cert", "ssl", "tls", "url", "mirror", "endpoint",
+    )
+
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
-        """Allow override of block if LLM explains why knowledge isn't needed."""
-        if reason and len(reason.strip()) > 5:
+        """Allow override of a block if the LLM gives a substantive reason.
+
+        Two DISTINCT gates live in this guard and they honor DIFFERENT reasons:
+
+        • Call-count / early-research block: any substantive reason (>5 chars)
+          releases it — the agent asserting it has solid prior experience.
+
+        • Network-recovery block: releases ONLY on a reason that carries concrete
+          NETWORK evidence (proxy/host/refused/500/dns/…). This prevents the
+          override-crosstalk bug where the registry calls this method with an
+          override reason the agent actually wrote for a DIFFERENT guard's block
+          in the same tool call (e.g. a BackupGuard 'backup already made' reason).
+          A reason with no network-futility content must NOT discharge the network
+          gate — the agent has to articulate why the network is genuinely a dead
+          end, matching what the block message explicitly asks for.
+        """
+        if not (reason and len(reason.strip()) > 5):
+            return False
+
+        if self._network_error_seen:
+            # Network gate is armed — require network-relevant evidence. A reason
+            # aimed at another guard (no network tokens) does NOT release it.
+            low = reason.lower()
+            if not any(tok in low for tok in self._NETWORK_EVIDENCE_TOKENS):
+                return False
+            self._network_error_seen = False
+            self._recovery_signatures = set()
             self._calls_since_knowledge = 0
             return True
-        return False
+
+        # No network gate armed — this is a call-count / early-research override.
+        self._calls_since_knowledge = 0
+        return True
 
     def reset_turn(self):
         """Don't reset per-turn — knowledge need persists across turns."""

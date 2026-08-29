@@ -373,6 +373,11 @@ class TestConstraintGuidanceBlockedComputation:
         assert "most available" in low or "most up-to-date data" in low
         # must fold qualifiers into the plan while framing, not after
         assert "plan" in low
+        # a qualifier is verified by an unfakeable external grader, not self-report:
+        # declaring done does not move the scored verdict; unmet qualifier => FAIL
+        assert "machine-verified" in low or "machine-checked" in low
+        assert "byte-for-byte" in low
+        assert "fail" in low
         # must not hardcode the originating task's specifics
         assert "august" not in low
         assert "mteb" not in low
@@ -447,10 +452,11 @@ class TestTaskCompleteRecheck:
                 "_override_reason": "open-ended: compared two distinct methods, this is fastest measured",
             },
             override_reason="open-ended: compared two distinct methods, this is fastest measured",
+            classify_fn=lambda q, data, default: False,  # Mock judge: no markers trigger
         )
         # gate1 releases (override present) and the reason reports a measurement,
-        # so gates 2-4 pass too; the chain falls through to the unconditional 5th
-        # gate (delivery hygiene), which fires once.
+        # so gates 2-4 pass too (all use classify_fn which returns False); the chain
+        # falls through to the unconditional 5th gate (delivery hygiene), which fires once.
         v1 = guard.check_pre(ctx1)
         assert v1 is not None and v1.reason == "task_complete_delivery_hygiene"
         assert guard._complete_recheck_reminded is True
@@ -679,10 +685,23 @@ class TestTaskCompleteObservationGate:
     observation-vs-argument litmus. Task-agnostic."""
 
     def _complete(self, reason):
+        # Mock judge: "ran...matched" means has observation, others lack observation
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_lacks_observation":
+                # True = lacks observation (pure argument)
+                return not ("ran" in r and "matched" in r)
+            elif question == "reason_overfits_sample":
+                return False
+            elif question == "reason_discloses_substitution":
+                return False
+            return default
+        
         return GuardContext(
             tool_name="plan_update",
             tool_args={"action": "complete", "_override_reason": reason},
             override_reason=reason,
+            classify_fn=mock_judge,
         )
 
     def test_pure_argument_reason_blocked_by_second_gate(self):
@@ -762,26 +781,44 @@ class TestTaskCompleteObservationGate:
 
     def test_has_observation_inclusion_predicate(self):
         from flagscale_agent.react.guard.verification import _has_observation
-        # concrete run/read/compare signals → True
-        assert _has_observation("ran pytest, tests passed") is True
-        assert _has_observation("I compared output to the known answer") is True
-        assert _has_observation("the result was 42, matches expected value") is True
-        assert _has_observation("diff shows no changes, exit code 0") is True
-        # bare assertion, no run+read → False (this is the gap the flip closes)
+        
+        # After marker removal: _has_observation requires classify_fn, returns False without it
+        # Test with no classify_fn → returns False
+        assert _has_observation("ran pytest, tests passed") is False
         assert _has_observation("the query returns the correct set") is False
-        assert _has_observation("re-checked each acceptance criterion") is False
-        assert _has_observation("this is reasonable and should generalize") is False
-        # empty → False
         assert _has_observation("") is False
+        
+        # Test with mock classify_fn
+        def mock_judge(question, data, default):
+            if question == "reason_lacks_observation":
+                r = data.get("reason", "").lower()
+                # True = lacks observation
+                return not any(w in r for w in ["ran", "compared", "diff", "result was"])
+            return default
+        
+        # concrete run/read/compare signals → has observation (lacks=False → return True)
+        assert _has_observation("ran pytest, tests passed", mock_judge) is True
+        assert _has_observation("I compared output to the known answer", mock_judge) is True
+        assert _has_observation("the result was 42, matches expected value", mock_judge) is True
+        assert _has_observation("diff shows no changes, exit code 0", mock_judge) is True
+        # bare assertion, no run+read → lacks observation (lacks=True → return False)
+        assert _has_observation("the query returns the correct set", mock_judge) is False
+        assert _has_observation("re-checked each acceptance criterion", mock_judge) is False
+        assert _has_observation("this is reasonable and should generalize", mock_judge) is False
 
     def test_inclusion_gate_uses_has_observation(self):
         # Regression guard for the exclusion→inclusion flip: a reason that is
         # NEITHER argument NOR observation (the sparql-style bare assertion) must
-        # now block. The old exclusion filter would have let it pass; the
-        # inclusion predicate _has_observation correctly returns False → blocks.
+        # now block. The inclusion predicate _has_observation correctly returns False → blocks.
         from flagscale_agent.react.guard.verification import _has_observation
+        
+        def mock_judge(question, data, default):
+            if question == "reason_lacks_observation":
+                return "ran" not in data.get("reason", "").lower()
+            return default
+        
         bare = "the output is correct for all cases"
-        assert _has_observation(bare) is False    # new gate: WILL block
+        assert _has_observation(bare, mock_judge) is False    # new gate: WILL block
 
 
 class TestTaskCompleteGeneralizationGate:
@@ -790,10 +827,26 @@ class TestTaskCompleteGeneralizationGate:
     after the second gate, at most once, and any override releases it."""
 
     def _complete(self, reason):
+        # Mock judge for generalization gate tests
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_lacks_observation":
+                # Has observation if contains "ran" or "compared" or "result" or "tuned" (tuned implies ran)
+                return not any(w in r for w in ["ran", "compared", "result", "diff", "tuned", "it got it right"])
+            elif question == "reason_overfits_sample":
+                # Overfits if contains "tuned" AND no generalization markers
+                has_tuned = "tuned" in r or "adjusted until" in r
+                has_generalization = any(w in r for w in ["perturbed", "rescaled", "stable", "other input", "variant"])
+                return has_tuned and not has_generalization
+            elif question == "reason_discloses_substitution":
+                return False
+            return default
+        
         return GuardContext(
             tool_name="plan_update",
             tool_args={"action": "complete", "_override_reason": reason},
             override_reason=reason,
+            classify_fn=mock_judge,
         )
 
     def test_sample_local_only_reason_blocked_by_third_gate(self):
@@ -878,20 +931,32 @@ class TestTaskCompleteGeneralizationGate:
 
     def test_is_sample_local_only_boundaries(self):
         from flagscale_agent.react.guard.verification import _is_sample_local_only
+        
+        # Without classify_fn → returns False (no marker fallback after removal)
+        assert _is_sample_local_only("tuned the constants on the example until it matched") is False
+        assert _is_sample_local_only("") is False
+        
+        # With mock judge
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_overfits_sample":
+                has_tuned = "tuned" in r
+                has_gen = any(w in r for w in ["perturbed", "hidden", "held-out", "variant"])
+                return has_tuned and not has_gen
+            return default
+        
         # sample-local + tuned, no generalization → True
         assert _is_sample_local_only(
-            "tuned the constants on the example until it matched"
+            "tuned the constants on the example until it matched", mock_judge
         ) is True
         # sample-local but generalization signal present → False
         assert _is_sample_local_only(
-            "tuned on the sample then ran a perturbed variant"
+            "tuned on the sample then ran a perturbed variant", mock_judge
         ) is False
         # generalization only → False
-        assert _is_sample_local_only("ran it on a hidden held-out input") is False
+        assert _is_sample_local_only("ran it on a hidden held-out input", mock_judge) is False
         # neither → False
-        assert _is_sample_local_only("re-checked each criterion") is False
-        # empty → False
-        assert _is_sample_local_only("") is False
+        assert _is_sample_local_only("re-checked each criterion", mock_judge) is False
 
 
 class TestTaskCompleteSubstitutionGate:
@@ -903,10 +968,25 @@ class TestTaskCompleteSubstitutionGate:
     Task-agnostic."""
 
     def _complete(self, reason):
+        # Mock judge for substitution gate tests
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_lacks_observation":
+                return not any(w in r for w in ["ran", "compared", "result", "diff", "read the output"])
+            elif question == "reason_overfits_sample":
+                return False
+            elif question == "reason_discloses_substitution":
+                # Discloses substitution if names substitute vocab AND not BLOCKED
+                has_sub = any(w in r for w in ["could not obtain", "successor", "instead", "backward-compatible", "substitute", "different version", "unavailable"])
+                has_blocked = any(w in r for w in ["blocked", "cannot proceed", "did not deliver", "reporting inability"])
+                return has_sub and not has_blocked
+            return default
+        
         return GuardContext(
             tool_name="plan_update",
             tool_args={"action": "complete", "_override_reason": reason},
             override_reason=reason,
+            classify_fn=mock_judge,
         )
 
     def test_disclosed_substitution_blocked_by_fourth_gate(self):
@@ -1007,20 +1087,32 @@ class TestTaskCompleteSubstitutionGate:
 
     def test_is_disclosed_substitution_boundaries(self):
         from flagscale_agent.react.guard.verification import _is_disclosed_substitution
+        
+        # Without classify_fn → returns False (no marker fallback after removal)
+        assert _is_disclosed_substitution("used the backward-compatible successor instead") is False
+        assert _is_disclosed_substitution("") is False
+        
+        # With mock judge
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_discloses_substitution":
+                has_sub = any(w in r for w in ["successor", "instead", "unavailable", "substitute"])
+                has_blocked = any(w in r for w in ["blocked", "reporting blocked"])
+                return has_sub and not has_blocked
+            return default
+        
         # substitution disclosed, no BLOCKED → True
         assert _is_disclosed_substitution(
-            "used the backward-compatible successor instead"
+            "used the backward-compatible successor instead", mock_judge
         ) is True
         # substitution language but framed as BLOCKED → False
         assert _is_disclosed_substitution(
-            "the successor was unavailable too; reporting BLOCKED"
+            "the successor was unavailable too; reporting BLOCKED", mock_judge
         ) is False
         # exact artifact, no substitution language → False
-        assert _is_disclosed_substitution("built the exact version from source") is False
+        assert _is_disclosed_substitution("built the exact version from source", mock_judge) is False
         # neutral → False
-        assert _is_disclosed_substitution("re-checked each criterion") is False
-        # empty → False
-        assert _is_disclosed_substitution("") is False
+        assert _is_disclosed_substitution("re-checked each criterion", mock_judge) is False
 
 
 class TestMagicAssumptionGate:
@@ -1033,10 +1125,25 @@ class TestMagicAssumptionGate:
     is now a generalization marker."""
 
     def _complete(self, reason):
+        # Mock judge for magic assumption gate tests
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_lacks_observation":
+                return not any(w in r for w in ["ran", "got", "result", "rows"])
+            elif question == "reason_overfits_sample":
+                # Overfits if binds form (starts-with, always) AND no universe exploration
+                has_form_bind = any(w in r for w in ["always starts", "starts with", "filter"])
+                has_universe = any(w in r for w in ["distinct", "enumerated", "value universe", "group by"])
+                return has_form_bind and not has_universe
+            elif question == "reason_discloses_substitution":
+                return False
+            return default
+        
         return GuardContext(
             tool_name="plan_update",
             tool_args={"action": "complete", "_override_reason": reason},
             override_reason=reason,
+            classify_fn=mock_judge,
         )
 
     def test_magic_assumption_reason_blocked_by_third_gate(self):
@@ -1083,20 +1190,33 @@ class TestMagicAssumptionGate:
 
     def test_is_sample_local_only_magic_assumption_boundaries(self):
         from flagscale_agent.react.guard.verification import _is_sample_local_only
+        
+        def mock_judge(question, data, default):
+            if question != "reason_overfits_sample":
+                return default
+            r = data.get("reason", "").lower()
+            # Overfits if binds form (assumes format/prefix/always) AND no universe exploration
+            has_form_bind = any(w in r for w in ["assumed the format", "fixed prefix", "always starts", "hardcoded prefix"])
+            has_universe = any(w in r for w in ["distinct", "enumerated", "value universe", "group by"])
+            return has_form_bind and not has_universe
+        
         # form-assumption, no universe exploration → True
         assert _is_sample_local_only(
-            "assumed the format is a fixed prefix and matched on it"
+            "assumed the format is a fixed prefix and matched on it",
+            classify_fn=mock_judge
         ) is True
         assert _is_sample_local_only(
-            "used a hardcoded prefix; it always starts with the same string"
+            "used a hardcoded prefix; it always starts with the same string",
+            classify_fn=mock_judge
         ) is True
         # form-assumption BUT explored the value universe → False (escape)
         assert _is_sample_local_only(
             "it always starts with Professor in the sample, but I ran a distinct "
-            "query over all the forms and used set-membership"
+            "query over all the forms and used set-membership",
+            classify_fn=mock_judge
         ) is False
         # generic mention of a string/filter with no assumption tell → False
-        assert _is_sample_local_only("wrote a filter on the role column") is False
+        assert _is_sample_local_only("wrote a filter on the role column", classify_fn=mock_judge) is False
 
     def test_generalization_message_names_magic_assumption_and_universe(self):
         from flagscale_agent.react.guard.verification import (
@@ -1118,10 +1238,24 @@ class TestCompletionDeliveryHygieneGate:
     Task-agnostic."""
 
     def _complete(self, reason):
+        # Mock judge that releases all prior gates (observation, generalization, substitution)
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_lacks_observation":
+                # Has observation if mentions ran/read/outputs
+                return not any(w in r for w in ["ran", "read", "outputs", "result"])
+            elif question == "reason_overfits_sample":
+                # Not sample-local if mentions perturbed/held-out/variant
+                return "perturbed" not in r and "held-out" not in r and "variant" not in r
+            elif question == "reason_discloses_substitution":
+                return False
+            return default
+        
         return GuardContext(
             tool_name="plan_update",
             tool_args={"action": "complete", "_override_reason": reason},
             override_reason=reason,
+            classify_fn=mock_judge,
         )
 
     def test_fifth_gate_fires_after_prior_gates_release(self):
@@ -1233,3 +1367,126 @@ class TestBatchStepDoneGate:
         verdict = guard.check_pre(ctx)
         assert verdict is not None
         assert verdict.reason == "batch_step_done_no_verification"
+
+
+class TestTextCompleteHygieneGate:
+    """Timing 0a: pure-text [TASK_COMPLETE] finish path (tool_name=="", no
+    plan_update). Bites ONCE with a focused delivery-hygiene check; overridable
+    via the kernel text override channel. [NEED_USER_INPUT] must not trigger it.
+    Task-agnostic."""
+
+    def _text_complete(self, override="", marker="[TASK_COMPLETE]"):
+        args = {"_override_reason": override} if override else {}
+        return GuardContext(
+            tool_name="",
+            tool_args=args,
+            override_reason=override,
+            assistant_text=f"Done with the work. {marker}",
+        )
+
+    def test_bare_text_complete_blocked_once(self):
+        guard = VerificationGuard()
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
+        assert guard._text_complete_hygiene_demanded is True
+
+    def test_second_text_complete_not_blocked(self):
+        # Fires once — a re-emitted bare completion after the gate already bit
+        # passes through (agent saw the message; the gate is a checkpoint).
+        guard = VerificationGuard()
+        guard.check_pre(self._text_complete())  # first: blocks
+        verdict = guard.check_pre(self._text_complete())  # second: released
+        assert verdict is None
+
+    def test_override_reason_releases(self):
+        guard = VerificationGuard()
+        verdict = guard.check_pre(
+            self._text_complete("checked: output.txt at /app, exact single file, no temp left")
+        )
+        assert verdict is None
+        assert guard._text_complete_hygiene_demanded is True
+
+    def test_need_user_input_not_triggered(self):
+        # [NEED_USER_INPUT] is routed through the same kernel path but must NOT
+        # fire the completion hygiene gate.
+        guard = VerificationGuard()
+        verdict = guard.check_pre(
+            self._text_complete(marker="[NEED_USER_INPUT]")
+        )
+        assert verdict is None
+        assert guard._text_complete_hygiene_demanded is False
+
+    def test_non_empty_tool_name_not_triggered(self):
+        # A real tool call that happens to have [TASK_COMPLETE] in prior text
+        # (tool_name != "") must not fire this gate.
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="shell",
+            tool_args={"command": "ls"},
+            assistant_text="almost there [TASK_COMPLETE]",
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is None
+        assert guard._text_complete_hygiene_demanded is False
+
+    def test_empty_override_whitespace_still_blocked(self):
+        guard = VerificationGuard()
+        verdict = guard.check_pre(self._text_complete("   "))
+        assert verdict is not None
+        assert verdict.reason == "text_complete_hygiene"
+
+    def test_near_far_leads_the_message(self):
+        # near/far verification is the FIRST content of the text-complete gate,
+        # ahead of the three delivery-path checks (user decision: near/far recheck
+        # as the leading item of the TASK_COMPLETE verification guard).
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        msg = _TEXT_COMPLETE_HYGIENE
+        low = msg.lower()
+        # Content present.
+        assert "near vs far end" in low
+        assert "far end" in low and "near end" in low
+        # Ordering: the near/far section precedes the numbered delivery checks.
+        near_pos = low.index("near vs far end")
+        path_pos = low.index("path & constraint")
+        assert near_pos < path_pos, "near/far must lead, before delivery-path checks"
+        # Also precedes the "three checks" transition line.
+        assert near_pos < low.index("three checks on what sits at the delivery path")
+        # Observation-vs-argument litmus carried in.
+        assert "argument" in low and "observation" in low
+        # Override channel intact.
+        assert "_override_reason" in msg
+
+    def test_near_far_names_recorded_constraint_drift_and_wrong_target_verify(self):
+        # The near/far block must catch the "found the constraint but drifted"
+        # variant: the agent discovered a fixed path/name/format (even recorded it),
+        # then the implementation drifted to a convenient form, and self-check
+        # observed the convenient artifact — all observations TRUE but aimed at the
+        # target the agent invented, not the one the consumer reads. Task-agnostic.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # the ≠ bullet distinguishing chosen artifact from the task-fixed target
+        assert "i confirmed the artifact i chose to produce" in low
+        assert "path/name the task or its source fixed" in low
+        # the reinforcing paragraph: discovering/recording is not honoring
+        assert "does not mean your implementation honored it" in low
+        assert "drift to" in low
+        # the far-end recheck: consumer looks at the SAME path you actually wrote
+        assert "the same path/name you actually wrote" in low
+        # framed as a GIVEN, not a chosen location
+        assert "not a location you may choose" in low
+
+    def test_near_far_content_is_task_agnostic(self):
+        # No leakage of the concrete tasks that motivated this (mips/doom/sqlite/
+        # qemu/mjcf/chess); the block must stay a general principle.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = _TEXT_COMPLETE_HYGIENE.lower()
+        for banned in (
+            "mips", "doom", "sqlite", "qemu", "mjcf", "chess",
+            "frame.bmp", "readelf", ".bashrc", "stdbuf",
+        ):
+            assert banned not in low, f"leaked task-specific token: {banned}"

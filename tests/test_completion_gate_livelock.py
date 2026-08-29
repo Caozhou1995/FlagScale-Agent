@@ -6,18 +6,22 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Regression tests for the completion-gate livelock breaker.
+"""Tests for the single-shot completion path (post completion-gate removal).
 
-Root cause (observed in sparql-university single-shot run):
-  A single-shot agent that repeatedly emits a bare [TASK_COMPLETE] with no
-  plan and no _override_reason hits the PlanGuard completion gate every time.
-  The gate correctly blocks, the kernel `continue`s WITHOUT incrementing
-  _continuation_count, so the loop spins all the way to max_iterations (2000)
-  producing ~2000 identical block messages.
+History: there used to be a NON-OVERRIDABLE PlanGuard completion gate that
+blocked a bare [TASK_COMPLETE] when no plan was ever created, backed by a
+kernel livelock breaker (stop_reason 'completion_gate_livelock'). That gate
+punished weak models — they neither reliably override nor plan_create, so the
+loop burned MAX_CONSECUTIVE_COMPLETION_BLOCKS and auto-killed the task (reward 0).
 
-The breaker: AgentKernel counts consecutive completion-gate blocks with no
-intervening progress and breaks out with stop_reason 'completion_gate_livelock'
-after MAX_CONSECUTIVE_COMPLETION_BLOCKS.
+The gate is REMOVED. Completing without a plan is no longer a hard failure;
+plan enforcement moved earlier to the write_file gate (overridable). These
+tests assert the new reality:
+  - single-shot [TASK_COMPLETE] with no plan → completes (explicit_signal),
+  - the completion marker prints correctly (display/sentinel behavior is
+    orthogonal to the removed gate and must still hold).
+The kernel's livelock-breaker branch is kept as dead-but-harmless code (its
+trigger reason 'single_shot_completion_without_plan' is no longer produced).
 """
 
 from unittest.mock import MagicMock
@@ -108,43 +112,25 @@ def _make_kernel(llm_responses, single_shot=True, max_iter=2000):
     return kernel
 
 
-def test_bare_task_complete_breaks_before_max_iter():
-    """Repeated bare [TASK_COMPLETE] with no plan must not spin to max_iter."""
+def test_bare_task_complete_single_shot_completes():
+    """Single-shot [TASK_COMPLETE] with no plan now COMPLETES (gate removed).
+
+    Previously this livelocked and auto-killed the task. It must now finish
+    normally on the first iteration — no gate, no spin.
+    """
     kernel = _make_kernel(
         [{"content": "[TASK_COMPLETE]", "tool_calls": []}],
         single_shot=True,
         max_iter=2000,
     )
     result = kernel.run_turn()
-    assert result.stop_reason.startswith("completion_gate_livelock"), result.stop_reason
-    # Broke out fast: LLM was called ~= threshold times, nowhere near 2000.
-    assert kernel._call_count["n"] <= AgentKernel.MAX_CONSECUTIVE_COMPLETION_BLOCKS + 1
-    assert kernel._call_count["n"] < 50
+    assert result.stop_reason == "explicit_signal", result.stop_reason
+    assert kernel._call_count["n"] == 1
+    kernel.deps.display.completion_signal.assert_called_once_with("[TASK_COMPLETE]")
 
 
-def test_inline_override_does_NOT_release_gate():
-    """The single-shot completion gate is NON-OVERRIDABLE: an inline
-    _override_reason no longer releases it. Only a real plan_create tool call
-    does. A [TASK_COMPLETE] carrying an inline override still gets blocked and
-    eventually hits the livelock breaker (the model must call plan_create).
-
-    Regression: the text-inline override was the escape the model could not
-    reliably emit, so bare [TASK_COMPLETE] livelocked. Forcing plan_create as
-    the sole exit structurally breaks the text-only spin.
-    """
-    kernel = _make_kernel(
-        [{"content": "[TASK_COMPLETE]\n_override_reason: trivial one-line lookup, no plan needed",
-          "tool_calls": []}],
-        single_shot=True,
-    )
-    result = kernel.run_turn()
-    assert result.stop_reason.startswith("completion_gate_livelock"), result.stop_reason
-    kernel.deps.display.completion_signal.assert_not_called()
-
-
-def test_plan_create_releases_gate():
-    """Calling plan_create sets _plan_ever_created; the SUBSEQUENT
-    [TASK_COMPLETE] then passes the gate and completes normally."""
+def test_plan_create_then_complete_still_works():
+    """A run that DID create a plan still completes normally."""
     kernel = _make_kernel(
         [
             {"content": "framing", "tool_calls": [
@@ -159,8 +145,8 @@ def test_plan_create_releases_gate():
     kernel.deps.display.completion_signal.assert_called_once_with("[TASK_COMPLETE]")
 
 
-def test_interactive_mode_never_blocks_completion():
-    """In interactive (non-single-shot) mode the completion gate never fires."""
+def test_interactive_mode_completes_normally():
+    """Interactive (non-single-shot) mode: completion always passes."""
     kernel = _make_kernel(
         [{"content": "[TASK_COMPLETE]", "tool_calls": []}],
         single_shot=False,
@@ -168,29 +154,6 @@ def test_interactive_mode_never_blocks_completion():
     result = kernel.run_turn()
     assert result.stop_reason == "explicit_signal", result.stop_reason
     assert kernel._call_count["n"] == 1
-
-
-def test_breaker_counts_only_consecutive_blocks():
-    """Threshold is on CONSECUTIVE blocks; the counter starts at zero."""
-    kernel = _make_kernel([{"content": "[TASK_COMPLETE]", "tool_calls": []}])
-    assert kernel._consecutive_completion_blocks == 0
-    kernel.run_turn()
-    # After livelock break the counter has reached the threshold.
-    assert (kernel._consecutive_completion_blocks
-            >= AgentKernel.MAX_CONSECUTIVE_COMPLETION_BLOCKS)
-
-
-def test_blocked_completion_never_prints_marker():
-    """A gate-blocked bare [TASK_COMPLETE] must NOT print the authoritative marker.
-
-    Display-ordering regression: the raw sentinel is stripped from the live
-    stream, and the kernel only prints the marker AFTER the gate passes. So a
-    completion that only ever gets blocked must never call completion_signal().
-    """
-    kernel = _make_kernel([{"content": "[TASK_COMPLETE]", "tool_calls": []}])
-    result = kernel.run_turn()
-    assert result.stop_reason.startswith("completion_gate_livelock")
-    kernel.deps.display.completion_signal.assert_not_called()
 
 
 def test_accepted_completion_prints_marker_once():
@@ -232,47 +195,16 @@ def test_need_user_input_prints_that_marker():
     kernel.deps.display.completion_signal.assert_called_once_with("[NEED_USER_INPUT]")
 
 
-def test_bare_completion_message_directs_plan_create_no_override_hint():
-    """A blocked text-only [TASK_COMPLETE] must direct the agent to call
-    plan_create and must NOT offer any override hint.
-
-    The gate is now non-overridable: neither the tool-arg _OVERRIDE_HINT
-    ("Add _override_reason to your next tool call") nor the text-inline
-    override hint should appear. The message's sole instruction is to call
-    plan_create — a real tool call is the only exit, which structurally
-    breaks the text-only livelock.
-    """
-    kernel = _make_kernel([{"content": "[TASK_COMPLETE]", "tool_calls": []}])
-    result = kernel.run_turn()
-    assert result.stop_reason.startswith("completion_gate_livelock")
-    guard_msgs = [m for m in kernel.deps.history.messages
-                  if isinstance(m.get("content"), str)
-                  and "plan_create" in m["content"]]
-    assert len(guard_msgs) > 0, "Expected a guard message directing plan_create"
-    combined = " ".join(m["content"] for m in guard_msgs)
-    # No override hint of either flavour should be appended.
-    assert "to your next tool call" not in combined, (
-        "Non-overridable gate must not show the tool-arg override hint"
-    )
-    assert "OVERRIDE REQUIRED" not in combined, (
-        "Non-overridable gate must not show any override hint"
-    )
-    assert "plan_create" in combined
-
-
-def test_completion_gate_verdict_is_non_overridable():
-    """The completion-gate verdict must carry overridable=False so a text or
-    tool-arg _override_reason cannot release it."""
+def test_completion_gate_verdict_removed_no_block():
+    """PlanGuard no longer blocks a text-only [TASK_COMPLETE] — the gate is gone.
+    A completion signal with no tool_name returns no verdict regardless of plan."""
     from flagscale_agent.react.guard import GuardContext
     guard = PlanGuard(task_plan=None, single_shot=True)
     ctx = GuardContext(
         tool_name="", tool_args={}, tool_result=None,
         assistant_text="[TASK_COMPLETE]",
     )
-    verdict = guard.check_pre(ctx)
-    assert verdict is not None and verdict.action == "block"
-    assert verdict.overridable is False
-    assert verdict.reason == "single_shot_completion_without_plan"
+    assert guard.check_pre(ctx) is None
 
 
 def test_trailing_sentinel_wins_over_earlier_mention():

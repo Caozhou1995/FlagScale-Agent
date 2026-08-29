@@ -7,14 +7,30 @@ from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGua
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 
 
-def _make_ctx(tool_name=None, tool_result=None, assistant_text=None):
+def _make_ctx(tool_name=None, tool_result=None, assistant_text=None, tool_args=None):
     ctx = MagicMock(spec=GuardContext)
     ctx.tool_name = tool_name
     ctx.tool_result = tool_result
+    ctx.tool_args = tool_args or {}
     ctx.assistant_text = assistant_text
     ctx.context_pressure = 0.5
     ctx.evictable_indexes = []
     return ctx
+
+
+def _advance(guard, ctx):
+    """Simulate one real tool cycle: check_pre decision, then (if the call was
+    not blocked) check_post persists the counter. KnowledgeSkillGuard moved the
+    count increment into check_post so a blocked/not-yet-run call never inflates
+    the counters — tests that accumulate calls must therefore drive BOTH phases.
+    Returns the check_pre verdict so callers can assert on it.
+    """
+    verdict = guard.check_pre(ctx)
+    # Mirror the kernel: a blocked call carries the marker in its result and does
+    # NOT advance the count. Here the ctx has no such marker, so a real executed
+    # call advances via check_post.
+    guard.check_post(ctx)
+    return verdict
 
 
 # ── PostEvictRecoveryGuard ──
@@ -126,7 +142,7 @@ class TestKnowledgeSkillGuard:
         # Make INJECT_THRESHOLD calls without knowledge loading
         for i in range(guard.INJECT_THRESHOLD - 1):
             ctx = _make_ctx(tool_name="shell")
-            guard.check_pre(ctx)
+            _advance(guard, ctx)
         
         # The Nth call should trigger inject
         ctx = _make_ctx(tool_name="read_file")
@@ -140,7 +156,7 @@ class TestKnowledgeSkillGuard:
         # Make BLOCK_THRESHOLD calls
         for i in range(guard.BLOCK_THRESHOLD - 1):
             ctx = _make_ctx(tool_name="shell")
-            guard.check_pre(ctx)
+            _advance(guard, ctx)
         
         # The BLOCK_THRESHOLD-th call should block
         ctx = _make_ctx(tool_name="shell")
@@ -207,7 +223,7 @@ class TestKnowledgeSkillGuard:
         # Accumulate calls
         for i in range(5):
             ctx = _make_ctx(tool_name="shell")
-            guard.check_pre(ctx)
+            _advance(guard, ctx)
         assert guard._calls_since_knowledge == 5
         
         # reset_turn should NOT reset the counter
@@ -236,7 +252,7 @@ class TestKnowledgeSkillGuard:
         guard = KnowledgeSkillGuard()
         for i in range(guard.INJECT_THRESHOLD - 1):
             ctx = _make_ctx(tool_name="shell")
-            guard.check_pre(ctx)
+            _advance(guard, ctx)
         ctx = _make_ctx(tool_name="shell")
         verdict = guard.check_pre(ctx)
         assert verdict is not None and verdict.action == "inject"
@@ -251,7 +267,7 @@ class TestKnowledgeSkillGuard:
         guard = KnowledgeSkillGuard()
         for i in range(guard.BLOCK_THRESHOLD - 1):
             ctx = _make_ctx(tool_name="shell")
-            guard.check_pre(ctx)
+            _advance(guard, ctx)
         ctx = _make_ctx(tool_name="shell")
         verdict = guard.check_pre(ctx)
         assert verdict is not None and verdict.action == "block"
@@ -271,31 +287,43 @@ class TestKnowledgeSkillGuardSingleShot:
         assert verdict is None
 
     def test_set_single_shot_blocks_persistently(self):
-        """Single-shot re-blocks EVERY real tool call until a knowledge call clears it."""
+        """Single-shot blocks after 3 non-meta calls until a knowledge call clears it."""
         guard = KnowledgeSkillGuard()
         guard.set_single_shot(True)
-        v1 = guard.check_pre(_make_ctx(tool_name="shell"))
-        assert v1 is not None and v1.action == "block"
-        assert v1.overridable is False
-        assert "research" in v1.message.lower()
-        assert "problem class" in v1.message.lower()
-        # Second real call: still blocked (persistent, not fire-once).
-        v2 = guard.check_pre(_make_ctx(tool_name="shell"))
-        assert v2 is not None and v2.action == "block"
-        assert v2.overridable is False
+        v1 = _advance(guard, _make_ctx(tool_name="shell"))
+        assert v1 is None  # call 1
+        v2 = _advance(guard, _make_ctx(tool_name="shell"))
+        assert v2 is None  # call 2
+        v3 = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v3 is not None and v3.action == "block"
+        assert v3.overridable is False
+        assert "research" in v3.message.lower()
+        assert "problem class" in v3.message.lower()
+        # Fourth real call: still blocked (persistent until knowledge call).
+        # (v3 was blocked so check_post would NOT advance; drive via check_pre.)
+        v4 = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v4 is not None and v4.action == "block"
+        assert v4.overridable is False
 
     def test_ctor_single_shot_flag(self):
-        """single_shot=True via constructor also arms the early gate."""
+        """single_shot=True via constructor also arms the early gate (blocks after 3 calls)."""
         guard = KnowledgeSkillGuard(single_shot=True)
-        v1 = guard.check_pre(_make_ctx(tool_name="edit_file"))
-        assert v1 is not None and v1.action == "block"
+        v1 = _advance(guard, _make_ctx(tool_name="edit_file"))
+        assert v1 is None  # call 1
+        v2 = _advance(guard, _make_ctx(tool_name="edit_file"))
+        assert v2 is None  # call 2
+        v3 = guard.check_pre(_make_ctx(tool_name="edit_file"))
+        assert v3 is not None and v3.action == "block"  # call 3
 
     def test_meta_tool_does_not_fire_early(self):
         """Meta tools (plan/memory) don't consume the early gate."""
         guard = KnowledgeSkillGuard(single_shot=True)
-        assert guard.check_pre(_make_ctx(tool_name="plan_create")) is None
-        assert guard.check_pre(_make_ctx(tool_name="memory_write")) is None
-        # First real call still gets the gate.
+        assert _advance(guard, _make_ctx(tool_name="plan_create")) is None
+        assert _advance(guard, _make_ctx(tool_name="memory_write")) is None
+        # First 2 real calls pass
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
+        # Third real call gets the gate.
         v = guard.check_pre(_make_ctx(tool_name="shell"))
         assert v is not None and v.action == "block"
 
@@ -303,26 +331,33 @@ class TestKnowledgeSkillGuardSingleShot:
         """If agent loads knowledge first, no early gate later."""
         guard = KnowledgeSkillGuard(single_shot=True)
         assert guard.check_pre(_make_ctx(tool_name="web_fetch")) is None
-        # Now a real call: gate already satisfied, stays silent.
-        v = guard.check_pre(_make_ctx(tool_name="shell"))
-        assert v is None
+        # Now real calls: gate already satisfied, normal counting resumes.
+        # No block until INJECT_THRESHOLD (15) or BLOCK_THRESHOLD (40).
+        for i in range(10):
+            v = guard.check_pre(_make_ctx(tool_name="shell"))
+            assert v is None
 
     def test_early_gate_non_overridable(self):
         """The early block is NON-overridable — only a real knowledge call clears it."""
         guard = KnowledgeSkillGuard(single_shot=True)
-        v = guard.check_pre(_make_ctx(tool_name="shell"))
+        # First 2 real calls pass; the 3rd trips the non-overridable early gate.
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
+        v = guard.check_pre(_make_ctx(tool_name="shell"))  # call 3
         assert v is not None and v.action == "block"
         assert v.overridable is False
 
     def test_early_gate_cleared_only_by_knowledge_tool(self):
         """After a knowledge call the gate is gone; real calls pass."""
         guard = KnowledgeSkillGuard(single_shot=True)
-        # Blocked before any knowledge call.
-        assert guard.check_pre(_make_ctx(tool_name="shell")).action == "block"
-        # A real knowledge call clears the gate.
-        assert guard.check_pre(_make_ctx(tool_name="load_knowledge")) is None
-        # Now real calls pass (normal counting resumes).
-        assert guard.check_pre(_make_ctx(tool_name="shell")) is None
+        # First 2 calls: pass
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
+        # Third call would block, but we do a knowledge call instead
+        assert _advance(guard, _make_ctx(tool_name="load_knowledge")) is None
+        # Now real calls pass (gate cleared, normal counting).
+        for i in range(10):
+            assert _advance(guard, _make_ctx(tool_name="shell")) is None
 
 
 # ── KnowledgeSkillGuard network resilience (check_post) ──
