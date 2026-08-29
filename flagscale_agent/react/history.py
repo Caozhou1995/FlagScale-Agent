@@ -467,7 +467,11 @@ class HistoryManager:
         display_index = msg.get("_ext_idx", index)
         role = msg.get("role", "unknown")
         if _is_tool_result(msg):
-            tool_name, tool_input = self._extract_tool_info_for_index(index)
+            # Use the resolved INTERNAL position, not the external _ext_idx.
+            # _extract_tool_info_for_index indexes self._messages directly, so it
+            # must receive an internal position. Passing the external index (which
+            # grows unboundedly across hard_resets) caused IndexError on high indexes.
+            tool_name, tool_input = self._extract_tool_info_for_index(internal)
             placeholder = (
                 f"[evicted | index={display_index} | {tool_name}({tool_input}) | {tokens} tokens]"
             )
@@ -626,9 +630,16 @@ class HistoryManager:
         return result
 
     def _extract_tool_info_for_index(self, index: int) -> tuple:
-        """Extract tool_name and key input for a tool_result at index."""
+        """Extract tool_name and key input for a tool_result at internal position `index`.
+
+        `index` is an INTERNAL position into self._messages. Guard against
+        out-of-range values so callers never trigger IndexError.
+        """
         tool_name = "unknown"
         tool_input = ""
+
+        if index < 0 or index >= len(self._messages):
+            return (tool_name, tool_input)
 
         for i in range(index - 1, -1, -1):
             msg = self._messages[i]

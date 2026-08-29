@@ -216,6 +216,12 @@ class WorkerAgent:
         guard_registry = GuardRegistry()
         # Register native guards - all guards registered unconditionally
         guard_registry.register(ArgTypeGuard(tool_registry=self.tool_registry))
+        # Backup guard runs FIRST (priority=5) — force a backup before the first
+        # destructive in-place op on an irreplaceable resource.
+        from flagscale_agent.react.guard.backup import BackupGuard
+        guard_registry.register(BackupGuard())
+        from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
+        guard_registry.register(CompileRedirectGuard())
         guard_registry.register(ShellSafetyGuard())
 
         # Reliability guards (P7)

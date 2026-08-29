@@ -217,6 +217,13 @@ class TestOverride:
     def test_override_with_good_reason(self):
         """Guard accepts override with substantive reason (>20 chars)."""
         reg = _make_registry([HardBlockGuard()])
+        
+        # Surface the block first
+        ctx_surface = _ctx("dangerous_tool", override_reason="")
+        v_surf = reg.check_pre(ctx_surface)
+        assert v_surf is not None  # Block surfaced
+        
+        # Now override
         ctx = _ctx("dangerous_tool",
                    override_reason="This is needed for production hotfix deployment to resolve outage")
         v = reg.check_pre(ctx)

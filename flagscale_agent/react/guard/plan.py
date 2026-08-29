@@ -32,6 +32,14 @@ subset, a specific metric definition. The subject is obvious; the qualifier is
 easy to drop — work completes with a confident answer whether or not you honored
 it. A dropped qualifier silently answers a nearby question the task did not ask.
 
+Treat every qualifier as machine-verified by a grader you cannot reach or fool: it
+re-parses the time boundary, diffs the exact version string, compares the output file
+byte-for-byte against a reference, re-counts the entries. Reporting the task done does
+not feed that check — if a qualifier is not literally satisfied, the scored result is
+FAIL no matter how finished the work looks or how you word the completion. So a
+qualifier is not a nicety to mention; it is a hard pass/fail condition to build the
+plan around.
+
 Re-read the task statement; list every qualifier as a first-class item. Fold each
 into the plan as a step or acceptance criterion. A qualifier not in the plan is one
 execution silently skips. But extraction is only half the job — you must also read
@@ -62,19 +70,19 @@ plainer call is the DEVIATION. Don't read the doc, see the requirement, then ski
 it with "the task didn't explicitly ask for that" — a literal-minimal reading
 silently swaps the task for an easier one."""
 
-_COMPLETION_NO_PLAN = (
-    "[Plan] BLOCKED — you are trying to complete without ever creating a plan. "
-    "This gate CANNOT be overridden by text. A bare [TASK_COMPLETE] will be "
-    "blocked again, and so will any _override_reason you add inline.\n"
+_WRITE_FILE_NO_PLAN = (
+    "[Plan] You are about to write a file — the concrete signal that you have "
+    "started producing a deliverable. Per UNDERSTAND → PLAN → ACT, a plan must "
+    "exist before you produce output.\n"
     "\n"
-    "The ONLY way forward is to call the plan_create() tool now — a real tool "
-    "call, not text. Frame the task as ordered steps with acceptance criteria "
-    "that name what THIS task requires. Even a genuinely small task gets a "
-    "one- or two-step plan: the plan is the structural supervisor for an "
-    "unsupervised run, and completing without one leaves the work ungoverned.\n"
+    "Call plan_create() now: frame the task as ordered steps with acceptance "
+    "criteria naming what THIS task requires. A budget-order first step ('land a "
+    "crude but complete, scorable deliverable at the required path, then refine') "
+    "keeps an unsupervised run from spending its whole budget with nothing on "
+    "disk.\n"
     "\n"
-    "Do this next: call plan_create(title=..., steps=[...]). After the plan "
-    "exists, your [TASK_COMPLETE] will pass this gate."
+    "If this write is a genuinely throwaway scratch/draft file (not the "
+    "deliverable), override with a one-line reason and proceed."
 )
 
 
@@ -84,15 +92,24 @@ class PlanGuard(Guard):
     Interactive: after REMIND_THRESHOLD tool calls without a plan, injects a
     periodic reminder. Never blocks.
 
-    Single-shot: the plan stands in as structural supervisor and completion gate.
+    Single-shot: the plan stands in as structural supervisor. Enforcement is
+    front-loaded to the "start producing" moment: the first write_file with no
+    plan blocks (overridable) to force plan_create before deliverable output.
     After SINGLE_SHOT_BLOCK_THRESHOLD calls without a plan, blocks further
     non-plan tools until plan_create. Overridable for genuinely-trivial tasks.
+    There is NO completion-time block: completing without a plan is never a hard
+    failure (that punished weak models with a livelock kill); the plan is forced
+    earlier, at write_file, where it is actionable rather than punitive.
     """
 
     name = "plan"
     priority = 35
 
+    # Interactive: periodic nudge cadence. Single-shot uses the tighter
+    # SINGLE_SHOT_REMIND cadence — an unsupervised run should be reminded sooner,
+    # since the write_file gate (not a completion block) is the real enforcement.
     REMIND_THRESHOLD = 15
+    SINGLE_SHOT_REMIND = 5
     # Single-shot: allow this many observation/exploration calls before requiring
     # a plan. Set generously — an unsupervised run legitimately needs to probe the
     # environment (paths, configs, GPU state, prior findings) before it can frame a
@@ -117,26 +134,31 @@ class PlanGuard(Guard):
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
-            # Completion gate (single-shot): block [TASK_COMPLETE] when no plan
-            # was ever created. NON-OVERRIDABLE — the only exit is an actual
-            # plan_create() tool call, which sets _plan_ever_created and releases
-            # the gate on the next completion attempt. A text-inline
-            # _override_reason no longer releases it: the model could not reliably
-            # emit the inline form, so a bare [TASK_COMPLETE] livelocked the loop
-            # (re-firing this gate on stale text every iteration). Forcing a real
-            # tool call structurally breaks that text-only spin. Never fires in
-            # interactive mode.
-            if (self._single_shot
-                    and not self._plan_ever_created
-                    and ctx.assistant_text
-                    and "[TASK_COMPLETE]" in ctx.assistant_text):
-                return GuardVerdict.block(
-                    message=_COMPLETION_NO_PLAN,
-                    reason="single_shot_completion_without_plan",
-                    category="plan_required",
-                    overridable=False,
-                )
+            # No completion-time gate. Completing without a plan is intentionally
+            # NOT blocked: the old NON-OVERRIDABLE completion block livelocked weak
+            # models (they neither reliably override nor plan_create, so the loop
+            # burned MAX_CONSECUTIVE_COMPLETION_BLOCKS and auto-killed the task →
+            # reward 0). Enforcement moved earlier to write_file, where forcing a
+            # plan is actionable instead of punitive.
             return None
+
+        # write_file gate (single-shot): the first attempt to write a file with
+        # no plan is the "start producing a deliverable" moment. Block once
+        # (overridable) to force plan_create before deliverable output. Only
+        # write_file triggers — read_file/shell exploration never does, so the
+        # investigation phase is not disturbed. Once a plan exists this never
+        # fires.
+        if (ctx.tool_name == "write_file"
+                and self._single_shot
+                and not self._plan_ever_created
+                and not (self._task_plan and self._task_plan.get_active())):
+            self._qualifier_reminded = True
+            return GuardVerdict.block(
+                message=_WRITE_FILE_NO_PLAN + _QUALIFIER_EXTRACTION,
+                reason="write_file_without_plan",
+                category="plan_required",
+                overridable=True,
+            )
 
         # Plan-related tools don't count toward the no-plan budget. The FIRST
         # plan_create is the plan-framing moment — inject qualifier-extraction
@@ -181,12 +203,17 @@ class PlanGuard(Guard):
                 category="plan_required",
             )
 
-        # Periodic reminder every REMIND_THRESHOLD calls (both modes)
-        if self._calls_without_plan % self.REMIND_THRESHOLD == 0:
+        # Periodic reminder. Single-shot uses the tighter cadence (5) since the
+        # write_file gate is the real enforcement and an unsupervised run should
+        # be nudged toward a plan sooner.
+        cadence = self.SINGLE_SHOT_REMIND if self._single_shot else self.REMIND_THRESHOLD
+        if self._calls_without_plan % cadence == 0:
             return GuardVerdict.inject(
                 message=(
                     f"[Plan] {self._calls_without_plan} tool calls without a plan. "
-                    f"Consider plan_create() to organize a long task."
+                    f"If environment exploration is done and you've begun producing "
+                    f"output, you understand the structure — call plan_create() to "
+                    f"freeze it into steps with acceptance criteria."
                 ),
                 reason="plan_reminder",
                 category="plan_needed",

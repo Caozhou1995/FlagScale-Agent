@@ -337,79 +337,71 @@ class TestPlanGuardSingleShot:
 
 
 class TestPlanGuardCompletionGate:
-    """Single-shot: [TASK_COMPLETE] is blocked when no plan was ever created."""
+    """Completion is NEVER blocked (the old NON-OVERRIDABLE completion gate was
+    removed — it livelocked weak models into auto-kill). Enforcement moved to the
+    write_file gate."""
 
-    def test_completion_blocked_without_plan_single_shot(self):
+    def test_completion_never_blocked_single_shot_no_plan(self):
+        # Even with no plan ever created, [TASK_COMPLETE] passes — no gate.
         g = PlanGuard(task_plan=None, single_shot=True)
-        # A few exploration calls, then straight to completion — no plan_create.
         for i in range(5):
             g.check_pre(_ctx("shell", {"command": f"c{i}"}))
         result = g.check_pre(_ctx("", assistant_text="Done. [TASK_COMPLETE]"))
-        assert result is not None
-        assert result.action == "block"
-        assert result.category == "plan_required"
-        assert result.reason == "single_shot_completion_without_plan"
-
-    def test_completion_allowed_after_plan_created(self):
-        g = PlanGuard(task_plan=None, single_shot=True)
-        # plan_create was called at some point this run.
-        g.check_post(_ctx("plan_create", {}))
-        result = g.check_pre(_ctx("", assistant_text="All steps done. [TASK_COMPLETE]"))
         assert result is None
 
-    def test_completion_not_blocked_interactive(self):
-        # Interactive mode: completion gate never fires, plan or not.
+    def test_completion_never_blocked_interactive(self):
         g = PlanGuard(task_plan=None, single_shot=False)
         result = g.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
         assert result is None
 
-    def test_completion_gate_blocks_every_bare_reemit(self):
-        # A bare re-emit of [TASK_COMPLETE] with no plan and no override reason
-        # must stay blocked EVERY time — never a blanket fire-once release that
-        # lets an unplanned, unverified completion slip through on the 2nd try.
-        g = PlanGuard(task_plan=None, single_shot=True)
-        first = g.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
-        assert first is not None and first.action == "block"
-        second = g.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
-        assert second is not None and second.action == "block"
-        third = g.check_pre(_ctx("", assistant_text="still done [TASK_COMPLETE]"))
-        assert third is not None and third.action == "block"
-
-    def test_completion_gate_ignores_need_user_input(self):
-        # [NEED_USER_INPUT] is not a completion signal; the gate must not fire.
-        g = PlanGuard(task_plan=None, single_shot=True)
-        result = g.check_pre(_ctx("", assistant_text="Need more info. [NEED_USER_INPUT]"))
-        assert result is None
-
-    def test_completion_gate_no_signal_no_block(self):
-        # tool_name=="" but no completion signal in text → no block.
+    def test_completion_no_signal_no_block(self):
         g = PlanGuard(task_plan=None, single_shot=True)
         result = g.check_pre(_ctx("", assistant_text="still working"))
         assert result is None
 
-    def test_completion_gate_non_overridable(self):
-        # The completion gate is now NON-OVERRIDABLE: an override_reason does
-        # NOT release it. Only plan_create sets _plan_ever_created and unlocks.
-        reg = GuardRegistry()
+
+class TestPlanGuardWriteFileGate:
+    """Single-shot: the first write_file with no plan blocks (overridable) to
+    force plan_create before producing a deliverable."""
+
+    def test_write_file_blocked_without_plan_single_shot(self):
         g = PlanGuard(task_plan=None, single_shot=True)
-        reg.register(g)
-        # No override → block returned.
-        blocked = reg.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
+        result = g.check_pre(_ctx("write_file", {"path": "out.txt", "content": "x"}))
+        assert result is not None
+        assert result.action == "block"
+        assert result.category == "plan_required"
+        assert result.reason == "write_file_without_plan"
+        assert result.overridable is True
+
+    def test_write_file_allowed_after_plan_created(self):
+        g = PlanGuard(task_plan=None, single_shot=True)
+        g.check_post(_ctx("plan_create", {}))
+        result = g.check_pre(_ctx("write_file", {"path": "out.txt", "content": "x"}))
+        assert result is None
+
+    def test_write_file_not_blocked_interactive(self):
+        # Interactive mode: write_file gate never fires.
+        g = PlanGuard(task_plan=None, single_shot=False)
+        result = g.check_pre(_ctx("write_file", {"path": "out.txt", "content": "x"}))
+        assert result is None
+
+    def test_write_file_gate_overridable(self):
+        # A one-line reason releases it (throwaway scratch file).
+        reg = GuardRegistry()
+        reg.register(PlanGuard(task_plan=None, single_shot=True))
+        blocked = reg.check_pre(_ctx("write_file", {"path": "s.txt", "content": "x"}))
         assert blocked is not None and blocked.action == "block"
-        assert blocked.overridable is False
-        # Same guard + an override reason → STILL blocked (non-overridable).
-        still_blocked = reg.check_pre(_ctx(
-            "", assistant_text="[TASK_COMPLETE]",
-            override_reason="genuinely trivial single lookup, nothing to verify",
+        allowed = reg.check_pre(_ctx(
+            "write_file", {"path": "s.txt", "content": "x"},
+            override_reason="throwaway scratch draft, not the deliverable",
         ))
-        assert still_blocked is not None and still_blocked.action == "block"
-        # The ONLY exit: call plan_create, which sets _plan_ever_created.
-        from flagscale_agent.react.guard import GuardContext
-        ctx = GuardContext(tool_name="plan_create", tool_args={}, tool_result=None)
-        g.check_post(ctx)  # sets _plan_ever_created=True
-        # Now [TASK_COMPLETE] passes.
-        allowed = reg.check_pre(_ctx("", assistant_text="[TASK_COMPLETE]"))
         assert allowed is None
+
+    def test_read_file_and_shell_never_gated(self):
+        # Investigation phase (read_file / shell) is never disturbed.
+        g = PlanGuard(task_plan=None, single_shot=True)
+        assert g.check_pre(_ctx("read_file", {"path": "a.py"})) is None
+        assert g.check_pre(_ctx("shell", {"command": "ls"})) is None
 
 
 class TestKernelTextOverrideExtraction:

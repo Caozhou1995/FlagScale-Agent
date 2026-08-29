@@ -451,6 +451,18 @@ class TestSystemPromptContent:
         assert "manufacture the APPEARANCE of satisfaction" in p
         assert "empty honest BLOCKED beats a populated fake" in p
 
+    def test_qualifier_is_machine_checked_present(self):
+        # A stated qualifier is verified by an unfakeable external grader — declaring
+        # the task done does not move the scored verdict. Examples must name the
+        # concrete mechanical checks: version string, byte-for-byte file, time boundary.
+        p = self._prompt()
+        assert "machine-checked" in p
+        assert "byte-for-byte" in p
+        # confident self-report does not change the verdict
+        assert "not move the scored verdict" in p or "does NOT move the scored verdict" in p
+        # failure is unconditional when the qualifier is literally unmet
+        assert "the task FAILS" in p
+
     def test_closed_exemption_list_and_unverified_attribution_present(self):
         # build-cython-ext lesson: a precise list of exceptions is a CLOSED constraint —
         # you may not widen the carve-out to swallow a failure you could not fix. And
@@ -474,6 +486,20 @@ class TestSystemPromptContent:
         p = self._prompt()
         assert "PRESERVE THE IRREPLACEABLE BEFORE YOU TOUCH IT" in p
         assert "copy it first" in p
+
+    def test_network_persistence_info_gain_present(self):
+        # Environment Resilience: a single failed web_fetch/search is one failed
+        # attempt on one path, NOT a verdict that the info is unavailable. Info gain
+        # from external research is high-leverage; do not downgrade to a sample-tuned
+        # guess at the first network error. "Could not fetch" needs several distinct
+        # failed attempts as evidence, not a single error.
+        p = self._prompt()
+        assert "information gain" in p
+        assert "not a verdict" in p.lower() or "is NOT a verdict" in p
+        # must frame giving up early as abandoning the highest-leverage move
+        assert "highest-leverage" in p or "high-leverage" in p.lower()
+        # "could not fetch" is a claim needing multiple failed attempts as evidence
+        assert "claim that needs" in p
 
     def test_logical_undo_not_byte_restore_present(self):
         # Principle 1 / PRESERVE: reverting a change at the logical level does NOT

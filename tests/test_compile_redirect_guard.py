@@ -1,0 +1,136 @@
+# Copyright 2026 FlagOS Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Tests for CompileRedirectGuard — pre-launch block on verbose build commands
+that do not persist output to a file."""
+
+import pytest
+
+from flagscale_agent.react.guard import GuardContext
+from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
+
+
+def _ctx(command):
+    return GuardContext(tool_name="shell", tool_args={"command": command})
+
+
+class TestCompileRedirectGuard:
+
+    def setup_method(self):
+        self.g = CompileRedirectGuard()
+
+    # --- should BLOCK: compile command whose output is NOT visible to the monitor ---
+    @pytest.mark.parametrize("cmd", [
+        "make -j$(nproc)",
+        "make -j8",
+        "cmake --build build",
+        "ninja",
+        "cargo build --release",
+        "opam install coq",
+        "gcc -O2 main.c -o main",
+        "g++ -std=c++17 a.cpp",
+        "go build ./...",
+        "make -j | tail",          # piped to pager = the classic hang
+        "make 2>&1 | head -100",
+        # bare file redirects are now a BLACK BOX to the monitor -> block
+        "make -j$(nproc) > build.log 2>&1",
+        "make -j8 >build.log",
+        "cargo build &> out.txt",
+        "opam install coq >> install.log 2>&1",
+        "gcc -O2 main.c -o main > compile.log 2>&1",
+        # the exact form from the compcert stall:
+        'unset HTTP_PROXY && eval $(opam env) && opam install coq.8.16.1 menhir -y > /tmp/opam_install2.log 2>&1; echo "EXIT: $?"',
+    ])
+    def test_blocks_compile_not_visible_to_monitor(self, cmd):
+        v = self.g.check_pre(_ctx(cmd))
+        assert v is not None and v.action == "block", f"should block: {cmd}"
+        assert v.category == "compile_redirect"
+
+    # --- should PASS: output stays visible to the monitor (tee / tail -f) ---
+    @pytest.mark.parametrize("cmd", [
+        "cmake --build build 2>&1 | tee build.log",
+        "ninja | tee ninja.log",
+        "make -j$(nproc) 2>&1 | tee build.log",
+        # background redirect + tail -f streams the log back to the terminal
+        "opam install coq > install.log 2>&1 & tail -f install.log",
+        "make -j8 > build.log 2>&1 & tail -F build.log",
+    ])
+    def test_passes_compile_visible_to_monitor(self, cmd):
+        v = self.g.check_pre(_ctx(cmd))
+        assert v is None, f"should pass (tee / tail -f keeps output visible): {cmd}"
+
+    # --- should PASS: not a compile command ---
+    @pytest.mark.parametrize("cmd", [
+        "ls -la",
+        "cat build.log",
+        "grep error build.log",
+        "echo make",              # 'make' as an argument, not the driver
+        "tail -f build.log",
+        "python train.py",
+        "rm -rf build",
+    ])
+    def test_ignores_non_compile(self, cmd):
+        v = self.g.check_pre(_ctx(cmd))
+        assert v is None, f"should ignore: {cmd}"
+
+    def test_non_shell_tool_ignored(self):
+        ctx = GuardContext(tool_name="read_file", tool_args={"path": "Makefile"})
+        assert self.g.check_pre(ctx) is None
+
+    def test_empty_command_ignored(self):
+        assert self.g.check_pre(_ctx("")) is None
+
+    def test_block_is_overridable(self):
+        v = self.g.check_pre(_ctx("make -j"))
+        assert v.action == "block"
+        assert v.overridable is True
+        # default accept_override: any reason > 5 chars
+        assert self.g.accept_override("already writes its own log file", _ctx("make -j")) is True
+        assert self.g.accept_override("", _ctx("make -j")) is False
+
+    def test_stdbuf_wrapped_compile_still_blocks(self):
+        # stdbuf -oL make ... still needs a file to be inspectable after
+        v = self.g.check_pre(_ctx("stdbuf -oL -eL make -j4"))
+        assert v is not None and v.action == "block"
+
+    def test_stateless_across_calls(self):
+        # unlike BackupGuard, this guard keys off the command text every time
+        assert self.g.check_pre(_ctx("make -j")).action == "block"
+        assert self.g.check_pre(_ctx("make -j 2>&1 | tee log")) is None
+        assert self.g.check_pre(_ctx("make -j")).action == "block"
+
+    def test_bare_redirect_is_blackbox_to_monitor(self):
+        # regression: pure `> file` was previously treated as OK, but it hides
+        # all output from the live monitor for the whole run (compcert opam stall).
+        assert self.g.check_pre(_ctx("make -j > build.log 2>&1")).action == "block"
+        # tee keeps it visible
+        assert self.g.check_pre(_ctx("make -j 2>&1 | tee build.log")) is None
+
+    def test_message_guides_probe_then_scale_parallelism(self):
+        # The block message must steer toward: single-threaded + timeout probe FIRST
+        # to surface config/toolchain/dep errors cleanly (a parallel first build buries
+        # the first real error in interleaved output), THEN bounded parallelism. And it
+        # must forbid a bare unbounded `make -j` (fork bomb → OOM/thrash).
+        v = self.g.check_pre(_ctx("make -j > build.log 2>&1"))
+        assert v.action == "block"
+        msg = v.message
+        # probe-first under a timeout, single-threaded
+        assert "timeout" in msg
+        assert "single-threaded" in msg
+        assert "probe first" in msg.lower() or "probe" in msg.lower()
+        # bounded parallelism only after the probe succeeds
+        assert "nproc" in msg
+        # forbid the unbounded fork-bomb form
+        assert "unbounded" in msg.lower()
+        assert "OOM" in msg or "oom" in msg.lower()

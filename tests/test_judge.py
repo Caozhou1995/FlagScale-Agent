@@ -92,13 +92,13 @@ class TestJudgeClassify:
 
 class TestJudgeHealth:
     def test_health_returns_dict(self):
-        provider = MockProvider(['{"kill": false, "reason": "", "next_check_seconds": 30}'])
+        provider = MockProvider(['{"kill": false, "reason": ""}'])
         judge = Judge(provider)
         result = judge.health("python train.py", "loss: 2.3", "5m", True, 0)
         assert result["kill"] is False
 
     def test_health_kill_decision(self):
-        provider = MockProvider(['{"kill": true, "reason": "stalled", "next_check_seconds": 10}'])
+        provider = MockProvider(['{"kill": true, "reason": "stalled"}'])
         judge = Judge(provider)
         result = judge.health("python train.py", "", "30m", False, 5)
         assert result["kill"] is True
@@ -109,6 +109,12 @@ class TestJudgeHealth:
         judge = Judge(provider)
         result = judge.health("cmd", "out", "1m", True, 0)
         assert result == {"kill": False}
+
+    def test_health_prompt_has_no_next_check_seconds(self):
+        # Monitor loop uses a FIXED 30s cadence; the LLM must not be asked for a
+        # next_check_seconds field (dead protocol field, shell.py ignores it).
+        from flagscale_agent.react.judge import _HEALTH_PROMPT
+        assert "next_check_seconds" not in _HEALTH_PROMPT
 
 
 # ── Prompts exist ─────────────────────────────────────────────────────────
@@ -182,7 +188,7 @@ class TestPrompts:
         # the provider (parsing + passthrough of the redirect reason).
         provider = MockProvider([
             '{"kill": true, "reason": "rate too low for budget; slowness is a '
-            'configurable choice, reconsider settings", "next_check_seconds": 10}'
+            'configurable choice, reconsider settings"}'
         ])
         judge = Judge(provider)
         out = "Progress: 10.0% ETA: long"
@@ -197,7 +203,7 @@ class TestPrompts:
 class CapturingProvider:
     """Records the FULL prompt of each call, returns a fixed response."""
 
-    def __init__(self, response='{"kill": false, "reason": "", "next_check_seconds": 30}'):
+    def __init__(self, response='{"kill": false, "reason": ""}'):
         self.response = response
         self.prompts = []
 

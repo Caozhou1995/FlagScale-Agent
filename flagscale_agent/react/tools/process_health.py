@@ -41,6 +41,13 @@ def get_process_health(proc_pid: int) -> dict:
         # CPU and memory (skip if zombie)
         cpu = 0.0
         mem = 0.0
+        # Cumulative CPU time (user+system) and IO bytes across the whole
+        # process tree. Unlike the 0.1s cpu_percent snapshot, these are
+        # monotonic counters — comparing them across sampling points gives a
+        # noise-free "is it actually doing work" signal (see support A of the
+        # health-monitor design). Used by shell.py to compute deltas.
+        cpu_time = 0.0
+        io_bytes = 0.0
         if not is_zombie:
             try:
                 cpu = p.cpu_percent(interval=0.1)
@@ -51,14 +58,28 @@ def get_process_health(proc_pid: int) -> dict:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
         
-        # Child processes
+        # Child processes (+ accumulate tree-wide cpu_time / io_bytes)
         try:
             children = p.children(recursive=True)
             num_children = len(children)
             alive_children = sum(1 for c in children if c.is_running())
         except (psutil.NoSuchProcess, psutil.AccessDenied):
+            children = []
             num_children = 0
             alive_children = 0
+
+        for proc_obj in [p] + list(children):
+            try:
+                t = proc_obj.cpu_times()
+                cpu_time += t.user + t.system
+            except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                pass
+            try:
+                io = proc_obj.io_counters()
+                io_bytes += io.read_bytes + io.write_bytes
+            except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError,
+                    NotImplementedError):
+                pass
         
         return {
             'alive': p.is_running(),
@@ -67,6 +88,8 @@ def get_process_health(proc_pid: int) -> dict:
             'memory_mb': mem,
             'num_children': num_children,
             'children_alive': alive_children,
+            'cpu_time': cpu_time,
+            'io_bytes': io_bytes,
         }
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return {
@@ -76,7 +99,23 @@ def get_process_health(proc_pid: int) -> dict:
             'memory_mb': 0.0,
             'num_children': 0,
             'children_alive': 0,
+            'cpu_time': 0.0,
+            'io_bytes': 0.0,
         }
+
+
+def system_mem_pressure(threshold_ratio: float = 0.10) -> bool:
+    """
+    Return True if the system is under real memory pressure — available memory
+    has dropped below `threshold_ratio` of total. This is the ONLY evidence
+    (besides an explicit "Killed" in output) that turns a child-count drop into
+    an OOM verdict. Without it, a child drop is treated as normal convergence.
+    """
+    try:
+        vm = psutil.virtual_memory()
+        return vm.available < vm.total * threshold_ratio
+    except Exception:
+        return False
 
 
 def detect_output_anomalies(recent_output: str) -> dict:
@@ -124,69 +163,106 @@ def should_kill_process(
     output_anomalies: dict,
     had_children: bool,
     prev_num_children: int = 0,
+    progress_signals: dict | None = None,
+    mem_pressure: bool | None = None,
 ) -> tuple[bool, str]:
     """
     Unified hard-indicator check. Returns (should_kill, reason).
-    
-    6 hard indicators:
-    1. Zombie process
-    2. OOM killed (2+ times in output OR >3 children disappeared)
-    3. All children dead + no output + >2min
-    4. CPU=0% + no output + >3min
-    5. Timeout >20min
-    6. Child processes suddenly disappeared (OOM killer silent signal)
+
+    Redesigned around three principles (see health_monitor_improvement.md):
+    a KILL must be driven by MULTIPLE independent signals converging on death;
+    any single signal — especially a child-count drop — must NOT convict alone;
+    and POSITIVE liveness evidence (the process is burning CPU / IO / memory)
+    vetoes every heuristic kill.
+
+    progress_signals: {'cpu_time_delta', 'io_bytes_delta', 'rss_delta'} computed
+        by shell.py across two sampling points. When None (legacy callers), the
+        liveness veto is skipped and only deterministic-death rules apply.
+    mem_pressure: real system memory pressure (available < ~10% total). When
+        None it is probed live via system_mem_pressure().
     """
-    
+    if mem_pressure is None:
+        mem_pressure = system_mem_pressure()
+
+    # --- Liveness veto (support A): is the process actually working? ---
+    making_progress = False
+    if progress_signals is not None:
+        making_progress = (
+            progress_signals.get('cpu_time_delta', 0.0) > 0.5      # cumulative CPU secs rising
+            or progress_signals.get('io_bytes_delta', 0.0) > (1 << 20)   # >1MB IO
+            or abs(progress_signals.get('rss_delta', 0.0)) > (1 << 20)   # RSS shifting
+        )
+
+    # === Deterministic death (fires regardless of liveness) ===
+
     # 1. Zombie process
     if proc_health['zombie']:
         return True, (
             "Process became zombie (all children died, parent stuck). "
             "This usually means child processes crashed but parent didn't detect it."
         )
-    
-    # 2. OOM killed repeatedly (output-based or child-disappearance-based)
-    child_drop = max(0, prev_num_children - proc_health['num_children'])
-    oom_from_output = output_anomalies['oom_killed'] and output_anomalies['killed_count'] >= 2
-    oom_from_children = prev_num_children >= 3 and child_drop >= 3
-    
-    if oom_from_output or oom_from_children:
-        reason_detail = (
-            f"OOM killer terminated processes (killed_count={output_anomalies['killed_count']}, "
-            f"child_drop={child_drop} from {prev_num_children}→{proc_health['num_children']}). "
-            if oom_from_children else 
-            f"OOM killer terminated processes {output_anomalies['killed_count']} times. "
-        )
+
+    # 2a. OOM HARD evidence: output shows Killed x2 / Error 137. This is real,
+    #     independent of liveness.
+    if output_anomalies['oom_killed'] and output_anomalies['killed_count'] >= 2:
         return True, (
-            reason_detail +
+            f"OOM killer terminated processes {output_anomalies['killed_count']} times. "
             "Reduce parallelism (e.g., make -j1 instead of make -j) or increase memory."
         )
-    
-    # 3. All children dead + no output + >2min
-    if (had_children and 
-        proc_health['children_alive'] == 0 and 
-        not output_changed and 
+
+    # --- Liveness veto: below here every rule is a heuristic; if the process
+    #     is demonstrably working, never kill. ---
+    if making_progress:
+        return False, ""
+
+    # === Heuristics (only reached when NOT making progress) ===
+
+    # 2b. Child-count drop — DOUBLE-evidence gate (support B). Relative drop
+    #     (>= half, min 3) AND no live children AND real OOM evidence
+    #     (system memory pressure OR at least one Killed in output). A drop
+    #     alone with killed_count==0 and no memory pressure is treated as
+    #     normal worker convergence, NOT OOM.
+    child_drop = max(0, prev_num_children - proc_health['num_children'])
+    drop_threshold = max(3, prev_num_children // 2)
+    if (child_drop >= drop_threshold
+            and proc_health['children_alive'] == 0
+            and (mem_pressure or output_anomalies['killed_count'] >= 1)):
+        return True, (
+            f"OOM likely: children dropped {prev_num_children}→{proc_health['num_children']} "
+            f"AND no live children AND memory pressure/Killed evidence. "
+            "Reduce parallelism or increase memory."
+        )
+
+    # 3. All children dead + no output + >2min (already past liveness veto)
+    if (had_children and
+        proc_health['children_alive'] == 0 and
+        not output_changed and
         elapsed_seconds > 120):
         return True, (
             f"All {proc_health['num_children']} child processes exited "
             f"but parent still running with no output for {int(elapsed_seconds)}s. "
             "Build likely failed silently."
         )
-    
-    # 4. CPU=0% + no output + stall_count>=6 (3min at 30s interval)
-    if (proc_health['cpu_percent'] < 0.5 and 
-        not output_changed and 
+
+    # 4. No output + sustained stall + >3min. cpu_percent kept as a cheap
+    #    secondary check, but the liveness veto above is the real guard.
+    if (proc_health['cpu_percent'] < 0.5 and
+        not output_changed and
         stall_count >= 6 and
         elapsed_seconds > 180):
         return True, (
             f"Process using 0% CPU with no output for {stall_count * 30}s. "
             "Command appears stuck or waiting indefinitely."
         )
-    
-    # 5. Timeout >20min
-    if elapsed_seconds > 1200:  # 20 minutes
+
+    # 5. Graduated timeout (support C). Hard cap 60min with no activity → kill.
+    #    Soft cap 20min → do NOT kill in the hard layer; hand to the LLM judge
+    #    with elapsed context (heavy compiles/training legitimately run long).
+    if elapsed_seconds > 3600:
         return True, (
-            f"Command exceeded 20-minute timeout (ran {int(elapsed_seconds)}s). "
-            "No single command should take this long without results."
+            f"Command exceeded 60-minute hard timeout (ran {int(elapsed_seconds)}s) "
+            "with no detectable activity. Almost certainly stuck."
         )
-    
+    # 20min < elapsed < 60min with no progress: defer to judge, don't hard-kill.
+
     return False, ""

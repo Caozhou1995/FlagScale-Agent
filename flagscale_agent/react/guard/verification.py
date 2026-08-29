@@ -312,185 +312,73 @@ The goal: avoid propagating stale assumptions into new work."""
 # Fires at most once (independent of the first gate) so it stays a checkpoint.
 
 # Argument markers: method-defence vocabulary the litmus names explicitly. Their
-# presence means the agent is reasoning ABOUT the method rather than reporting a
-# measurement.
-# Observation markers: signs the reason reports something the agent actually DID
-# and READ — ran a command/test, compared to a known/expected/ground-truth value,
-# read a concrete output. Presence of any of these means it is not pure argument.
-_OBSERVATION_MARKERS = (
-    "ran ", "i ran", "output was", "printed", "returned", "measured",
-    "observed", "compared", "matches", "matched", "ground truth", "ground-truth",
-    "expected value", "known answer", "against the sample", "on the sample",
-    "test passed", "tests passed", "test failed", "pytest", "assert",
-    "reproduced", "in a clean", "fresh environment", "exit code", "stdout",
-    "the result was", "got ", "equals", "==", "diff ",
-)
-
-
 def _has_observation(reason: str, classify_fn=None) -> bool:
     """True when the reason reports a positive OBSERVATION — something the agent
     ran and read: a command/test executed, an output/value read, a comparison to
     a known/expected/ground-truth answer.
 
-    Primary path is an LLM judge (classify_fn): a wrong answer has no lexical
-    fingerprint, and the keyword MARKERS below both false-positive on innocent
-    phrasings and are gameable by sprinkling observation words into the override
-    reason. When a classify_fn is available we ask it semantically. The regex
-    MARKERS remain as a FALLBACK only when no provider is wired (tests, offline).
+    Uses an LLM judge (classify_fn) for semantic classification. If no judge is
+    available, returns False (does not trigger).
 
     The judge answers "reason_lacks_observation" = True when the reason is
     argument-only; this function returns the inverse (has_observation = not lacks).
     """
     if not reason:
         return False
-    if classify_fn is not None:
-        # default=False → on judge failure, treat as "lacks observation" is False,
-        # i.e. do NOT fabricate a block; the fires-once gate already bounds nagging.
-        lacks = classify_fn(
-            "reason_lacks_observation", {"reason": reason}, default=False
-        )
-        return not lacks
-    low = reason.lower()
-    return any(m in low for m in _OBSERVATION_MARKERS)
+    if classify_fn is None:
+        return False
+    # default=False → on judge failure, treat as "lacks observation" is False,
+    # i.e. do NOT fabricate a block; the fires-once gate already bounds nagging.
+    lacks = classify_fn(
+        "reason_lacks_observation", {"reason": reason}, default=False
+    )
+    return not lacks
 
 
-# Third-stage markers. The second gate passes any reason that reports an
-# observation. But an observation can be TRUE and still overfit: the agent ran
-# something and read a value, yet only on the ONE sample it developed against —
-# tuning constants until that visible case came out right — while the real grade
-# lands on inputs it never saw. Passing the visible sample is the FLOOR, not the
-# goal. These markers catch the runtime form of that: the reason reports work
-# confined to the development sample (or admits fitting/tuning to it) but shows no
-# sign the method was tested for GENERALIZATION beyond that one instance.
-
-# Sample-local (overfit) markers: the method was FITTED or TUNED to the single
-# sample the agent could see. The distinguishing tell is fitting, not location —
-# merely observing "on the sample" or comparing output to a known/expected answer
-# is legitimate verification (it is the second gate's own prescribed escape), so
-# those are deliberately NOT markers here. Only explicit fitting/tuning language —
-# the sign that constants were bent until the visible case came out right — counts.
-_SAMPLE_LOCAL_MARKERS = (
-    "tuned", "tuning", "adjusted until", "tweaked until", "tweaked it until",
-    "calibrated", "fit to", "fitted to", "overfit", "hand-picked", "handpicked",
-    "hardcoded", "hard-coded", "magic constant", "magic number",
-    "until it matched", "until it worked", "until it came out",
-    "got it right by", "picked so that", "chosen so that", "set so that",
-    # Magic-ASSUMPTION markers: the non-numeric twin. These reveal the agent bound
-    # a CONCEPT to the one concrete FORM it took in the visible sample — a fixed
-    # prefix / exact label / assumed format — WITHOUT enumerating the field's real
-    # value universe. Kept narrow (each phrase implies an assumption about a
-    # categorical value's shape, not a generic mention of a string/filter) so the
-    # gate's no-false-positive posture holds. The escape is a generalization marker
-    # below, which now includes value-universe exploration (checking the field's
-    # actual distinct values) — i.e. the agent who checked the real range passes.
-    "assumes the format", "assumed the format", "assume the format",
-    "assumes the value", "assumed the value", "assumes the role", "assumed the role",
-    "always starts with", "always formatted", "always formatted as",
-    "hardcoded prefix", "hard-coded prefix", "hardcoded string", "hard-coded string",
-    "exact prefix", "exact-form", "exact form match", "only form", "single form",
-    "starts-with filter", "starts with filter", "starts-with the string",
-)
-
-# Generalization markers: signs the agent went BEYOND the single sample — ran on a
-# different / hidden / held-out input, or manufactured a perturbed stress input and
-# read whether the output stayed stable. Presence of any means it is not
-# sample-local-only.
-_GENERALIZATION_MARKERS = (
-    "hidden", "held-out", "held out", "unseen", "different input",
-    "other input", "another input", "perturbed", "perturbation", "stress input",
-    "stress test", "rescaled", "reframed", "reordered", "noised", "variant",
-    "generaliz", "out-of-sample", "out of sample", "multiple inputs",
-    "several inputs", "stayed stable", "remained stable", "did not swing",
-    "each input", "across inputs",
-    # Value-universe exploration: the escape for the magic-ASSUMPTION markers. An
-    # agent who enumerated the field's real distinct values BEFORE committing a
-    # filter has calibrated to the concept's true boundary, not to the sample's
-    # accidental form — that IS generalization for categorical matching.
-    "distinct values", "distinct query", "value universe", "all distinct",
-    "enumerated the values", "enumerated the categories", "checked the range",
-    "unique values", "full range of values", "set-membership", "set membership",
-    "value list", "normalized comparison", "normalized match", "all the forms",
-    "all forms", "every form", "range of forms",
-)
 
 
 def _is_sample_local_only(reason: str, classify_fn=None) -> bool:
     """True when the reason reports an observation confined to the ONE visible
     sample (or admits fitting/tuning to it) with NO sign of generalization.
 
+    Uses an LLM judge (classify_fn) for semantic classification. If no judge is
+    available, returns False (does not trigger).
+
     Runtime form of the prompt's single-sample-overfit warning: "it works on the
     example" is the beginning of the check, never the end. A reason that shows the
     method was exercised on a different / hidden / perturbed input passes; a reason
     that only reports sample-local work — and names fitting or tuning to that one
-    case — is caught once. A reason with neither signal is left alone (no false
-    positive).
+    case — is caught once.
     """
     if not reason:
         return False
-    if classify_fn is not None:
-        return classify_fn(
-            "reason_overfits_sample", {"reason": reason}, default=False
-        )
-    low = reason.lower()
-    has_local = any(m in low for m in _SAMPLE_LOCAL_MARKERS)
-    has_generalization = any(m in low for m in _GENERALIZATION_MARKERS)
-    return has_local and not has_generalization
+    if classify_fn is None:
+        return False
+    return classify_fn(
+        "reason_overfits_sample", {"reason": reason}, default=False
+    )
 
-
-# Fourth-stage task-complete gate — GIVEN-vs-RANGE substitution. Distinct from the
-# observation/generalization gates: those catch a result that is unverified or
-# overfit; this catches a result the agent KNOWS is not the thing the task named and
-# is delivering anyway, wrapped in a disclosure. The prompt's CONSTRAINT LOYALTY rule
-# says a GIVEN (a point value the task states exactly — a version, timestamp, size,
-# filename, commit) has zero tolerance, and disclosing the substitution ("I could not
-# get X so I used near-equivalent Y") does NOT legalize delivering Y. The runtime tell
-# is the disclosure vocabulary itself: the agent narrates why a substitute should count
-# instead of reporting it produced the named artifact or hit BLOCKED.
-
-# Substitution-disclosure markers: language that admits the delivered thing is not the
-# named one, or argues a near-equivalent should count in its place.
-_SUBSTITUTION_MARKERS = (
-    "could not obtain", "couldn't obtain", "could not get", "couldn't get",
-    "could not find", "couldn't find", "was unavailable", "is unavailable",
-    "not available", "instead used", "used instead", "in place of",
-    "backward compatible", "backward-compatible", "backwards compatible",
-    "successor", "drop-in replacement", "drop in replacement", "close enough",
-    "essentially the same", "near-equivalent", "near equivalent", "closest available",
-    "closest match", "nearest version", "different version", "newer version",
-    "older version", "may differ", "slightly different", "approximation of",
-    "substitute", "substituted", "替代", "近似", "差不多", "版本不同", "兼容",
-)
-
-# BLOCKED-report markers: signs the agent is NOT delivering the substitute but is
-# instead reporting inability to meet the constraint — the honest outcome. Presence of
-# any means the disclosure is a BLOCKED report, not a delivered counterfeit.
-_BLOCKED_REPORT_MARKERS = (
-    "blocked", "cannot proceed", "could not complete", "did not deliver",
-    "delivered nothing", "no artifact", "reporting inability", "unable to complete",
-    "abandon", "not the named", "not delivering", "refuse to substitute",
-    "report blocked", "报告blocked", "无法完成", "未交付",
-)
 
 
 def _is_disclosed_substitution(reason: str, classify_fn=None) -> bool:
     """True when the reason DISCLOSES delivering a substitute for a GIVEN value
     without reporting BLOCKED.
 
+    Uses an LLM judge (classify_fn) for semantic classification. If no judge is
+    available, returns False (does not trigger).
+
     Runtime form of CONSTRAINT LOYALTY: disclosing a substitution does not legalize
     it. A reason that names substitution/near-equivalent vocabulary AND does not frame
     the outcome as BLOCKED (no counterfeit delivered) is caught once. A reason that
-    reports inability (BLOCKED) passes — that is the honest path. A reason with neither
-    signal is left alone (no false positive)."""
+    reports inability (BLOCKED) passes — that is the honest path.
+    """
     if not reason:
         return False
-    if classify_fn is not None:
-        return classify_fn(
-            "reason_discloses_substitution", {"reason": reason}, default=False
-        )
-    low = reason.lower()
-    has_substitution = any(m in low for m in _SUBSTITUTION_MARKERS)
-    has_blocked = any(m in low for m in _BLOCKED_REPORT_MARKERS)
-    return has_substitution and not has_blocked
+    if classify_fn is None:
+        return False
+    return classify_fn(
+        "reason_discloses_substitution", {"reason": reason}, default=False
+    )
 
 
 _TASK_COMPLETE_OBSERVATION_DEMAND = """[VerificationGuard] Your reason argues the method; it does not report an observation.
@@ -621,7 +509,9 @@ raised here and not at plan time. Walk the ones that apply:
   • Exact contents. If the task names an EXACT set (often one file), the path holds that
     set and NOTHING MORE — a stray sibling fails an exact-contents check as hard as a
     missing file, and silently. A verify command the task SHOWS you is the consumer's
-    action, not where your byproducts go; clean scratch/temp out of the delivery path.
+    action, not where your byproducts go; clean scratch/temp AND any .bak/.backup files
+    YOU created out of the delivery path. The backups you made for safety are NOT part
+    of the deliverable — delete them before finishing.
   • Byte-immutability of inputs. If an input must stay UNCHANGED (hash / checksum /
     exact bytes), reverting a change is NOT never changing it — add-then-remove leaves
     the file grown and rewritten. Restore from a pre-touch backup, or operate on a copy
@@ -636,6 +526,75 @@ To proceed, re-issue plan_update(action="complete") with "_override_reason" repo
 which of these you checked on the DELIVERED artifact — or stating plainly that none
 apply to this task (e.g. no file is delivered, no search, no noisy metric). This gate
 fires once."""
+
+
+# Covers the PURE-TEXT [TASK_COMPLETE] finish path (no tool_name), which bypasses
+# the plan_update(action="complete") gate chain above. Single-shot runs routinely
+# end with a bare [TASK_COMPLETE] and never call plan_update(complete), so the full
+# delivery-hygiene chain never fires for them. This is a focused last check on the
+# three things most easily left wrong at a text completion: path/constraint, exact
+# contents, and temp/backup cleanup. Fires once; overridable via the completion
+# path's text override channel (kernel._extract_text_override feeds _override_reason
+# into tool_args for the tool_name=="" completion ctx).
+_TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — first the verification END, then the delivery path.
+
+NEAR vs FAR END — check this before anything else. Whatever check gave you confidence
+proved the result only at the end of the chain you could observe cheaply: your own run,
+your own primed shell, your live in-memory objects, the one input you could see. The
+judge observes the FAR end — a fresh process, a bare non-login invocation, the artifact
+reloaded cold from disk, an input you never saw. These two ends diverge silently, and a
+green light at the near end feels exactly like verification while proving nothing at the
+far end. Before trusting it, ask "what will be DIFFERENT when someone else runs this?"
+— then manufacture that difference and READ the result, do not argue it away:
+
+  • command accepted / API returned OK  ≠  the target's own state actually changed
+  • in-memory object configured  ≠  the setting survived serialization into the file you delivered
+  • it printed when I ran it to completion  ≠  the output survives the consumer killing the process mid-run (unflushed buffers vanish)
+  • it runs when I TYPE it  ≠  it runs when a PROGRAM calls it bare (no PATH/rc/alias/cwd priming)
+  • it passes in my environment  ≠  it passes without the packages / env vars / helper files I personally added
+  • my downstream analysis is thorough  ≠  the upstream premise it all rests on (a value parsed, a state reconstructed, an input identified) was ever checked
+  • it worked on the sample I developed against  ≠  it holds on an input that differs in scale / distribution / format
+  • I confirmed the artifact I chose to produce  ≠  I confirmed the artifact at the path/name the task or its source fixed — a green observation on the wrong target proves nothing
+
+The last one bites hardest when you ALREADY found the right constraint. Discovering a
+fixed path / name / format earlier (and even recording it in your plan or notes) does not
+mean your implementation honored it — under implementation pressure it is easy to drift to
+a more convenient form (your own output dir, your own filename, an intercept-and-reexport
+shortcut) while your memory still holds the correct one. Then self-check observes your
+convenient artifact, finds it valid, and reports "verified" — every observation TRUE, but
+aimed at the target YOU invented, not the one the consumer reads. A constraint the task or
+its source pins is a GIVEN, not a location you may choose. Before trusting a green check,
+re-read the deliverable against the fixed constraint you recorded, and confirm the FAR-end
+consumer looks at the SAME path/name you actually wrote — not the one you meant to.
+
+If your evidence is an ARGUMENT ("should work", "is fine", "makes sense", "is principled")
+rather than an OBSERVATION you ran at the far end and read, you have not verified — you
+have explained. Reproduce the consumer's condition (fresh process, bare call, reloaded
+artifact, perturbed input) and observe, before you proceed.
+
+Then three checks on what sits at the delivery path, not on the work that made it.
+
+The judge reads the delivery path cold. It never sees your in-session state — only the
+files on disk, right now. A text completion skips the plan_update(complete) hygiene
+chain, so this is the one place these get checked:
+
+  1. PATH & CONSTRAINT. Is the deliverable at the EXACT path the task named, with the
+     exact filename? Are the task's named constraints (version / format / count / exact
+     value) all satisfied? A GIVEN has zero tolerance — an empty honest BLOCKED beats a
+     substitute at the wrong path or under the wrong name.
+  2. EXACT CONTENTS. If the task names an exact set (often one file), does the delivery
+     path hold that set and NOTHING MORE? A stray sibling fails an exact-contents check
+     as hard as a missing file, silently.
+  3. TEMP & BACKUP CLEANUP. Are scratch/temp files, verification byproducts (.gcov,
+     .o, logs), and ANY .bak backups YOU created cleaned out of the delivery path?
+     The backups you made for safety (*.bak, *.backup, original.*, etc.) are NOT
+     part of the deliverable — delete them before finishing. The delivery directory
+     must contain ONLY what the task explicitly asked for.
+
+To proceed, re-issue [TASK_COMPLETE] with an inline `_override_reason:` reporting the
+near/far gap you reproduced (or that the near and far ends are identical here) and which
+of the three delivery checks you ran — or that none apply (nothing delivered to a path).
+This gate fires once."""
 
 
 # Pre-mortem, delivered AFTER a step_done goes through (check_post). The pre-side
@@ -696,6 +655,7 @@ class VerificationGuard(Guard):
         self._complete_generalization_demanded = False
         self._complete_substitution_demanded = False
         self._complete_delivery_hygiene_demanded = False
+        self._text_complete_hygiene_demanded = False
         # Set by check_pre when a step_done is about to pass through, so the
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
@@ -715,6 +675,27 @@ class VerificationGuard(Guard):
         return None
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Timing 0a: pure-text [TASK_COMPLETE] finish path. The kernel consults
+        # guards on a text-only completion with tool_name=="" (no plan_update),
+        # so the plan_update(action="complete") hygiene chain below never fires
+        # for it. Single-shot runs routinely end this way. Bite ONCE with a focused
+        # delivery-hygiene check (path/constraint, exact-contents, temp+backup
+        # cleanup). Overridable via the kernel text override channel
+        # (_extract_text_override → _override_reason in tool_args). Guard against
+        # [NEED_USER_INPUT] (also routed here) — only fire on [TASK_COMPLETE].
+        if ctx.tool_name == "" and "[TASK_COMPLETE]" in (ctx.assistant_text or ""):
+            if not self._text_complete_hygiene_demanded:
+                if not ctx.override_reason.strip():
+                    self._text_complete_hygiene_demanded = True
+                    return GuardVerdict.block(
+                        message=_TEXT_COMPLETE_HYGIENE,
+                        reason="text_complete_hygiene",
+                        category="verification_required",
+                    )
+                # Override provided → agent checked the delivery path. Release.
+                self._text_complete_hygiene_demanded = True
+            return None
+
         # NOTE: qualifier extraction at plan-framing time used to live here as a
         # separate block on the first plan_create. It was moved into PlanGuard
         # (see plan.py, _QUALIFIER_EXTRACTION). Reason: PlanGuard is the guard that
