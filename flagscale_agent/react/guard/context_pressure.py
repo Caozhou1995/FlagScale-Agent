@@ -21,6 +21,8 @@ Design:
 - Minimal state: one bool flag (_need_hard_reset)
 """
 
+from __future__ import annotations
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 

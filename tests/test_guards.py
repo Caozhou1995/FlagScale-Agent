@@ -218,6 +218,20 @@ class TestPlanGuard:
         # ANY form, so the phrasing must not hardcode a single mechanism.
         assert "any form" in m
 
+    def test_planframing_injects_small_sample_step(self):
+        """Plan-framing injection must prompt the agent to include a small-sample
+        validation step in the plan — validate method on the smallest meaningful
+        input before scaling to the full task. This catches wrong method choices
+        early and gives a time estimate for full-task completion."""
+        g = PlanGuard()
+        result = g.check_pre(_ctx("plan_create", {}))
+        assert result is not None and result.action == "inject"
+        m = result.message.lower()
+        assert "small-sample" in m
+        assert "smallest meaningful input" in m
+        assert "time estimate" in m or "estimate" in m
+        assert "10-100x" in m  # cost of debugging at full scale vs small scale
+
     def test_reminds_at_threshold(self):
         g = PlanGuard(task_plan=None)
         for i in range(14):

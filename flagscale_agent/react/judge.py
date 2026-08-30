@@ -141,26 +141,22 @@ Consecutive checks with no output change: {stall_count}
 Recent output:
 {output}
 {expectation_block}{activity_block}
-## Phase-aware monitoring
+## Context-driven judgment
 
-Identify the command's current lifecycle phase and adapt your judgment:
+You have been given (when available) the container's resources (memory, CPU count),
+the command's prior history in this session (how many times similar commands ran
+and their outcomes), and the output pattern (continuous, intermittent, silent).
 
-- STARTUP (no output yet, imports loading, initializing): check frequently (10-30s).
-- INSTALLING (pip/conda installing packages): moderate (60-120s). Large packages can take 3-10 minutes with zero output.
-- COMPILING (gcc/nvcc/ninja building C++/CUDA extensions, make -j builds): very patient (120-300s).
-  Watch for OOM kills (Error 137, "Killed" messages) — high parallelism exhausts memory.
-  If build is killed repeatedly or exceeds 15 minutes, it needs either lower -j value
-  or the build is stuck/broken. Source builds that compile actively but show no
-  completion progress after 10-12 minutes likely need intervention (reduce -j, check
-  for stalled sub-processes, or the build may be failing silently).
-  IMPORTANT: COMPILING phase can have zero output for minutes while C++ files compile —
-  stall_count will rise naturally during healthy compilation. Do NOT kill based on
-  stall_count alone. Only kill if: (a) elapsed time exceeds 15 minutes, OR (b) OOM
-  indicators appear, OR (c) build shows errors/crashes in output.
-- DOWNLOADING (wget, curl, git clone, pip downloading): moderate (30-60s). MUST show progress indicators.
-- LOADING (model weights, data loading): moderate (30-60s).
-- STABLE (training iterations running, loss printing regularly): relaxed (120-300s).
-- ANOMALY (errors in output, repeated failures): check soon (10-15s) or kill.
+USE THIS CONTEXT to calibrate your judgment — do NOT apply fixed time thresholds.
+A 4GB container importing a large library may run silent for minutes legitimately;
+the same silence on a 64GB container running `ls` is immediately suspicious. A
+command that was killed 3 times before with OOM on the same prefix needs a
+fundamentally different approach, not another retry. A "silent" output pattern
+for an import or model-loading command is normal; the same pattern for a command
+that should be printing progress is a red flag.
+
+Judge reasonableness from the command TYPE, the container RESOURCES, and the
+command HISTORY — not from a stopwatch.
 
 ## Silence is not by itself a stall
 
@@ -175,7 +171,7 @@ signature in the output, or an explicit hard limit below being exceeded. If the
 live resource signals (when provided) show sustained CPU or live children, the
 process is computing, not hung — let it run. Do NOT invent a short "monitoring
 window" or deadline that the command must emit output within; no such limit
-exists apart from the explicit time bounds stated below.
+exists.
 
 ## Kill criteria
 
@@ -219,52 +215,10 @@ Kill immediately if:
   with a reason) that prompts the agent to compare its own observed rate/ETA
   against the budget and reconsider its configuration.
 
-Phase-specific patience (kill if exceeded with no progress):
-- pip install "Installing collected packages": up to 10 minutes
-- Source builds: up to 15 minutes (not 30 — many test harnesses enforce 15-minute
-  agent timeouts, so builds exceeding that will hit external timeout anyway)
-- git clone/fetch: up to 5 minutes IF progress shown, else 2 minutes
-- wget/curl: up to 5 minutes IF progress shown, else 1 minute
-- conda: up to 10 minutes
-
 When uncertain about install/compile: do NOT kill — a healthy-but-silent build
-is normal; prefer an advisory (kill=false) and let the fixed-cadence heartbeat
-keep watching.
+or install is normal; prefer an advisory (kill=false) and let the fixed-cadence
+heartbeat keep watching.
 When uncertain about network: KILL — network hangs don't self-resolve.
-
-## Compile/build output visibility — redirect to tee EARLY
-
-Compilation is where blind monitoring hurts most: a build can run 10+ minutes and
-then fail, but if its output was swallowed you never saw the error and cannot
-diagnose it. Recognize BUILD/COMPILE commands: make / make -j, cmake --build,
-ninja, direct gcc/g++/clang/nvcc invocations, cargo build, go build, opam install,
-`configure && make`, and pip/conda installs that compile from source.
-
-The trap: a build command whose stdout/stderr is piped through a PAGER or
-TRUNCATOR — `| tail`, `| head`, `| grep`, `| less` — hands you NOTHING useful.
-Those tools buffer their input and emit only at the very end (or a fixed tail), so
-across checks you see the SAME frozen lines while children are alive, and the real
-compile errors appear only after the pipe closes — too late to act on. The command
-also leaves no log on disk, so once it is killed the output is gone for good.
-
-When you observe a build/compile command that (a) pipes its output through
-tail/head/grep/less, OR (b) shows output that stays frozen/identical across several
-checks while child processes are alive (classic pipe/full buffering), AND it does
-NOT already capture full output to a file (no `tee`, no `> file`/`>> file`
-redirect), then REDIRECT IT — and do so EARLY (within the first checks), because
-the compile work discarded by a restart grows with elapsed time; a redirect at 30s
-costs almost nothing, at 12 minutes it is expensive.
-
-Set kill=true with a reason that names the visibility problem and tells the agent to
-re-run the SAME build capturing full output to a file, e.g. append
-`2>&1 | tee /tmp/build.log` (keep a live view AND a persistent log), or redirect
-`> /tmp/build.log 2>&1` and tail the file in a separate step. The point: subprocess
-output must be VISIBLE during the run and must SURVIVE on disk after any kill, so the
-next attempt can read the actual error instead of guessing. Do NOT tell the agent to
-shrink or weaken the build — only to make its output observable.
-
-If the build ALREADY tees / redirects to a file (output is being captured), this
-criterion does not apply — judge it on the normal COMPILING patience rules above.
 
 ## Writing the kill reason (when kill=true)
 
@@ -330,6 +284,8 @@ class Judge:
         self, command: str, recent_output: str, elapsed: str,
         output_changed: bool = True, stall_count: int = 0,
         expectation: str = "", activity: str = "",
+        command_history: str = "", container_resources: str = "",
+        output_pattern: str = "",
     ) -> dict:
         """Evaluate whether a long-running command is healthy.
 
@@ -347,6 +303,23 @@ class Judge:
         from a HEALTHY SILENT one (no output but sustained CPU/child work — a
         compute-bound library call or a run with progress printing suppressed).
         When empty, behavior is identical to the no-activity mode.
+
+        command_history: optional summary of prior runs of similar commands
+        (same prefix), including how many times they were run, their durations,
+        and outcomes (completed, killed, OOM). This lets the judge recognize
+        repeated failures and escalate its recommendation rather than treating
+        each run in isolation. When empty, behavior is identical to no-history mode.
+
+        container_resources: optional summary of available system resources
+        (memory GB, CPU count, swap). This helps the judge calibrate expectations
+        — a 4GB container's import will be slower than a 64GB one's. When empty,
+        behavior is identical to no-resource mode.
+
+        output_pattern: optional classification of output trend — "continuous"
+        (steady stream), "intermittent" (bursts with gaps), or "silent" (no
+        output at all). This helps the judge distinguish a healthy silent
+        compute from a truly stuck process. When empty, behavior is identical
+        to no-pattern mode.
         """
         prompt = _HEALTH_PROMPT.format(
             command=command, elapsed=elapsed,
@@ -356,7 +329,73 @@ class Judge:
             expectation_block=self._build_expectation_block(expectation),
             activity_block=self._build_activity_block(activity),
         )
+        # Append optional context blocks (byte-identical to old prompt when empty)
+        if command_history:
+            prompt += self._build_history_block(command_history)
+        if container_resources:
+            prompt += self._build_resources_block(container_resources)
+        if output_pattern:
+            prompt += self._build_pattern_block(output_pattern)
         return self._call_and_parse(prompt) or {"kill": False}
+
+    @staticmethod
+    def _build_history_block(command_history: str) -> str:
+        """Build the command-history section injected into the health prompt.
+
+        Returns empty string when command_history is falsy, so the health
+        prompt is byte-identical to the pre-history version (backward compat).
+        """
+        if not command_history or not command_history.strip():
+            return ""
+        return (
+            "\n## Command history\n\n"
+            "Similar commands (same prefix) have been run before in this session:\n\n"
+            f"    {command_history}\n\n"
+            "Use this to recognize patterns: if the same type of command was\n"
+            "killed repeatedly before, the environment itself may be broken —\n"
+            "recommend the agent stop retrying variants and try a fundamentally\n"
+            "different approach or skip this dependency. If prior runs completed\n"
+            "successfully, a current stall is more concerning than for a first run.\n"
+        )
+
+    @staticmethod
+    def _build_resources_block(container_resources: str) -> str:
+        """Build the container-resources section injected into the health prompt.
+
+        Returns empty string when container_resources is falsy, so the health
+        prompt is byte-identical to the pre-resources version (backward compat).
+        """
+        if not container_resources or not container_resources.strip():
+            return ""
+        return (
+            "\n## Container resources\n\n"
+            "The container's available system resources:\n\n"
+            f"    {container_resources}\n\n"
+            "Use this to calibrate expectations: a 4GB container will be slower\n"
+            "for memory-intensive operations (large imports, parallel compiles)\n"
+            "than a 64GB one. A command that seems slow on a small container may\n"
+            "be perfectly normal — do not kill it just for being slow when the\n"
+            "container is resource-constrained. Conversely, high parallelism on\n"
+            "a small container risks OOM — advise reducing -j value.\n"
+        )
+
+    @staticmethod
+    def _build_pattern_block(output_pattern: str) -> str:
+        """Build the output-pattern section injected into the health prompt.
+
+        Returns empty string when output_pattern is falsy, so the health
+        prompt is byte-identical to the pre-pattern version (backward compat).
+        """
+        if not output_pattern or not output_pattern.strip():
+            return ""
+        return (
+            "\n## Output pattern\n\n"
+            f"    {output_pattern}\n\n"
+            "Use this to judge silence: 'continuous' output that stopped is more\n"
+            "concerning than 'silent' output that never started (some commands\n"
+            "like imports produce no stdout by design). 'intermittent' output\n"
+            "with long gaps is normal for batch processing.\n"
+        )
 
     @staticmethod
     def _build_expectation_block(expectation: str) -> str:

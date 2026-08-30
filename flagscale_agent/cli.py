@@ -28,6 +28,8 @@ Environment variables:
     OPENAI_BASE_URL / ANTHROPIC_BASE_URL      # Custom API endpoints
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import typer
@@ -51,6 +53,8 @@ def main(
     config: Path | None = typer.Option(None, "--config", "-c", help="Agent config YAML path"),
     auto_resume: str | None = typer.Option(None, "--auto-resume", help="Auto-resume session ID (internal use by /reload)"),
     query: str | None = typer.Argument(None, help="Single-shot query (non-interactive mode)"),
+    max_output_tokens: int = typer.Option(8192, "--max-output-tokens", help="Max output tokens per response"),
+    thinking_budget: int = typer.Option(0, "--thinking-budget", help="Thinking budget tokens (0=disabled, >0=enable thinking)"),
     version: bool = typer.Option(None, "--version", "-v", is_eager=True, help="Show version"),
 ):
     """Start the FlagScale Agent, or run a single query."""
@@ -74,6 +78,10 @@ def main(
             cfg.base_url = base_url
     else:
         cfg = AgentConfig.auto_load(provider=provider, model=model, base_url=base_url)
+    if thinking_budget:
+        cfg.thinking_budget = thinking_budget
+    if max_output_tokens != 8192:
+        cfg.max_output_tokens = max_output_tokens
 
     agent_instance = WorkerAgent(cfg)
 

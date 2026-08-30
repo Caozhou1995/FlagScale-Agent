@@ -163,22 +163,32 @@ Keep the output flowing to the terminal AND a file, so it is visible live and in
 monitor needs — not a bare `> file`.
 
 While you are here — parallelism strategy, before you commit the full build:
-  • Do NOT open with all cores. A first build that fails on a missing dep, a bad
-    toolchain, or a config error wastes the whole parallel run — and worse, with many
-    jobs interleaving their output, the FIRST real error is buried in the noise and hard
-    to locate. A single-threaded run fails deterministically AT the first error, clean
-    and readable.
-  • So probe first, then scale: run once single-threaded UNDER A TIMEOUT to confirm the
-    build is configured and starts compiling cleanly, THEN relaunch with bounded
-    parallelism. Example:
-      timeout 120 make 2>&1 | tee build.probe.log   # confirm it configures & compiles
-      make -j"$(nproc)" 2>&1 | tee build.log         # then the full parallel build
-  • NEVER use a bare unbounded `make -j` (no number): it forks as many compilers as the
-    dependency graph allows and routinely OOMs or thrashes the box. Always bound it —
-    `-j"$(nproc)"` or a fixed small number.
+  • Do NOT use multiple threads. The eval container has limited memory (often
+    4-8GB). Each compiler process can use 1-2GB RAM, so multi-threaded builds
+    can easily OOM the box, killing the build and wasting all progress. A
+    single-threaded build is slower but SAFE and deterministic — it fails at
+    the first error with a clean, readable message instead of interleaved noise.
+  • Probe first, then build: run once single-threaded UNDER A TIMEOUT to confirm
+    the build is configured and starts compiling cleanly, THEN run the full
+    single-threaded build. Example:
+      timeout 120 make -j1 2>&1 | tee build.probe.log   # confirm it configures
+      make -j1 2>&1 | tee build.log                     # then full single-threaded build
+  • NEVER use `make -j` or `make -j$(nproc)`: it forks as many compilers as the
+    dependency graph allows and routinely OOMs or thrashes the box. Always use -j1.
+  • For other build systems, apply the same single-threaded constraint:
+      cargo build -j 1 | tee build.log
+      cmake --build . -j 1 | tee build.log
+      opam install -j 1 <pkg> | tee build.log
 
 If this command is short, already streams its own progress, or output is intentionally
-discarded, override with "_override_reason" explaining why."""
+discarded, override with "_override_reason" explaining why.
+
+After any build/install: check its exit code before assuming success. A long
+install (opam, pip, cargo) can fail silently — the log scrolls past the error and
+the prompt returns, but the package was NOT installed. Verify:
+  echo "EXIT: $?"                     # right after the command
+  which <binary>; <binary> --version  # confirm the artifact exists and runs
+Do not proceed to the next step until you confirm the build actually succeeded."""
 
 
 class CompileRedirectGuard(Guard):

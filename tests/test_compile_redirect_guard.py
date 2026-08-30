@@ -117,20 +117,32 @@ class TestCompileRedirectGuard:
         # tee keeps it visible
         assert self.g.check_pre(_ctx("make -j 2>&1 | tee build.log")) is None
 
-    def test_message_guides_probe_then_scale_parallelism(self):
-        # The block message must steer toward: single-threaded + timeout probe FIRST
-        # to surface config/toolchain/dep errors cleanly (a parallel first build buries
-        # the first real error in interleaved output), THEN bounded parallelism. And it
-        # must forbid a bare unbounded `make -j` (fork bomb → OOM/thrash).
+    def test_message_guides_single_threaded_build(self):
+        # The block message must steer toward: single-threaded (-j1) builds ONLY,
+        # probe first under a timeout, then full single-threaded build. No
+        # multi-threaded advice — the eval container has limited memory.
         v = self.g.check_pre(_ctx("make -j > build.log 2>&1"))
         assert v.action == "block"
         msg = v.message
-        # probe-first under a timeout, single-threaded
-        assert "timeout" in msg
+        # single-threaded is the only option
         assert "single-threaded" in msg
-        assert "probe first" in msg.lower() or "probe" in msg.lower()
-        # bounded parallelism only after the probe succeeds
-        assert "nproc" in msg
-        # forbid the unbounded fork-bomb form
-        assert "unbounded" in msg.lower()
+        assert "-j1" in msg
+        assert "probe" in msg.lower()
+        assert "timeout" in msg
+        # must NOT recommend multi-threaded parallelism as advice
+        # (-j$(nproc) may appear in the "NEVER use" warning — that's fine)
+        assert "-j N" not in msg
+        assert "-j4" not in msg
+        # must NOT tell agent to check nproc / free -h / available memory as advice
+        assert "free -h" not in msg
+        assert "available memory" not in msg.lower()
+        # must NOT mention memory-to-cores mapping
+        assert "4GB" not in msg
+        assert "32GB" not in msg
+        # must warn about OOM from multi-threading
         assert "OOM" in msg or "oom" in msg.lower()
+        # must forbid bare unbounded make -j
+        assert "make -j" in msg  # as the thing to NEVER use
+        # verify exit code after build/install
+        assert "EXIT" in msg or "exit code" in msg.lower() or "exit:" in msg.lower()
+        assert "which" in msg  # verify binary exists

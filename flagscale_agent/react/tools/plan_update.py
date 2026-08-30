@@ -14,6 +14,8 @@
 
 """Plan update tool — modify task plan steps and status."""
 
+from __future__ import annotations
+
 import re
 
 from flagscale_agent.react.tools.base import Tool

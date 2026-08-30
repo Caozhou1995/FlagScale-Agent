@@ -25,6 +25,8 @@ Design parallel to MemoryDisciplineGuard but with looser thresholds,
 because not every task requires domain knowledge.
 """
 
+from __future__ import annotations
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 

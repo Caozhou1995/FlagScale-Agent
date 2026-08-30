@@ -113,6 +113,7 @@ class OpenAIProvider(LLMProvider):
                 rc = (delta.model_extra or {}).get("reasoning") if hasattr(delta, "model_extra") else None
             if rc:
                 had_reasoning = True
+                yield {"type": "thinking", "content": rc}
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     if tc.function and tc.function.name:
@@ -128,6 +129,8 @@ class OpenAIProvider(LLMProvider):
 
     def format_assistant_message(self, response: Dict[str, Any]) -> Dict[str, Any]:
         msg = {"role": "assistant"}
+        if response.get("thinking"):
+            msg["thinking"] = response["thinking"]
         if response["content"]:
             msg["content"] = response["content"]
         if response["tool_calls"]:

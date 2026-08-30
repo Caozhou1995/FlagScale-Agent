@@ -39,6 +39,8 @@ silent with no tool calls, the guard never fires until the next call. In practic
 thrash always emits tool calls, so the signal still fires.
 """
 
+from __future__ import annotations
+
 import time
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict

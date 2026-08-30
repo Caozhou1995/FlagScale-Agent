@@ -170,7 +170,10 @@ class TestShouldKillProcess:
         assert should_kill is True
         assert 'child processes exited' in reason.lower()
 
-    def test_cpu_zero_long_stall(self):
+    def test_cpu_zero_long_stall_is_advisory_not_hard_kill(self):
+        # REDESIGN: rule #4 (silent stall >3min with 0% CPU) is now ADVISORY only.
+        # The old rule killed healthy imports (torch, large libraries) that legitimately
+        # run silent for minutes. The LLM judge with richer context makes this call.
         should_kill, reason = should_kill_process(
             elapsed_seconds=200,
             output_changed=False,
@@ -180,8 +183,8 @@ class TestShouldKillProcess:
             had_children=False,
             prev_num_children=0,
         )
-        assert should_kill is True
-        assert '0% CPU' in reason
+        assert should_kill is False  # advisory, not hard kill
+        assert "0% CPU" in reason  # still returns a reason for LLM judge context
 
     def test_soft_timeout_20min_does_not_hard_kill(self):
         # support C: 20min soft cap no longer hard-kills — deferred to LLM judge.
@@ -262,10 +265,11 @@ class TestShouldKillProcess:
         )
         assert should_kill is False
 
-    def test_empty_output_triggers_stall_then_kill(self):
-        # Regression test for pitfall/flagscale_agent/empty_output_stall_detection_disabled
-        # Commands with no streaming output (e.g., `apt-get ... | tail -5`, silent network waits)
-        # should accumulate stall_count and trigger hard indicator #4 at 3min
+    def test_empty_output_triggers_stall_advisory(self):
+        # Regression test: Commands with no streaming output (e.g., `apt-get ... | tail -5`,
+        # silent network waits) should accumulate stall_count and trigger advisory rule #4
+        # at 3min, but this is now ADVISORY (returns False) not a hard kill.
+        # The LLM judge gets the reason as context to make the final call.
         should_kill, reason = should_kill_process(
             elapsed_seconds=190,  # >180s
             output_changed=False,  # empty output = not changed
@@ -275,7 +279,7 @@ class TestShouldKillProcess:
             had_children=True,
             prev_num_children=1,
         )
-        assert should_kill is True
+        assert should_kill is False  # advisory, not hard kill
         assert "0% CPU with no output" in reason
         assert "210s" in reason  # stall_count * 30 = 7*30 = 210s
 

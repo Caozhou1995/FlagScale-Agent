@@ -14,6 +14,8 @@
 
 """Process health detection for shell command monitoring."""
 
+from __future__ import annotations
+
 import psutil
 
 
@@ -244,15 +246,22 @@ def should_kill_process(
             "Build likely failed silently."
         )
 
-    # 4. No output + sustained stall + >3min. cpu_percent kept as a cheap
-    #    secondary check, but the liveness veto above is the real guard.
+    # 4. SILENT + SUSTAINED STALL — now ADVISORY ONLY (handled by LLM judge).
+    #    The old rule killed processes with 0% CPU + no output after 3 minutes.
+    #    But this killed healthy imports (torch, large libraries) that legitimately
+    #    run silent for minutes. The LLM judge with command history + container
+    #    resources + output pattern has far better context to make this call.
+    #    We keep the signal but downgrade to advisory — return (False, advisory_msg)
+    #    so the LLM judge sees it as context, not a hard kill.
     if (proc_health['cpu_percent'] < 0.5 and
         not output_changed and
         stall_count >= 6 and
         elapsed_seconds > 180):
-        return True, (
+        return False, (
             f"Process using 0% CPU with no output for {stall_count * 30}s. "
-            "Command appears stuck or waiting indefinitely."
+            "This MAY be stuck, but could also be a legitimate silent operation "
+            "(library import, buffered computation). Deferring to LLM judge "
+            "for contextual assessment."
         )
 
     # 5. Graduated timeout (support C). Hard cap 60min with no activity → kill.

@@ -365,3 +365,119 @@ class TestSilenceAndAntiDowngradePrompt:
         low = _HEALTH_PROMPT.lower()
         for leaked in ("fasttext", "words/sec", "yelp", "ngram"):
             assert leaked not in low
+
+
+# ── Command history / container resources / output pattern ────────────────
+
+
+class TestContextBlocks:
+    """Tests for the optional context blocks added to the health prompt."""
+
+    # --- command_history ---
+
+    def test_no_history_block_is_empty(self):
+        assert Judge._build_history_block("") == ""
+        assert Judge._build_history_block(None) == ""
+
+    def test_history_block_contains_text(self):
+        block = Judge._build_history_block("pip install torch: 3 runs, all killed (OOM)")
+        assert "pip install torch" in block
+        assert "Command history" in block
+
+    def test_history_block_advises_pattern_recognition(self):
+        low = Judge._build_history_block("some history").lower()
+        assert "pattern" in low
+        assert "killed repeatedly" in low or "repeatedly" in low
+
+    def test_health_injects_history_into_prompt(self):
+        provider = CapturingProvider()
+        judge = Judge(provider)
+        judge.health("cmd", "out", "5m", False, 3,
+                     command_history="make -j: 2 runs, completed in 120s")
+        assert "make -j" in provider.prompts[0]
+        assert "Command history" in provider.prompts[0]
+
+    def test_health_without_history_omits_block(self):
+        provider = CapturingProvider()
+        judge = Judge(provider)
+        judge.health("cmd", "out", "5m")
+        assert "Command history" not in provider.prompts[0]
+
+    # --- container_resources ---
+
+    def test_no_resources_block_is_empty(self):
+        assert Judge._build_resources_block("") == ""
+        assert Judge._build_resources_block(None) == ""
+
+    def test_resources_block_contains_text(self):
+        block = Judge._build_resources_block("Memory: 4GB, CPU: 2 cores, Swap: 0")
+        assert "Memory: 4GB" in block
+        assert "Container resources" in block
+
+    def test_resources_block_advises_calibration(self):
+        low = Judge._build_resources_block("some resources").lower()
+        assert "calibrate" in low
+        assert "resource-constrained" in low or "resource" in low
+
+    def test_health_injects_resources_into_prompt(self):
+        provider = CapturingProvider()
+        judge = Judge(provider)
+        judge.health("cmd", "out", "5m", False, 3,
+                     container_resources="Memory: 4GB, CPU: 2 cores")
+        assert "Memory: 4GB" in provider.prompts[0]
+        assert "Container resources" in provider.prompts[0]
+
+    def test_health_without_resources_omits_block(self):
+        provider = CapturingProvider()
+        judge = Judge(provider)
+        judge.health("cmd", "out", "5m")
+        assert "Container resources" not in provider.prompts[0]
+
+    # --- output_pattern ---
+
+    def test_no_pattern_block_is_empty(self):
+        assert Judge._build_pattern_block("") == ""
+        assert Judge._build_pattern_block(None) == ""
+
+    def test_pattern_block_contains_text(self):
+        block = Judge._build_pattern_block("intermittent: bursts of output with 30s gaps")
+        assert "intermittent" in block
+        assert "Output pattern" in block
+
+    def test_pattern_block_advises_silence_judgment(self):
+        low = Judge._build_pattern_block("some pattern").lower()
+        assert "silent" in low
+        assert "continuous" in low
+
+    def test_health_injects_pattern_into_prompt(self):
+        provider = CapturingProvider()
+        judge = Judge(provider)
+        judge.health("cmd", "", "5m", False, 3,
+                     output_pattern="silent: no output since start")
+        assert "silent" in provider.prompts[0]
+        assert "Output pattern" in provider.prompts[0]
+
+    def test_health_without_pattern_omits_block(self):
+        provider = CapturingProvider()
+        judge = Judge(provider)
+        judge.health("cmd", "out", "5m")
+        assert "Output pattern" not in provider.prompts[0]
+
+    # --- backward compatibility ---
+
+    def test_all_new_params_default_to_no_change(self):
+        # When none of the new params are passed, the prompt should be byte-identical
+        # to the version before these params were added.
+        provider_old = CapturingProvider()
+        judge_old = Judge(provider_old)
+        judge_old.health("cmd", "out", "5m", True, 0)
+        old_prompt = provider_old.prompts[0]
+
+        provider_new = CapturingProvider()
+        judge_new = Judge(provider_new)
+        judge_new.health("cmd", "out", "5m", True, 0,
+                         command_history="", container_resources="",
+                         output_pattern="")
+        new_prompt = provider_new.prompts[0]
+
+        assert old_prompt == new_prompt

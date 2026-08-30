@@ -14,6 +14,8 @@
 
 """Shell command tool — pure executor with long-command monitoring."""
 
+from __future__ import annotations
+
 import os
 import re
 import shutil
@@ -188,6 +190,65 @@ class ShellTool(Tool):
         self._remind_interval = remind_interval
         self._env = env or {}
         self._health_judge_fn = health_judge_fn
+        # Per-prefix command history for the LLM health judge. Maps a command
+        # prefix (first 2 tokens) to a list of (outcome, duration_secs) tuples.
+        # outcome is "completed", "killed", or "error".
+        self._command_history: dict[str, list[tuple[str, float]]] = {}
+        # Container resources cached once (memory, cpu count).
+        self._cached_resources: str | None = None
+
+    @staticmethod
+    def _cmd_prefix(command: str) -> str:
+        """Extract a 2-token prefix from a command for history grouping."""
+        toks = command.strip().split()[:2]
+        return " ".join(toks)
+
+    def _record_history(self, command: str, outcome: str, duration: float):
+        """Record the outcome of a command execution for the LLM judge."""
+        prefix = self._cmd_prefix(command)
+        if prefix not in self._command_history:
+            self._command_history[prefix] = []
+        self._command_history[prefix].append((outcome, duration))
+        # Keep only the last 10 entries per prefix to bound memory.
+        if len(self._command_history[prefix]) > 10:
+            self._command_history[prefix] = self._command_history[prefix][-10:]
+
+    def _build_history_str(self, command: str) -> str:
+        """Build a human-readable history summary for the LLM judge."""
+        prefix = self._cmd_prefix(command)
+        entries = self._command_history.get(prefix, [])
+        if not entries:
+            return ""
+        parts = []
+        for outcome, dur in entries:
+            parts.append(f"{outcome} in {dur:.0f}s")
+        return f"{prefix}: {len(entries)} prior run(s) — {', '.join(parts)}"
+
+    def _detect_resources(self) -> str:
+        """Detect container resources (memory, CPU count) for the LLM judge."""
+        if self._cached_resources is not None:
+            return self._cached_resources
+        try:
+            import multiprocessing
+            nproc = multiprocessing.cpu_count()
+            # Read memory from /proc/meminfo (Linux containers)
+            mem_kb = None
+            try:
+                with open("/proc/meminfo") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            mem_kb = int(line.split()[1])
+                            break
+            except Exception:
+                pass
+            if mem_kb:
+                mem_gb = mem_kb / (1024 * 1024)
+                self._cached_resources = f"Memory: {mem_gb:.0f}GB, CPU: {nproc} cores"
+            else:
+                self._cached_resources = f"CPU: {nproc} cores (memory unknown)"
+        except Exception:
+            self._cached_resources = ""
+        return self._cached_resources
 
     def execute(self, **kwargs) -> str:
         command = kwargs.get("command", "")
@@ -276,6 +337,41 @@ class ShellTool(Tool):
                     recent_text = "".join(stdout_chunks[-20:] + stderr_chunks[-20:])
                     current_snapshot = "".join(stdout_chunks[-10:] + stderr_chunks[-10:])
 
+                    # ── Heartbeat FIRST (before any health checks) ──
+                    # The heartbeat must fire unconditionally every check_interval,
+                    # independent of whether the health checks below block or stall.
+                    # Previously the heartbeat was at the END of the health block;
+                    # if get_process_health or the LLM judge blocked (even with
+                    # timeouts, GIL contention from psutil C calls or API latency
+                    # could delay the main thread), the heartbeat was suppressed
+                    # for minutes — making a healthy long build look hung AND
+                    # hiding the fact that the monitor itself was alive.
+                    if not quiet:
+                        from flagscale_agent.react import display
+                        recent_hb = stdout_chunks[-5:] + stderr_chunks[-5:]
+                        if hasattr(display, '_active_spinner') and display._active_spinner:
+                            display._active_spinner.stop()
+                        health_note_hb = f"\n   🩺 {health_reason}\n" if health_reason else ""
+                        if recent_hb:
+                            header_hb = f"\033[2m   ⏳ [{time_str}]{health_note_hb}   Recent output:\033[0m"
+                            lines_out_hb = [header_hb]
+                            for line_hb in recent_hb[-5:]:
+                                lines_out_hb.append(f"\033[2m   │ {line_hb.rstrip()}\033[0m")
+                        else:
+                            lines_out_hb = [
+                                f"\033[2m   ⏳ [{time_str}]{health_note_hb}   "
+                                f"(running, no output yet)\033[0m"
+                            ]
+                        if hasattr(display, '_stdout_lock'):
+                            with display._stdout_lock:
+                                sys.stdout.write("\n".join(lines_out_hb) + "\n")
+                                sys.stdout.flush()
+                        else:
+                            sys.stdout.write("\n".join(lines_out_hb) + "\n")
+                            sys.stdout.flush()
+                        if hasattr(display, '_active_spinner') and display._active_spinner:
+                            display._active_spinner.start()
+
                     # Track output changes. Empty output counts as a STALL,
                     # not as "changed" — otherwise commands that never stream
                     # output (piped through tail/grep, silent network waits)
@@ -357,6 +453,7 @@ class ShellTool(Tool):
                         t_out.join(timeout=2)
                         t_err.join(timeout=2)
                         partial = "".join(stdout_chunks) + "".join(stderr_chunks)
+                        self._record_history(command, "killed", time.time() - start)
                         return (
                             f"TERMINATED: {kill_reason} (after {time_str}).\n"
                             f"This was stopped by the health monitor, not by "
@@ -366,6 +463,13 @@ class ShellTool(Tool):
                             f"running anything similar again.\n"
                             f"Output:\n{partial}"
                         )
+
+                    # Advisory from hard indicators (e.g. silent stall) —
+                    # pass as context to the LLM judge, which has richer
+                    # information (command history, container resources,
+                    # output pattern) to make a better-informed decision.
+                    if kill_reason:
+                        health_reason = kill_reason
 
                     # Fallback: LLM judge (if hard indicators passed).
                     # Pass the live resource signals so the judge can tell a
@@ -390,6 +494,8 @@ class ShellTool(Tool):
                                 "output_changed": output_changed,
                                 "stall_count": stall_count,
                                 "activity": activity,
+                                "command_history": self._build_history_str(command),
+                                "container_resources": self._detect_resources(),
                             },
                         ) or {"kill": False}
                         if decision.get("kill"):
@@ -398,6 +504,7 @@ class ShellTool(Tool):
                             t_err.join(timeout=2)
                             partial = "".join(stdout_chunks) + "".join(stderr_chunks)
                             reason = decision.get("reason", "Unhealthy command")
+                            self._record_history(command, "killed", time.time() - start)
                             return (
                                 f"TERMINATED: {reason} (after {time_str}).\n"
                                 f"This was stopped by the health monitor, not by "
@@ -414,38 +521,6 @@ class ShellTool(Tool):
                                 from flagscale_agent.react import display
                                 if hasattr(display, '_active_spinner') and display._active_spinner:
                                     display._active_spinner.set_hint(f"🩺 {reason}")
-
-                    # Display progress for long-running commands.
-                    # The [Xm Ys] heartbeat is emitted UNCONDITIONALLY every
-                    # check_interval — even when there is no output yet — so a
-                    # command that streams nothing (silent compile, network wait)
-                    # still shows it is alive. Recent output lines are appended
-                    # only when available.
-                    if not quiet:
-                        from flagscale_agent.react import display
-                        recent = stdout_chunks[-5:] + stderr_chunks[-5:]
-                        if hasattr(display, '_active_spinner') and display._active_spinner:
-                            display._active_spinner.stop()
-                        health_note = f"\n   🩺 {health_reason}\n" if health_reason else ""
-                        if recent:
-                            header = f"\033[2m   ⏳ [{time_str}]{health_note}   Recent output:\033[0m"
-                            lines_out = [header]
-                            for line in recent[-5:]:
-                                lines_out.append(f"\033[2m   │ {line.rstrip()}\033[0m")
-                        else:
-                            lines_out = [
-                                f"\033[2m   ⏳ [{time_str}]{health_note}   "
-                                f"(running, no output yet)\033[0m"
-                            ]
-                        if hasattr(display, '_stdout_lock'):
-                            with display._stdout_lock:
-                                sys.stdout.write("\n".join(lines_out) + "\n")
-                                sys.stdout.flush()
-                        else:
-                            sys.stdout.write("\n".join(lines_out) + "\n")
-                            sys.stdout.flush()
-                        if hasattr(display, '_active_spinner') and display._active_spinner:
-                            display._active_spinner.start()
 
                 # Ctrl-C handling
                 try:
@@ -472,6 +547,7 @@ class ShellTool(Tool):
             t_err.join(timeout=5)
 
             # --- Post-execution: assemble result ---
+            elapsed_total = time.time() - start
             output = ""
             if stdout_chunks:
                 output += "".join(stdout_chunks)
@@ -481,6 +557,15 @@ class ShellTool(Tool):
                 output = "(no output)"
             if post_fn and output != "(no output)":
                 output = post_fn(output)
+
+            # Record command outcome for future health-judge context.
+            outcome = "completed"
+            if output.startswith("TERMINATED"):
+                outcome = "killed"
+            elif output.startswith("ERROR"):
+                outcome = "error"
+            self._record_history(command, outcome, elapsed_total)
+
             return output
 
         except KeyboardInterrupt:
