@@ -51,29 +51,14 @@ qualifier. When the task fixes a boundary, the answer inside it is right even if
 better candidate exists outside. A bound on time is especially easy to invert: it
 can mean the state as it stood at a given point (with anything that came later out of scope), or the state right now; these select different answers — let the task's words decide, not defaulting to the most up-to-date data.
 
-Before committing to shape, answer:
-  1. CLASS — what known problem class is this an instance of? Name it. "It's its
-     own thing" means you haven't placed it yet.
-  2. STANDARD METHOD — the established technique for that class and its first step.
+Before committing to shape, apply P1's framework: name the problem CLASS, identify the STANDARD METHOD, and ensure the plan includes a SMALL-SAMPLE step that validates the method on the smallest meaningful input before scaling to the full task — the small run also gives a time estimate, and each debugging iteration at full scale costs 10-100x more. Generic steps ("analyze", "implement", "test") mean the class was never identified — a brute-force sweep is the tell.
 
-Generic steps ("analyze", "implement", "test") mean the class was never identified.
-A brute-force sweep is the tell you skipped this.
-
-Some qualifiers pin you to a concrete tool instance (specific version, revision
-hash, named model). That instance may have usage requirements that differ from the
-generic API — the difference can take ANY form (preprocessing, defaults, precision,
-prefix). When pinned, add a step to consult that instance's own documentation
-(README, model card, release notes) before writing the call. But consulting is
-only the near half — the far half is APPLYING what the doc says. The task's VERB
-selects which documented usage applies; the documented way is the DEFAULT, the
-plainer call is the DEVIATION. Don't read the doc, see the requirement, then skip
-it with "the task didn't explicitly ask for that" — a literal-minimal reading
-silently swaps the task for an easier one."""
+Some qualifiers pin you to a concrete tool instance (specific version, revision, named model). The instance may have usage requirements that differ from the generic API in ANY form (preprocessing, defaults, precision, prefix). When pinned, add a step to consult that instance's own documentation before writing the call — per P1's TOOL INSTANCE rule, the task's VERB selects which documented usage applies, and the documented way is the DEFAULT. Consulting is the near half; APPLYING what the doc says is the far half — a literal-minimal reading silently swaps the task for an easier one."""
 
 _WRITE_FILE_NO_PLAN = (
-    "[Plan] You are about to write a file — the concrete signal that you have "
-    "started producing a deliverable. Per UNDERSTAND → PLAN → ACT, a plan must "
-    "exist before you produce output.\n"
+    "[Plan] You are about to write or edit a file — the concrete signal that you have "
+    "started producing a deliverable. A plan must exist before you produce "
+    "output.\n"
     "\n"
     "Call plan_create() now: frame the task as ordered steps with acceptance "
     "criteria naming what THIS task requires. A budget-order first step ('land a "
@@ -148,7 +133,7 @@ class PlanGuard(Guard):
         # write_file triggers — read_file/shell exploration never does, so the
         # investigation phase is not disturbed. Once a plan exists this never
         # fires.
-        if (ctx.tool_name == "write_file"
+        if ((ctx.tool_name == "write_file" or ctx.tool_name == "edit_file")
                 and self._single_shot
                 and not self._plan_ever_created
                 and not (self._task_plan and self._task_plan.get_active())):

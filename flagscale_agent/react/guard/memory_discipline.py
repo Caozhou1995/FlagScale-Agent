@@ -22,6 +22,8 @@ Logic:
 - If LLM reads/writes memory, reset counter
 """
 
+from __future__ import annotations
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 

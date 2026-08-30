@@ -158,12 +158,20 @@ class AnthropicProvider(LLMProvider):
                     block = event.content_block
                     if block.type == "tool_use":
                         yield {"type": "tool_start", "id": block.id, "name": block.name}
+                    elif block.type == "thinking":
+                        yield {"type": "thinking_start"}
                 elif event.type == "content_block_delta":
                     delta = event.delta
                     if delta.type == "text_delta":
                         yield {"type": "text", "content": delta.text}
                     elif delta.type == "input_json_delta":
                         yield {"type": "tool_delta", "id": "", "arguments_delta": delta.partial_json}
+                    elif delta.type == "thinking_delta":
+                        yield {"type": "thinking", "content": delta.thinking}
+                    elif delta.type == "signature_delta":
+                        yield {"type": "signature", "content": delta.signature}
+                elif event.type == "content_block_stop":
+                    yield {"type": "block_stop"}
             
             # Get usage BEFORE closing the stream
             if stream_ctx is not None:
@@ -203,6 +211,12 @@ class AnthropicProvider(LLMProvider):
 
     def format_assistant_message(self, response: Dict[str, Any]) -> Dict[str, Any]:
         content_blocks = []
+        if response.get("thinking"):
+            content_blocks.append({
+                "type": "thinking",
+                "thinking": response["thinking"],
+                "signature": response.get("signature", ""),
+            })
         if response["content"]:
             content_blocks.append({"type": "text", "text": response["content"]})
         if response["tool_calls"]:

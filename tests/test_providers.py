@@ -156,6 +156,30 @@ class TestAnthropicProvider:
             assert kwargs["thinking"]["type"] == "enabled"
             assert kwargs["thinking"]["budget_tokens"] == 12288
 
+    def test_format_assistant_with_thinking(self, provider):
+        """format_assistant_message should include thinking block with signature when present."""
+        response = {
+            "content": "Here's my answer.",
+            "tool_calls": None,
+            "thinking": "Let me think about this...",
+            "signature": "sig123",
+        }
+        msg = provider.format_assistant_message(response)
+        types = [b["type"] for b in msg["content"]]
+        assert "thinking" in types
+        thinking_block = [b for b in msg["content"] if b["type"] == "thinking"][0]
+        assert thinking_block["thinking"] == "Let me think about this..."
+        assert thinking_block["signature"] == "sig123"
+        # Thinking block should come before text
+        assert types.index("thinking") < types.index("text")
+
+    def test_format_assistant_no_thinking_backward_compat(self, provider):
+        """Without thinking data, format_assistant_message should not include thinking block."""
+        response = {"content": "Hello!", "tool_calls": None}
+        msg = provider.format_assistant_message(response)
+        types = [b["type"] for b in msg["content"]]
+        assert "thinking" not in types
+
     # ── cache_control tests ───────────────────────────────────────────────
 
     def test_system_prompt_has_cache_control(self, provider):
@@ -237,6 +261,70 @@ class TestAnthropicProvider:
         msgs = [{"role": "system", "content": "sys"}]
         kwargs = provider._build_kwargs(msgs, tools=[])
         assert kwargs["messages"] == []
+
+    def test_chat_stream_thinking_events(self, provider):
+        """chat_stream should emit thinking and signature events for thinking_delta."""
+        # Mock Anthropic streaming events
+        thinking_start = MagicMock()
+        thinking_start.type = "content_block_start"
+        thinking_start.content_block = MagicMock()
+        thinking_start.content_block.type = "thinking"
+
+        thinking_delta = MagicMock()
+        thinking_delta.type = "content_block_delta"
+        thinking_delta.delta = MagicMock()
+        thinking_delta.delta.type = "thinking_delta"
+        thinking_delta.delta.thinking = "Reasoning about the problem..."
+
+        sig_delta = MagicMock()
+        sig_delta.type = "content_block_delta"
+        sig_delta.delta = MagicMock()
+        sig_delta.delta.type = "signature_delta"
+        sig_delta.delta.signature = "sig_abc123"
+
+        block_stop = MagicMock()
+        block_stop.type = "content_block_stop"
+
+        text_delta = MagicMock()
+        text_delta.type = "content_block_delta"
+        text_delta.delta = MagicMock()
+        text_delta.delta.type = "text_delta"
+        text_delta.delta.text = "Here is my answer."
+
+        text_start = MagicMock()
+        text_start.type = "content_block_start"
+        text_start.content_block = MagicMock()
+        text_start.content_block.type = "text"
+
+        events = [thinking_start, thinking_delta, sig_delta, block_stop, text_start, text_delta, block_stop]
+
+        # Mock the stream context manager
+        mock_stream = MagicMock()
+        mock_stream.__enter__ = MagicMock(return_value=iter(events))
+        mock_stream.__exit__ = MagicMock(return_value=False)
+        mock_final = MagicMock()
+        mock_final.usage = MagicMock()
+        mock_final.usage.input_tokens = 100
+        mock_final.usage.output_tokens = 200
+        mock_final.usage.cache_read_input_tokens = 0
+        mock_final.usage.cache_creation_input_tokens = 0
+        mock_stream.get_final_message = MagicMock(return_value=mock_final)
+        provider._mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+        results = list(provider.chat_stream([{"role": "user", "content": "hi"}], tools=[]))
+        types = [e["type"] for e in results]
+
+        assert "thinking_start" in types
+        assert "thinking" in types
+        thinking_event = [e for e in results if e["type"] == "thinking"][0]
+        assert thinking_event["content"] == "Reasoning about the problem..."
+
+        assert "signature" in types
+        sig_event = [e for e in results if e["type"] == "signature"][0]
+        assert sig_event["content"] == "sig_abc123"
+
+        assert "text" in types
+        assert "done" in types
 
 
 class TestOpenAIProvider:
@@ -354,6 +442,49 @@ class TestOpenAIProvider:
         assert "reasoning_only" in types
         assert "done" in types
         assert "text" not in types
+
+    def test_chat_stream_emits_thinking_event(self, provider):
+        """When reasoning_content is present, a thinking event is emitted with the content."""
+        chunk1 = MagicMock()
+        chunk1.usage = None
+        chunk1.choices = [MagicMock()]
+        delta1 = MagicMock()
+        delta1.content = None
+        delta1.tool_calls = None
+        delta1.reasoning_content = "Let me analyze this circuit..."
+        delta1.model_extra = {}
+        chunk1.choices[0].delta = delta1
+
+        chunk2 = MagicMock()
+        chunk2.usage = MagicMock()
+        chunk2.usage.prompt_tokens = 100
+        chunk2.usage.completion_tokens = 200
+        chunk2.choices = []
+
+        provider._mock_client.chat.completions.create.return_value = iter([chunk1, chunk2])
+
+        events = list(provider.chat_stream(
+            [{"role": "user", "content": "solve circuit"}], tools=[]
+        ))
+        thinking_events = [e for e in events if e["type"] == "thinking"]
+        assert len(thinking_events) == 1
+        assert thinking_events[0]["content"] == "Let me analyze this circuit..."
+
+    def test_format_assistant_with_thinking(self, provider):
+        """format_assistant_message includes thinking field when present in response."""
+        response = {"content": "Answer", "tool_calls": None, "thinking": "My reasoning..."}
+        msg = provider.format_assistant_message(response)
+        assert msg["role"] == "assistant"
+        assert msg["content"] == "Answer"
+        assert msg["thinking"] == "My reasoning..."
+
+    def test_format_assistant_no_thinking_backward_compat(self, provider):
+        """format_assistant_message works without thinking field (backward compat)."""
+        response = {"content": "Answer", "tool_calls": None}
+        msg = provider.format_assistant_message(response)
+        assert msg["role"] == "assistant"
+        assert msg["content"] == "Answer"
+        assert "thinking" not in msg
 
     def test_chat_stream_reasoning_plus_text_no_reasoning_only(self, provider):
         """When stream has both reasoning and text, reasoning_only is emitted but text is also present."""

@@ -190,46 +190,8 @@ class TestSystemPromptContent:
     def test_carry_forward_constraints_present(self):
         # Constraint amnesia: pivoting to clear a blocker must not revert to a proven-bad state.
         p = self._prompt()
-        assert "carry forward the constraints you already established" in p
+        assert "Carry forward the constraints you already established" in p
         assert "Re-breaking a known constraint is negative progress" in p
-
-    def test_optimize_first_improvement_not_finish_line_present(self):
-        # Optimization tasks: first working improvement is not the finish line;
-        # keep pushing across distinct methods when no absolute threshold is given.
-        p = self._prompt()
-        assert "OPEN-ENDED PROGRESS" in p
-        assert "FLOOR, not an achievement" in p
-        assert "graded against a reference solution or relative bar you cannot see" in p
-        # Baseline-anchor guard: the only informative comparison is between own attempts.
-        assert "The only informative comparison is between your own genuinely-different attempts" in p
-        # Symmetric other half (path-tracing case): once distinct methods stop yielding
-        # gains, tweaking WITHIN one method is burning budget on variance, not progress.
-        # Guard both the "two-sided test" framing and the oscillation tell.
-        assert '"until improvements stop" is a two-sided test' in p
-        assert "burning the budget on variance" in p
-        assert "deliver the current best and stop" in p
-
-    def test_noisy_threshold_margin_over_own_measurement_present(self):
-        # tune-mjcf rerun: agent's own timing measured the speed ratio just UNDER
-        # the pass bar, but the verifier's rigorous measurement (repeats + drop
-        # extreme percentiles + mean) landed just OVER it → fail by a hair. The two
-        # numbers differ only by the disagreement between measuring instruments.
-        # Prompt must name: on a noisy, measurement-dependent, hidden-grader
-        # threshold, passing by a hair on your OWN measure is over-fit to your
-        # measuring stick; measure the artifact the grader's way and demand margin.
-        p = self._prompt()
-        assert "NOISY, MEASUREMENT-DEPENDENT metric" in p
-        assert "passing by a HAIR according to YOUR OWN measurement" in p
-        # robust re-measurement recipe: repeats + discard extreme percentiles + central stat
-        assert "discard extreme percentiles" in p
-        # margin proportional to noise is the finish condition
-        assert "demand MARGIN proportional to the noise" in p
-        assert "beat the bar by enough that neither run-to-run variance" in p
-        # keep it an observation, not the rhetorical exit
-        assert "I re-measured the artifact the way the grader would" in p
-        # leak guard: no task-specific nouns from this task
-        for w in ("mujoco", "mjcf", "model.xml", "jacobian", "0.60"):
-            assert w not in p, f"leaked task-specific term: {w!r}"
 
     def test_switching_requires_fundamental_difference_present(self):
         assert "Switching methods requires fundamental difference, not variants" in self._prompt()
@@ -272,39 +234,18 @@ class TestSystemPromptContent:
         # structure-derived judgments. Task-agnostic (no jump/video/hurdle specifics).
         p = self._prompt()
         assert "calibrating to the one example you can see" in p
-        assert "magic constants" in p
-        assert "no scale-invariant or structural justification" in p
-        # the magic-constant example must stay ABSTRACT — naming specific tuned numbers
-        # (e.g. "threshold of 25", "cutoff of 2000", "exceeds 40") re-leaks one task's
-        # concrete pipeline. The concept ("an absolute threshold / fixed cutoff") is the
-        # insight; the digits are case-by-case noise. Use a generic placeholder N.
-        assert "hardcoded \"trigger only when it exceeds N\"" in p
-        import re as _re
+        assert "hardcoded number" in p
+        assert "structure-derived" in p
+        # leak guard: no task-specific concrete tuned numbers
+        import re
         for _lit in ("threshold of 25", "cutoff of 2000", "exceeds 40", "rises more than 40"):
             assert _lit not in p, f"leaked concrete tuned magic number: {_lit!r}"
-        # openssl+video rerun lesson: the OLD wording ("burden shifts to making the
-        # method principled") was a self-defeating escape hatch — video's agent, unable
-        # to see the hidden test video, "made the method principled" by arguing each
-        # threshold reasonable and stopped there. Tightened so "principled" is only a
-        # FIX applied AFTER observing perturbed-input instability, never a substitute
-        # for observing because the true label is out of reach.
-        assert "cannot confirm the FINAL answer by testing" in p
-        assert "never means \"I can't observe my own output's behavior\"" in p
-        assert "you took the rhetorical exit" in p
-        import re
         for w in ("jump", "hurdle", "takeoff", "jump_analyzer"):
             assert not re.search(r"\b" + w + r"\b", p, re.I)
-        # leak guard: the magic-constant example must be an ABSTRACT threshold, not a
-        # specific vision/video task's mechanism (pixel threshold, area cutoff). Those
-        # concrete nouns are case-by-case leakage of one task's internals.
         for w in ("pixel", "area cutoff", "ffmpeg", "sqlite", "sha256"):
             assert w not in p.lower(), f"leaked task-specific term: {w!r}"
-        # domain->tool leak guard: the stress-input passage must NOT hand the agent a
-        # domain-to-tool lookup table (e.g. "video -> ffmpeg"). Naming the tool for a
-        # domain is case-by-case leakage — the agent must derive the tool from the
-        # problem class itself. Only abstract perturbation dimensions may appear.
         assert "ffmpeg" not in p.lower()
-        assert "which tool is for you to identify from the problem class, not something to be handed" in p
+
 
     def test_observation_vs_argument_litmus_present(self):
         # chess(reward1)/openssl(reward0)/video(reward0) rerun: all three share ONE
@@ -324,25 +265,29 @@ class TestSystemPromptContent:
         for w in ("chess", "openssl", "cryptography", "hurdle", "jump"):
             assert not re.search(r"\b" + w + r"\b", p, re.I)
 
+    def test_grader_invoke_simulation_present(self):
+        # sam-cell-seg / install-windows lesson: agent's deliverable works under
+        # its own invocation but fails under the grader's (wrong arg format, wrong
+        # path, wrong interface). The prompt must nudge the agent to ask "how will
+        # the grader call this?" and test that form before claiming done.
+        p = self._prompt()
+        assert "how will a hidden grader invoke" in p.lower()
+        assert "test the exact form the description implies" in p.lower()
+        # When the task doesn't specify positional vs --flag, support BOTH
+        assert "support both forms" in p.lower()
+        # Constraint listing: re-read task, verify EACH constraint
+        assert "re-read the task description" in p.lower()
+        assert "list every constraint" in p.lower()
+
     def test_generalization_actionable_moves_present(self):
         # video-processing rerun lesson: agent matched the example's truth but its
-        # algorithm HARD-CRASHED (ValueError) on the hidden test input. Line-87 "be
-        # principled" was too passive — add two concrete moves: (1) manufacture stress
-        # inputs from the one sample to find overfitting early,
-        # (2) never hard-crash on hidden input — degrade to a defensible fallback and
-        # still emit a well-formed answer. Task-agnostic.
+        # algorithm HARD-CRASHED on the hidden test input. The prompt must tell the
+        # agent to manufacture stress inputs and degrade to a fallback rather than
+        # crashing. Task-agnostic.
         p = self._prompt()
-        assert "MANUFACTURE stress inputs" in p
-        assert "WRONG answer versus a HARD CRASH" in p
+        assert "manufacture a stress input" in p.lower()
+        assert "WRONG answer" in p and "HARD CRASH" in p
         assert "degrade to a defensible fallback" in p
-        # video rerun #2 lesson: agent READ the perturbation text but only ARGUED
-        # ("the algorithm should work as long as...") and never generated a variant
-        # input — then hard-crashed on the hidden video. Sharpen: a stress input is a
-        # GENERATED artifact run through the actual solution, not a sentence, and its
-        # output must be READ. Task-agnostic (domain picks the tool).
-        assert "a stress input is NOT a sentence" in p
-        assert "NEW INPUT ARTIFACT you GENERATE" in p
-        assert "FED THROUGH YOUR ACTUAL SOLUTION" in p
         import re
         for w in ("jump", "hurdle", "takeoff", "jump_analyzer"):
             assert not re.search(r"\b" + w + r"\b", p, re.I)
@@ -377,102 +322,63 @@ class TestSystemPromptContent:
             assert w not in p
 
     def test_deliverable_hygiene_present(self):
-        # Principle 2 sub-discipline (c): fixed delivery dir always holds the current
-        # best verified version; iterate in scratch, overwrite only after verification.
+        # Principle 2 sub-discipline (b): delivery dir holds current best verified version.
         p = self._prompt()
         assert "DELIVERABLE HYGIENE" in p
-        assert "single source of truth" in p
-        # tune-mjcf regression: a better-and-valid candidate held ONLY in memory is
-        # not banked; when the process is stopped (timeout) the grader reads the
-        # delivery path, not process memory, so an unpersisted in-memory winner
-        # scores as if never found. Must prescribe continuous write-through of
-        # best-so-far to the delivery path the moment it's measured, not "at the end".
-        assert "ONLY in memory" in p or "only in memory" in p
+        # write-through: best-so-far must be on disk, not only in memory
+        assert "write-through" in p.lower() or "write it through" in p.lower()
         assert "banked" in p
-        assert "write it THROUGH" in p or "write-through" in p.lower()
-        assert "Best-so-far lives on disk" in p or "best-so-far lives on disk" in p.lower()
-        # names being stopped on timeout/kill/budget as when the in-memory best evaporates
-        assert "timeout" in p and ("evaporate" in p or "process" in p)
-        # tune-mjcf 4th rerun: when the delivery path IS what gets measured, the agent
-        # is forced to overwrite-then-measure; writing a candidate over the verified
-        # best then finding it worse and NOT restoring leaves a regression at the
-        # delivery path (which ships on timeout). Must prescribe backup + rollback so
-        # the delivery path always holds the current best verified version.
-        assert "overwrite-then-measure" in p
-        assert "BACKUP + ROLLBACK" in p or "backup + rollback" in p.lower()
-        assert "restore the backup" in p or "restore" in p.lower()
-        assert "strictly better" in p
+        assert "NOT banked" in p
+        # exact-contents: delivery path holds the named set and nothing more
+        assert "EXACT-CONTENTS" in p or "exact-contents" in p.lower()
+        assert "nothing more" in p.lower()
+        # budget order refinement
+        assert "BUDGET ORDER" in p
 
     def test_deliverable_exact_contents_and_shown_command_byproduct_present(self):
-        # single-file-delivery regression: an exact-contents contract (deliver
-        # EXACTLY one named file at a fixed path) was failed silently because the
-        # agent self-verified by running the example command the TASK SHOWED
-        # verbatim, and that command wrote its build byproduct INTO the delivery
-        # directory — leaving a stray sibling beside the correct deliverable. The
-        # hygiene section must teach both halves: (1) exact-contents means the
-        # location holds the named set and NOTHING MORE, a stray sibling fails as
-        # hard as a missing deliverable and does so silently; (2) a command the task
-        # SHOWS is the consumer's action on your artifact, not a spec for where your
-        # byproducts go — running it verbatim can deposit strays; redirect byproducts
-        # to scratch or clean them before finishing.
+        # EXACT-CONTENTS: delivery path holds named set and NOTHING MORE.
         p = self._prompt()
         low = p.lower()
-        assert "EXACT-CONTENTS" in p or "exact-contents" in low
+        assert "exact-contents" in low
         assert "nothing more" in low
-        assert "silently" in low
-        assert "shows you" in low
-        assert "byproduct" in low
-        assert "verbatim" in low
+        # build artifacts must be cleaned before finishing
+        assert "scratch" in low or "build artifacts" in low or "artifacts" in low
         # stays generic: no nouns from the originating task
         for w in ("polyglot", "cmain", "main.py.c", "fibonacci", ".py.c"):
             assert w not in low, f"leaked task-specific term: {w!r}"
 
     def test_budget_order_present(self):
-        # Principle 2 sub-discipline (d): land a crude complete scorable deliverable
-        # at the required path FIRST, refine second — a rough answer that exists beats
-        # a perfect one that never got written when the budget runs out mid-task.
+        # Principle 2 sub-discipline (c): land a crude complete scorable deliverable
+        # at the required path FIRST, refine second.
         p = self._prompt()
         assert "BUDGET ORDER" in p
         assert "crude" in p
-        # the guard against sinking the whole budget with no artifact at the path
-        assert "ALL" in p and "that gets scored" in p
-        # must not contradict P1 / minimal verification unit
-        assert "does NOT contradict" in p or "does not contradict" in p.lower()
+        assert "that gets scored" in p
+        assert "partial answer that exists" in p
 
     def test_constraint_loyalty_present(self):
-        # Principle 2 sub-discipline (a): a stated constraint is task identity;
-        # if unmet, report BLOCKED rather than substitute a nearby thing.
+        # Principle 2 sub-discipline (a): a stated constraint is non-negotiable;
+        # if unmet, report BLOCKED rather than substitute.
         p = self._prompt()
         assert "CONSTRAINT LOYALTY" in p
-        assert "part of the task's identity" in p
-        # povray lesson: disclosing a substitute is not permission to deliver it,
-        # and manufacturing the appearance of satisfaction is still a violation.
-        assert "honesty about a deviation is NOT permission" in p
-        assert "manufacture the APPEARANCE of satisfaction" in p
-        assert "empty honest BLOCKED beats a populated fake" in p
+        assert "non-negotiable" in p
+        assert "ZERO tolerance" in p
+        assert "BLOCKED" in p
+        assert "manufacture the appearance of satisfaction" in p.lower() or "manufacture the APPEARANCE" in p
 
     def test_qualifier_is_machine_checked_present(self):
-        # A stated qualifier is verified by an unfakeable external grader — declaring
-        # the task done does not move the scored verdict. Examples must name the
-        # concrete mechanical checks: version string, byte-for-byte file, time boundary.
+        # The grader reads the FAR end — re-parses timestamps, diffs exact version
+        # strings, compares byte-for-byte. If the qualifier is not literally
+        # satisfied, the task FAILS.
         p = self._prompt()
-        assert "machine-checked" in p
-        assert "byte-for-byte" in p
-        # confident self-report does not change the verdict
-        assert "not move the scored verdict" in p or "does NOT move the scored verdict" in p
-        # failure is unconditional when the qualifier is literally unmet
-        assert "the task FAILS" in p
+        assert "byte-for-byte" in p or "byte-for-byte" in p.lower()
+        assert "FAILS" in p
+        assert "GIVEN" in p and "RANGE" in p
+        assert "Never promote a GIVEN to a RANGE" in p
 
     def test_closed_exemption_list_and_unverified_attribution_present(self):
-        # build-cython-ext lesson: a precise list of exceptions is a CLOSED constraint —
-        # you may not widen the carve-out to swallow a failure you could not fix. And
-        # "pre-existing / external / unrelated" is a claim needing evidence, not a
-        # default exit when stuck. Task-agnostic (no pyknotid/planarity specifics).
+        # Task-agnostic leak guard — no task-specific vocabulary.
         p = self._prompt()
-        assert "closed constraint" in p
-        assert "does not earn you the right to add it to the list" in p
-        assert "is a CLAIM that needs evidence" in p
-        assert "launder a stuck point into an out-of-scope ruling" in p
         for w in ("pyknotid", "planarity", "reconstructed_space_curve"):
             assert w not in p
 
@@ -480,12 +386,20 @@ class TestSystemPromptContent:
         # Principle 1: prove the one load-bearing assumption in a seconds-scale experiment.
         assert "MINIMAL VERIFICATION UNIT" in self._prompt()
 
+    def test_small_sample_first_present(self):
+        # Principle 1: validate method on smallest meaningful input before scaling up;
+        # use the small-sample run to estimate full-task completion time.
+        p = self._prompt()
+        assert "SMALL-SAMPLE FIRST" in p
+        assert "smallest meaningful input" in p
+        assert "estimate" in p or "extrapolate" in p
+        assert "scaling" in p or "proportionally" in p
+
     def test_preserve_irreplaceable_present(self):
         # Principle 1: snapshot/copy an irreplaceable given resource before any action
-        # (even innocent-looking exploration) whose side effect could be irreversible.
+        # BackupGuard covers the backup reminder; prompt only keeps LOGICAL UNDO concept.
         p = self._prompt()
-        assert "PRESERVE THE IRREPLACEABLE BEFORE YOU TOUCH IT" in p
-        assert "copy it first" in p
+        assert "LOGICAL UNDO IS NOT BYTE RESTORE" in p
 
     def test_network_persistence_info_gain_present(self):
         # Environment Resilience: a single failed web_fetch/search is one failed
@@ -511,7 +425,7 @@ class TestSystemPromptContent:
         # Task-agnostic: the add-then-remove round-trip does not reproduce original bytes,
         # stated abstractly (add an internal structure then remove it), NOT via a specific
         # store/engine. Leak guard below asserts no concrete DB engine name is used here.
-        assert "ADD an internal structure and then REMOVE it" in p
+        assert "adding then removing an internal structure" in p
         # The only safe strategy: never touch the original / restore from backup.
         assert "never touch the original" in p
         # domain leak guard: the PRESERVE passage must teach copy-first as a general
@@ -531,14 +445,11 @@ class TestSystemPromptContent:
         # infra/ops work (default_to_action + load_knowledge) nor treat a long
         # training run as a failure signal.
         p = self._prompt()
-        assert "ROUTE the task" in p
+        assert "ROUTE THE TASK" in p
         assert "INFRASTRUCTURE / OPS" in p
         assert "UNFAMILIAR ALGORITHM" in p
-        # Ops minimal verification is a sanity run, and long runtime is not a failure signal.
-        assert "SANITY RUN" in p
-        assert "long runtime is NOT a failure signal" in p
         # The mandatory web_fetch checkpoint is scoped to novel-problem tasks, not ANY task.
-        assert "for any UNFAMILIAR ALGORITHM / NOVEL PROBLEM task" in p
+        assert "UNFAMILIAR ALGORITHM / NOVEL PROBLEM" in p
 
 
 # ── refresh() session_dir passthrough ───────────────────────────────────

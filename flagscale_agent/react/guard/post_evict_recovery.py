@@ -19,6 +19,8 @@ injects a reminder to run plan_status() and memory_read() before continuing
 with other operations. Resets once recovery actions are taken.
 """
 
+from __future__ import annotations
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 

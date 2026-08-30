@@ -1373,7 +1373,23 @@ class TestTextCompleteHygieneGate:
     """Timing 0a: pure-text [TASK_COMPLETE] finish path (tool_name=="", no
     plan_update). Bites ONCE with a focused delivery-hygiene check; overridable
     via the kernel text override channel. [NEED_USER_INPUT] must not trigger it.
+    Only fires when there IS an active plan (status=active) — no plan or a
+    completed/abandoned plan means the agent is not delivering task artifacts.
     Task-agnostic."""
+
+    @staticmethod
+    def _active_plan():
+        from unittest.mock import MagicMock
+        plan = MagicMock()
+        plan.get_active.return_value = {"title": "test", "status": "active", "steps": []}
+        return plan
+
+    @staticmethod
+    def _completed_plan():
+        from unittest.mock import MagicMock
+        plan = MagicMock()
+        plan.get_active.return_value = {"title": "test", "status": "completed", "steps": []}
+        return plan
 
     def _text_complete(self, override="", marker="[TASK_COMPLETE]"):
         args = {"_override_reason": override} if override else {}
@@ -1385,23 +1401,38 @@ class TestTextCompleteHygieneGate:
         )
 
     def test_bare_text_complete_blocked_once(self):
-        guard = VerificationGuard()
+        guard = VerificationGuard(plan=self._active_plan())
         verdict = guard.check_pre(self._text_complete())
         assert verdict is not None
         assert verdict.action == "block"
         assert verdict.reason == "text_complete_hygiene"
         assert guard._text_complete_hygiene_demanded is True
 
+    def test_text_complete_not_blocked_without_plan(self):
+        # No plan at all (casual conversation, single-shot with no plan) — gate
+        # must NOT fire. This is the bug fix: the old code fired unconditionally.
+        guard = VerificationGuard()
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is None
+        assert guard._text_complete_hygiene_demanded is False
+
+    def test_text_complete_not_blocked_when_plan_completed(self):
+        # Plan already completed (status != active) — gate must NOT fire.
+        guard = VerificationGuard(plan=self._completed_plan())
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is None
+        assert guard._text_complete_hygiene_demanded is False
+
     def test_second_text_complete_not_blocked(self):
         # Fires once — a re-emitted bare completion after the gate already bit
         # passes through (agent saw the message; the gate is a checkpoint).
-        guard = VerificationGuard()
+        guard = VerificationGuard(plan=self._active_plan())
         guard.check_pre(self._text_complete())  # first: blocks
         verdict = guard.check_pre(self._text_complete())  # second: released
         assert verdict is None
 
     def test_override_reason_releases(self):
-        guard = VerificationGuard()
+        guard = VerificationGuard(plan=self._active_plan())
         verdict = guard.check_pre(
             self._text_complete("checked: output.txt at /app, exact single file, no temp left")
         )
@@ -1411,7 +1442,7 @@ class TestTextCompleteHygieneGate:
     def test_need_user_input_not_triggered(self):
         # [NEED_USER_INPUT] is routed through the same kernel path but must NOT
         # fire the completion hygiene gate.
-        guard = VerificationGuard()
+        guard = VerificationGuard(plan=self._active_plan())
         verdict = guard.check_pre(
             self._text_complete(marker="[NEED_USER_INPUT]")
         )
@@ -1421,7 +1452,7 @@ class TestTextCompleteHygieneGate:
     def test_non_empty_tool_name_not_triggered(self):
         # A real tool call that happens to have [TASK_COMPLETE] in prior text
         # (tool_name != "") must not fire this gate.
-        guard = VerificationGuard()
+        guard = VerificationGuard(plan=self._active_plan())
         ctx = GuardContext(
             tool_name="shell",
             tool_args={"command": "ls"},
@@ -1432,7 +1463,7 @@ class TestTextCompleteHygieneGate:
         assert guard._text_complete_hygiene_demanded is False
 
     def test_empty_override_whitespace_still_blocked(self):
-        guard = VerificationGuard()
+        guard = VerificationGuard(plan=self._active_plan())
         verdict = guard.check_pre(self._text_complete("   "))
         assert verdict is not None
         assert verdict.reason == "text_complete_hygiene"
@@ -1446,14 +1477,14 @@ class TestTextCompleteHygieneGate:
         msg = _TEXT_COMPLETE_HYGIENE
         low = msg.lower()
         # Content present.
-        assert "near vs far end" in low
+        assert "near vs far" in low
         assert "far end" in low and "near end" in low
         # Ordering: the near/far section precedes the numbered delivery checks.
-        near_pos = low.index("near vs far end")
+        near_pos = low.index("near vs far")
         path_pos = low.index("path & constraint")
         assert near_pos < path_pos, "near/far must lead, before delivery-path checks"
-        # Also precedes the "three checks" transition line.
-        assert near_pos < low.index("three checks on what sits at the delivery path")
+        # Also precedes the "three delivery checks" transition line.
+        assert near_pos < low.index("three delivery checks")
         # Observation-vs-argument litmus carried in.
         assert "argument" in low and "observation" in low
         # Override channel intact.
@@ -1471,13 +1502,40 @@ class TestTextCompleteHygieneGate:
         # the ≠ bullet distinguishing chosen artifact from the task-fixed target
         assert "i confirmed the artifact i chose to produce" in low
         assert "path/name the task or its source fixed" in low
-        # the reinforcing paragraph: discovering/recording is not honoring
-        assert "does not mean your implementation honored it" in low
-        assert "drift to" in low
-        # the far-end recheck: consumer looks at the SAME path you actually wrote
-        assert "the same path/name you actually wrote" in low
-        # framed as a GIVEN, not a chosen location
-        assert "not a location you may choose" in low
+
+    def test_near_far_grader_invoke_bullet_present(self):
+        # sam-cell-seg lesson: agent's script works under its own invocation but
+        # crashes under the grader's (different interface/args). The hygiene gate
+        # must carry a bullet nudging the agent to test the grader's invocation form.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "runs under my invocation" in low
+        assert "runs under the grader's invocation" in low
+        assert "how will the grader call this" in low
+
+    def test_hygiene_requires_listing_exact_verify_commands(self):
+        # sam-cell-seg lesson: agent realized it should support --flag args,
+        # said so in thinking, but never actually ran the --flag form.
+        # The hygiene gate must require listing the exact commands run,
+        # so the agent faces a concrete gap ("I can't list that command").
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "list the exact commands you ran to verify" in low
+        assert "the actual shell lines" in low
+        assert "without the command is an argument" in low
+
+    def test_hygiene_gate_requires_constraint_listing(self):
+        # The gate must remind the agent to re-read the task and verify
+        # EVERY stated constraint — not just the one it spent the most
+        # effort on.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "re-read the task description" in low
+        assert "list every constraint" in low
+        assert "the one you skipped is the one that fails" in low
 
     def test_near_far_content_is_task_agnostic(self):
         # No leakage of the concrete tasks that motivated this (mips/doom/sqlite/

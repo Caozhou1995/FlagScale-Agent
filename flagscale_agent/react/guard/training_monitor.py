@@ -18,6 +18,8 @@ Deterministic trigger: training detected AND next_call != monitor.
 No escalation, no whitelist complexity — just block once until monitor is called.
 """
 
+from __future__ import annotations
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
 

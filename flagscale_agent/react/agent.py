@@ -1231,6 +1231,8 @@ class WorkerAgent:
         streaming_trailing_newlines = 0
         streaming_started = False
         sentinel_stripper = display.SentinelStripper()
+        thinking_text = ""
+        thinking_signature = ""
 
         def compress_newlines(text, trailing_from_prev, is_first):
             if not text:
@@ -1313,6 +1315,22 @@ class WorkerAgent:
                     elif event["type"] == "reasoning_only":
                         if not content_parts and not tool_calls:
                             reasoning_only = True
+                    elif event["type"] == "thinking":
+                        thinking_text += event["content"]
+                        if display._use_color():
+                            display._write(display.dim(event["content"]))
+                        else:
+                            display._write(event["content"])
+                    elif event["type"] == "thinking_start":
+                        if not thinking_cleared:
+                            display.thinking_done()
+                            thinking_cleared = True
+                        display._write(display.dim("💭 thinking...\n"))
+                    elif event["type"] == "block_stop":
+                        if thinking_text:
+                            display._write(display.dim("\n"))
+                    elif event["type"] == "signature":
+                        thinking_signature += event["content"]
                     elif event["type"] == "usage":
                         usage = {
                             "input_tokens": event.get("input_tokens"),
@@ -1382,7 +1400,7 @@ class WorkerAgent:
             if not parsed_tool_calls:
                 parsed_tool_calls = None
 
-        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated, "reasoning_only": reasoning_only}, usage
+        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated, "reasoning_only": reasoning_only, "thinking": thinking_text or None, "signature": thinking_signature or None}, usage
 
     # ── Tool execution (delegated to ToolExecutor) ──────────────────────────
 

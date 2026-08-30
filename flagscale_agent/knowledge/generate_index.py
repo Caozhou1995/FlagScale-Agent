@@ -12,6 +12,8 @@ Usage:
     python generate_index.py --config /path/to/config.yaml --docs /path/to/docs --output /path/to/indexes
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import re

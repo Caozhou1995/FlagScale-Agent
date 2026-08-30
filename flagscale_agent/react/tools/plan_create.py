@@ -23,9 +23,9 @@ from flagscale_agent.react.tools.base import Tool
 class PlanCreateTool(Tool):
     name = "plan_create"
     description = (
-        "Create a task plan with ordered steps for complex multi-step work. "
-        "Use when starting environment setup, model porting, training runs, "
-        "or any task with 3+ sequential steps. Only one plan can be active at a time."
+        "Create a task plan with ordered steps for multi-step work. "
+        "Use when about to produce a deliverable or act on a task. "
+        "Only one plan can be active at a time."
     )
     parameters = {
         "type": "object",

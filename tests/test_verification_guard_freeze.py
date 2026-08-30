@@ -205,55 +205,25 @@ def test_acceptance_guidance_covers_all_inputs_and_generalization():
         msg = guard.check_pre(ctx).message.lower()
         # Coverage: verify against every provided input, not just the debug one.
         assert "every input" in msg
-        assert "run the solution on each" in msg
-        # Actionable self-question: enumerate the not-yet-covered inputs before completing.
-        assert "have i not yet run" in msg
-        # Blind-sample: don't assert a reverse-engineered range; check validity.
-        assert "generalization" in msg
-        assert "structurally valid" in msg
-        # Unseen scored input: a green result on the only visible sample proves
-        # the code runs, not that it generalizes. Honest about what a pass proves.
-        assert "shows the code runs, not" in msg
-        assert "accident, not a promise" in msg
-        # Attribution-excuse (mode C): don't dismiss a real failure by its origin
-        # ("pre-existing"/"not caused by my change"); judge by whether the failing
-        # behavior is within what the task asks to deliver.
-        assert "pre-existing" in msg
-        assert "judges the result, not its" in msg
+        # Attribution-excuse: a failure inside your declared scope is yours,
+        # regardless of origin.
         assert "declared scope" in msg
-        # Judge-measurement (4th cross-task bullet): verify with the judge's own
-        # measurement (verifier script / reproduce its logic), not a proxy.
+        assert "regardless of origin" in msg
+        # Judge-measurement: verify against the judge's measurement, not a proxy.
         assert "the judge's measurement" in msg
-        assert "still scores zero" in msg
-        # Situational-traps pointer: the six DELIVERY-time traps (reload-fresh,
-        # backup+rollback, exact-contents, byte-immutability, noisy-margin,
-        # best-so-far write-through) are explicitly deferred to a completion-time
-        # check and must NOT be carried at plan time. Fix-3a/3b moved them into
-        # _TASK_COMPLETE_DELIVERY_HYGIENE. This freeze asserts the deferral.
-        assert "apply only at delivery" in msg
-        assert "completion-time check" in msg
-        assert "do not carry them here" in msg
-        # Task contract adherence (mode H, retained): before marking complete,
-        # confirm you executed every operation the task explicitly asks for;
-        # reasoning "I know how to do X" is not the same as executing X; verify
-        # named artifacts exist at specified paths.
+        assert "not your proxy" in msg
+        # Situational-traps pointer: delivery-time traps are deferred to
+        # completion, not carried at plan time.
+        assert "do not carry them into acceptance" in msg
+        # Task contract adherence: re-read the task statement, map each
+        # operation to a criterion; "I know how to do X" is not a criterion.
         assert "re-read the task statement" in msg
-        assert "executed every operation it explicitly asks for" in msg
-        assert "designing a recovery strategy" in msg
-        assert "is not the same as executing the write" in msg
-        assert "verify those exact artifacts exist" in msg
-        assert "you have not yet built" in msg
+        assert "list every operation it explicitly asks for" in msg
         assert "know how to do x, so x is done" in msg  # quotes normalized to lowercase
-        # Constraint-driven method selection (mode I, retained): let the task's
-        # stated constraints shape the approach before committing; hitting the
-        # same wall twice is a cue to re-read for a skipped constraint.
-        assert "shape your method before you commit" in msg
-        assert "narrows the problem" in msg
-        assert "decide the path" in msg
-        assert "same wall stops you twice" in msg
-        assert "for a constraint or hint you skipped" in msg
-        assert "made easy will keep failing no matter how you tune it" in msg
-        assert "approach from the givens" in msg
+        # Independence: the check must be independent of your implementation.
+        assert "independent of your implementation" in msg
+        # Externally observable end state.
+        assert "externally observable" in msg
         # Removed modes (D definitional-grounding, E derived-quantity, F
         # fragile-state-snapshot, G close-the-gap) were retired from plan-time
         # guidance in Fix-3a — assert they no longer leak back in here.
