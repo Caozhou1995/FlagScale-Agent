@@ -195,6 +195,23 @@ def should_kill_process(
             or abs(progress_signals.get('rss_delta', 0.0)) > (1 << 20)   # RSS shifting
         )
 
+    # Frozen-output advisory — fires EVEN WHEN the process is making progress.
+    # A child subprocess (e.g. stockfish) burning CPU in the background does
+    # NOT mean the parent is healthy: if stdout has been byte-for-byte
+    # identical for stall_count consecutive 30s checks, the parent likely
+    # caught an error (e.g. KeyError printed a traceback) and is now
+    # blocking forever on the child.  We don't hard-kill yet — we return an
+    # advisory so the LLM judge (which has command history and richer
+    # context) can make the final call.
+    # Capped at stall_count < 12: after 6 minutes the hard kill below fires.
+    if not output_changed and 6 <= stall_count < 12 and elapsed_seconds > 120:
+        return False, (
+            f"Process output has been frozen (identical) for {stall_count * 30}s "
+            f"despite {proc_health['cpu_percent']:.0f}% CPU activity. "
+            f"The command may have caught an error and is blocking on a subprocess. "
+            f"Consider killing if this pattern persists."
+        )
+
     # === Deterministic death (fires regardless of liveness) ===
 
     # 1. Zombie process
@@ -210,6 +227,28 @@ def should_kill_process(
         return True, (
             f"OOM killer terminated processes {output_anomalies['killed_count']} times. "
             "Reduce parallelism (e.g., make -j1 instead of make -j) or increase memory."
+        )
+
+    # 1b. FROZEN OUTPUT — hard kill. The process is alive (poll() is None),
+    #     children may be alive and burning CPU, but the output has been
+    #     byte-for-byte identical for stall_count consecutive 30s checks.
+    #     This means the command caught an error and is blocking forever
+    #     (e.g. a try/except that swallows the exception then waits on a
+    #     subprocess that never responds). A child burning CPU in the
+    #     background (e.g. stockfish thinking) is NOT real progress when the
+    #     parent process is stuck in a deadlock — so this fires REGARDLESS of
+    #     the liveness veto.
+    #     Threshold: 12 consecutive stalls (≈6 minutes at 30s interval).
+    #     The advisory at line 206 fires first at stall_count >= 6 (≈3 min),
+    #     giving the LLM judge a chance to kill. This hard kill is the safety
+    #     net for when the judge doesn't act (no judge_fn, API timeout, or
+    #     judge returns kill=False).
+    if not output_changed and stall_count >= 12 and elapsed_seconds > 300:
+        return True, (
+            f"Process output has been frozen (identical) for {stall_count * 30}s "
+            f"with {proc_health['cpu_percent']:.0f}% CPU. "
+            f"The command likely caught an error and is blocking on a subprocess. "
+            f"Stop and fix the root cause instead of waiting."
         )
 
     # --- Liveness veto: below here every rule is a heuristic; if the process

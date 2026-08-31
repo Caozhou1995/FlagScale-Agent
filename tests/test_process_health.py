@@ -236,14 +236,16 @@ class TestShouldKillProcess:
         assert should_kill is True
         assert '60-minute' in reason
 
-    def test_busy_loop_survives_until_hard_timeout(self):
-        # Known tradeoff (doc §5): a busy-loop burning CPU is judged healthy by
-        # the liveness veto and survives until the 60min hard cap. Document the
-        # behavior so it isn't mistaken for a bug.
+    def test_busy_loop_killed_after_6min_frozen(self):
+        # A busy-loop burning CPU with NO output change for 6+ minutes is now
+        # hard-killed. Previously this survived until 60min hard cap (liveness
+        # veto), but that caused real hangs (e.g. stockfish subprocess holding
+        # stdout while parent was dead). The frozen-output hard kill fires
+        # regardless of liveness veto.
         should_kill, reason = should_kill_process(
-            elapsed_seconds=1800,  # 30min, past soft cap
+            elapsed_seconds=1800,  # 30min
             output_changed=False,
-            stall_count=20,
+            stall_count=20,  # 20 * 30s = 10min frozen
             proc_health={'zombie': False, 'cpu_percent': 100, 'num_children': 0, 'children_alive': 0},
             output_anomalies={'oom_killed': False, 'killed_count': 0, 'repeated_errors': False},
             had_children=False,
@@ -251,7 +253,7 @@ class TestShouldKillProcess:
             progress_signals={'cpu_time_delta': 15.0, 'io_bytes_delta': 0, 'rss_delta': 0},
             mem_pressure=False,
         )
-        assert should_kill is False  # liveness veto — intentional (see doc §5)
+        assert should_kill is True  # frozen output hard kill fires at stall_count >= 12
 
     def test_healthy_process(self):
         should_kill, reason = should_kill_process(
@@ -267,9 +269,10 @@ class TestShouldKillProcess:
 
     def test_empty_output_triggers_stall_advisory(self):
         # Regression test: Commands with no streaming output (e.g., `apt-get ... | tail -5`,
-        # silent network waits) should accumulate stall_count and trigger advisory rule #4
-        # at 3min, but this is now ADVISORY (returns False) not a hard kill.
-        # The LLM judge gets the reason as context to make the final call.
+        # silent network waits) should accumulate stall_count and trigger the
+        # frozen-output advisory at 3min.  This is ADVISORY (returns False) not
+        # a hard kill.  The LLM judge gets the reason as context to make the
+        # final call.
         should_kill, reason = should_kill_process(
             elapsed_seconds=190,  # >180s
             output_changed=False,  # empty output = not changed
@@ -280,7 +283,7 @@ class TestShouldKillProcess:
             prev_num_children=1,
         )
         assert should_kill is False  # advisory, not hard kill
-        assert "0% CPU with no output" in reason
+        assert "frozen" in reason.lower()
         assert "210s" in reason  # stall_count * 30 = 7*30 = 210s
 
     def test_oom_killed_once_not_enough(self):
