@@ -127,8 +127,11 @@ class ContextPressureGuard(Guard):
                 f"{len(evictable)} evictable messages] "
                 f"Evict aggressively until pressure drops below 50%. "
                 f"Call evict(indexes=[...]) with wide ranges.\n"
-                f"1. memory_write() / plan_update() — save progress first\n"
-                f"2. evict(indexes=[...]) — free context space\n"
+                f"BEFORE evicting, save progress — evicting destroys context:\n"
+                f"1. If you have an active plan → plan_update(notes='...') to record state\n"
+                f"2. ALWAYS memory_write() — save key findings, paths, commands, decisions\n"
+                f"   (No plan? memory_write is your ONLY recovery mechanism after eviction)\n"
+                f"3. evict(indexes=[...]) — free context space\n"
                 f"Evictable: {evictable}\n"
                 f"Allowed tools: {', '.join(sorted(self._SAVE_TOOLS))}",
                 reason="evict_required",
