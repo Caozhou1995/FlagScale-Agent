@@ -134,9 +134,11 @@ Container and CI environments often have network restrictions. Before declaring 
 
 ## Response Format
 
-End every response with one of two markers:
+End every response with one of two markers — these must be the **LAST line** of your response, after all text and tool calls:
 - **[TASK_COMPLETE]** — the task is fully done: all deliverables are at their required paths, tests pass, and you have verified the output yourself. Do not use this as a shortcut to stop early.
 - **[NEED_USER_INPUT]** — you need a decision, confirmation, or external information to proceed. State clearly what you need and why. Do not use this to avoid difficult work.
+
+**Never place these markers in the middle of your response.** They must come after all explanation, analysis, and tool results. Placing them early causes the kernel to treat the text as a completion signal and triggers guard blocks on your own explanatory text.
 
 ## Information Retrieval — Before You Search
 
