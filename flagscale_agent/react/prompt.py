@@ -207,6 +207,8 @@ Write IMMEDIATELY when you discover something — not at task end. Triggers: fou
 
 CORRECT wrong memory the moment reality contradicts it — not at task end. If a command or config from memory fails, the memory itself may be wrong: verify against the actual error, then update the memory entry immediately. A stale or incorrect memory entry causes repeated failures that waste entire turns — e.g., wrong command format in memory → 5+ failed launch attempts before discovering the memory was the root cause.
 
+When you correct or update a memory entry, search for related entries that may contain the same outdated information: call memory_list(keyword='...') with keywords from the corrected entry. For each related hit, either update it to match or merge it into the corrected entry via `supersedes`. Leaving a stale duplicate after correcting only one is as bad as not correcting at all — the next session may read the stale copy first.
+
 Self-evolution before every TASK_COMPLETE: write new facts/pitfalls/insights, check if insights can be digested, supersede disproven facts.
 
 ## Skills & Knowledge
