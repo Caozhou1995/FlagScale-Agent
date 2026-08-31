@@ -563,6 +563,25 @@ class VerificationGuard(Guard):
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
 
+    def reset_turn(self):
+        """Reset per-turn state on a new user message.
+
+        The _complete_* and _text_complete_hygiene flags track progress
+        through the Gate 1-5 cascade within a single run_turn (which spans
+        multiple LLM iterations). They must NOT be reset within the same
+        turn — Gate 1 fires on iteration N, Gate 2 on iteration N+1, etc.
+        However, when a NEW user message arrives (new task or new instruction),
+        all gate states should be cleared so the cascade starts fresh.
+        """
+        self._complete_recheck_reminded = False
+        self._complete_observation_demanded = False
+        self._complete_generalization_demanded = False
+        self._complete_substitution_demanded = False
+        self._complete_delivery_hygiene_demanded = False
+        self._text_complete_hygiene_demanded = False
+        self._step_done_recheck_reminded = False
+        self._premortem_pending = False
+
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # Pre-mortem: fires immediately AFTER a step_done that passed the pre-side
         # checks. The reversal ("assume you're wrong") lands hardest right when the
@@ -608,6 +627,17 @@ class VerificationGuard(Guard):
                         has_plan = True
                 except Exception:
                     pass
+                # After plan_update(complete), get_active() returns None because
+                # _clear_active() was called. Check disk for a recently-completed
+                # plan so the hygiene gate still fires as a backstop.
+                if not has_plan:
+                    try:
+                        for p in self._plan.list_plans():
+                            if p.get("status") == "completed":
+                                has_plan = True
+                                break
+                    except Exception:
+                        pass
             if not has_plan:
                 return None
             if not self._text_complete_hygiene_demanded:
