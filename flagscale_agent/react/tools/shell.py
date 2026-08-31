@@ -496,6 +496,7 @@ class ShellTool(Tool):
                                 "activity": activity,
                                 "command_history": self._build_history_str(command),
                                 "container_resources": self._detect_resources(),
+                                "health_advisory": health_reason,
                             },
                         ) or {"kill": False}
                         if decision.get("kill"):
