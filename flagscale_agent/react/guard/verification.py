@@ -46,6 +46,8 @@ Execution flow (structured):
 
 from __future__ import annotations
 
+import re
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
@@ -610,7 +612,15 @@ class VerificationGuard(Guard):
         # plan (casual conversation, plan already completed/abandoned), the agent
         # is not delivering task artifacts — firing here is noise that blocks
         # every normal turn-end.
-        if ctx.tool_name == "" and "[TASK_COMPLETE]" in (ctx.assistant_text or ""):
+        _text = (ctx.assistant_text or "").rstrip()
+        _is_completion = (
+            _text.endswith("[TASK_COMPLETE]")
+            or re.search(
+                r'\[TASK_COMPLETE\]\s*\n?_override_reason\s*[:=]',
+                _text,
+            ) is not None
+        )
+        if ctx.tool_name == "" and _is_completion:
             # Fire when there IS (or WAS) an active plan. We check both "active"
             # and "completed" because the pure-text [TASK_COMPLETE] path is a
             # backstop for agents that either (a) skip plan_update(complete)
