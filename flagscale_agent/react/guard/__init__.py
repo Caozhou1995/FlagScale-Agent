@@ -253,6 +253,23 @@ class GuardRegistry:
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
                     display.guard_overridden(guard.name, ctx.override_reason)
+                    # Intra-guard gate-crosstalk prevention: a single guard may
+                    # have cascading internal gates (e.g. VerificationGuard's 5
+                    # gates on plan_update(complete)). When the first gate's block
+                    # is released by an override, the guard's check_pre may now
+                    # return a DIFFERENT block (the next gate). Re-call check_pre
+                    # and if it returns a new block with a different reason, surface
+                    # THAT instead of silently releasing. This prevents an
+                    # override reason written for Gate 1 from releasing Gate 5.
+                    new_verdict = check(guard)
+                    if (
+                        new_verdict is not None
+                        and new_verdict.action in ("block", "escalate")
+                        and new_verdict.reason != verdict.reason
+                    ):
+                        new_verdict.guard_name = guard.name
+                        surfaced, surfaced_guard = new_verdict, guard
+                        break
                     continue  # released; fall through to next hardest block
                 surfaced, surfaced_guard = verdict, guard
                 break

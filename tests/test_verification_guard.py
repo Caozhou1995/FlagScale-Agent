@@ -1373,8 +1373,10 @@ class TestTextCompleteHygieneGate:
     """Timing 0a: pure-text [TASK_COMPLETE] finish path (tool_name=="", no
     plan_update). Bites ONCE with a focused delivery-hygiene check; overridable
     via the kernel text override channel. [NEED_USER_INPUT] must not trigger it.
-    Only fires when there IS an active plan (status=active) — no plan or a
-    completed/abandoned plan means the agent is not delivering task artifacts.
+    Fires when there IS (or WAS) an active plan (status=active OR completed) —
+    the "completed" case is the intra-guard gate-crosstalk backstop: if the
+    Fifth gate was silently released by an override reason for an earlier gate,
+    this catches it. No plan at all means casual conversation.
     Task-agnostic."""
 
     @staticmethod
@@ -1416,12 +1418,18 @@ class TestTextCompleteHygieneGate:
         assert verdict is None
         assert guard._text_complete_hygiene_demanded is False
 
-    def test_text_complete_not_blocked_when_plan_completed(self):
-        # Plan already completed (status != active) — gate must NOT fire.
+    def test_text_complete_fires_when_plan_completed(self):
+        # Plan already completed (status=completed) — gate MUST still fire.
+        # This is the intra-guard gate-crosstalk fix: after plan_update(complete),
+        # if the Fifth gate (delivery hygiene) was silently released by an
+        # override reason written for an earlier gate, the pure-text
+        # [TASK_COMPLETE] backstop catches it.
         guard = VerificationGuard(plan=self._completed_plan())
         verdict = guard.check_pre(self._text_complete())
-        assert verdict is None
-        assert guard._text_complete_hygiene_demanded is False
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
+        assert guard._text_complete_hygiene_demanded is True
 
     def test_second_text_complete_not_blocked(self):
         # Fires once — a re-emitted bare completion after the gate already bit

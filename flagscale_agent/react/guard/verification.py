@@ -592,15 +592,23 @@ class VerificationGuard(Guard):
         # is not delivering task artifacts — firing here is noise that blocks
         # every normal turn-end.
         if ctx.tool_name == "" and "[TASK_COMPLETE]" in (ctx.assistant_text or ""):
-            has_active_plan = False
+            # Fire when there IS (or WAS) an active plan. We check both "active"
+            # and "completed" because the pure-text [TASK_COMPLETE] path is a
+            # backstop for agents that either (a) skip plan_update(complete)
+            # entirely (plan still active) or (b) went through plan_update(complete)
+            # but whose Fifth gate (delivery hygiene) was released by an override
+            # reason written for an earlier gate (intra-guard gate-crosstalk).
+            # The _text_complete_hygiene_demanded flag ensures it fires at most
+            # once, so including "completed" does not cause noise on later turns.
+            has_plan = False
             if self._plan:
                 try:
                     plan_data = self._plan.get_active()
-                    if plan_data and plan_data.get("status") == "active":
-                        has_active_plan = True
+                    if plan_data and plan_data.get("status") in ("active", "completed"):
+                        has_plan = True
                 except Exception:
                     pass
-            if not has_active_plan:
+            if not has_plan:
                 return None
             if not self._text_complete_hygiene_demanded:
                 if not ctx.override_reason.strip():
