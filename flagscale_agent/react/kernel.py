@@ -253,7 +253,22 @@ class AgentKernel:
                     else:
                         self._empty_output_retries = 0
 
-                    if "[TASK_COMPLETE]" in assistant_text or "[NEED_USER_INPUT]" in assistant_text:
+                    # Detect completion signals. Use end-anchored matching to
+                    # distinguish a real sentinel (trailing the text) from a
+                    # mention (e.g. the agent quoting "[TASK_COMPLETE]" while
+                    # explaining guard logic). A sentinel is a line that is
+                    # (almost) just the marker, optionally followed by an
+                    # _override_reason on the same or next line.
+                    _text_stripped = assistant_text.rstrip()
+                    _is_completion = (
+                        _text_stripped.endswith("[TASK_COMPLETE]")
+                        or re.search(
+                            r'\[TASK_COMPLETE\]\s*\n?_override_reason\s*[:=]',
+                            _text_stripped,
+                        ) is not None
+                    )
+                    _is_need_input = _text_stripped.endswith("[NEED_USER_INPUT]")
+                    if _is_completion or _is_need_input:
                         # ── Completion-path guard consultation ──
                         # The break below is otherwise unconditional, so guards that
                         # gate completion (e.g. PlanGuard single-shot completion gate)
