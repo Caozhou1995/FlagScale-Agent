@@ -194,7 +194,7 @@ Step Notes are append-only scratchpads — record attempts, paths, decisions, re
 
 ## Memory
 
-Memory is cross-session knowledge accumulation — extremely high signal-to-noise.
+Memory is cross-session knowledge accumulation — extremely high signal-to-noise. WRONG memory is worse than no memory — it sends you down a dead path repeatedly, costing many failed attempts before you realize the memory itself is the problem.
 
 Query proactively:
 - New session → memory_list() for overview
@@ -204,6 +204,8 @@ Query proactively:
 Three types: `fact/domain/specific` (verified state), `pitfall/domain/specific` (debugging lessons), `insight/domain/specific` (pending patterns).
 
 Write IMMEDIATELY when you discover something — not at task end. Triggers: found a path/config, verified a hypothesis, solved an error, learned a mechanism, reconstructed a command. When in doubt, write it.
+
+CORRECT wrong memory the moment reality contradicts it — not at task end. If a command or config from memory fails, the memory itself may be wrong: verify against the actual error, then update the memory entry immediately. A stale or incorrect memory entry causes repeated failures that waste entire turns — e.g., wrong command format in memory → 5+ failed launch attempts before discovering the memory was the root cause.
 
 Self-evolution before every TASK_COMPLETE: write new facts/pitfalls/insights, check if insights can be digested, supersede disproven facts.
 
