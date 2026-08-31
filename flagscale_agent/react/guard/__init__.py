@@ -164,6 +164,7 @@ class GuardRegistry:
         # reason written for guard A from silently releasing guard B that fired
         # for the first time this turn — the phantom-override crosstalk (Bug C).
         self._last_surfaced: str | None = None
+        self._last_surfaced_reason: str | None = None
 
     def register(self, guard: Guard):
         self._guards.append(guard)
@@ -250,6 +251,7 @@ class GuardRegistry:
                     and verdict.overridable
                     and ctx.override_reason
                     and guard.name == self._last_surfaced
+                    and verdict.reason == self._last_surfaced_reason
                     and guard.accept_override(ctx.override_reason, ctx)
                 ):
                     display.guard_overridden(guard.name, ctx.override_reason)
@@ -299,9 +301,15 @@ class GuardRegistry:
                     # Non-overridable block: no override hint, but still name the
                     # owner so the agent addresses the right guard's required action.
                     surfaced.message += owner_tag
-                # Remember which guard we surfaced. Next turn, only THIS guard's
-                # block may be released by an override reason (see loop above).
+                # Remember which guard (and which internal gate/reason) we surfaced.
+                # Next turn, only THIS guard's block with THIS exact reason may be
+                # released by an override reason (see loop above). Tracking the
+                # reason prevents intra-guard gate-crosstalk: an override written
+                # for Gate 1 (e.g. task_complete_premise_recheck) must not release
+                # Gate 2 (e.g. task_complete_observation_demand) even though both
+                # belong to the same VerificationGuard.
                 self._last_surfaced = owner or (surfaced_guard.name if surfaced_guard else None)
+                self._last_surfaced_reason = surfaced.reason
                 return surfaced
 
         if inject_messages:
