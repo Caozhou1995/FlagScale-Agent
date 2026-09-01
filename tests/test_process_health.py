@@ -311,3 +311,107 @@ class TestShouldKillProcess:
             prev_num_children=4,
         )
         assert should_kill is False
+
+
+_CLEAN = {'oom_killed': False, 'killed_count': 0, 'repeated_errors': False}
+_HEALTH = {'zombie': False, 'cpu_percent': 0.0, 'num_children': 0, 'children_alive': 0}
+
+
+class TestIdleKill:
+    """Rule 1c: no output + flat CPU/IO/RSS for IDLE_KILL_THRESHOLD samples."""
+
+    def test_idle_threshold_reached_kills(self):
+        # 4 consecutive idle samples (~2 min): no output, all counters flat.
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=130,
+            output_changed=False,
+            stall_count=4,
+            proc_health=_HEALTH,
+            output_anomalies=_CLEAN,
+            had_children=False,
+            prev_num_children=0,
+            progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
+            idle_count=4,
+        )
+        assert should_kill is True
+        assert 'no output' in reason.lower()
+        assert 'syscall' in reason.lower() or 'network' in reason.lower()
+
+    def test_below_idle_threshold_does_not_kill(self):
+        # Only 3 idle samples — under the 4-sample threshold.
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=100,
+            output_changed=False,
+            stall_count=3,
+            proc_health=_HEALTH,
+            output_anomalies=_CLEAN,
+            had_children=False,
+            prev_num_children=0,
+            progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
+            idle_count=3,
+        )
+        assert should_kill is False
+
+    def test_cpu_progress_prevents_idle_kill(self):
+        # A compile burns CPU: shell.py would never accumulate idle_count here,
+        # but even if idle_count is stale, the liveness veto + zero idle_count
+        # from the caller keeps it alive. Here idle_count=0 (caller reset it
+        # because cpu_time_delta > 0.5) and progress vetoes heuristics.
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=400,
+            output_changed=False,
+            stall_count=8,
+            proc_health={'zombie': False, 'cpu_percent': 95, 'num_children': 20, 'children_alive': 20},
+            output_anomalies=_CLEAN,
+            had_children=True,
+            prev_num_children=20,
+            progress_signals={'cpu_time_delta': 30.0, 'io_bytes_delta': 0, 'rss_delta': 0},
+            idle_count=0,
+        )
+        assert should_kill is False
+
+    def test_io_progress_prevents_idle_kill(self):
+        # A download writing bytes: io_bytes_delta > 1MB means caller keeps
+        # idle_count at 0 even with no stdout.
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=200,
+            output_changed=False,
+            stall_count=6,
+            proc_health={'zombie': False, 'cpu_percent': 2, 'num_children': 1, 'children_alive': 1},
+            output_anomalies=_CLEAN,
+            had_children=True,
+            prev_num_children=1,
+            progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 5 << 20, 'rss_delta': 0},
+            idle_count=0,
+        )
+        assert should_kill is False
+
+    def test_idle_kill_fires_even_with_stale_progress_signal(self):
+        # idle_count is the authority: if the caller says 4 idle samples, kill
+        # regardless of a single-sample progress_signals blip (defense in depth
+        # — caller only bumps idle_count when signals were flat anyway).
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=140,
+            output_changed=False,
+            stall_count=4,
+            proc_health=_HEALTH,
+            output_anomalies=_CLEAN,
+            had_children=False,
+            prev_num_children=0,
+            progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
+            idle_count=5,
+        )
+        assert should_kill is True
+
+    def test_default_idle_count_zero_is_backward_compatible(self):
+        # Legacy callers omit idle_count → defaults to 0 → never triggers 1c.
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=100,
+            output_changed=True,
+            stall_count=0,
+            proc_health={'zombie': False, 'cpu_percent': 50, 'num_children': 4, 'children_alive': 4},
+            output_anomalies=_CLEAN,
+            had_children=True,
+            prev_num_children=4,
+        )
+        assert should_kill is False

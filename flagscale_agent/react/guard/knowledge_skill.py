@@ -64,26 +64,41 @@ class KnowledgeSkillGuard(Guard):
     REQUIRED_RECOVERY_ATTEMPTS = 5
 
     # Tokens that mark a shell command as a genuine network-access attempt.
+    # These are SUBSTANTIVE operations, not probes. Only match when they appear
+    # at the start of the command (after common prefixes like sudo/env/time).
     _NETWORK_CMD_TOKENS = (
-        "curl", "wget", "urllib", "requests.get", "requests.post", "requests.head",
-        "http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
-        "pip install", "pip download", "apt-get", "apt install",
         "git clone", "git fetch", "git pull",
-        "nslookup", "dig ", "host ", "ping ", "nc ", "ncat", "telnet",
-        "openssl s_client", "http.client", "socket.", "aiohttp", "httpx", "urlopen",
+        "pip install", "pip3 install", "pip download",
+        "apt-get install", "apt install",
+        "wget http", "wget -", 
+        "curl -L", "curl -o", "curl --output",
     )
+    
+    # Common command prefixes that don't change the operation semantics
+    _CMD_PREFIXES = ("sudo ", "env ", "time ", "nohup ", "nice ", "ionice ")
 
     # Tokens that mark a shell command as a network PROBE (connectivity/speed test).
     # These are allowed through the single-shot early gate BEFORE _early_fired
     # is set, so the agent can test which sources are reachable and fast.
     _NETWORK_PROBE_TOKENS = (
+        # curl forms
         "curl -sI", "curl -si", "curl --head", "curl -I",
         "curl -sL", "curl -s ", "curl -o /dev/null",
-        "curl -s --connect-timeout",
-        "wget --spider", "wget -q --spider",
+        "curl -s --connect-timeout", "curl --connect-timeout",
+        # wget forms (including flag-prefixed spider / timeout probes)
+        "wget --spider", "wget -q --spider", "wget -T", "wget --timeout",
+        "wget -S", "wget --server-response",
+        # tool-availability check — probing WHICH net tool exists IS part of the probe
+        "command -v curl", "command -v wget", "command -v python3",
+        "which curl", "which wget",
+        # python-based probes (fallback when no curl/wget in a minimal container)
+        "urllib.request", "urlopen", "urllib.request.urlopen",
+        "requests.get", "requests.head", "http.client", "httpx", "aiohttp",
+        "socket.create_connection", "socket.setdefaulttimeout",
+        # connectivity / DNS / TLS
         "ping -c", "ping -w",
         "nc -z", "nc -vz",
-        "nslookup ", "dig ", "host ",
+        "nslookup ", "dig ", "host ", "getent hosts", "getent ahosts",
         "time curl", "time wget",
         "openssl s_client",
         "env -u HTTP_PROXY", "env -u HTTPS_PROXY",
@@ -114,6 +129,17 @@ class KnowledgeSkillGuard(Guard):
         # episode — de-duplicated so re-running the SAME failing command does not
         # count. Forces genuinely DIFFERENT techniques, not repetition.
         self._recovery_signatures: set[str] = set()
+
+    def _is_network_cmd(self, cmd: str) -> bool:
+        """Check if command is a substantive network operation (not just containing the token).
+        Returns True only if the command STARTS with a network op (after stripping common prefixes)."""
+        cmd_stripped = cmd.strip()
+        # Strip common prefixes (sudo, env, time, etc.)
+        for prefix in self._CMD_PREFIXES:
+            if cmd_stripped.startswith(prefix):
+                cmd_stripped = cmd_stripped[len(prefix):].strip()
+        # Now check if the command starts with any network op token
+        return any(cmd_stripped.startswith(tok) for tok in self._NETWORK_CMD_TOKENS)
 
     def set_single_shot(self, enabled: bool = True):
         """Enable single-shot early-advisory at runtime (set once run mode known)."""
@@ -259,30 +285,30 @@ class KnowledgeSkillGuard(Guard):
                     steps_done.append("network probe ✓")
                 else:
                     steps_needed.append(
-                        "STEP 1 — Network probe (FAST, each command MUST have --connect-timeout 3 --max-time 5):\n"
-                        "  # 1a. Test core code-hosting / package sources WITH and WITHOUT proxy:\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://github.com\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://pypi.org/simple\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://raw.githubusercontent.com\n"
-                        "  env -u HTTP_PROXY -u HTTPS_PROXY curl -sI --connect-timeout 3 --max-time 5 https://github.com\n"
-                        "  # 1b. Test mirrors (often faster in restricted environments):\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://mirrors.tuna.tsinghua.edu.cn\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://gitee.com\n"
-                        "  # 1c. Test language-specific package registries (pick ones relevant to your task):\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://registry.npmjs.org\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://crates.io\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://proxy.golang.org\n"
-                        "  curl -sI --connect-timeout 3 --max-time 5 https://astral.sh\n"
-                        "  # 1d. DNS resolution (does the host resolve at all?):\n"
-                        "  nslookup github.com; nslookup pypi.org\n"
-                        "  # 1e. TLS handshake test (is TLS blocked / MITM'd?):\n"
-                        "  echo | openssl s_client -connect github.com:443 -servername github.com 2>&1 | head -5\n"
-                        "  # 1f. Download speed test (is the source reachable but too slow?):\n"
-                        "  time curl -s --connect-timeout 3 --max-time 10 -o /dev/null https://github.com/favicon.ico\n"
-                        "  # Write ALL results to memory so you don't re-test later.\n"
-                        "  # If a source fails, try in order: proxy unset → mirror →\n"
-                        "  #   case flip → alternative endpoint → DNS check → TLS check →\n"
-                        "  #   offline cache / pre-installed copy.\n"
+                        "STEP 1 — Network probe. GOAL: find out whether the external "
+                        "resources THIS task depends on are reachable, and which path is "
+                        "fastest — so you never conclude 'network is down' or 'no other "
+                        "method exists' from memory alone. This is about the goal, not a "
+                        "fixed script; adapt every command below to your environment.\n"
+                        "  1. NAME what you need first: which hosts does THIS task pull "
+                        "from (source repo, package index, docs)? Probe only those 1–2 "
+                        "task-relevant hosts — do NOT sweep a generic list of registries "
+                        "you will never use.\n"
+                        "  2. CHECK the tool exists before you use it — a minimal container "
+                        "may have no curl. Pick whatever is present:\n"
+                        "       command -v curl wget python3 2>/dev/null   # see what you have\n"
+                        "     Then probe with the FIRST available (all MUST bound time):\n"
+                        "       curl -sI --connect-timeout 3 --max-time 5 <host>\n"
+                        "       wget -T 5 -t 1 --spider -S <host>              # if no curl\n"
+                        "       python3 -c \"import urllib.request,socket; socket.setdefaulttimeout(5); print(urllib.request.urlopen('<host>').status)\"   # if neither\n"
+                        "     If a name won't resolve, check DNS: getent hosts <host> "
+                        "(or nslookup/dig if present).\n"
+                        "  3. If the first path fails, DEGRADE — don't repeat the same call. "
+                        "Order: toggle proxy (env -u HTTP_PROXY -u HTTPS_PROXY …, or ADD "
+                        "one) → mirror/alternative endpoint → case-flip the URL → offline "
+                        "cache / pre-installed copy. A single failure is ONE data point, "
+                        "not proof the resource is unreachable.\n"
+                        "  4. WRITE results to memory so you don't re-probe later.\n"
                     )
                 if self._early_fired:
                     steps_done.append("research pass ✓")
@@ -292,6 +318,8 @@ class KnowledgeSkillGuard(Guard):
                         "  web_fetch() — EXTERNAL domains (any field where your prior knowledge\n"
                         "    may not reflect the current standard method).\n"
                         "  load_knowledge() / load_skill() — INTERNAL FlagScale domains.\n"
+                        "  Networked shell operations (git clone, pip/apt install, wget, curl downloads)\n"
+                        "    — substantive external dependency acquisition.\n"
                     )
                 done_str = f" Done: {', '.join(steps_done)}." if steps_done else ""
                 needed_str = "\n".join(steps_needed)
@@ -327,9 +355,11 @@ class KnowledgeSkillGuard(Guard):
             return GuardVerdict.block(
                 f"[KnowledgeSkill] {self.BLOCK_THRESHOLD} tool calls without loading "
                 "domain knowledge, skills, or external references. Consider whether "
-                "load_knowledge()/load_skill() (INTERNAL FlagScale domains) or web_fetch() "
+                "load_knowledge()/load_skill() (INTERNAL FlagScale domains), web_fetch() "
                 "(EXTERNAL domains, for any field where your prior knowledge may not "
-                "reflect standard methods) would help. If you are about to conclude "
+                "reflect standard methods), or networked shell operations (git clone, "
+                "pip/apt install, wget, curl downloads — substantive external dependency "
+                "acquisition) would help. If you are about to conclude "
                 "'no better/other method exists within this library or tool budget', that "
                 "is an unverified knowledge gap — web_fetch the standard technique for the "
                 "problem class before you commit to it; you cannot prove 'no other method "
@@ -385,11 +415,24 @@ class KnowledgeSkillGuard(Guard):
             return
         if name in self._META_TOOLS:
             return
-        # Check if this was a network probe command — mark _network_probed.
+        # Check if this was a network shell command.
         if name == "shell":
             cmd = str((ctx.tool_args or {}).get("command", ""))
-            if any(tok in cmd for tok in self._NETWORK_PROBE_TOKENS):
+            is_probe = any(tok in cmd for tok in self._NETWORK_PROBE_TOKENS)
+            if is_probe:
                 self._network_probed = True
+            # A SUBSTANTIVE external fetch (git clone/pip install/wget a file/curl
+            # a url to download — a real network op that is NOT merely a
+            # connectivity probe) is an external information-gain act, equivalent
+            # to web_fetch. Per the system prompt's unified "From external" concept,
+            # it must reset the knowledge counter and satisfy the research pass just
+            # like a knowledge tool. Use _is_network_cmd to avoid false positives
+            # (e.g., 'echo git clone' or 'grep pip install' should NOT reset).
+            elif self._is_network_cmd(cmd):
+                self._calls_since_knowledge = 0
+                self._early_fired = True
+                self._network_probed = True
+                return
         # A real, executed tool call.
         self._calls_since_knowledge += 1
         if self._single_shot and not (self._early_fired and self._network_probed):
@@ -426,14 +469,26 @@ class KnowledgeSkillGuard(Guard):
                     reason="web_fetch_network_info_gain",
                     category="knowledge_skill",
                 )
-            # Success — was it NEW information or did you already know this?
+            # Success — classify the info-gain into one of three states so the
+            # agent knows its NEXT move, not just whether it "learned something".
+            # This is the acquired/missing/self-fillable loop: each state has a
+            # distinct exit, mirroring the system prompt's three sources of gain
+            # (external / external-again / self-reasoning).
             return GuardVerdict.inject(
-                "[KnowledgeSkill] You just fetched external knowledge. Did this "
-                "produce information you did NOT already know? If yes, state the "
-                "gain explicitly and proceed. If no — same as before, you are stalled: "
-                "the retrieval confirmed your prior knowledge but added nothing. "
-                "Escape by narrowing the query or fetching a different source.",
-                reason="knowledge_info_gain_check",
+                "[KnowledgeSkill] You just fetched external knowledge. Classify what "
+                "you now have into ONE of three states, then take that state's exit:\n"
+                "  • ACQUIRED — the fetch answered the gap with something you did NOT "
+                "already know. State the concrete gain (the fact/API/method) and "
+                "PROCEED to apply it.\n"
+                "  • MISSING — the gap is still open and it is NOT self-fillable "
+                "(needs an external fact you don't have). Do NOT reason from memory — "
+                "fetch AGAIN with a narrower query, a different source, or a mirror.\n"
+                "  • SELF-FILLABLE — the fetch gave you enough that the remaining gap "
+                "can be closed by REASONING from what you already have (inference, "
+                "connecting known facts). Don't over-fetch — reason it out, then proceed.\n"
+                "If the fetch merely confirmed prior knowledge and added nothing (not "
+                "any of the three), you are stalled — narrow the query or switch source.",
+                reason="knowledge_info_gain_three_state",
                 category="knowledge_skill",
             )
         return None
