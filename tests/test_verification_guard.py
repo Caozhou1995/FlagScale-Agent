@@ -1556,3 +1556,109 @@ class TestTextCompleteHygieneGate:
             "frame.bmp", "readelf", ".bashrc", "stdbuf",
         ):
             assert banned not in low, f"leaked task-specific token: {banned}"
+
+
+class TestTextCompleteStalePlanGuard:
+    """Regression: _TEXT_COMPLETE_HYGIENE must NOT re-fire on a new turn when the
+    only plan on disk is a "completed" plan from a PRIOR turn.
+
+    Root cause: reset_turn() clears _text_complete_hygiene_demanded. The old plan
+    is still "completed" on disk (list_plans returns it). Without the
+    _complete_called_this_turn guard, the gate re-fires every new turn on any
+    [TASK_COMPLETE], even a casual one — because has_plan=True from the stale
+    plan and the _demanded flag was just reset.
+
+    Fix: only check the "completed" plan on disk when plan_update(complete) was
+    called THIS turn (_complete_called_this_turn=True). A prior turn's completed
+    plan is stale state, not a current completion target.
+    """
+
+    @staticmethod
+    def _stale_completed_plan():
+        """Simulates the state AFTER plan_update(complete) in a prior turn:
+        get_active() returns None (plan was cleared), but list_plans() still
+        returns the completed plan on disk."""
+        from unittest.mock import MagicMock
+        plan = MagicMock()
+        plan.get_active.return_value = None
+        plan.list_plans.return_value = [{"title": "old", "status": "completed"}]
+        return plan
+
+    @staticmethod
+    def _text_complete(override=""):
+        args = {"_override_reason": override} if override else {}
+        return GuardContext(
+            tool_name="",
+            tool_args=args,
+            override_reason=override,
+            assistant_text="Done with the work. [TASK_COMPLETE]",
+        )
+
+    def test_stale_completed_plan_no_block_new_turn(self):
+        """New turn: get_active()=None, list_plans has a completed plan from a
+        prior turn, _complete_called_this_turn=False → must NOT block."""
+        guard = VerificationGuard(plan=self._stale_completed_plan())
+        # Simulate reset_turn() being called at the start of a new turn
+        guard.reset_turn()
+        assert guard._complete_called_this_turn is False
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is None, "stale completed plan from prior turn should not re-trigger"
+        assert guard._text_complete_hygiene_demanded is False
+
+    def test_same_turn_complete_then_text_complete_blocks(self):
+        """Same turn: plan_update(complete) was called (sets flag), then a
+        pure-text [TASK_COMPLETE] arrives → must block (backstop still works)."""
+        guard = VerificationGuard(plan=self._stale_completed_plan())
+        # Simulate plan_update(complete) being called this turn
+        complete_ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete"},
+            override_reason="verified all tests pass",
+        )
+        # Drive plan_update(complete) through check_pre — this sets
+        # _complete_called_this_turn=True. The gate chain (recheck → observation
+        # → ... → delivery_hygiene) will fire, but we just need the flag set.
+        # Use an override reason that passes all gates.
+        guard.check_pre(complete_ctx)
+        assert guard._complete_called_this_turn is True
+        # Now a pure-text [TASK_COMPLETE] arrives
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
+
+    def test_reset_turn_clears_complete_called_this_turn(self):
+        """reset_turn() must clear _complete_called_this_turn so a new turn
+        starts fresh — a prior turn's plan_update(complete) must not leak."""
+        guard = VerificationGuard(plan=self._stale_completed_plan())
+        guard._complete_called_this_turn = True
+        guard.reset_turn()
+        assert guard._complete_called_this_turn is False
+
+    def test_active_plan_still_blocks_without_complete_call(self):
+        """Active plan (get_active returns active) + [TASK_COMPLETE] → must
+        block even without plan_update(complete) this turn. This is the
+        case (a) backstop: agent skips plan_update(complete) entirely."""
+        from unittest.mock import MagicMock
+        plan = MagicMock()
+        plan.get_active.return_value = {"title": "test", "status": "active", "steps": []}
+        guard = VerificationGuard(plan=plan)
+        assert guard._complete_called_this_turn is False
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
+
+    def test_get_active_completed_still_blocks_without_flag(self):
+        """get_active() returns a plan with status="completed" → must block
+        even without _complete_called_this_turn. This is the existing test
+        path (get_active returns completed, not the disk list_plans path)."""
+        from unittest.mock import MagicMock
+        plan = MagicMock()
+        plan.get_active.return_value = {"title": "test", "status": "completed", "steps": []}
+        guard = VerificationGuard(plan=plan)
+        assert guard._complete_called_this_turn is False
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
