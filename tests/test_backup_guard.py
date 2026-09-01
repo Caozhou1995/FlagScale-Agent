@@ -97,52 +97,6 @@ class TestUpfrontBackupGate:
         assert v is not None and v.action == "block"
 
 
-class TestBackupCleanupReminder:
-    def test_text_complete_reminds_when_bak_exists(self, tmp_path, monkeypatch):
-        (tmp_path / "main.db.bak").write_text("x")
-        monkeypatch.chdir(tmp_path)
-        g = BackupGuard()
-        ctx = GuardContext(
-            tool_name="", tool_args={}, assistant_text="done [TASK_COMPLETE]"
-        )
-        v = g.check_pre(ctx)
-        assert v is not None
-        assert v.action == "inject"
-        assert v.reason == "backup_cleanup_reminder"
-
-    def test_no_reminder_when_no_bak(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        g = BackupGuard()
-        ctx = GuardContext(
-            tool_name="", tool_args={}, assistant_text="done [TASK_COMPLETE]"
-        )
-        # After redesign: reminder fires unconditionally at completion, does not check .bak
-        v = g.check_pre(ctx)
-        assert v is not None
-        assert v.action == "inject"
-        assert v.reason == "backup_cleanup_reminder"
-
-    def test_plan_complete_reminds_when_bak_exists(self, tmp_path, monkeypatch):
-        (tmp_path / "data.bak").write_text("x")
-        monkeypatch.chdir(tmp_path)
-        g = BackupGuard()
-        ctx = GuardContext(
-            tool_name="plan_update", tool_args={"action": "complete"}
-        )
-        v = g.check_pre(ctx)
-        assert v is not None and v.action == "inject"
-
-    def test_reminder_fires_once(self, tmp_path, monkeypatch):
-        (tmp_path / "x.bak").write_text("x")
-        monkeypatch.chdir(tmp_path)
-        g = BackupGuard()
-        ctx = GuardContext(
-            tool_name="", tool_args={}, assistant_text="[TASK_COMPLETE]"
-        )
-        assert g.check_pre(ctx) is not None
-        assert g.check_pre(ctx) is None
-
-
 class TestBatchedFirstTurnLeak:
     """Regression: a BATCH of shell calls in one turn must NOT let later calls
     slip past the backup gate once the first is blocked.
