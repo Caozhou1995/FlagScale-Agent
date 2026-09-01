@@ -16,7 +16,7 @@
 NOT persist their output to a file.
 
 Motivation (near/far + monitor-stall):
-  A compile command (make -j / cmake --build / opam install coq / cargo build ...)
+  A compile command (make -j / cmake --build / cargo build ...)
   can run for many minutes and spew huge output. Two failure modes surface:
     1. Piped to a pager/filter (`make -j | tail`) the child full-buffers its stdout;
        nothing appears until it exits, so the run looks hung.
@@ -144,7 +144,7 @@ def _streams_to_monitor(cmd: str) -> bool:
 
 _MESSAGE = """[CompileRedirectGuard] Long-running build/compile command whose output is not visible to the monitor.
 
-Verbose builds (make -j, cmake --build, opam/coq, cargo build, ...) can run for many
+Verbose builds (make -j, cmake --build, cargo build, ...) can run for many
 minutes. The live monitor watches the child's stdout in real time. Two forms make the
 run LOOK HUNG even while it progresses:
   • piped to a pager/filter (`| tail` / `| head`) — the child full-buffers, nothing
@@ -178,17 +178,30 @@ While you are here — parallelism strategy, before you commit the full build:
   • For other build systems, apply the same single-threaded constraint:
       cargo build -j 1 | tee build.log
       cmake --build . -j 1 | tee build.log
-      opam install -j 1 <pkg> | tee build.log
+      pip install <pkg> | tee build.log
 
 If this command is short, already streams its own progress, or output is intentionally
 discarded, override with "_override_reason" explaining why.
 
 After any build/install: check its exit code before assuming success. A long
-install (opam, pip, cargo) can fail silently — the log scrolls past the error and
+install (pip, cargo, apt) can fail silently — the log scrolls past the error and
 the prompt returns, but the package was NOT installed. Verify:
   echo "EXIT: $?"                     # right after the command
   which <binary>; <binary> --version  # confirm the artifact exists and runs
-Do not proceed to the next step until you confirm the build actually succeeded."""
+Do not proceed to the next step until you confirm the build actually succeeded.
+
+Installing multiple dependencies — install CRITICAL packages ONE BY ONE, not all
+at once. A multi-package install (e.g. `pip install pkg1 pkg2 pkg3`) can freeze
+for 10+ minutes with no visible progress because the package manager resolves all
+dependencies together and a single slow/failing package stalls the entire batch.
+Install each critical package individually and check its exit code BEFORE moving
+to the next:
+  pip install <critical-pkg> 2>&1 | tee install.log; echo "EXIT: $?"
+  pip install <next-pkg>    2>&1 | tee install.log; echo "EXIT: $?"
+If one package fails, you see EXACTLY which one and can debug it in isolation
+instead of debugging a frozen multi-package batch. This applies to all package
+managers (apt, pip, cargo, npm, etc.) — install the most critical / most
+likely-to-fail packages first, one at a time, verifying each succeeds."""
 
 
 class CompileRedirectGuard(Guard):
