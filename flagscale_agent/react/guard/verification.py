@@ -564,6 +564,15 @@ class VerificationGuard(Guard):
         # Set by check_pre when a step_done is about to pass through, so the
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
+        # Tracks whether plan_update(complete) was called during the current
+        # turn. The pure-text [TASK_COMPLETE] hygiene gate (Timing 0a) has a
+        # backstop branch that fires when the plan on disk is "completed". But
+        # without this flag, a stale completed plan from a PRIOR turn would
+        # re-trigger the gate every new turn — the old plan is still "completed"
+        # on disk, so has_plan=True, and reset_turn() cleared the _demanded flag.
+        # Only fire the "completed" branch when plan_update(complete) actually
+        # ran THIS turn; otherwise the plan is stale state, not a current target.
+        self._complete_called_this_turn = False
 
     def reset_turn(self):
         """Reset per-turn state on a new user message.
@@ -583,6 +592,7 @@ class VerificationGuard(Guard):
         self._text_complete_hygiene_demanded = False
         self._step_done_recheck_reminded = False
         self._premortem_pending = False
+        self._complete_called_this_turn = False
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # Pre-mortem: fires immediately AFTER a step_done that passed the pre-side
@@ -627,8 +637,18 @@ class VerificationGuard(Guard):
             # entirely (plan still active) or (b) went through plan_update(complete)
             # but whose Fifth gate (delivery hygiene) was released by an override
             # reason written for an earlier gate (intra-guard gate-crosstalk).
+            #
+            # The "completed" branch (b) must only fire when plan_update(complete)
+            # was called THIS turn (_complete_called_this_turn). Without that guard,
+            # a stale completed plan from a PRIOR turn would re-trigger every new
+            # turn: reset_turn() clears _text_complete_hygiene_demanded, the old
+            # plan is still "completed" on disk, and any [TASK_COMPLETE] in the new
+            # turn (even a casual "I'm done") would hit the gate. The stale plan is
+            # not a current completion target — it was already fully gated.
+            #
             # The _text_complete_hygiene_demanded flag ensures it fires at most
-            # once, so including "completed" does not cause noise on later turns.
+            # once per turn, so including "completed" does not cause noise within
+            # the same turn.
             has_plan = False
             if self._plan:
                 try:
@@ -639,8 +659,10 @@ class VerificationGuard(Guard):
                     pass
                 # After plan_update(complete), get_active() returns None because
                 # _clear_active() was called. Check disk for a recently-completed
-                # plan so the hygiene gate still fires as a backstop.
-                if not has_plan:
+                # plan so the hygiene gate still fires as a backstop — but ONLY if
+                # plan_update(complete) was called this turn. A "completed" plan
+                # from a prior turn is stale state, not a current target.
+                if not has_plan and self._complete_called_this_turn:
                     try:
                         for p in self._plan.list_plans():
                             if p.get("status") == "completed":
@@ -686,6 +708,11 @@ class VerificationGuard(Guard):
         # be noise on a pass/fail task. Fires once so it stays a checkpoint, not
         # nagging.
         if ctx.tool_name == "plan_update" and ctx.tool_args.get("action") == "complete":
+            # Mark that plan_update(complete) was called THIS turn, so the
+            # pure-text [TASK_COMPLETE] gate (Timing 0a) knows the "completed"
+            # plan on disk is from THIS turn (a valid backstop target), not a
+            # stale plan from a prior turn (which should not re-trigger).
+            self._complete_called_this_turn = True
             if not self._complete_recheck_reminded:
                 if not ctx.override_reason.strip():
                     return GuardVerdict.block(
