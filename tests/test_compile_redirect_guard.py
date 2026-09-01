@@ -49,8 +49,8 @@ class TestCompileRedirectGuard:
         "cargo build &> out.txt",
         "opam install coq >> install.log 2>&1",
         "gcc -O2 main.c -o main > compile.log 2>&1",
-        # the exact form from the compcert stall:
-        'unset HTTP_PROXY && eval $(opam env) && opam install coq.8.16.1 menhir -y > /tmp/opam_install2.log 2>&1; echo "EXIT: $?"',
+        # a multi-package install with env setup and bare redirect:
+        'unset HTTP_PROXY && eval $(opam env) && opam install pkg1 pkg2 -y > /tmp/opam_install2.log 2>&1; echo "EXIT: $?"',
     ])
     def test_blocks_compile_not_visible_to_monitor(self, cmd):
         v = self.g.check_pre(_ctx(cmd))
@@ -112,7 +112,7 @@ class TestCompileRedirectGuard:
 
     def test_bare_redirect_is_blackbox_to_monitor(self):
         # regression: pure `> file` was previously treated as OK, but it hides
-        # all output from the live monitor for the whole run (compcert opam stall).
+        # all output from the live monitor for the whole run (opam stall).
         assert self.g.check_pre(_ctx("make -j > build.log 2>&1")).action == "block"
         # tee keeps it visible
         assert self.g.check_pre(_ctx("make -j 2>&1 | tee build.log")) is None
@@ -146,3 +146,25 @@ class TestCompileRedirectGuard:
         # verify exit code after build/install
         assert "EXIT" in msg or "exit code" in msg.lower() or "exit:" in msg.lower()
         assert "which" in msg  # verify binary exists
+
+    def test_message_advises_one_by_one_install(self):
+        """The block message must advise installing critical packages ONE BY ONE,
+        not all at once — a multi-package install can freeze for 10+ minutes."""
+        v = self.g.check_pre(_ctx("cargo build --release"))
+        assert v.action == "block"
+        msg = v.message
+        # must mention one-by-one / individual install
+        assert "ONE BY ONE" in msg or "one by one" in msg or "individually" in msg
+        # must show per-package install examples
+        assert "pip install" in msg
+        # must advise checking exit code after each package
+        assert "EXIT" in msg or "exit code" in msg.lower()
+        # must mention that multi-package install can freeze/stall
+        assert "freeze" in msg.lower() or "stall" in msg.lower() or "frozen" in msg.lower()
+        # must apply to all package managers
+        assert "apt" in msg or "pip" in msg or "cargo" in msg or "npm" in msg
+        # must NOT contain task-specific package names or tools (no leaking)
+        assert "coq" not in msg.lower()
+        assert "menhir" not in msg.lower()
+        assert "ocamlfind" not in msg.lower()
+        assert "opam" not in msg.lower()

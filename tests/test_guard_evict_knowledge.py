@@ -393,6 +393,61 @@ class TestKnowledgeSkillGuardSingleShot:
         for i in range(10):
             assert _advance(guard, _make_ctx(tool_name="shell")) is None
 
+    @pytest.mark.parametrize("probe_cmd", [
+        "curl -s --connect-timeout 3 --max-time 5 -o /dev/null https://github.com",
+        "echo | openssl s_client -connect github.com:443 -servername github.com 2>&1 | head -5",
+        "env -u HTTP_PROXY -u HTTPS_PROXY curl -sI --connect-timeout 3 --max-time 5 https://github.com",
+        "nslookup github.com",
+        "dig github.com",
+        "time curl -s --connect-timeout 3 --max-time 10 -o /dev/null https://pypi.org/simple/pip/",
+    ])
+    def test_expanded_network_probe_tokens_pass_through(self, probe_cmd):
+        """New probe tokens (curl -s --connect-timeout, openssl s_client,
+        env -u HTTP_PROXY, DNS tools, time curl) pass through the early gate."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        # Exhaust the 2 free calls
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
+        # Each expanded probe command should pass through
+        probe_ctx = _make_ctx(tool_name="shell", tool_args={"command": probe_cmd})
+        v = guard.check_pre(probe_ctx)
+        assert v is None  # passes through as a network probe
+
+    def test_step1_message_lists_broad_probe_targets(self):
+        """The STEP 1 block message must list broader probe targets beyond
+        just github/pypi — including mirrors, language registries, DNS, TLS,
+        and download speed tests."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        # Exhaust 2 free calls to trigger the gate
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
+        # Call 3 triggers the block with STEP 1 message
+        v = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v is not None and v.action == "block"
+        msg = v.message
+        # core code-hosting sources
+        assert "github.com" in msg
+        assert "pypi.org" in msg
+        assert "raw.githubusercontent.com" in msg
+        # mirrors
+        assert "mirrors.tuna.tsinghua.edu.cn" in msg
+        assert "gitee.com" in msg
+        # language-specific registries
+        assert "registry.npmjs.org" in msg
+        assert "crates.io" in msg
+        assert "proxy.golang.org" in msg
+        # DNS resolution test
+        assert "nslookup" in msg
+        # TLS handshake test
+        assert "openssl s_client" in msg
+        # download speed test
+        assert "time curl" in msg
+        # proxy toggle test
+        assert "env -u HTTP_PROXY" in msg
+        # must NOT contain task-specific sources (no leaking)
+        assert "compcert.org" not in msg
+        assert "inria.hal.science" not in msg
+
 
 # ── KnowledgeSkillGuard information-gain inject (check_post) ──
 

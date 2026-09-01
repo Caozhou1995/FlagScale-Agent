@@ -79,11 +79,14 @@ class KnowledgeSkillGuard(Guard):
     _NETWORK_PROBE_TOKENS = (
         "curl -sI", "curl -si", "curl --head", "curl -I",
         "curl -sL", "curl -s ", "curl -o /dev/null",
+        "curl -s --connect-timeout",
         "wget --spider", "wget -q --spider",
         "ping -c", "ping -w",
         "nc -z", "nc -vz",
         "nslookup ", "dig ", "host ",
         "time curl", "time wget",
+        "openssl s_client",
+        "env -u HTTP_PROXY", "env -u HTTPS_PROXY",
     )
 
     def __init__(self, single_shot: bool = False):
@@ -257,17 +260,29 @@ class KnowledgeSkillGuard(Guard):
                 else:
                     steps_needed.append(
                         "STEP 1 — Network probe (FAST, each command MUST have --connect-timeout 3 --max-time 5):\n"
-                        "  # Test official sources WITH and WITHOUT proxy:\n"
+                        "  # 1a. Test core code-hosting / package sources WITH and WITHOUT proxy:\n"
                         "  curl -sI --connect-timeout 3 --max-time 5 https://github.com\n"
                         "  curl -sI --connect-timeout 3 --max-time 5 https://pypi.org/simple\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://raw.githubusercontent.com\n"
                         "  env -u HTTP_PROXY -u HTTPS_PROXY curl -sI --connect-timeout 3 --max-time 5 https://github.com\n"
-                        "  # Test mirrors (often faster in restricted environments):\n"
+                        "  # 1b. Test mirrors (often faster in restricted environments):\n"
                         "  curl -sI --connect-timeout 3 --max-time 5 https://mirrors.tuna.tsinghua.edu.cn\n"
-                        "  # Test task-relevant sources (e.g. astral.sh for uv, npm for node, etc.):\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://gitee.com\n"
+                        "  # 1c. Test language-specific package registries (pick ones relevant to your task):\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://registry.npmjs.org\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://crates.io\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://proxy.golang.org\n"
                         "  curl -sI --connect-timeout 3 --max-time 5 https://astral.sh\n"
-                        "  # Write results to memory so you don't re-test later.\n"
-                        "  # If a source fails later, try in order: proxy unset → mirror →\n"
-                        "  #   case flip → alternative endpoint → offline cache.\n"
+                        "  # 1d. DNS resolution (does the host resolve at all?):\n"
+                        "  nslookup github.com; nslookup pypi.org\n"
+                        "  # 1e. TLS handshake test (is TLS blocked / MITM'd?):\n"
+                        "  echo | openssl s_client -connect github.com:443 -servername github.com 2>&1 | head -5\n"
+                        "  # 1f. Download speed test (is the source reachable but too slow?):\n"
+                        "  time curl -s --connect-timeout 3 --max-time 10 -o /dev/null https://github.com/favicon.ico\n"
+                        "  # Write ALL results to memory so you don't re-test later.\n"
+                        "  # If a source fails, try in order: proxy unset → mirror →\n"
+                        "  #   case flip → alternative endpoint → DNS check → TLS check →\n"
+                        "  #   offline cache / pre-installed copy.\n"
                     )
                 if self._early_fired:
                     steps_done.append("research pass ✓")
