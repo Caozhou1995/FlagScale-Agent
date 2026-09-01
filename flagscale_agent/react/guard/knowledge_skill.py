@@ -73,6 +73,19 @@ class KnowledgeSkillGuard(Guard):
         "openssl s_client", "http.client", "socket.", "aiohttp", "httpx", "urlopen",
     )
 
+    # Tokens that mark a shell command as a network PROBE (connectivity/speed test).
+    # These are allowed through the single-shot early gate BEFORE _early_fired
+    # is set, so the agent can test which sources are reachable and fast.
+    _NETWORK_PROBE_TOKENS = (
+        "curl -sI", "curl -si", "curl --head", "curl -I",
+        "curl -sL", "curl -s ", "curl -o /dev/null",
+        "wget --spider", "wget -q --spider",
+        "ping -c", "ping -w",
+        "nc -z", "nc -vz",
+        "nslookup ", "dig ", "host ",
+        "time curl", "time wget",
+    )
+
     def __init__(self, single_shot: bool = False):
         self._calls_since_knowledge = 0
         # Single-shot mode: no human supervisor to nudge toward research, so
@@ -86,6 +99,10 @@ class KnowledgeSkillGuard(Guard):
         # is actually called — the single-shot early gate re-blocks every real
         # tool call until then.
         self._early_fired = False
+        # Network probe gate: set True when the agent runs a network probe
+        # command (curl/wget/ping etc.) in single-shot mode. The early gate
+        # requires BOTH _network_probed AND _early_fired to clear.
+        self._network_probed = False
         # Network-recovery gate state. Set True in check_post when web_fetch
         # reports a network error; while True, substantive non-network work is
         # blocked until REQUIRED_RECOVERY_ATTEMPTS distinct attempts are made.
@@ -211,10 +228,18 @@ class KnowledgeSkillGuard(Guard):
             return None
 
         # Single-shot early gate: NON-OVERRIDABLE block after
-        # SINGLE_SHOT_EARLY_THRESHOLD non-meta tool calls if no research call has
-        # been made. Set to 3 to avoid collision with BackupGuard (which blocks
-        # the 1st shell and may require a 2nd for backup). This gives the agent
-        # room to satisfy BackupGuard first before the research gate fires.
+        # SINGLE_SHOT_EARLY_THRESHOLD non-meta tool calls if no research call
+        # AND no network probe have been made. Set to 3 to avoid collision with
+        # BackupGuard (which blocks the 1st shell and may require a 2nd for
+        # backup). This gives the agent room to satisfy BackupGuard first.
+        #
+        # Two requirements to clear the gate:
+        #   1. _network_probed: agent ran a network probe (curl/ping/dig etc.)
+        #   2. _early_fired: agent made a research call (web_fetch/load_knowledge/
+        #      load_skill)
+        # Both must be satisfied. A network probe command is allowed THROUGH the
+        # gate (returns None) so the agent can execute it, but does NOT clear
+        # the research requirement.
         #
         # Why non-overridable: an overridable block was released by the agent's
         # own "I have solid prior experience" reason (observed: it named the
@@ -223,7 +248,15 @@ class KnowledgeSkillGuard(Guard):
         # Making it non-overridable forces the corrective ACTION instead of an
         # argument — the agent must run a real research call, not merely assert it
         # does not need one.
-        if self._single_shot and not self._early_fired:
+        if self._single_shot and not (self._early_fired and self._network_probed):
+            # Allow network probe commands through the gate so the agent can
+            # test connectivity. Mark _network_probed so the gate knows this
+            # requirement is met after execution (check_post will persist).
+            if ctx.tool_name == "shell":
+                cmd = str((ctx.tool_args or {}).get("command", ""))
+                if any(tok in cmd for tok in self._NETWORK_PROBE_TOKENS):
+                    # Network probe — let it through, persist flag in check_post
+                    return None
             # Count this call as the (n+1)th for the BLOCK DECISION, but do NOT
             # persist the increment here — persistence happens in check_post,
             # AFTER the tool actually executed. This prevents a tool call that is
@@ -231,23 +264,52 @@ class KnowledgeSkillGuard(Guard):
             # the count on every check_pre pass. See _persist_pre_effects.
             projected = self._single_shot_call_count + 1
             if projected >= self.SINGLE_SHOT_EARLY_THRESHOLD:
+                # Build the step-2 hint dynamically based on what's missing
+                steps_done = []
+                steps_needed = []
+                if self._network_probed:
+                    steps_done.append("network probe ✓")
+                else:
+                    steps_needed.append(
+                        "STEP 1 — Network probe (FAST, each command MUST have --connect-timeout 3 --max-time 5):\n"
+                        "  # Test official sources WITH and WITHOUT proxy:\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://github.com\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://pypi.org/simple\n"
+                        "  env -u HTTP_PROXY -u HTTPS_PROXY curl -sI --connect-timeout 3 --max-time 5 https://github.com\n"
+                        "  # Test mirrors (often faster in restricted environments):\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://mirrors.tuna.tsinghua.edu.cn\n"
+                        "  # Test task-relevant sources (e.g. astral.sh for uv, npm for node, etc.):\n"
+                        "  curl -sI --connect-timeout 3 --max-time 5 https://astral.sh\n"
+                        "  # Write results to memory so you don't re-test later.\n"
+                    )
+                if self._early_fired:
+                    steps_done.append("research pass ✓")
+                else:
+                    steps_needed.append(
+                        "STEP 2 — Research pass (choose one or more):\n"
+                        "  web_fetch() — EXTERNAL domains (any field where your prior knowledge\n"
+                        "    may not reflect the current standard method).\n"
+                        "  load_knowledge() / load_skill() — INTERNAL FlagScale domains.\n"
+                    )
+                done_str = f" Done: {', '.join(steps_done)}." if steps_done else ""
+                needed_str = "\n".join(steps_needed)
                 return GuardVerdict.block(
-                    f"[KnowledgeSkill] {projected} tool calls without "
-                    "a research pass — BLOCKED until you run one. The ONLY way past this "
-                    "gate is to actually CALL one of: web_fetch() (EXTERNAL domain — any "
-                    "field where your prior knowledge may not reflect the current standard "
-                    "method), load_knowledge() or load_skill() (INTERNAL FlagScale domains). "
-                    "This block is NON-OVERRIDABLE: a text/tool-arg override will not "
-                    "release it, and neither will meta tools (plan/memory/evict) — only "
-                    "a real knowledge call clears it. First name the PROBLEM CLASS, then "
-                    "look up its standard technique. Adopting the vocabulary of a "
-                    "'structural/principled method' without looking it up is exactly the "
-                    "failure this gate targets: the dangerous case is when the example "
-                    "looks simple and you feel no gap — that feeling is not evidence you "
-                    "hold the general rule, it means you are about to hand-tune to the "
-                    "one visible sample. Concluding 'no better method exists' from your "
-                    "own memory is an unverified knowledge gap, not a fact. Run the "
-                    "lookup now.",
+                    f"[KnowledgeSkill] {projected} tool calls without network probe "
+                    f"AND research pass. {done_str}\n\n"
+                    f"{needed_str}\n"
+                    "Both steps are required to clear this gate. This block is "
+                    "NON-OVERRIDABLE: a text/tool-arg override will not release it, "
+                    "and neither will meta tools (plan/memory/evict) — only running "
+                    "the actual actions clears it. First name the PROBLEM CLASS, "
+                    "then probe the network, then look up the standard technique. "
+                    "Adopting the vocabulary of a 'structural/principled method' "
+                    "without looking it up is exactly the failure this gate targets: "
+                    "the dangerous case is when the example looks simple and you "
+                    "feel no gap — that feeling is not evidence you hold the general "
+                    "rule, it means you are about to hand-tune to the one visible "
+                    "sample. Concluding 'no better method exists' from your own "
+                    "memory is an unverified knowledge gap, not a fact. Run the "
+                    "probe and lookup now.",
                     reason="single_shot_early_research_gate",
                     category="knowledge_skill",
                     overridable=False,
@@ -321,9 +383,14 @@ class KnowledgeSkillGuard(Guard):
             return
         if name in self._META_TOOLS:
             return
+        # Check if this was a network probe command — mark _network_probed.
+        if name == "shell":
+            cmd = str((ctx.tool_args or {}).get("command", ""))
+            if any(tok in cmd for tok in self._NETWORK_PROBE_TOKENS):
+                self._network_probed = True
         # A real, executed tool call.
         self._calls_since_knowledge += 1
-        if self._single_shot and not self._early_fired:
+        if self._single_shot and not (self._early_fired and self._network_probed):
             self._single_shot_call_count += 1
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:

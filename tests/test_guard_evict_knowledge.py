@@ -347,15 +347,49 @@ class TestKnowledgeSkillGuardSingleShot:
         assert v is not None and v.action == "block"
         assert v.overridable is False
 
+    def test_network_probe_passes_through_gate(self):
+        """A network probe command (curl -sI) passes through the early gate."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        # Exhaust the 2 free calls
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
+        # Network probe should pass even on call 3 (would normally block)
+        probe_ctx = _make_ctx(tool_name="shell", tool_args={"command": "curl -sI --connect-timeout 3 --max-time 5 https://github.com"})
+        v = guard.check_pre(probe_ctx)
+        assert v is None  # passes through
+
+    def test_gate_requires_both_probe_and_knowledge(self):
+        """Gate stays active if only one of probe/knowledge is done."""
+        guard = KnowledgeSkillGuard(single_shot=True)
+        # Exhaust 2 free calls first
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
+        # Network probe passes through (call 3 would block non-probe)
+        probe_ctx = _make_ctx(tool_name="shell", tool_args={"command": "curl -sI --connect-timeout 3 --max-time 5 https://github.com"})
+        assert _advance(guard, probe_ctx) is None
+        assert guard._network_probed is True
+        # Now a regular shell call should still block (knowledge not done yet)
+        v = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert v is not None and v.action == "block"
+        assert "STEP 2" in v.message  # hints at research, not probe
+        # Do knowledge call
+        assert _advance(guard, _make_ctx(tool_name="load_knowledge")) is None
+        # Now both done — regular calls pass
+        assert _advance(guard, _make_ctx(tool_name="shell")) is None
+
     def test_early_gate_cleared_only_by_knowledge_tool(self):
-        """After a knowledge call the gate is gone; real calls pass."""
+        """After a knowledge call AND a network probe the gate is gone; real calls pass."""
         guard = KnowledgeSkillGuard(single_shot=True)
         # First 2 calls: pass
         assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
         assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 2
-        # Third call would block, but we do a knowledge call instead
+        # Third call would block, but we do a network probe instead (passes through)
+        probe_ctx = _make_ctx(tool_name="shell", tool_args={"command": "curl -sI --connect-timeout 3 --max-time 5 https://github.com"})
+        assert _advance(guard, probe_ctx) is None  # network probe passes
+        assert guard._network_probed is True
+        # Then a knowledge call
         assert _advance(guard, _make_ctx(tool_name="load_knowledge")) is None
-        # Now real calls pass (gate cleared, normal counting).
+        # Now real calls pass (gate cleared, both requirements met).
         for i in range(10):
             assert _advance(guard, _make_ctx(tool_name="shell")) is None
 
