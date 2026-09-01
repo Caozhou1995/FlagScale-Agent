@@ -394,65 +394,77 @@ class TestKnowledgeSkillGuardSingleShot:
             assert _advance(guard, _make_ctx(tool_name="shell")) is None
 
 
-# ── KnowledgeSkillGuard network resilience (check_post) ──
+# ── KnowledgeSkillGuard information-gain inject (check_post) ──
 
-class TestKnowledgeSkillGuardNetworkResilience:
-    """Network-recovery gate is DISABLED (overlaps with new network probe gate).
-    These tests verify the gate remains disabled and does not fire."""
+class TestKnowledgeSkillGuardInfoGainInject:
+    """check_post now returns inject (not block) for knowledge tools — aligns with
+    system prompt's Information Gain section. Inject is advisory, not blocking."""
 
-    def test_no_inject_when_web_fetch_succeeds(self):
-        """No network resilience reminder when web_fetch returns normal content."""
+    def test_inject_when_web_fetch_succeeds(self):
+        """Successful web_fetch gets info-gain inject (was None when gate disabled)."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
             tool_name="web_fetch",
             tool_result="Here is the documentation page content..."
         )
         verdict = guard.check_post(ctx)
-        assert verdict is None
+        assert verdict is not None
+        assert verdict.action == "inject"
+        assert verdict.category == "knowledge_skill"
 
-    def test_no_inject_on_web_fetch_network_error(self):
-        """Network-recovery gate is disabled — no inject even on network error."""
+    def test_inject_on_web_fetch_network_error(self):
+        """Network error gets info-gain inject with fallback guidance."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_NETWORK_ERROR] Could not retrieve https://example.com: ConnectionError"
         )
         verdict = guard.check_post(ctx)
-        assert verdict is None  # gate disabled, no inject
+        assert verdict is not None
+        assert verdict.action == "inject"
+        assert verdict.category == "knowledge_skill"
 
-    def test_no_inject_case_insensitive_marker(self):
-        """Network error marker does not trigger inject (gate disabled)."""
+    def test_inject_case_insensitive_marker(self):
+        """Network error marker triggers inject regardless of case."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
             tool_name="web_fetch",
             tool_result="[web_fetch_network_error] timeout"
         )
         verdict = guard.check_post(ctx)
-        assert verdict is None  # gate disabled
+        assert verdict is not None
+        assert verdict.action == "inject"
 
-    def test_no_inject_for_other_web_fetch_errors(self):
-        """Non-network errors (blocked, size exceeded) don't trigger resilience reminder."""
+    def test_no_inject_for_non_network_web_fetch_errors(self):
+        """Non-network errors (blocked, size exceeded) still get info-gain inject
+        (they are knowledge tools returning a result)."""
         guard = KnowledgeSkillGuard()
         ctx1 = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_BLOCKED] Blocked host: localhost"
         )
-        assert guard.check_post(ctx1) is None
-        
+        v1 = guard.check_post(ctx1)
+        assert v1 is not None
+        assert v1.action == "inject"
+
         ctx2 = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_SIZE_EXCEEDED] Response exceeded 5 MB limit..."
         )
-        assert guard.check_post(ctx2) is None
-        
+        v2 = guard.check_post(ctx2)
+        assert v2 is not None
+        assert v2.action == "inject"
+
         ctx3 = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_LOW_CONTENT] returned only 12 chars"
         )
-        assert guard.check_post(ctx3) is None
+        v3 = guard.check_post(ctx3)
+        assert v3 is not None
+        assert v3.action == "inject"
 
-    def test_no_inject_for_non_web_fetch_tools(self):
-        """Network resilience only fires for web_fetch, not other tools."""
+    def test_no_inject_for_non_knowledge_tools(self):
+        """Info-gain inject only fires for knowledge tools, not shell/etc."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
             tool_name="shell",
@@ -466,12 +478,24 @@ class TestKnowledgeSkillGuardNetworkResilience:
         ctx = _make_ctx(tool_name="web_fetch", tool_result=None)
         assert guard.check_post(ctx) is None
 
-    def test_network_gate_disabled_no_env_resilience_reference(self):
-        """Gate is disabled — no Environment Resilience reference in output."""
+    def test_inject_for_load_knowledge(self):
+        """load_knowledge also gets info-gain inject."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
-            tool_name="web_fetch",
-            tool_result="[WEB_FETCH_NETWORK_ERROR] ProxyError"
+            tool_name="load_knowledge",
+            tool_result="NCCL topology detection algorithm..."
         )
         verdict = guard.check_post(ctx)
-        assert verdict is None  # gate disabled, no inject
+        assert verdict is not None
+        assert verdict.action == "inject"
+
+    def test_inject_for_load_skill(self):
+        """load_skill also gets info-gain inject."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(
+            tool_name="load_skill",
+            tool_result="Skill content: train-run workflow..."
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is not None
+        assert verdict.action == "inject"

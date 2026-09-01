@@ -266,6 +266,8 @@ class KnowledgeSkillGuard(Guard):
                         "  # Test task-relevant sources (e.g. astral.sh for uv, npm for node, etc.):\n"
                         "  curl -sI --connect-timeout 3 --max-time 5 https://astral.sh\n"
                         "  # Write results to memory so you don't re-test later.\n"
+                        "  # If a source fails later, try in order: proxy unset → mirror →\n"
+                        "  #   case flip → alternative endpoint → offline cache.\n"
                     )
                 if self._early_fired:
                     steps_done.append("research pass ✓")
@@ -388,20 +390,37 @@ class KnowledgeSkillGuard(Guard):
         # advanced the research/knowledge counters.
         self._persist_call_count(ctx)
 
-        # Network-recovery inject — DISABLED (overlaps with new network probe gate).
-        # The new single-shot early gate already requires a network probe before
-        # any real work, making the post-failure recovery inject redundant.
-        # To re-enable, uncomment the block below.
-        # if ctx.tool_name == "web_fetch" and ctx.tool_result:
-        #     result_upper = ctx.tool_result.upper()
-        #     if "[WEB_FETCH_NETWORK_ERROR]" in result_upper:
-        #         self._network_error_seen = True
-        #         self._recovery_signatures = set()
-        #         return GuardVerdict.inject(
-        #             "[NetworkResilience] web_fetch reported a network error. ...",
-        #             reason="web_fetch_network_failure",
-        #             category="network_resilience",
-        #         )
+        # Information-gain inject for knowledge tools (inject, not block).
+        # Aligns with system prompt's Information Gain section: after any knowledge
+        # acquisition (web_fetch / load_knowledge / load_skill), inject a gentle
+        # nudge to self-check whether the retrieval produced NEW information the
+        # agent did not already know. If it did not, the agent is stalled and must
+        # escape (downward: smaller input; upward: web_fetch standard technique).
+        # This is advisory (inject), not a block — the agent can continue without
+        # responding, avoiding wasted turns on what is a cognitive self-check.
+        if ctx.tool_name in self._KNOWLEDGE_TOOLS and ctx.tool_result:
+            result_str = str(ctx.tool_result)
+            is_error = "[WEB_FETCH_NETWORK_ERROR]" in result_str.upper()
+            if is_error:
+                return GuardVerdict.inject(
+                    "[KnowledgeSkill] Your last web_fetch hit a network error. "
+                    "Did this attempt teach you something you didn't already know? "
+                    "If not, you are stalled — try a different fallback: proxy unset, "
+                    "mirror source, case-flipped URL, alternative endpoint, or offline "
+                    "cache. Information gain is the exit, not a retry of the same path.",
+                    reason="web_fetch_network_info_gain",
+                    category="knowledge_skill",
+                )
+            # Success — was it NEW information or did you already know this?
+            return GuardVerdict.inject(
+                "[KnowledgeSkill] You just fetched external knowledge. Did this "
+                "produce information you did NOT already know? If yes, state the "
+                "gain explicitly and proceed. If no — same as before, you are stalled: "
+                "the retrieval confirmed your prior knowledge but added nothing. "
+                "Escape by narrowing the query or fetching a different source.",
+                reason="knowledge_info_gain_check",
+                category="knowledge_skill",
+            )
         return None
 
     # Evidence keywords that make an override reason RELEVANT to the network gate.
