@@ -40,6 +40,120 @@ _HEALTH_JUDGE_TIMEOUT_SECS = 20
 # the heartbeat never starves; on timeout we fall back to a neutral reading.
 _PROCESS_HEALTH_TIMEOUT_SECS = 5
 
+# Max characters of command output returned to the caller. A chatty build
+# (compile, make -j, pip) can emit hundreds of MB in seconds; returning it all
+# as ONE observation floods the LLM context (measured: 200k trivial lines =
+# 7.7 MB ≈ 1.9M tokens) and grows memory unbounded. We keep the HEAD (command
+# echo, config, early errors) and the TAIL (final errors, exit status, result
+# summary) — the two regions that actually carry signal — and drop the middle,
+# which is almost always repetitive progress. ~200KB ≈ 50k tokens: large enough
+# to preserve real diagnostics, small enough to never single-handedly blow a
+# context window.
+_MAX_OUTPUT_CHARS = 200_000
+# When truncating, how to split the budget between head and tail. The tail is
+# where failures and exit status land, so it gets the larger share.
+_OUTPUT_HEAD_CHARS = 60_000
+_OUTPUT_TAIL_CHARS = 140_000
+
+
+def _truncate_output(text: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
+    """Bound command output by keeping the head and tail, dropping the middle.
+
+    Build logs put the signal at the ends: the head has the command/config and
+    first errors, the tail has the final errors and exit status. The middle is
+    repetitive progress. If text fits, it is returned unchanged.
+    """
+    if len(text) <= max_chars:
+        return text
+    head = text[:_OUTPUT_HEAD_CHARS]
+    tail = text[-_OUTPUT_TAIL_CHARS:]
+    # Snap the cut points to line boundaries so we never emit a half-line that
+    # could split a key error message. Head: trim back to the last newline it
+    # contains. Tail: trim forward to the first newline. A pathological line
+    # longer than the budget (no newline to snap to) keeps the raw slice, so the
+    # size bound is always honored.
+    head_nl = head.rfind("\n")
+    if head_nl != -1:
+        head = head[: head_nl + 1]
+    tail_nl = tail.find("\n")
+    if tail_nl != -1:
+        tail = tail[tail_nl + 1 :]
+    omitted = len(text) - len(head) - len(tail)
+    marker = (
+        f"\n\n... [output truncated: {omitted:,} chars omitted from the middle; "
+        f"showing first {len(head):,} and last {len(tail):,} of {len(text):,} "
+        f"total. Re-run with a narrower filter (grep/tail/head) to see more] ...\n\n"
+    )
+    return head + marker + tail
+
+
+class _HealthSampler:
+    """Single long-lived background thread that samples process health.
+
+    WHY THIS EXISTS: the monitor loop must never call get_process_health on
+    its own (heartbeat) thread. Under a huge parallel build (opam/coq, make
+    -j) the child-process tree explodes and one get_process_health call —
+    children(recursive=True) + per-proc cpu_times()/io_counters() /proc reads
+    — can block for MINUTES on saturated disk IO. The previous design spawned
+    a fresh bounded daemon thread every check_interval; each blocked for
+    minutes, they PILED UP (dozens of abandoned threads all hammering /proc,
+    contending for the GIL), and the main heartbeat starved for minutes
+    (observed: an 8-minute heartbeat gap during a compcert build).
+
+    This sampler runs exactly ONE thread for the whole command. It samples,
+    stores the latest result + timestamp under a lock, then sleeps. The main
+    loop reads latest() — an O(1) dict copy that NEVER blocks — so the
+    heartbeat fires on schedule no matter how slow /proc is. A slow sample
+    just means the main loop reuses the last-known reading (marked stale via
+    its age), never that the heartbeat freezes.
+    """
+
+    def __init__(self, fn, pid, interval):
+        self._fn = fn
+        self._pid = pid
+        self._interval = interval
+        self._lock = threading.Lock()
+        self._latest = None
+        self._ts = 0.0
+        self._seq = 0  # increments on every fresh sample
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                value = self._fn(self._pid)
+            except Exception:
+                value = None
+            if value is not None:
+                with self._lock:
+                    self._latest = value
+                    self._ts = time.time()
+                    self._seq += 1
+            # Wait interval, but wake early if asked to stop.
+            self._stop.wait(self._interval)
+
+    def latest(self):
+        """Return (sample_or_None, age_seconds, seq). Never blocks on /proc.
+
+        seq lets the caller tell a FRESH sample from a re-read of the same one.
+        Liveness deltas (cpu_time/io/rss) are only meaningful between two
+        DISTINCT samples — computing a delta against the same snapshot always
+        yields 0 and would false-flag a busy process as idle. The main loop
+        must only run its idle/kill delta logic when seq advanced.
+        """
+        with self._lock:
+            if self._latest is None:
+                return None, None, self._seq
+            return dict(self._latest), time.time() - self._ts, self._seq
+
+    def stop(self):
+        self._stop.set()
+
 
 def _run_health_judge_bounded(fn, args, kwargs, timeout=_HEALTH_JUDGE_TIMEOUT_SECS):
     """Call the health-judge fn in a worker thread with a hard timeout.
@@ -308,6 +422,31 @@ class ShellTool(Tool):
             t_out.start()
             t_err.start()
 
+            # Background health sampler — see _HealthSampler docstring. The
+            # main loop below NEVER calls get_process_health directly; it only
+            # reads sampler.latest(), which cannot block. This is what keeps
+            # the heartbeat firing on schedule even when a single /proc sample
+            # takes minutes under a giant build tree.
+            from flagscale_agent.react.tools.process_health import (
+                get_process_health,
+                detect_output_anomalies,
+                should_kill_process,
+            )
+            # Sampler cadence tracks the check cadence but is capped at
+            # _PROCESS_HEALTH_TIMEOUT_SECS. In production the check interval is
+            # 30s so the sampler runs every 5s (plenty fresh per check). When a
+            # caller/test uses a tighter remind_interval (e.g. 1s) the sampler
+            # matches it so every check gets a fresh sample and idle-kill timing
+            # stays responsive. Under a giant build tree a sample naturally
+            # takes longer than this interval — the sampler just runs as fast as
+            # /proc allows; the interval is only the MINIMUM sleep between samples.
+            _sampler_interval = min(_PROCESS_HEALTH_TIMEOUT_SECS,
+                                    min(30, self._remind_interval))
+            _health_sampler = _HealthSampler(
+                get_process_health, proc.pid,
+                interval=_sampler_interval,
+            ).start()
+
             # --- Long-command monitoring loop ---
             start = time.time()
             # Default cadence is 30s; honor a smaller remind_interval so callers
@@ -325,6 +464,8 @@ class ShellTool(Tool):
             _prev_cpu_time = None   # Cumulative CPU secs (liveness signal A)
             _prev_io_bytes = None   # Cumulative IO bytes (liveness signal A)
             _prev_rss_mb = None     # RSS MB (liveness signal A)
+            idle_count = 0          # Consecutive no-output + flat-counter samples
+            _last_health_seq = -1   # Seq of the last health sample we acted on
 
             while proc.poll() is None:
                 elapsed = time.time() - start
@@ -383,30 +524,40 @@ class ShellTool(Tool):
                         stall_count = 0
                     last_output_snapshot = current_snapshot
 
-                    # Hard-indicator check (priority)
-                    from flagscale_agent.react.tools.process_health import (
-                        get_process_health,
-                        detect_output_anomalies,
-                        should_kill_process,
+                    # Read the latest health sample from the background sampler.
+                    # This is an O(1) lock-guarded dict copy — it NEVER blocks on
+                    # /proc, so the heartbeat above always fires on schedule no
+                    # matter how slow a real sample is under a giant build tree.
+                    proc_health, _sample_age, _sample_seq = _health_sampler.latest()
+                    # Liveness deltas (cpu_time/io/rss) are only meaningful
+                    # between two DISTINCT samples. The heartbeat cadence
+                    # (remind_interval, as low as 1s) can be much faster than
+                    # the sampler interval (5s), so several loop iterations read
+                    # the SAME snapshot. Computing a delta against an unchanged
+                    # snapshot always yields 0 → a busy CPU-loop with no output
+                    # would look idle and get false-killed. So: only act on a
+                    # FRESH sample (seq advanced). A missing sample (seq==-1
+                    # never advanced) or a STALE one (sampler stuck minutes on a
+                    # giant /proc walk) also falls back to the neutral reading.
+                    _fresh = proc_health is not None and _sample_seq != _last_health_seq
+                    _stale = (
+                        _sample_age is not None
+                        and _sample_age > 3 * _PROCESS_HEALTH_TIMEOUT_SECS
                     )
-
-                    # Bound the health sample. get_process_health walks the whole
-                    # child-process tree (children(recursive=True) + per-proc
-                    # cpu_times()/io_counters() /proc reads). Under a make -j / opam
-                    # coq build the tree explodes to 100s-1000s of short procs and a
-                    # single call can block MINUTES on /proc reads while the disk/CPU
-                    # is saturated — starving the heartbeat (only emitted between
-                    # samples). Cap it like the judge: on timeout, fall back to a
-                    # neutral "alive, working" reading so the loop keeps beating and
-                    # never false-kills on a slow sample.
-                    proc_health = _run_health_judge_bounded(
-                        get_process_health, (proc.pid,), {},
-                        timeout=_PROCESS_HEALTH_TIMEOUT_SECS,
-                    )
-                    if proc_health is None:
-                        # Neutral "alive & working" reading. Bump cpu_time by a
-                        # nonzero amount so the liveness veto (support A) treats a
-                        # slow sample as progress, never as a stall → no false kill.
+                    # THREE cases:
+                    #  (a) STALE: a real sample exists but the sampler is stuck
+                    #      minutes on a giant /proc walk. Use a neutral "working"
+                    #      reading (cpu_time bumped) so we never false-kill a
+                    #      healthy build just because /proc is slow. Evaluate.
+                    #  (b) FRESH: a new distinct sample — evaluate deltas normally.
+                    #  (c) NON-FRESH & not stale: heartbeat cadence outran the
+                    #      sampler (e.g. 1s checks vs a sample still in flight).
+                    #      There is NO new health info, so we must NOT evaluate —
+                    #      fabricating a reading here would either reset idle_count
+                    #      (masking a real hang) or accumulate it (false-kill).
+                    #      Skip the whole health/kill block; idle_count is left
+                    #      untouched until the next fresh sample arrives.
+                    if _stale:
                         _base_cpu = _prev_cpu_time if _prev_cpu_time is not None else 0.0
                         _base_io = _prev_io_bytes if _prev_io_bytes is not None else 0.0
                         proc_health = {
@@ -416,6 +567,14 @@ class ShellTool(Tool):
                             'children_alive': max(1, _prev_num_children),
                             'cpu_time': _base_cpu + 1.0, 'io_bytes': _base_io,
                         }
+                    elif not _fresh:
+                        # No fresh health data this tick — heartbeat already fired
+                        # above; just wait for the next sample. Do not touch
+                        # idle_count or _prev_* counters.
+                        time.sleep(0.2)
+                        continue
+                    else:
+                        _last_health_seq = _sample_seq
                     output_anomalies = detect_output_anomalies(recent_text)
                     
                     # Track if we ever had children
@@ -438,21 +597,46 @@ class ShellTool(Tool):
                     _prev_io_bytes = proc_health.get('io_bytes', 0.0)
                     _prev_rss_mb = proc_health.get('memory_mb', 0.0)
 
+                    # Idle tracking: a sample is idle when there is NO new output
+                    # AND all three cumulative counters are flat (same test the
+                    # liveness veto uses, inverted). idle_count accumulates only
+                    # across consecutive idle samples and resets the moment the
+                    # process produces output or moves any counter. When the
+                    # health sample times out, progress_signals stays None (no
+                    # baseline yet) OR the neutral fallback bumped cpu_time by
+                    # +1.0 so cpu_time_delta > 0.5 → not idle → we never
+                    # false-kill on a slow /proc read.
+                    if progress_signals is None:
+                        is_idle = False  # no baseline delta yet — cannot judge
+                    else:
+                        counters_flat = (
+                            progress_signals.get('cpu_time_delta', 0.0) <= 0.5
+                            and progress_signals.get('io_bytes_delta', 0.0) <= (1 << 20)
+                            and abs(progress_signals.get('rss_delta', 0.0)) <= (1 << 20)
+                        )
+                        is_idle = (not output_changed) and counters_flat
+                    if is_idle:
+                        idle_count += 1
+                    else:
+                        idle_count = 0
+
                     should_kill, kill_reason = should_kill_process(
                         elapsed, output_changed, stall_count,
                         proc_health, output_anomalies, _had_children,
                         _prev_num_children,
                         progress_signals=progress_signals,
+                        idle_count=idle_count,
                     )
                     
                     # Update child count for next iteration
                     _prev_num_children = proc_health['num_children']
 
                     if should_kill:
+                        _health_sampler.stop()
                         proc.kill()
                         t_out.join(timeout=2)
                         t_err.join(timeout=2)
-                        partial = "".join(stdout_chunks) + "".join(stderr_chunks)
+                        partial = _truncate_output("".join(stdout_chunks) + "".join(stderr_chunks))
                         self._record_history(command, "killed", time.time() - start)
                         return (
                             f"TERMINATED: {kill_reason} (after {time_str}).\n"
@@ -500,10 +684,11 @@ class ShellTool(Tool):
                             },
                         ) or {"kill": False}
                         if decision.get("kill"):
+                            _health_sampler.stop()
                             proc.kill()
                             t_out.join(timeout=2)
                             t_err.join(timeout=2)
-                            partial = "".join(stdout_chunks) + "".join(stderr_chunks)
+                            partial = _truncate_output("".join(stdout_chunks) + "".join(stderr_chunks))
                             reason = decision.get("reason", "Unhealthy command")
                             self._record_history(command, "killed", time.time() - start)
                             return (
@@ -544,8 +729,20 @@ class ShellTool(Tool):
 
                 time.sleep(0.2)
 
-            t_out.join(timeout=5)
-            t_err.join(timeout=5)
+            # Drain the reader threads. When the pipe closes normally these
+            # return in milliseconds. But if the command backgrounded a child
+            # that INHERITED the stdout/stderr write end (e.g. `cmd; daemon &`),
+            # the pipe never sees EOF even though proc.poll() already returned —
+            # the read threads' `for line in stream` blocks on the orphaned
+            # write end. The process is DONE; its own output was already flushed
+            # the moment it exited, so we only need a brief grace to drain the
+            # buffer, not the full 5s per stream. A short bounded join keeps the
+            # tool responsive (returns in <1s instead of 10s) while still
+            # collecting any last buffered lines. The threads are daemon, so a
+            # still-blocked reader is abandoned cleanly at process exit.
+            t_out.join(timeout=0.5)
+            t_err.join(timeout=0.5)
+            _health_sampler.stop()
 
             # --- Post-execution: assemble result ---
             elapsed_total = time.time() - start
@@ -558,6 +755,10 @@ class ShellTool(Tool):
                 output = "(no output)"
             if post_fn and output != "(no output)":
                 output = post_fn(output)
+            # Bound the returned output so a chatty build can never flood the
+            # context or blow memory (see _truncate_output). Applied AFTER
+            # post_fn so a trailing head/tail pipe still sees full output first.
+            output = _truncate_output(output)
 
             # Record command outcome for future health-judge context.
             outcome = "completed"

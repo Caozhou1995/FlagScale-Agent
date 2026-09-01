@@ -51,6 +51,12 @@ class TestCompileRedirectGuard:
         "gcc -O2 main.c -o main > compile.log 2>&1",
         # a multi-package install with env setup and bare redirect:
         'unset HTTP_PROXY && eval $(opam env) && opam install pkg1 pkg2 -y > /tmp/opam_install2.log 2>&1; echo "EXIT: $?"',
+        # `env -u VAR ...` prefix must NOT let the build slip past the guard: the
+        # env branch has to consume its own -u unset pairs before the driver.
+        # Seen live on compcert running invisible to the monitor.
+        'env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy opam install coq.8.16.1 menhir --switch=compcert -y 2>&1 | tail -30; echo "EXIT: $?"',
+        "env -u HTTP_PROXY make -j8 | tail",
+        "env -i opam install coq -y | tail -20",
     ])
     def test_blocks_compile_not_visible_to_monitor(self, cmd):
         v = self.g.check_pre(_ctx(cmd))
@@ -65,6 +71,8 @@ class TestCompileRedirectGuard:
         # background redirect + tail -f streams the log back to the terminal
         "opam install coq > install.log 2>&1 & tail -f install.log",
         "make -j8 > build.log 2>&1 & tail -F build.log",
+        # env -u prefix with a proper tee stays visible -> must still PASS
+        "env -u HTTP_PROXY opam install coq -y 2>&1 | tee install.log",
     ])
     def test_passes_compile_visible_to_monitor(self, cmd):
         v = self.g.check_pre(_ctx(cmd))
@@ -117,35 +125,27 @@ class TestCompileRedirectGuard:
         # tee keeps it visible
         assert self.g.check_pre(_ctx("make -j 2>&1 | tee build.log")) is None
 
-    def test_message_guides_single_threaded_build(self):
-        # The block message must steer toward: single-threaded (-j1) builds ONLY,
-        # probe first under a timeout, then full single-threaded build. No
-        # multi-threaded advice — the eval container has limited memory.
+    def test_message_guides_probe_then_bounded_parallel_build(self):
+        # The block message must steer toward: probe single-threaded (-j1) first
+        # under a timeout to surface the first real error cleanly, THEN scale up
+        # with MEMORY-BOUNDED parallelism (not full single-threaded, not bare
+        # unbounded -j). This balances throughput against OOM on small boxes.
         v = self.g.check_pre(_ctx("make -j > build.log 2>&1"))
         assert v.action == "block"
         msg = v.message
-        # single-threaded is the only option
-        assert "single-threaded" in msg
+        # probe stage is single-threaded under a timeout
         assert "-j1" in msg
         assert "probe" in msg.lower()
         assert "timeout" in msg
-        # must NOT recommend multi-threaded parallelism as advice
-        # (-j$(nproc) may appear in the "NEVER use" warning — that's fine)
-        assert "-j N" not in msg
-        assert "-j4" not in msg
-        # must NOT tell agent to check nproc / free -h / available memory as advice
-        assert "free -h" not in msg
-        assert "available memory" not in msg.lower()
-        # must NOT mention memory-to-cores mapping
-        assert "4GB" not in msg
-        assert "32GB" not in msg
-        # must warn about OOM from multi-threading
+        # real build scales up with a memory-derived -j (bounded parallelism)
+        assert "MemAvailable" in msg
+        assert "-j$J" in msg or '-j "$J"' in msg
+        # must forbid bare UNBOUNDED make -j (the fork-bomb path)
+        assert "make -j" in msg
         assert "OOM" in msg or "oom" in msg.lower()
-        # must forbid bare unbounded make -j
-        assert "make -j" in msg  # as the thing to NEVER use
-        # verify exit code after build/install
+        # verify exit code + binary after build/install
         assert "EXIT" in msg or "exit code" in msg.lower() or "exit:" in msg.lower()
-        assert "which" in msg  # verify binary exists
+        assert "which" in msg
 
     def test_message_advises_one_by_one_install(self):
         """The block message must advise installing critical packages ONE BY ONE,

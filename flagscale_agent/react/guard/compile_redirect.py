@@ -58,10 +58,16 @@ _COMPILE_TOKENS = (
 )
 
 # Leading wrapper/env-setter tokens that may precede the real build driver:
-#   sudo, VAR=val env prefixes, stdbuf -oL -eL, nice -n 5, time, ...
+#   sudo, VAR=val env prefixes, env -u VAR / env -i / env VAR=val,
+#   stdbuf -oL -eL, nice -n 5, time, nohup, ...
 # Each may carry its own flags/args, so consume greedily up to the driver.
+# NB: the `env` branch must eat its OWN options (`-u VAR` unset pairs, `-i`,
+# `VAR=val` assignments); otherwise `env -u HTTP_PROXY opam install ...` slips
+# past the whole guard (the `-u` breaks the match right after `env `), and a
+# `... | tail` build then runs invisible to the monitor. Seen live on compcert.
 _WRAPPER = (
-    r"(?:sudo\s+|[A-Za-z_][A-Za-z0-9_]*=\S+\s+|env\s+|"
+    r"(?:sudo\s+|[A-Za-z_][A-Za-z0-9_]*=\S+\s+|"
+    r"env(?:\s+(?:-[A-Za-z]+\s+\S+|-[A-Za-z]+|[A-Za-z_][A-Za-z0-9_]*=\S+))*\s+|"
     r"stdbuf(?:\s+-\S+)*\s+|nice(?:\s+-\S+)*\s+|time\s+|nohup\s+)*"
 )
 
@@ -163,22 +169,23 @@ Keep the output flowing to the terminal AND a file, so it is visible live and in
 monitor needs — not a bare `> file`.
 
 While you are here — parallelism strategy, before you commit the full build:
-  • Do NOT use multiple threads. The eval container has limited memory (often
-    4-8GB). Each compiler process can use 1-2GB RAM, so multi-threaded builds
-    can easily OOM the box, killing the build and wasting all progress. A
-    single-threaded build is slower but SAFE and deterministic — it fails at
-    the first error with a clean, readable message instead of interleaved noise.
-  • Probe first, then build: run once single-threaded UNDER A TIMEOUT to confirm
-    the build is configured and starts compiling cleanly, THEN run the full
-    single-threaded build. Example:
-      timeout 120 make -j1 2>&1 | tee build.probe.log   # confirm it configures
-      make -j1 2>&1 | tee build.log                     # then full single-threaded build
-  • NEVER use `make -j` or `make -j$(nproc)`: it forks as many compilers as the
-    dependency graph allows and routinely OOMs or thrashes the box. Always use -j1.
-  • For other build systems, apply the same single-threaded constraint:
-      cargo build -j 1 | tee build.log
-      cmake --build . -j 1 | tee build.log
-      pip install <pkg> | tee build.log
+  • Probe single-threaded first, THEN build with BOUNDED parallelism. A parallel
+    first build interleaves output and buries the first real config/toolchain/dep
+    error in noise; a single-threaded probe surfaces it cleanly. Once the probe
+    confirms it configures and starts compiling, scale up:
+      timeout 120 make -j1 2>&1 | tee build.probe.log   # probe: clean first error
+      J=$(nproc); M=$(awk '/MemAvailable/{print int($2/2000000)}' /proc/meminfo)
+      J=$(( M<J ? M : J )); J=$(( J<1 ? 1 : J ))         # ~2GB/compiler, memory-bounded
+      make -j$J 2>&1 | tee build.log                     # then bounded-parallel build
+  • NEVER use bare `make -j` or `make -j$(nproc)` WITHOUT the memory cap above: an
+    unbounded `-j` forks as many compilers as the dependency graph allows and
+    routinely OOMs or thrashes a small (4-8GB) box, killing the build. Cap `-j` by
+    available memory (each compiler process can use 1-2GB). On a tiny container the
+    formula naturally degrades to -j2 or -j1; on a big host it uses the cores.
+  • For other build systems, apply the same memory-bounded parallelism:
+      cargo build -j "$J" 2>&1 | tee build.log
+      cmake --build . -j "$J" 2>&1 | tee build.log
+      ninja -j "$J" 2>&1 | tee build.log
 
 If this command is short, already streams its own progress, or output is intentionally
 discarded, override with "_override_reason" explaining why.

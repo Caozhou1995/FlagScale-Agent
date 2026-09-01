@@ -400,10 +400,16 @@ class TestKnowledgeSkillGuardSingleShot:
         "nslookup github.com",
         "dig github.com",
         "time curl -s --connect-timeout 3 --max-time 10 -o /dev/null https://pypi.org/simple/pip/",
+        # degradation-chain tokens: minimal container may lack curl
+        "command -v curl wget python3 2>/dev/null",
+        "wget -T 5 -t 1 --spider -S https://github.com",
+        "python3 -c \"import urllib.request,socket; socket.setdefaulttimeout(5); print(urllib.request.urlopen('https://pypi.org').status)\"",
+        "getent hosts github.com",
     ])
     def test_expanded_network_probe_tokens_pass_through(self, probe_cmd):
         """New probe tokens (curl -s --connect-timeout, openssl s_client,
-        env -u HTTP_PROXY, DNS tools, time curl) pass through the early gate."""
+        env -u HTTP_PROXY, DNS tools, time curl) plus degradation-chain tokens
+        (command -v, wget -T, python urllib, getent) pass through the early gate."""
         guard = KnowledgeSkillGuard(single_shot=True)
         # Exhaust the 2 free calls
         assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
@@ -413,10 +419,12 @@ class TestKnowledgeSkillGuardSingleShot:
         v = guard.check_pre(probe_ctx)
         assert v is None  # passes through as a network probe
 
-    def test_step1_message_lists_broad_probe_targets(self):
-        """The STEP 1 block message must list broader probe targets beyond
-        just github/pypi — including mirrors, language registries, DNS, TLS,
-        and download speed tests."""
+    def test_step1_message_is_goal_oriented_and_adaptive(self):
+        """The STEP 1 block message must teach the GOAL + an adaptive degradation
+        chain (check tool exists, fall back curl→wget→python), NOT a fixed script
+        of hardcoded task-irrelevant registries. This is the anti-'copy the list'
+        redesign: the compcert run showed the LLM copied ~20 curl lines verbatim
+        into a container with no curl and burned 133s."""
         guard = KnowledgeSkillGuard(single_shot=True)
         # Exhaust 2 free calls to trigger the gate
         assert _advance(guard, _make_ctx(tool_name="shell")) is None  # call 1
@@ -425,26 +433,28 @@ class TestKnowledgeSkillGuardSingleShot:
         v = guard.check_pre(_make_ctx(tool_name="shell"))
         assert v is not None and v.action == "block"
         msg = v.message
-        # core code-hosting sources
-        assert "github.com" in msg
-        assert "pypi.org" in msg
-        assert "raw.githubusercontent.com" in msg
-        # mirrors
-        assert "mirrors.tuna.tsinghua.edu.cn" in msg
-        assert "gitee.com" in msg
-        # language-specific registries
-        assert "registry.npmjs.org" in msg
-        assert "crates.io" in msg
-        assert "proxy.golang.org" in msg
-        # DNS resolution test
-        assert "nslookup" in msg
-        # TLS handshake test
-        assert "openssl s_client" in msg
-        # download speed test
-        assert "time curl" in msg
-        # proxy toggle test
-        assert "env -u HTTP_PROXY" in msg
-        # must NOT contain task-specific sources (no leaking)
+        # 1. States the GOAL, not just commands
+        assert "GOAL" in msg
+        # 2. Requires task-relevant host selection (not a generic sweep)
+        assert "task-relevant" in msg
+        assert "sweep" in msg  # explicitly warns against sweeping a generic list
+        # 3. Tool-existence check before use (minimal container may lack curl)
+        assert "command -v" in msg
+        assert "no curl" in msg
+        # 4. Degradation chain: curl → wget → python urllib
+        assert "curl" in msg
+        assert "wget" in msg
+        assert "urllib" in msg
+        # 5. Still enforces bounded time + memory write
+        assert "connect-timeout" in msg or "max-time" in msg
+        assert "memory" in msg
+        # 6. Failure = one data point, degrade don't repeat
+        assert "proxy" in msg
+        # 7. Must NOT hardcode task-irrelevant registries any more
+        assert "registry.npmjs.org" not in msg
+        assert "crates.io" not in msg
+        assert "proxy.golang.org" not in msg
+        # 8. must NOT leak any task-specific source
         assert "compcert.org" not in msg
         assert "inria.hal.science" not in msg
 
@@ -554,3 +564,250 @@ class TestKnowledgeSkillGuardInfoGainInject:
         verdict = guard.check_post(ctx)
         assert verdict is not None
         assert verdict.action == "inject"
+
+    def test_success_inject_presents_three_state_loop(self):
+        """Successful fetch inject presents the acquired/missing/self-fillable
+        three-state loop so the agent knows its next move."""
+        guard = KnowledgeSkillGuard()
+        ctx = _make_ctx(
+            tool_name="web_fetch",
+            tool_result="Here is the documentation page content..."
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is not None
+        assert verdict.action == "inject"
+        msg = verdict.message.upper()
+        # All three states must be named
+        assert "ACQUIRED" in msg
+        assert "MISSING" in msg
+        assert "SELF-FILLABLE" in msg
+        assert verdict.reason == "knowledge_info_gain_three_state"
+
+
+
+# ── KnowledgeSkillGuard network shell commands reset counter ──
+
+class TestKnowledgeSkillGuardNetworkShellReset:
+    """check_post detects substantive network shell ops (git clone, pip install, wget, curl download)
+    and treats them as external info-gain — resets _calls_since_knowledge=0, _early_fired=True.
+    Pure probes (command -v, curl -sI) do NOT reset the counter."""
+
+    def test_git_clone_resets_counter(self):
+        """git clone is a substantive network op → resets counter."""
+        guard = KnowledgeSkillGuard()
+        # Advance counter to near inject threshold
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        assert guard._calls_since_knowledge == guard.INJECT_THRESHOLD - 2
+
+        # Execute git clone
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "git clone https://github.com/user/repo.git /tmp/repo"},
+            tool_result="Cloning into '/tmp/repo'..."
+        )
+        verdict = guard.check_post(ctx)
+        # check_post returns None (no message), but counter is reset
+        assert verdict is None
+        assert guard._calls_since_knowledge == 0
+        assert guard._early_fired is True
+
+    def test_pip_install_resets_counter(self):
+        """pip install is a substantive network op → resets counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        assert guard._calls_since_knowledge == guard.INJECT_THRESHOLD - 2
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "pip install numpy"},
+            tool_result="Collecting numpy..."
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        assert guard._calls_since_knowledge == 0
+        assert guard._early_fired is True
+
+    def test_apt_install_resets_counter(self):
+        """apt-get/apt install is a substantive network op → resets counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "sudo apt-get install -y build-essential"},
+            tool_result="Reading package lists..."
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        assert guard._calls_since_knowledge == 0
+
+    def test_wget_download_resets_counter(self):
+        """wget downloading a file is a substantive network op → resets counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "wget https://example.com/file.tar.gz"},
+            tool_result="Saving to: 'file.tar.gz'"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        assert guard._calls_since_knowledge == 0
+
+    def test_curl_download_resets_counter(self):
+        """curl downloading a file (not probe) is a substantive network op → resets counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "curl -L -o /tmp/file.tar.gz https://example.com/file.tar.gz"},
+            tool_result="  % Total    % Received..."
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        assert guard._calls_since_knowledge == 0
+
+    def test_curl_probe_does_not_reset_counter(self):
+        """curl -sI (probe) does NOT reset counter — only sets _network_probed."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        counter_before = guard._calls_since_knowledge
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "curl -sI --connect-timeout 3 https://github.com"},
+            tool_result="HTTP/2 200"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        # Counter incremented by 1 (probe does NOT reset, falls through to increment)
+        assert guard._calls_since_knowledge == counter_before + 1
+        # Network probe flag set
+        assert guard._network_probed is True
+        assert guard._network_probed is True
+
+    def test_command_v_probe_does_not_reset_counter(self):
+        """command -v (probe) does NOT reset counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        counter_before = guard._calls_since_knowledge
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "command -v curl wget"},
+            tool_result="/usr/bin/curl\n/usr/bin/wget"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        # Counter incremented by 1
+        assert guard._calls_since_knowledge == counter_before + 1
+        assert guard._network_probed is True
+
+    def test_curl_silent_probe_does_not_reset(self):
+        """curl -s --connect-timeout (probe) does NOT reset counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        counter_before = guard._calls_since_knowledge
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "curl -s --connect-timeout 3 --max-time 5 -o /dev/null https://pypi.org"},
+            tool_result=""
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        # Counter incremented by 1
+        assert guard._calls_since_knowledge == counter_before + 1
+        assert guard._network_probed is True
+
+    def test_multiple_network_ops_each_reset(self):
+        """Multiple substantive network ops each reset the counter independently."""
+        guard = KnowledgeSkillGuard()
+        # First git clone
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        ctx1 = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "git clone https://github.com/A/B.git"},
+            tool_result="Cloning..."
+        )
+        guard.check_post(ctx1)
+        assert guard._calls_since_knowledge == 0
+
+        # Build up counter again
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        assert guard._calls_since_knowledge == guard.INJECT_THRESHOLD - 2
+
+        # Second pip install also resets
+        ctx2 = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "pip install requests"},
+            tool_result="Collecting requests..."
+        )
+        guard.check_post(ctx2)
+        assert guard._calls_since_knowledge == 0
+
+    def test_regular_shell_command_does_not_reset(self):
+        """Regular shell commands (ls, grep, etc.) do NOT reset counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        counter_before = guard._calls_since_knowledge
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "ls -la /tmp"},
+            tool_result="total 12\ndrwxr-xr-x..."
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        # Counter incremented by 1 (regular commands don't reset)
+        assert guard._calls_since_knowledge == counter_before + 1
+
+
+    def test_echo_git_clone_does_not_reset(self):
+        """Commands that contain network tokens but don't execute them (e.g. echo, grep) should NOT reset.
+        This is a regression test for false positives in substring matching."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        counter_before = guard._calls_since_knowledge
+
+        # echo containing "git clone" should NOT reset
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "echo 'git clone https://github.com/user/repo.git'"},
+            tool_result="git clone https://github.com/user/repo.git"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        # Counter should increment by 1, NOT reset to 0
+        assert guard._calls_since_knowledge == counter_before + 1
+
+    def test_grep_pip_install_does_not_reset(self):
+        """grep containing 'pip install' should NOT reset counter."""
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.INJECT_THRESHOLD - 2):
+            _advance(guard, _make_ctx(tool_name="shell"))
+        counter_before = guard._calls_since_knowledge
+
+        ctx = _make_ctx(
+            tool_name="shell",
+            tool_args={"command": "grep 'pip install' logfile.txt"},
+            tool_result="2024-01-01: pip install numpy"
+        )
+        verdict = guard.check_post(ctx)
+        assert verdict is None
+        # Counter should increment by 1, NOT reset to 0
+        assert guard._calls_since_knowledge == counter_before + 1

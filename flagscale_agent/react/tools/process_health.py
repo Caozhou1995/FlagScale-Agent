@@ -19,6 +19,17 @@ from __future__ import annotations
 import psutil
 
 
+# Consecutive idle samples (no output AND flat CPU/IO/RSS) before a hard kill.
+# At the 30s check cadence this is ~2 minutes. A genuinely computing process
+# (compile, torch import, buffered work) always moves at least one of
+# cpu_time / io_bytes / rss between samples, so it never accumulates idle
+# samples. A process that is byte-for-byte silent AND burns no CPU/IO for two
+# straight minutes is blocked on a syscall — a dead network connect, a DNS
+# black hole, a lock it will never get — not working. Killing it fast reclaims
+# the minutes an agent would otherwise burn waiting on a hung curl/wget/apt.
+IDLE_KILL_THRESHOLD = 4
+
+
 def get_process_health(proc_pid: int) -> dict:
     """
     Get process health status using psutil.
@@ -167,6 +178,7 @@ def should_kill_process(
     prev_num_children: int = 0,
     progress_signals: dict | None = None,
     mem_pressure: bool | None = None,
+    idle_count: int = 0,
 ) -> tuple[bool, str]:
     """
     Unified hard-indicator check. Returns (should_kill, reason).
@@ -249,6 +261,29 @@ def should_kill_process(
             f"with {proc_health['cpu_percent']:.0f}% CPU. "
             f"The command likely caught an error and is blocking on a subprocess. "
             f"Stop and fix the root cause instead of waiting."
+        )
+
+    # 1c. IDLE HANG — hard kill, fires regardless of the liveness veto because
+    #     idle_count is ITSELF the negation of liveness: shell.py only bumps it
+    #     when output is unchanged AND all three progress deltas (cpu_time, io,
+    #     rss) are flat. IDLE_KILL_THRESHOLD consecutive such samples (~2 min at
+    #     the 30s cadence) means the process produced no output and did no
+    #     measurable CPU/IO/memory work for two straight minutes — it is blocked
+    #     on a syscall (dead network connect, DNS black hole, unobtainable lock),
+    #     not computing. A real compile / import / buffered job moves at least
+    #     one counter every sample and never reaches this count. This kills a
+    #     hung curl/wget/apt/git in ~2 min instead of waiting out the 6-min
+    #     frozen-output rule (1b), which never fires when there is simply no
+    #     output at all.
+    if idle_count >= IDLE_KILL_THRESHOLD:
+        return True, (
+            f"No output and no CPU/IO/memory activity for ~{idle_count * 30}s "
+            f"(idle for {idle_count} consecutive checks). The process is not "
+            f"computing — it is blocked on a syscall (a dead network endpoint, "
+            f"DNS black hole, or a lock it will never acquire). Retrying the "
+            f"same command will hang the same way. Change your approach: unset "
+            f"the proxy, try a different mirror/endpoint, add an explicit "
+            f"--max-time/timeout, or use a local cache."
         )
 
     # --- Liveness veto: below here every rule is a heuristic; if the process

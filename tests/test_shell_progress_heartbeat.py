@@ -98,6 +98,44 @@ class TestShellProgressHeartbeat:
         assert "before_fail" in result
 
 
+class TestIdleHangKill:
+    """A command that produces no output AND burns no CPU/IO (a hung network
+    connect, simulated here by sleep) is killed within ~IDLE_KILL_THRESHOLD
+    checks instead of waiting out the 6-minute frozen-output rule."""
+
+    def test_idle_sleep_killed_fast(self):
+        import time
+        tool = ShellTool(remind_interval=1)  # check_interval = 1s
+        t0 = time.time()
+        # sleep 60 would hang for a full minute; idle-kill must stop it in ~5-6s
+        # (first sample has no baseline, then 4 flat samples reach the threshold).
+        progress, result = _run_capturing_stdout(tool, "sleep 60")
+        elapsed = time.time() - t0
+        assert result.startswith("TERMINATED"), result[:200]
+        assert "no output" in result.lower()
+        # Killed far sooner than the 6-min frozen rule or 60s sleep.
+        assert elapsed < 30, f"idle-kill took {elapsed:.0f}s, expected <30s"
+
+    def test_active_command_not_idle_killed(self):
+        """A CPU-burning command with no stdout must NOT be idle-killed —
+        cpu_time_delta stays positive so idle_count never accumulates."""
+        import time
+        tool = ShellTool(remind_interval=1)
+        # Busy-loop ~6s, no output. Must complete normally, not TERMINATED.
+        prog = (
+            "python3 -c \""
+            "import time\n"
+            "e=time.time()+6\n"
+            "x=0\n"
+            "while time.time()<e:\n"
+            "    x+=1\n"
+            "print('BUSY_DONE')\""
+        )
+        _, result = _run_capturing_stdout(tool, prog)
+        assert "BUSY_DONE" in result, result[:200]
+        assert not result.startswith("TERMINATED"), result[:200]
+
+
 class TestHealthJudgeBounded:
     """A stalled health-judge LLM call must not freeze the monitor loop.
 
@@ -210,3 +248,66 @@ class TestProcessHealthBounded:
                 'cpu_percent': 55.0, 'memory_mb': 42.0}
         out = _run_health_judge_bounded(lambda pid: real, (99,), {}, timeout=5)
         assert out is real
+
+
+import re
+import threading
+import time as _time
+
+
+class TestHeartbeatNeverStarvedBySlowHealth:
+    """Reproduce the compcert 8-minute heartbeat gap and prove it's fixed.
+
+    Root cause (old design): the monitor loop called get_process_health on its
+    OWN thread every check_interval. Under a giant build tree a single /proc
+    walk blocked for minutes; the old per-check bounded threads piled up and
+    the main heartbeat starved. Fix: one background _HealthSampler thread; the
+    main loop only reads latest() (never blocks), so the heartbeat fires on
+    schedule regardless of /proc latency.
+    """
+
+    def _run_with_slow_health(self, sleep_secs, cmd, remind_interval=1):
+        import flagscale_agent.react.tools.process_health as ph
+        from flagscale_agent.react.tools.shell import ShellTool
+
+        orig = ph.get_process_health
+
+        def _slow(pid):
+            _time.sleep(sleep_secs)
+            return orig(pid)
+
+        ph.get_process_health = _slow
+        try:
+            buf = io.StringIO()
+            old = sys.stdout
+            sys.stdout = buf
+            try:
+                tool = ShellTool(remind_interval=remind_interval)
+                result = tool.execute(command=cmd)
+            finally:
+                sys.stdout = old
+            return buf.getvalue(), result
+        finally:
+            ph.get_process_health = orig
+
+    def test_heartbeat_fires_on_schedule_despite_slow_health(self):
+        progress, result = self._run_with_slow_health(20, "sleep 6; echo GAP_DONE")
+        beats = [int(x) for x in re.findall(r'⏳ \[(\d+)s\]', progress)]
+        assert len(beats) >= 4, (
+            f"HEARTBEAT STARVED by slow health sample: only {len(beats)} beats "
+            f"in ~6s (expected >=4 at 1s cadence). beats={beats}"
+        )
+        gaps = [b2 - b1 for b1, b2 in zip(beats, beats[1:])]
+        assert all(g <= 3 for g in gaps), (
+            f"heartbeat cadence dragged by slow health: gaps={gaps} (want ~1s)"
+        )
+        assert "GAP_DONE" in result
+
+    def test_no_sampler_thread_leak_after_command(self):
+        before = threading.active_count()
+        self._run_with_slow_health(2, "echo QUICK", remind_interval=1)
+        _time.sleep(0.3)
+        after = threading.active_count()
+        assert after <= before + 1, (
+            f"sampler/reader threads leaked: before={before} after={after}"
+        )
