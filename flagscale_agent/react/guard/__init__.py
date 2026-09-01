@@ -52,6 +52,13 @@ class GuardContext:
     # LLM response text
     assistant_text: str = ""
 
+    # True only when assistant_text is the text the LLM produced THIS turn's
+    # current iteration (completion-path consultation), not stale text scanned
+    # back out of history at the top of a fresh iteration. Completion gates that
+    # match on assistant_text.endswith("[TASK_COMPLETE]") MUST require this, or a
+    # prior turn's trailing sentinel re-triggers them at every new turn's top.
+    llm_responded: bool = False
+
     # LLM classify function
     classify_fn: Any = None
 
