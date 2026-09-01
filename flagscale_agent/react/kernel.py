@@ -289,6 +289,13 @@ class AgentKernel:
                             tool_args=({"_override_reason": comp_override}
                                        if comp_override else {}),
                             tool_result=None,
+                            # This consultation runs right after the LLM produced
+                            # the sentinel THIS iteration — the completion text is
+                            # fresh, not stale history. The top-of-loop check_pre
+                            # (llm_responded defaults False) must NOT be treated as
+                            # a completion signal even when it scans a prior turn's
+                            # trailing [TASK_COMPLETE] out of history.
+                            llm_responded=True,
                         )
                         comp_verdict = d.guard_registry.check_pre(comp_ctx)
                         if comp_verdict is not None:
@@ -528,7 +535,8 @@ class AgentKernel:
                     return "".join(texts)
         return ""
 
-    def _build_ctx(self, tool_name: str, tool_args: dict, tool_result: str | None) -> GuardContext:
+    def _build_ctx(self, tool_name: str, tool_args: dict, tool_result: str | None,
+                   llm_responded: bool = False) -> GuardContext:
         d = self.deps
         history = d.history
         # Resolve tool effects from registry
@@ -556,6 +564,7 @@ class AgentKernel:
             classify_fn=d.judge.classify,
             override_reason=override_reason,
             assistant_text=assistant_text,
+            llm_responded=llm_responded,
         )
 
     def _apply_verdict(self, verdict: GuardVerdict, pre: bool) -> bool:

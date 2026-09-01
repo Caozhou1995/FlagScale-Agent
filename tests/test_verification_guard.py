@@ -1400,6 +1400,11 @@ class TestTextCompleteHygieneGate:
             tool_args=args,
             override_reason=override,
             assistant_text=f"Done with the work. {marker}",
+            # These model a FRESH completion the LLM just emitted this iteration
+            # (the completion-path consultation sets llm_responded=True). The
+            # stale-history top-of-loop case is covered separately in
+            # TestTextCompleteHygieneStaleCompletion.
+            llm_responded=True,
         )
 
     def test_bare_text_complete_blocked_once(self):
@@ -1574,6 +1579,8 @@ class TestTextCompleteStalePlanGuard:
             tool_args=args,
             override_reason=override,
             assistant_text="Done with the work. [TASK_COMPLETE]",
+            # Fresh completion this iteration (see companion note above).
+            llm_responded=True,
         )
 
     def test_no_plan_still_blocks(self):
@@ -1599,13 +1606,6 @@ class TestTextCompleteStalePlanGuard:
         assert verdict is not None
         assert verdict.action == "block"
         assert verdict.reason == "text_complete_hygiene"
-
-    def test_reset_turn_clears_complete_called_this_turn(self):
-        """reset_turn() must clear _complete_called_this_turn."""
-        guard = VerificationGuard(plan=None)
-        guard._complete_called_this_turn = True
-        guard.reset_turn()
-        assert guard._complete_called_this_turn is False
 
     def test_active_plan_still_blocks(self):
         """Active plan + [TASK_COMPLETE] → blocks."""
@@ -1633,3 +1633,87 @@ class TestTextCompleteStalePlanGuard:
         guard.reset_turn()
         verdict = guard.check_pre(self._text_complete(override="verified all outputs"))
         assert verdict is None
+
+
+class TestTextCompleteHygieneStaleCompletion:
+    """Timing 0a (text_complete_hygiene) must fire only on a FRESH completion
+    signal the LLM produced this iteration — never on a prior turn's trailing
+    [TASK_COMPLETE] scanned back out of history at a new turn's top-of-loop.
+
+    Regression for: every new turn opened with a VerificationGuard block before
+    the agent had done any work, because the top-of-loop check_pre built a ctx
+    with tool_name="" and assistant_text = the previous turn's ending sentinel.
+    """
+
+    def test_stale_completion_at_new_turn_top_does_not_fire(self):
+        """tool_name=="" + trailing [TASK_COMPLETE] but llm_responded=False
+        (top-of-loop, stale history text) → must NOT block."""
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="",
+            tool_args={},
+            assistant_text="all done here.\n\n[TASK_COMPLETE]",
+            llm_responded=False,
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is None
+
+    def test_fresh_completion_this_iteration_fires(self):
+        """tool_name=="" + trailing [TASK_COMPLETE] + llm_responded=True
+        (completion-path, fresh text, no override) → must block once."""
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="",
+            tool_args={},
+            assistant_text="I finished the task.\n\n[TASK_COMPLETE]",
+            llm_responded=True,
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
+
+    def test_fresh_completion_with_override_releases(self):
+        """Fresh completion + inline _override_reason → released (no block)."""
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="",
+            tool_args={"_override_reason": "info-only answer, nothing delivered"},
+            assistant_text="answer above.\n\n[TASK_COMPLETE]",
+            override_reason="info-only answer, nothing delivered",
+            llm_responded=True,
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is None
+
+    def test_stale_then_fresh_same_guard_instance(self):
+        """The stale top-of-loop consultation must not consume the one-shot
+        _text_complete_hygiene_demanded flag, so the later FRESH completion in
+        the same turn still fires."""
+        guard = VerificationGuard()
+        # 1) top-of-loop with stale prior-turn sentinel → no block, flag untouched
+        stale = GuardContext(
+            tool_name="", tool_args={},
+            assistant_text="prior turn.\n[TASK_COMPLETE]",
+            llm_responded=False,
+        )
+        assert guard.check_pre(stale) is None
+        # 2) LLM emits a real completion this iteration → must still block
+        fresh = GuardContext(
+            tool_name="", tool_args={},
+            assistant_text="now really done.\n[TASK_COMPLETE]",
+            llm_responded=True,
+        )
+        v = guard.check_pre(fresh)
+        assert v is not None and v.reason == "text_complete_hygiene"
+
+    def test_need_user_input_never_fires_regardless_of_flag(self):
+        """[NEED_USER_INPUT] is not a completion signal — must not block even
+        when llm_responded=True."""
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="", tool_args={},
+            assistant_text="I need a decision.\n\n[NEED_USER_INPUT]",
+            llm_responded=True,
+        )
+        assert guard.check_pre(ctx) is None

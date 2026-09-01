@@ -571,15 +571,6 @@ class VerificationGuard(Guard):
         # Set by check_pre when a step_done is about to pass through, so the
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
-        # Tracks whether plan_update(complete) was called during the current
-        # turn. The pure-text [TASK_COMPLETE] hygiene gate (Timing 0a) has a
-        # backstop branch that fires when the plan on disk is "completed". But
-        # without this flag, a stale completed plan from a PRIOR turn would
-        # re-trigger the gate every new turn — the old plan is still "completed"
-        # on disk, so has_plan=True, and reset_turn() cleared the _demanded flag.
-        # Only fire the "completed" branch when plan_update(complete) actually
-        # ran THIS turn; otherwise the plan is stale state, not a current target.
-        self._complete_called_this_turn = False
 
     def reset_turn(self):
         """Reset per-turn state on a new user message.
@@ -599,7 +590,6 @@ class VerificationGuard(Guard):
         self._text_complete_hygiene_demanded = False
         self._step_done_recheck_reminded = False
         self._premortem_pending = False
-        self._complete_called_this_turn = False
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # Pre-mortem: fires immediately AFTER a step_done that passed the pre-side
@@ -629,6 +619,13 @@ class VerificationGuard(Guard):
         # plan (casual conversation, plan already completed/abandoned), the agent
         # is not delivering task artifacts — firing here is noise that blocks
         # every normal turn-end.
+        # ctx.llm_responded gates this: only the completion-path consultation
+        # (right after the LLM emitted the sentinel THIS iteration) sets it True.
+        # The top-of-loop check_pre scans the last assistant message out of
+        # history with llm_responded=False; at a new turn's first iteration that
+        # message is the PRIOR turn's trailing [TASK_COMPLETE], which must not
+        # re-trigger this gate. Without this guard the hygiene block fires at the
+        # start of every new turn before the agent has done any work.
         _text = (ctx.assistant_text or "").rstrip()
         _is_completion = (
             _text.endswith("[TASK_COMPLETE]")
@@ -637,30 +634,20 @@ class VerificationGuard(Guard):
                 _text,
             ) is not None
         )
-        if ctx.tool_name == "" and _is_completion:
-            # Fire when there IS (or WAS) an active plan. We check both "active"
-            # and "completed" because the pure-text [TASK_COMPLETE] path is a
-            # backstop for agents that either (a) skip plan_update(complete)
-            # entirely (plan still active) or (b) went through plan_update(complete)
-            # but whose Fifth gate (delivery hygiene) was released by an override
-            # reason written for an earlier gate (intra-guard gate-crosstalk).
-            #
-            # The "completed" branch (b) must only fire when plan_update(complete)
-            # was called THIS turn (_complete_called_this_turn). Without that guard,
-            # a stale completed plan from a PRIOR turn would re-trigger every new
-            # turn: reset_turn() clears _text_complete_hygiene_demanded, the old
-            # plan is still "completed" on disk, and any [TASK_COMPLETE] in the new
-            # turn (even a casual "I'm done") would hit the gate. The stale plan is
-            # not a current completion target — it was already fully gated.
-            #
-            # The _text_complete_hygiene_demanded flag ensures it fires at most
-            # once per turn, so including "completed" does not cause noise within
-            # the same turn.
-            #
-            # This gate fires regardless of whether a plan exists — it is a
-            # final delivery check, not a plan-specific check. Even single-step
+        if ctx.tool_name == "" and _is_completion and ctx.llm_responded:
+            # This gate fires regardless of plan state — it is a final delivery
+            # check, not a plan-specific check. It backstops agents that either
+            # skip plan_update(complete) entirely or went through it but had the
+            # Fifth gate (delivery hygiene) released by an override reason written
+            # for an earlier gate (intra-guard gate-crosstalk). Even single-step
             # tasks (no plan) need path/constraint/exact-contents/temp-cleanup
             # verification before completion.
+            #
+            # Stale prior-turn completions are excluded by ctx.llm_responded (set
+            # only on the completion-path consultation, right after the LLM emits
+            # the sentinel this iteration) — NOT by tracking whether
+            # plan_update(complete) ran this turn. The _text_complete_hygiene_
+            # demanded flag ensures it fires at most once per turn.
             if not self._text_complete_hygiene_demanded:
                 if not ctx.override_reason.strip():
                     self._text_complete_hygiene_demanded = True
@@ -697,11 +684,6 @@ class VerificationGuard(Guard):
         # be noise on a pass/fail task. Fires once so it stays a checkpoint, not
         # nagging.
         if ctx.tool_name == "plan_update" and ctx.tool_args.get("action") == "complete":
-            # Mark that plan_update(complete) was called THIS turn, so the
-            # pure-text [TASK_COMPLETE] gate (Timing 0a) knows the "completed"
-            # plan on disk is from THIS turn (a valid backstop target), not a
-            # stale plan from a prior turn (which should not re-trigger).
-            self._complete_called_this_turn = True
             if not self._complete_recheck_reminded:
                 if not ctx.override_reason.strip():
                     return GuardVerdict.block(
