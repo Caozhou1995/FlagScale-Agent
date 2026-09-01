@@ -638,8 +638,16 @@ class AgentKernel:
                         plan_hint = f" Current step: {step.get('title', step.get('description', ''))}"
             return (
                 "Your previous response contained text but no tool calls and no stop signal. "
-                "If you intended to use a tool, emit it now. "
-                "If done, end with [TASK_COMPLETE] or [NEED_USER_INPUT]."
+                "The ONLY valid stop signals are [TASK_COMPLETE] and [NEED_USER_INPUT] "
+                "— they must appear as the last line of your response. "
+                "Simply stopping output is NOT a stop signal.\n\n"
+                "You MUST choose exactly one:\n"
+                "1. If the task is fully done: end with [TASK_COMPLETE] as the last line, "
+                "no tool calls in the same response.\n"
+                "2. If you need user input: end with [NEED_USER_INPUT] as the last line, "
+                "no tool calls in the same response.\n"
+                "3. If you need to take action: emit ONLY tool call(s), no stop signal.\n\n"
+                "Do NOT mix tool calls and stop signals in the same response."
                 f"{plan_hint}"
             )
 
