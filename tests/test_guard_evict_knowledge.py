@@ -397,6 +397,9 @@ class TestKnowledgeSkillGuardSingleShot:
 # ── KnowledgeSkillGuard network resilience (check_post) ──
 
 class TestKnowledgeSkillGuardNetworkResilience:
+    """Network-recovery gate is DISABLED (overlaps with new network probe gate).
+    These tests verify the gate remains disabled and does not fire."""
+
     def test_no_inject_when_web_fetch_succeeds(self):
         """No network resilience reminder when web_fetch returns normal content."""
         guard = KnowledgeSkillGuard()
@@ -407,54 +410,41 @@ class TestKnowledgeSkillGuardNetworkResilience:
         verdict = guard.check_post(ctx)
         assert verdict is None
 
-    def test_inject_on_web_fetch_network_error(self):
-        """Inject network resilience reminder when web_fetch fails with network error."""
+    def test_no_inject_on_web_fetch_network_error(self):
+        """Network-recovery gate is disabled — no inject even on network error."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_NETWORK_ERROR] Could not retrieve https://example.com: ConnectionError"
         )
         verdict = guard.check_post(ctx)
-        assert verdict is not None
-        assert verdict.action == "inject"
-        assert verdict.category == "network_resilience"
-        msg_lower = verdict.message.lower()
-        # Must mention the key troubleshooting steps from Environment Resilience
-        assert "proxy" in msg_lower or "http_proxy" in msg_lower
-        assert "env -u" in msg_lower or "unset" in msg_lower
-        assert "case" in msg_lower  # case sensitivity
-        assert "mirror" in msg_lower or "alternative" in msg_lower
-        assert "local" in msg_lower or "offline" in msg_lower or "cache" in msg_lower
+        assert verdict is None  # gate disabled, no inject
 
-    def test_inject_case_insensitive_marker(self):
-        """Network error marker match is case-insensitive."""
+    def test_no_inject_case_insensitive_marker(self):
+        """Network error marker does not trigger inject (gate disabled)."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
             tool_name="web_fetch",
             tool_result="[web_fetch_network_error] timeout"
         )
         verdict = guard.check_post(ctx)
-        assert verdict is not None
-        assert verdict.action == "inject"
+        assert verdict is None  # gate disabled
 
     def test_no_inject_for_other_web_fetch_errors(self):
         """Non-network errors (blocked, size exceeded) don't trigger resilience reminder."""
         guard = KnowledgeSkillGuard()
-        # SSRF blocked
         ctx1 = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_BLOCKED] Blocked host: localhost"
         )
         assert guard.check_post(ctx1) is None
         
-        # Size exceeded
         ctx2 = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_SIZE_EXCEEDED] Response exceeded 5 MB limit..."
         )
         assert guard.check_post(ctx2) is None
         
-        # Low content
         ctx3 = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_LOW_CONTENT] returned only 12 chars"
@@ -476,14 +466,12 @@ class TestKnowledgeSkillGuardNetworkResilience:
         ctx = _make_ctx(tool_name="web_fetch", tool_result=None)
         assert guard.check_post(ctx) is None
 
-    def test_network_resilience_mentions_env_resilience_section(self):
-        """Message explicitly references the Environment Resilience section of system prompt."""
+    def test_network_gate_disabled_no_env_resilience_reference(self):
+        """Gate is disabled — no Environment Resilience reference in output."""
         guard = KnowledgeSkillGuard()
         ctx = _make_ctx(
             tool_name="web_fetch",
             tool_result="[WEB_FETCH_NETWORK_ERROR] ProxyError"
         )
         verdict = guard.check_post(ctx)
-        assert verdict is not None
-        msg_lower = verdict.message.lower()
-        assert "environment resilience" in msg_lower or "system prompt" in msg_lower
+        assert verdict is None  # gate disabled, no inject
