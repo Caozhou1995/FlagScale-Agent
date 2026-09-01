@@ -1,12 +1,13 @@
 """Tests for KnowledgeSkillGuard's network-recovery gate.
 
-After web_fetch hits a network error, the guard must BLOCK substantive
-non-network work until the agent makes REQUIRED_RECOVERY_ATTEMPTS distinct
-genuine recovery attempts. The exit is the ACTION (real network attempts), not
-an argument that the network is unreachable — this targets the "network is
-restricted, I'll use prior knowledge" reflex that caps knowledge-gap tasks at
-the model's own ceiling.
+Network-recovery gate is DISABLED (overlaps with new network probe gate).
+All tests in this file are skipped until the gate is re-enabled.
+To re-enable: uncomment the network-recovery blocks in knowledge_skill.py
+(check_pre, check_post, accept_override) and remove the skip marker below.
 """
+
+import pytest
+pytestmark = pytest.mark.skip(reason="Network-recovery gate disabled — overlaps with new network probe gate")
 
 from unittest.mock import MagicMock
 from flagscale_agent.react.guard import GuardContext

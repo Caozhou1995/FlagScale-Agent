@@ -161,62 +161,47 @@ class KnowledgeSkillGuard(Guard):
         # shell cmd) is allowed through while the gate is armed; local knowledge
         # fallbacks are blocked until the recovery quota is met.
 
-        # Network-recovery gate. Once web_fetch has failed with a network error
-        # (set in check_post), the agent is NOT allowed to walk away and solve the
-        # task from prior knowledge until it has made REQUIRED_RECOVERY_ATTEMPTS
-        # DISTINCT genuine recovery attempts. This targets the exact failure you
-        # cannot fix with a model upgrade: on a knowledge-gap task the model's own
-        # ceiling is the wall, and real info from the network is the only way past
-        # it — so "network is restricted, I'll use what I know" is precisely the
-        # wrong reflex. A network attempt (retry web_fetch with a different
-        # URL/case, or a shell command that actually touches the network) counts
-        # toward the quota and passes through; anything else is blocked.
-        if self._network_error_seen:
-            sig = self._recovery_signature(ctx)
-            if sig is not None:
-                # This IS a genuine, distinct recovery attempt — let it run and
-                # record it. Duplicate attempts (same signature) still pass but
-                # do not advance the quota, so re-running one failing command
-                # neither deadlocks nor cheats the gate.
-                self._recovery_signatures.add(sig)
-                if len(self._recovery_signatures) >= self.REQUIRED_RECOVERY_ATTEMPTS:
-                    # Quota met: the agent genuinely tried. Release the gate so a
-                    # defensible fallback to prior-knowledge work is allowed.
-                    self._network_error_seen = False
-                    self._recovery_signatures = set()
-                # A web_fetch retry is also a research call — reset the knowledge
-                # counters so a genuine network attempt satisfies the early gate.
-                if ctx.tool_name in self._KNOWLEDGE_TOOLS:
-                    self._calls_since_knowledge = 0
-                    self._early_fired = True
-                return None
-            # Not a recovery attempt — the agent is trying to move on to other
-            # work. Block until the quota is met.
-            remaining = self.REQUIRED_RECOVERY_ATTEMPTS - len(self._recovery_signatures)
-            return GuardVerdict.block(
-                "[NetworkResilience] web_fetch hit a NETWORK error and you are about "
-                f"to move on with other work having made only {len(self._recovery_signatures)} "
-                f"genuine recovery attempt(s) — {remaining} more required before you may "
-                "fall back to prior knowledge. On a knowledge-gap task the model's own "
-                "capability has a ceiling; real information from the network is the ONLY "
-                "way past it, so 'the network is restricted, I'll use what I know' is the "
-                "wrong reflex, not a valid exit. Make a DISTINCT recovery attempt now "
-                "(each must differ from the last):\n"
-                "  • Retry web_fetch with a different URL, a mirror, or flipped case.\n"
-                "  • Toggle the proxy in a shell cmd: `env -u HTTP_PROXY -u HTTPS_PROXY "
-                "curl -sSL <url>` (proxy may be the blocker) — or the reverse, ADD a "
-                "proxy if none is set.\n"
-                "  • Use urllib/requests directly in python3 against the URL.\n"
-                "  • Try an alternative source: package mirror, archive, CDN, raw GitHub.\n"
-                "This block releases automatically once you have made "
-                f"{self.REQUIRED_RECOVERY_ATTEMPTS} distinct attempts — the exit is the "
-                "ACTION, not an argument that it is unreachable. If a single attempt "
-                "proved a hard, host-level block (e.g. proxy returns 500 for that exact "
-                "host and a direct connection is refused), state that concrete evidence "
-                "in the override reason.",
-                reason="network_recovery_attempts_incomplete",
-                category="network_resilience",
-            )
+        # Network-recovery gate — DISABLED (overlaps with new network probe gate).
+        # The new single-shot early gate already requires a network probe (curl -sI
+        # --connect-timeout 3 --max-time 5) before any real work, making the
+        # post-failure recovery gate redundant in most cases. To re-enable, uncomment
+        # the block below and the check_post web_fetch error detection block.
+        # if self._network_error_seen:
+        #     sig = self._recovery_signature(ctx)
+        #     if sig is not None:
+        #         self._recovery_signatures.add(sig)
+        #         if len(self._recovery_signatures) >= self.REQUIRED_RECOVERY_ATTEMPTS:
+        #             self._network_error_seen = False
+        #             self._recovery_signatures = set()
+        #         if ctx.tool_name in self._KNOWLEDGE_TOOLS:
+        #             self._calls_since_knowledge = 0
+        #             self._early_fired = True
+        #         return None
+        #     remaining = self.REQUIRED_RECOVERY_ATTEMPTS - len(self._recovery_signatures)
+        #     return GuardVerdict.block(
+        #         "[NetworkResilience] web_fetch hit a NETWORK error and you are about "
+        #         f"to move on with other work having made only {len(self._recovery_signatures)} "
+        #         f"genuine recovery attempt(s) — {remaining} more required before you may "
+        #         "fall back to prior knowledge. On a knowledge-gap task the model's own "
+        #         "capability has a ceiling; real information from the network is the ONLY "
+        #         "way past it, so 'the network is restricted, I'll use what I know' is the "
+        #         "wrong reflex, not a valid exit. Make a DISTINCT recovery attempt now "
+        #         "(each must differ from the last):\n"
+        #         "  • Retry web_fetch with a different URL, a mirror, or flipped case.\n"
+        #         "  • Toggle the proxy in a shell cmd: `env -u HTTP_PROXY -u HTTPS_PROXY "
+        #         "curl -sSL <url>` (proxy may be the blocker) — or the reverse, ADD a "
+        #         "proxy if none is set.\n"
+        #         "  • Use urllib/requests directly in python3 against the URL.\n"
+        #         "  • Try an alternative source: package mirror, archive, CDN, raw GitHub.\n"
+        #         "This block releases automatically once you have made "
+        #         f"{self.REQUIRED_RECOVERY_ATTEMPTS} distinct attempts — the exit is the "
+        #         "ACTION, not an argument that it is unreachable. If a single attempt "
+        #         "proved a hard, host-level block (e.g. proxy returns 500 for that exact "
+        #         "host and a direct connection is refused), state that concrete evidence "
+        #         "in the override reason.",
+        #         reason="network_recovery_attempts_incomplete",
+        #         category="network_resilience",
+        #     )
 
         # Knowledge/skill loaded — reset counter. In single-shot, mark the early
         # advisory as satisfied: the agent already reached for external knowledge.
@@ -403,38 +388,20 @@ class KnowledgeSkillGuard(Guard):
         # advanced the research/knowledge counters.
         self._persist_call_count(ctx)
 
-        # If web_fetch just failed due to network, inject the Environment Resilience
-        # reminder from system prompt to surface network troubleshooting steps.
-        if ctx.tool_name == "web_fetch" and ctx.tool_result:
-            result_upper = ctx.tool_result.upper()
-            # Match web_fetch.py's [WEB_FETCH_NETWORK_ERROR] marker
-            if "[WEB_FETCH_NETWORK_ERROR]" in result_upper:
-                # Arm the network-recovery gate: the next substantive non-network
-                # action will be blocked until REQUIRED_RECOVERY_ATTEMPTS distinct
-                # recovery attempts are made. web_fetch itself (this failing call)
-                # is the trigger, not an attempt — the quota counts what comes
-                # AFTER, so a fresh episode starts with an empty signature set.
-                self._network_error_seen = True
-                self._recovery_signatures = set()
-                return GuardVerdict.inject(
-                    "[NetworkResilience] web_fetch reported a network error. Before giving up, "
-                    "try systematic troubleshooting (these are standard techniques in restricted "
-                    "container/CI environments):\n"
-                    "  • **Proxy interference**: HTTP_PROXY/HTTPS_PROXY may block the target. "
-                    "Try with proxy unset — use `env -u HTTP_PROXY -u HTTPS_PROXY curl ...` or "
-                    "`python3 -c 'import os; [os.environ.pop(k,None) for k in [\"HTTP_PROXY\",\"HTTPS_PROXY\",\"http_proxy\",\"https_proxy\"]]; import urllib.request; ...'`.\n"
-                    "  • **URL case sensitivity**: Many servers (FTP mirrors, CDNs) are case-sensitive. "
-                    "If a URL returns 404, try UPPER and lower case variants.\n"
-                    "  • **Alternative sources**: Search for mirrors, package archives, or alternative "
-                    "download endpoints. A 403/404 on one host does not mean the resource does not exist.\n"
-                    "  • **Offline fallback**: Check local caches (apt, pip, pre-installed packages, mounted volumes).\n"
-                    "\n"
-                    "Only after exhausting these should you conclude the network is truly unavailable. "
-                    "Trying one fetch and accepting failure is premature — the system prompt's "
-                    "Environment Resilience section describes this standard protocol.",
-                    reason="web_fetch_network_failure",
-                    category="network_resilience",
-                )
+        # Network-recovery inject — DISABLED (overlaps with new network probe gate).
+        # The new single-shot early gate already requires a network probe before
+        # any real work, making the post-failure recovery inject redundant.
+        # To re-enable, uncomment the block below.
+        # if ctx.tool_name == "web_fetch" and ctx.tool_result:
+        #     result_upper = ctx.tool_result.upper()
+        #     if "[WEB_FETCH_NETWORK_ERROR]" in result_upper:
+        #         self._network_error_seen = True
+        #         self._recovery_signatures = set()
+        #         return GuardVerdict.inject(
+        #             "[NetworkResilience] web_fetch reported a network error. ...",
+        #             reason="web_fetch_network_failure",
+        #             category="network_resilience",
+        #         )
         return None
 
     # Evidence keywords that make an override reason RELEVANT to the network gate.
@@ -471,16 +438,18 @@ class KnowledgeSkillGuard(Guard):
         if not (reason and len(reason.strip()) > 5):
             return False
 
-        if self._network_error_seen:
-            # Network gate is armed — require network-relevant evidence. A reason
-            # aimed at another guard (no network tokens) does NOT release it.
-            low = reason.lower()
-            if not any(tok in low for tok in self._NETWORK_EVIDENCE_TOKENS):
-                return False
-            self._network_error_seen = False
-            self._recovery_signatures = set()
-            self._calls_since_knowledge = 0
-            return True
+        # Network-recovery gate — DISABLED (overlaps with new network probe gate).
+        # The _network_error_seen flag is never set now, so this branch is dead
+        # code. To re-enable, uncomment the block below along with the check_pre
+        # and check_post network-recovery blocks.
+        # if self._network_error_seen:
+        #     low = reason.lower()
+        #     if not any(tok in low for tok in self._NETWORK_EVIDENCE_TOKENS):
+        #         return False
+        #     self._network_error_seen = False
+        #     self._recovery_signatures = set()
+        #     self._calls_since_knowledge = 0
+        #     return True
 
         # No network gate armed — this is a call-count / early-research override.
         self._calls_since_knowledge = 0
