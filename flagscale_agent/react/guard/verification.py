@@ -496,6 +496,13 @@ Three delivery checks on what sits at the delivery path:
   3. **TEMP & BACKUP CLEANUP**: scratch/temp files, verification byproducts, and ANY
      .bak backups YOU created cleaned out? Delete *.bak, *.backup before finishing.
 
+**Memory review** — before completing, run memory_list() and check:
+   (1) Any new fact/pitfall/insight to save?
+   (2) Can any existing pitfall be elevated to an insight (recurring pattern)?
+   (3) Any existing fact invalidated by this session's work?
+   Act on findings directly — write new entries, supersede stale ones.
+   Do NOT report suggestions to the user for confirmation.
+
 Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced, or
 "none apply">. This gate fires once."""
 
@@ -649,29 +656,11 @@ class VerificationGuard(Guard):
             # The _text_complete_hygiene_demanded flag ensures it fires at most
             # once per turn, so including "completed" does not cause noise within
             # the same turn.
-            has_plan = False
-            if self._plan:
-                try:
-                    plan_data = self._plan.get_active()
-                    if plan_data and plan_data.get("status") in ("active", "completed"):
-                        has_plan = True
-                except Exception:
-                    pass
-                # After plan_update(complete), get_active() returns None because
-                # _clear_active() was called. Check disk for a recently-completed
-                # plan so the hygiene gate still fires as a backstop — but ONLY if
-                # plan_update(complete) was called this turn. A "completed" plan
-                # from a prior turn is stale state, not a current target.
-                if not has_plan and self._complete_called_this_turn:
-                    try:
-                        for p in self._plan.list_plans():
-                            if p.get("status") == "completed":
-                                has_plan = True
-                                break
-                    except Exception:
-                        pass
-            if not has_plan:
-                return None
+            #
+            # This gate fires regardless of whether a plan exists — it is a
+            # final delivery check, not a plan-specific check. Even single-step
+            # tasks (no plan) need path/constraint/exact-contents/temp-cleanup
+            # verification before completion.
             if not self._text_complete_hygiene_demanded:
                 if not ctx.override_reason.strip():
                     self._text_complete_hygiene_demanded = True

@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""BackupGuard — upfront backup reminder at task start and cleanup at completion.
+"""BackupGuard — upfront backup reminder at task start.
 
-Runs FIRST (priority=5, before safety=10). Two simple reminders:
+Runs FIRST (priority=5, before safety=10). One reminder:
   1. On the FIRST shell command: remind LLM to check for irreplaceable inputs and
      back them up before touching anything.
-  2. At completion: remind LLM to check for and remove any .bak files created.
 
 The guard does NOT detect, parse, or scan anything — it just reminds. The LLM
-decides what needs backup and what needs cleanup.
+decides what needs backup. Completion-time .bak cleanup is handled by
+VerificationGuard's _TEXT_COMPLETE_HYGIENE gate.
 """
 
 from __future__ import annotations
@@ -48,14 +48,6 @@ If no irreplaceable inputs exist (task generates data from scratch, or inputs ar
 regenerable), override this with "_override_reason" explaining why no backup is needed."""
 
 
-_COMPLETE_CLEANUP_MSG = """[BackupGuard] Before completing, check whether you created any .bak files during this task.
-
-A stray .bak in the delivery directory fails an exact-contents check. If you created
-backups, delete them now: rm *.bak
-
-If the task explicitly requires keeping backups, override this reminder."""
-
-
 class BackupGuard(Guard):
     """Upfront backup reminder at task start, cleanup reminder at completion."""
 
@@ -64,27 +56,8 @@ class BackupGuard(Guard):
 
     def __init__(self):
         self._first_shell_seen = False
-        self._cleanup_reminded = False
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
-        # Completion: remind to check for and clean up .bak files
-        is_text_complete = (
-            ctx.tool_name == "" and "[TASK_COMPLETE]" in (ctx.assistant_text or "")
-        )
-        is_plan_complete = (
-            ctx.tool_name == "plan_update"
-            and ctx.tool_args.get("action") == "complete"
-        )
-        if is_text_complete or is_plan_complete:
-            if self._cleanup_reminded:
-                return None
-            self._cleanup_reminded = True
-            return GuardVerdict.inject(
-                message=_COMPLETE_CLEANUP_MSG,
-                reason="backup_cleanup_reminder",
-                category="backup",
-            )
-
         # First shell command: upfront backup reminder.
         # NOTE: do NOT set _first_shell_seen here. If we consumed the flag on the
         # first block, a BATCHED first turn (LLM emits several shell calls at once)

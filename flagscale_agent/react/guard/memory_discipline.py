@@ -18,8 +18,11 @@ Logic:
 - Track tool calls since last memory read/write
 - Every 10 calls without memory operation → inject a reminder
 - Every 30 calls without memory operation → block (overridable)
-- Before TASK_COMPLETE without memory review → inject evolution reminder
 - If LLM reads/writes memory, reset counter
+
+Note: The [TASK_COMPLETE] completion-time memory review was moved to
+VerificationGuard's _TEXT_COMPLETE_HYGIENE gate (block, not inject) so it
+actually stops the agent before completion.
 """
 
 from __future__ import annotations
@@ -38,43 +41,23 @@ class MemoryDisciplineGuard(Guard):
 
     def __init__(self):
         self._calls_since_memory = 0
-        self._evolution_reminded = False
-        self._has_memory_review = False
 
     _MEMORY_TOOLS = frozenset((
         "memory_write", "memory_read", "memory_list",
         "plan_status", "plan_create", "plan_update",
     ))
 
-    _MEMORY_READ_TOOLS = frozenset(("memory_read", "memory_list"))
-
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
-            # Check if assistant is about to emit TASK_COMPLETE without memory review
-            if (ctx.assistant_text
-                    and "[TASK_COMPLETE]" in ctx.assistant_text
-                    and not self._evolution_reminded
-                    and not self._has_memory_review):
-                self._evolution_reminded = True
-                return GuardVerdict.inject(
-                    "[MemoryDiscipline] About to TASK_COMPLETE but no memory review this session. "
-                    "Before completing, run memory_list() and check:\n"
-                    "(1) Any new fact/pitfall/insight to save?\n"
-                    "(2) Can any existing pitfall be elevated to an insight (recurring pattern)?\n"
-                    "(3) Can any existing insight be digested into a concrete artifact — "
-                    "create/improve a skill, knowledge doc, or agent code?\n"
-                    "(4) Any existing fact invalidated by this session's work?\n\n"
-                    "Report [Memory suggestions] to user with proposed actions; "
-                    "do NOT self-execute digest/delete without confirmation.",
-                    reason="evolution_check_before_complete",
-                    category="memory_evolution_reminder",
-                )
+            # The [TASK_COMPLETE] completion-time memory review was moved to
+            # VerificationGuard's _TEXT_COMPLETE_HYGIENE gate (block, not inject)
+            # so it actually stops the agent before completion. An inject here
+            # was useless — the agent had already emitted [TASK_COMPLETE] and
+            # would not act on advisory text.
             return None
 
         if ctx.tool_name in self._MEMORY_TOOLS:
             self._calls_since_memory = 0
-            if ctx.tool_name in self._MEMORY_READ_TOOLS:
-                self._has_memory_review = True
             return None
 
         self._calls_since_memory += 1

@@ -211,8 +211,6 @@ CORRECT wrong memory the moment reality contradicts it — not at task end. If a
 
 When you correct or update a memory entry, search for related entries that may contain the same outdated information: call memory_list(keyword='...') with keywords from the corrected entry. For each related hit, either update it to match or merge it into the corrected entry via `supersedes`. Leaving a stale duplicate after correcting only one is as bad as not correcting at all — the next session may read the stale copy first.
 
-Self-evolution before every TASK_COMPLETE: write new facts/pitfalls/insights, check if insights can be digested, supersede disproven facts.
-
 ## Skills & Knowledge
 
 - **Skills**: workflow guides for multi-step task types. Load when starting a complex multi-step task in a specific domain.

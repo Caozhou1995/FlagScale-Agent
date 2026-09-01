@@ -1410,13 +1410,16 @@ class TestTextCompleteHygieneGate:
         assert verdict.reason == "text_complete_hygiene"
         assert guard._text_complete_hygiene_demanded is True
 
-    def test_text_complete_not_blocked_without_plan(self):
-        # No plan at all (casual conversation, single-shot with no plan) — gate
-        # must NOT fire. This is the bug fix: the old code fired unconditionally.
+    def test_text_complete_blocked_without_plan(self):
+        # No plan at all — gate still fires. The hygiene gate is a final
+        # delivery check, not plan-specific. Even single-step tasks (no plan)
+        # need path/constraint/exact-contents/temp-cleanup verification.
         guard = VerificationGuard()
         verdict = guard.check_pre(self._text_complete())
-        assert verdict is None
-        assert guard._text_complete_hygiene_demanded is False
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
+        assert guard._text_complete_hygiene_demanded is True
 
     def test_text_complete_fires_when_plan_completed(self):
         # Plan already completed (status=completed) — gate MUST still fire.
@@ -1559,30 +1562,9 @@ class TestTextCompleteHygieneGate:
 
 
 class TestTextCompleteStalePlanGuard:
-    """Regression: _TEXT_COMPLETE_HYGIENE must NOT re-fire on a new turn when the
-    only plan on disk is a "completed" plan from a PRIOR turn.
-
-    Root cause: reset_turn() clears _text_complete_hygiene_demanded. The old plan
-    is still "completed" on disk (list_plans returns it). Without the
-    _complete_called_this_turn guard, the gate re-fires every new turn on any
-    [TASK_COMPLETE], even a casual one — because has_plan=True from the stale
-    plan and the _demanded flag was just reset.
-
-    Fix: only check the "completed" plan on disk when plan_update(complete) was
-    called THIS turn (_complete_called_this_turn=True). A prior turn's completed
-    plan is stale state, not a current completion target.
-    """
-
-    @staticmethod
-    def _stale_completed_plan():
-        """Simulates the state AFTER plan_update(complete) in a prior turn:
-        get_active() returns None (plan was cleared), but list_plans() still
-        returns the completed plan on disk."""
-        from unittest.mock import MagicMock
-        plan = MagicMock()
-        plan.get_active.return_value = None
-        plan.list_plans.return_value = [{"title": "old", "status": "completed"}]
-        return plan
+    """_TEXT_COMPLETE_HYGIENE now fires regardless of plan state — it is a
+    final delivery check, not plan-specific. These tests verify the new
+    behavior: [TASK_COMPLETE] always triggers the hygiene gate (once per turn)."""
 
     @staticmethod
     def _text_complete(override=""):
@@ -1594,71 +1576,60 @@ class TestTextCompleteStalePlanGuard:
             assistant_text="Done with the work. [TASK_COMPLETE]",
         )
 
-    def test_stale_completed_plan_no_block_new_turn(self):
-        """New turn: get_active()=None, list_plans has a completed plan from a
-        prior turn, _complete_called_this_turn=False → must NOT block."""
-        guard = VerificationGuard(plan=self._stale_completed_plan())
-        # Simulate reset_turn() being called at the start of a new turn
+    def test_no_plan_still_blocks(self):
+        """No plan at all → hygiene gate still fires (delivery check applies
+        to all tasks, not just plan-based ones)."""
+        guard = VerificationGuard(plan=None)
         guard.reset_turn()
-        assert guard._complete_called_this_turn is False
         verdict = guard.check_pre(self._text_complete())
-        assert verdict is None, "stale completed plan from prior turn should not re-trigger"
-        assert guard._text_complete_hygiene_demanded is False
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
 
-    def test_same_turn_complete_then_text_complete_blocks(self):
-        """Same turn: plan_update(complete) was called (sets flag), then a
-        pure-text [TASK_COMPLETE] arrives → must block (backstop still works)."""
-        guard = VerificationGuard(plan=self._stale_completed_plan())
-        # Simulate plan_update(complete) being called this turn
-        complete_ctx = GuardContext(
-            tool_name="plan_update",
-            tool_args={"action": "complete"},
-            override_reason="verified all tests pass",
-        )
-        # Drive plan_update(complete) through check_pre — this sets
-        # _complete_called_this_turn=True. The gate chain (recheck → observation
-        # → ... → delivery_hygiene) will fire, but we just need the flag set.
-        # Use an override reason that passes all gates.
-        guard.check_pre(complete_ctx)
-        assert guard._complete_called_this_turn is True
-        # Now a pure-text [TASK_COMPLETE] arrives
+    def test_stale_completed_plan_blocks_new_turn(self):
+        """New turn with a stale completed plan from a prior turn → still blocks.
+        The gate is a final delivery check, not plan-state-dependent."""
+        from unittest.mock import MagicMock
+        plan = MagicMock()
+        plan.get_active.return_value = None
+        plan.list_plans.return_value = [{"title": "old", "status": "completed"}]
+        guard = VerificationGuard(plan=plan)
+        guard.reset_turn()
         verdict = guard.check_pre(self._text_complete())
         assert verdict is not None
         assert verdict.action == "block"
         assert verdict.reason == "text_complete_hygiene"
 
     def test_reset_turn_clears_complete_called_this_turn(self):
-        """reset_turn() must clear _complete_called_this_turn so a new turn
-        starts fresh — a prior turn's plan_update(complete) must not leak."""
-        guard = VerificationGuard(plan=self._stale_completed_plan())
+        """reset_turn() must clear _complete_called_this_turn."""
+        guard = VerificationGuard(plan=None)
         guard._complete_called_this_turn = True
         guard.reset_turn()
         assert guard._complete_called_this_turn is False
 
-    def test_active_plan_still_blocks_without_complete_call(self):
-        """Active plan (get_active returns active) + [TASK_COMPLETE] → must
-        block even without plan_update(complete) this turn. This is the
-        case (a) backstop: agent skips plan_update(complete) entirely."""
+    def test_active_plan_still_blocks(self):
+        """Active plan + [TASK_COMPLETE] → blocks."""
         from unittest.mock import MagicMock
         plan = MagicMock()
         plan.get_active.return_value = {"title": "test", "status": "active", "steps": []}
         guard = VerificationGuard(plan=plan)
-        assert guard._complete_called_this_turn is False
         verdict = guard.check_pre(self._text_complete())
         assert verdict is not None
         assert verdict.action == "block"
         assert verdict.reason == "text_complete_hygiene"
 
-    def test_get_active_completed_still_blocks_without_flag(self):
-        """get_active() returns a plan with status="completed" → must block
-        even without _complete_called_this_turn. This is the existing test
-        path (get_active returns completed, not the disk list_plans path)."""
-        from unittest.mock import MagicMock
-        plan = MagicMock()
-        plan.get_active.return_value = {"title": "test", "status": "completed", "steps": []}
-        guard = VerificationGuard(plan=plan)
-        assert guard._complete_called_this_turn is False
-        verdict = guard.check_pre(self._text_complete())
-        assert verdict is not None
-        assert verdict.action == "block"
-        assert verdict.reason == "text_complete_hygiene"
+    def test_hygiene_demanded_prevents_double_fire(self):
+        """Second [TASK_COMPLETE] in the same turn → no block (demanded flag)."""
+        guard = VerificationGuard(plan=None)
+        guard.reset_turn()
+        v1 = guard.check_pre(self._text_complete())
+        assert v1 is not None and v1.action == "block"
+        v2 = guard.check_pre(self._text_complete())
+        assert v2 is None
+
+    def test_override_releases_gate(self):
+        """Override reason provided → gate releases, no block."""
+        guard = VerificationGuard(plan=None)
+        guard.reset_turn()
+        verdict = guard.check_pre(self._text_complete(override="verified all outputs"))
+        assert verdict is None
