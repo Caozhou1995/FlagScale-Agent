@@ -424,6 +424,30 @@ class TestConstraintGuidanceBlockedComputation:
         assert "qualifier" not in low
         assert "scandinavian" not in low
 
+    def test_delivery_hygiene_has_semantic_vs_syntactic_bullet(self):
+        """方案B: SEMANTIC vs SYNTACTIC bullet 已添加到 Gate5"""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        
+        msg = _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = msg.lower()
+        
+        # Bullet 7 present
+        assert "semantic vs syntactic" in low, "Missing SEMANTIC vs SYNTACTIC bullet"
+        
+        # Key content: distinguishes form (syntactic) from content (semantic)
+        assert "form" in low or "format" in low
+        assert "content" in low
+        assert "genuine result" in low or "true product" in low
+        
+        # Mentions the trap: hand-crafted artifact that looks right
+        assert "hand-crafted" in low or "constructed" in low or "stub" in low or "placeholder" in low
+        
+        # Task-agnostic (no leaked specifics from make-mips or any other task)
+        import re
+        for w in ("mips", "doom", "frame", "bmp", "vm.js", "640", "400"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), f"leaked task term: {w!r}"
+
+
 
 class TestTaskCompleteRecheck:
     """The first plan_update(action="complete") of a run is blocked once for a
@@ -1102,17 +1126,89 @@ class TestTaskCompleteSubstitutionGate:
             return default
         
         # substitution disclosed, no BLOCKED → True
+        # Updated to new signature: (reason, messages=None, classify_fn=None)
         assert _is_disclosed_substitution(
-            "used the backward-compatible successor instead", mock_judge
+            "used the backward-compatible successor instead", None, mock_judge
         ) is True
         # substitution language but framed as BLOCKED → False
         assert _is_disclosed_substitution(
-            "the successor was unavailable too; reporting BLOCKED", mock_judge
+            "the successor was unavailable too; reporting BLOCKED", None, mock_judge
         ) is False
         # exact artifact, no substitution language → False
-        assert _is_disclosed_substitution("built the exact version from source", mock_judge) is False
+        assert _is_disclosed_substitution("built the exact version from source", None, mock_judge) is False
         # neutral → False
-        assert _is_disclosed_substitution("re-checked each criterion", mock_judge) is False
+        assert _is_disclosed_substitution("re-checked each criterion", None, mock_judge) is False
+
+    def test_substitution_disclosed_in_context_not_reason(self):
+        """方案A: context披露替换，reason不披露 → Gate4应拦"""
+        from flagscale_agent.react.guard.verification import _is_disclosed_substitution
+        
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_discloses_substitution":
+                # Judge sees reason + [Recent context] concatenated
+                return "rather than deliver nothing" in r or "stub" in r
+            return default
+        
+        reason = "Far-end verified, frame created successfully"
+        messages = [
+            {"role": "assistant", "content": "Rather than deliver nothing, I created a stub vm.js"},
+            {"role": "user", "content": "..."},
+            {"role": "assistant", "content": "Generated frame.bmp with correct header"},
+        ]
+        result = _is_disclosed_substitution(reason, messages, mock_judge)
+        assert result is True, "Should catch substitution disclosure in recent context"
+
+    def test_substitution_in_reason_only(self):
+        """方案A: reason单独披露 → Gate4应拦"""
+        from flagscale_agent.react.guard.verification import _is_disclosed_substitution
+        
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_discloses_substitution":
+                return "successor" in r or "substitute" in r
+            return default
+        
+        reason = "I delivered a near-equivalent successor version"
+        messages = []
+        result = _is_disclosed_substitution(reason, messages, mock_judge)
+        assert result is True
+
+    def test_no_substitution_in_reason_or_context(self):
+        """方案A: reason和context都不披露 → 应放行"""
+        from flagscale_agent.react.guard.verification import _is_disclosed_substitution
+        
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_discloses_substitution":
+                return "substitute" in r or "successor" in r or "stub" in r
+            return default
+        
+        reason = "Verified the exact artifact version 3.0.10"
+        messages = [
+            {"role": "assistant", "content": "Implemented the MIPS interpreter"},
+            {"role": "assistant", "content": "Ran DOOM, output captured"},
+        ]
+        result = _is_disclosed_substitution(reason, messages, mock_judge)
+        assert result is False
+
+    def test_empty_messages_backward_compatibility(self):
+        """方案A: messages为空时向后兼容，仅用reason"""
+        from flagscale_agent.react.guard.verification import _is_disclosed_substitution
+        
+        def mock_judge(question, data, default):
+            r = data.get("reason", "").lower()
+            if question == "reason_discloses_substitution":
+                return "substitute" in r
+            return default
+        
+        reason = "Used a substitute implementation"
+        result = _is_disclosed_substitution(reason, [], mock_judge)
+        assert result is True
+        
+        reason2 = "Verified exact artifact"
+        result2 = _is_disclosed_substitution(reason2, [], mock_judge)
+        assert result2 is False
 
 
 class TestMagicAssumptionGate:
