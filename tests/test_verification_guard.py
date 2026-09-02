@@ -1484,74 +1484,74 @@ class TestTextCompleteHygieneGate:
         assert verdict is not None
         assert verdict.reason == "text_complete_hygiene"
 
-    def test_near_far_leads_the_message(self):
-        # near/far verification is the FIRST content of the text-complete gate,
-        # ahead of the three delivery-path checks (user decision: near/far recheck
-        # as the leading item of the TASK_COMPLETE verification guard).
+    def test_wrap_up_message_is_three_light_items(self):
+        # User decision: the text-complete gate is a LIGHT wrap-up for runs that
+        # did NOT go through the plan_update(complete) cascade — near/far, temp/.bak
+        # cleanup, memory review. It must NOT re-run the cascade's deep checks
+        # (three delivery-path checks, exact-command listing, every-constraint
+        # re-read) — those belong to the cascade, and re-asking them here is the
+        # duplication the user removed.
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
 
         msg = _TEXT_COMPLETE_HYGIENE
         low = msg.lower()
-        # Content present.
+        # Three wrap-up items present.
         assert "near vs far" in low
         assert "far end" in low and "near end" in low
-        # Ordering: the near/far section precedes the numbered delivery checks.
+        assert "cleanup" in low and (".bak" in low or "temp" in low)
+        assert "memory review" in low and "memory_list()" in low
+        # near/far leads.
         near_pos = low.index("near vs far")
-        path_pos = low.index("path & constraint")
-        assert near_pos < path_pos, "near/far must lead, before delivery-path checks"
-        # Also precedes the "three delivery checks" transition line.
-        assert near_pos < low.index("three delivery checks")
-        # Observation-vs-argument litmus carried in.
+        assert near_pos < low.index("cleanup")
+        assert near_pos < low.index("memory review")
+        # Observation-vs-argument litmus carried in (the load-bearing near/far idea).
         assert "argument" in low and "observation" in low
         # Override channel intact.
         assert "_override_reason" in msg
 
-    def test_near_far_names_recorded_constraint_drift_and_wrong_target_verify(self):
-        # The near/far block must catch the "found the constraint but drifted"
-        # variant: the agent discovered a fixed path/name/format (even recorded it),
-        # then the implementation drifted to a convenient form, and self-check
-        # observed the convenient artifact — all observations TRUE but aimed at the
-        # target the agent invented, not the one the consumer reads. Task-agnostic.
+    def test_wrap_up_does_not_duplicate_cascade_deep_checks(self):
+        # The removed blocks: the numbered "three delivery checks", the
+        # exact-command listing demand, and the "re-read every constraint" block.
+        # These are the cascade's job (gates 4/5); the text gate must not repeat
+        # them, else planned tasks get asked twice.
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
 
         low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
-        # the ≠ bullet distinguishing chosen artifact from the task-fixed target
-        assert "i confirmed the artifact i chose to produce" in low
-        assert "path/name the task or its source fixed" in low
+        assert "three delivery checks" not in low
+        assert "path & constraint" not in low
+        assert "list the exact commands you ran to verify" not in low
+        assert "list every constraint" not in low
 
-    def test_near_far_grader_invoke_bullet_present(self):
-        # sam-cell-seg lesson: agent's script works under its own invocation but
-        # crashes under the grader's (different interface/args). The hygiene gate
-        # must carry a bullet nudging the agent to test the grader's invocation form.
+    def test_wrap_up_names_the_no_cascade_reason(self):
+        # The message should tell the agent WHY it is being asked now: this finish
+        # did not go through the plan_update(complete) cascade, so this light gate
+        # is the only completion check.
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
 
         low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
-        assert "runs under my invocation" in low
-        assert "runs under the grader's invocation" in low
-        assert "how will the grader call this" in low
+        assert "plan_update(complete)" in low
+        assert "cascade" in low
 
-    def test_hygiene_requires_listing_exact_verify_commands(self):
-        # sam-cell-seg lesson: agent realized it should support --flag args,
-        # said so in thinking, but never actually ran the --flag form.
-        # The hygiene gate must require listing the exact commands run,
-        # so the agent faces a concrete gap ("I can't list that command").
-        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+    def test_wrap_up_fires_even_after_cascade(self):
+        # The wrap-up is an ALWAYS-DO finish-line routine. Even if the
+        # plan_update(complete) cascade already ran this turn (_complete_recheck_
+        # reminded set), the wrap-up still fires — its content (near/far, cleanup,
+        # memory review) is disjoint from the cascade's deep delivery checks, so
+        # there is no re-run. It is not gated on whether a cascade happened.
+        guard = VerificationGuard(plan=self._active_plan())
+        guard._complete_recheck_reminded = True  # cascade ran this turn
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is not None and verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
 
-        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
-        assert "list the exact commands you ran to verify" in low
-        assert "the actual shell lines" in low
-        assert "without the command is an argument" in low
-
-    def test_hygiene_gate_requires_constraint_listing(self):
-        # The gate must remind the agent to re-read the task and verify
-        # EVERY stated constraint — not just the one it spent the most
-        # effort on.
-        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
-
-        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
-        assert "re-read the task description" in low
-        assert "list every constraint" in low
-        assert "the one you skipped is the one that fails" in low
+    def test_wrap_up_fires_without_cascade(self):
+        # Complement: no cascade this turn (single-step / no plan) → the wrap-up
+        # still fires. Same behavior either way.
+        guard = VerificationGuard(plan=self._active_plan())
+        assert guard._complete_recheck_reminded is False
+        verdict = guard.check_pre(self._text_complete())
+        assert verdict is not None and verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
 
     def test_near_far_content_is_task_agnostic(self):
         # No leakage of the concrete tasks that motivated this (mips/doom/sqlite/
