@@ -533,10 +533,33 @@ apply to every completion — NOT a re-run of deep delivery checks:
   2. **TEMP & .bak CLEANUP** — scratch/temp files, verification byproducts, and ANY
      .bak/.backup files YOU created, cleaned out. Cheap and easy to forget.
 
-  3. **MEMORY REVIEW** — run memory_list(): any new fact/pitfall/insight worth
-     saving, any pitfall recurring enough to become an insight, any existing fact
-     this session invalidated? Act directly — write/supersede entries. Do NOT report
-     suggestions to the user for confirmation.
+  3. **MEMORY REVIEW & UPDATE** — memory is not write-once; stale entries cost
+     future sessions repeated dead ends. Run memory_list() (filter by this task's
+     domain/keyword) and do TWO passes, acting directly — write/supersede in place,
+     do NOT report suggestions to the user for confirmation:
+       a) CAPTURE — any new fact/pitfall/insight worth saving from this session; any
+          pitfall recurring enough to promote to an insight.
+       b) RECONCILE (the one usually skipped) — open the existing entries this
+          session touched and ask of EACH: did my work this session make it stale?
+          A WRONG memory is worse than no memory — it sends the next session down the
+          same dead path. Two stale-triggers, both mandatory to fix ON THE SPOT (not
+          deferred to task end — the moment reality contradicts the entry):
+            • READ-THEN-REFUTED — you read a fact/command/path/config OUT of memory,
+              acted on it, and reality contradicted it: the command errored, the path
+              did not exist, the flag was wrong, the config no longer applies. That
+              entry is now KNOWN-WRONG. Rewrite its value to the corrected form you
+              just verified, and note what the old value got wrong so the error is not
+              re-tried. Then search siblings (memory_list with the same keyword): the
+              same stale value often lives in several entries — fix or supersede EVERY
+              copy, not just the one you happened to read. Leaving a stale duplicate is
+              as bad as not fixing at all.
+            • IMPLEMENTED-OR-DISPROVED — the stale part is not a value but an insight's
+              "digest direction" or a pitfall's "fix" that this session already
+              IMPLEMENTED, VERIFIED, or DISPROVED. Update the entry — mark the landed
+              part done, cross-reference the entry that verifies it, narrow the
+              remaining gap — or supersede it. An insight whose proposed change you
+              already shipped, left unupdated, sends the next session to re-design what
+              already exists.
 
 Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced, or
 "none apply">. This gate fires once."""
