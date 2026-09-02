@@ -519,21 +519,49 @@ apply (e.g. no file delivered, no search, no noisy metric). This gate fires once
 _TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — a short wrap-up to close cleanly.
 
 This is an always-do finish-line routine (whether or not a plan_update(complete)
-cascade also ran). It covers three light hygiene items that are easy to forget but
-apply to every completion — NOT a re-run of deep delivery checks:
+cascade also ran). It covers four light hygiene items that are easy to forget but
+apply to every completion — NOT a re-run of deep delivery checks. Do them IN ORDER;
+the order is load-bearing (verify before you clean, re-confirm delivery after you
+clean):
 
-  1. **NEAR vs FAR** — the one load-bearing question. You verified at the near end
-     (your shell, your env, your sample). The consumer observes the far end: a fresh
-     process, a bare non-login invocation, the artifact reloaded cold from disk. Ask
-     "what will be DIFFERENT when someone else runs this?" — then manufacture that
-     difference and READ the result. If your evidence is an ARGUMENT ("should work",
-     "is fine") rather than an OBSERVATION you ran at the far end and read, you have
-     not verified.
+  1. **NEAR vs FAR** (do this FIRST — it may itself create files) — the one
+     load-bearing question. You verified at the near end (your shell, your env, your
+     sample). The consumer observes the far end: a fresh process, a bare non-login
+     invocation, the artifact reloaded cold from disk. Ask "what will be DIFFERENT
+     when someone else runs this?" — then manufacture that difference and READ the
+     result. If your evidence is an ARGUMENT ("should work", "is fine") rather than an
+     OBSERVATION you ran at the far end and read, you have not verified.
 
-  2. **TEMP & .bak CLEANUP** — scratch/temp files, verification byproducts, and ANY
-     .bak/.backup files YOU created, cleaned out. Cheap and easy to forget.
+  2. **TEMP & BUILD CLEANUP** (do this AFTER far-end verification, not before — the
+     fresh runs, reloads, and re-builds in step 1 often generate new byproducts, so
+     cleaning first just leaves the new ones behind) — the delivery directory must
+     contain EXACTLY the artifacts the task requires and NOTHING you created along the
+     way. Sweep out, from the delivery path and anywhere the task will be inspected:
+       • backup files you created — .bak / .backup / .orig / timestamped copies
+       • scratch & temp files — logs, dumps, .tmp, editor swap files, test fixtures
+       • build & compile intermediates — .o / .obj / .pyc / __pycache__ / .class,
+         build/ dist/ target/ node_modules cruft, coverage & profiling output
+     Keep what the task asked for; remove the rest. A dirty delivery dir can fail an
+     EXACT-CONTENTS check even when the required artifact is perfect.
 
-  3. **MEMORY REVIEW & UPDATE** — memory is not write-once; stale entries cost
+  3. **RE-READ TASK & CONFIRM DELIVERY** — go back to the task description and read
+     it again, then confirm the CURRENT on-disk state satisfies every delivery
+     requirement it states. This is the authoritative check: not "did cleanup break
+     something" but "does what sits at the delivery path right now match what the task
+     asked for". For EACH requirement the task states, OBSERVE (do not assume):
+       • file path — every required output exists at its EXACT required path, not a
+         near-miss location, not a renamed or parent-dir copy
+       • contents & format — each output is non-empty, well-formed, and in the format
+         the task specified (extension, schema, encoding)
+       • naming & count — exactly the named set of files, nothing missing, nothing
+         extra
+       • process / service state — any server, daemon, or runtime state the task
+         requires is still in the expected condition
+     Placing this AFTER cleanup is deliberate: cleanup can over-reach (a glob that
+     swept temp files may also take a required output or leave a service half-stopped),
+     so the final delivery contract must be re-confirmed on the post-cleanup state.
+
+  4. **MEMORY REVIEW & UPDATE** — memory is not write-once; stale entries cost
      future sessions repeated dead ends. Run memory_list() (filter by this task's
      domain/keyword) and do TWO passes, acting directly — write/supersede in place,
      do NOT report suggestions to the user for confirmation:

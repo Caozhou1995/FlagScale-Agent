@@ -1580,26 +1580,38 @@ class TestTextCompleteHygieneGate:
         assert verdict is not None
         assert verdict.reason == "text_complete_hygiene"
 
-    def test_wrap_up_message_is_three_light_items(self):
+    def test_wrap_up_message_is_four_light_items_in_order(self):
         # User decision: the text-complete gate is a LIGHT wrap-up for runs that
-        # did NOT go through the plan_update(complete) cascade — near/far, temp/.bak
-        # cleanup, memory review. It must NOT re-run the cascade's deep checks
-        # (three delivery-path checks, exact-command listing, every-constraint
-        # re-read) — those belong to the cascade, and re-asking them here is the
-        # duplication the user removed.
+        # did NOT go through the plan_update(complete) cascade — near/far, temp/build
+        # cleanup, re-read-task delivery confirm, memory review. It must NOT re-run
+        # the cascade's deep checks (three delivery-path checks, exact-command
+        # listing, every-constraint re-read) — those belong to the cascade, and
+        # re-asking them here is the duplication the user removed.
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
 
         msg = _TEXT_COMPLETE_HYGIENE
         low = msg.lower()
-        # Three wrap-up items present.
+        # Four wrap-up items present.
         assert "near vs far" in low
         assert "far end" in low and "near end" in low
         assert "cleanup" in low and (".bak" in low or "temp" in low)
+        assert "build" in low  # build/compile intermediates named in cleanup
+        assert "confirm delivery" in low  # step 3 re-reads task & confirms delivery
         assert "memory review" in low and "memory_list()" in low
-        # near/far leads.
-        near_pos = low.index("near vs far")
-        assert near_pos < low.index("cleanup")
-        assert near_pos < low.index("memory review")
+        # Order is load-bearing: near/far FIRST (may create files), then cleanup,
+        # then delivery re-confirm (cleanup can over-reach), then memory.
+        # Anchor on the numbered section headers (**...**) so intro mentions of the
+        # same words don't skew the positions.
+        near_pos = low.index("**near vs far**")
+        clean_pos = low.index("**temp & build cleanup**")
+        confirm_pos = low.index("**re-read task & confirm delivery**")
+        mem_pos = low.index("**memory review & update**")
+        assert near_pos < clean_pos < confirm_pos < mem_pos
+        # The order rationale is stated explicitly (verify before clean, re-confirm
+        # after clean).
+        assert "load-bearing" in low
+        # Delivery re-confirm checks the EXACT path and observes rather than assumes.
+        assert "exact" in low and ("re-read" in low or "read it again" in low)
         # Observation-vs-argument litmus carried in (the load-bearing near/far idea).
         assert "argument" in low and "observation" in low
         # Override channel intact.
