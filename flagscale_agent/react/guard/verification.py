@@ -310,9 +310,38 @@ def _is_sample_local_only(reason: str, classify_fn=None) -> bool:
 
 
 
-def _is_disclosed_substitution(reason: str, classify_fn=None) -> bool:
-    """True when the reason DISCLOSES delivering a substitute for a GIVEN value
-    without reporting BLOCKED.
+def _extract_recent_assistant_text(messages, limit: int = 5, lookback: int = 20) -> str:
+    """Extract text from the most recent `limit` assistant messages.
+
+    Walks back through at most `lookback` messages, collecting assistant-authored
+    text (handling both plain-string content and structured content lists). Returns
+    the collected text in chronological order, joined by a separator. Empty string
+    if there is nothing to collect.
+    """
+    if not messages:
+        return ""
+    recent: list[str] = []
+    for msg in reversed(messages[-lookback:]):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            if content.strip():
+                recent.append(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = item.get("text", "")
+                    if text.strip():
+                        recent.append(text)
+        if len(recent) >= limit:
+            break
+    return "\n\n---\n\n".join(reversed(recent))
+
+
+def _is_disclosed_substitution(reason: str, messages=None, classify_fn=None) -> bool:
+    """True when the reason OR recent assistant messages DISCLOSE delivering a
+    substitute for a GIVEN value without reporting BLOCKED.
 
     Uses an LLM judge (classify_fn) for semantic classification. If no judge is
     available, returns False (does not trigger).
@@ -321,13 +350,24 @@ def _is_disclosed_substitution(reason: str, classify_fn=None) -> bool:
     it. A reason that names substitution/near-equivalent vocabulary AND does not frame
     the outcome as BLOCKED (no counterfeit delivered) is caught once. A reason that
     reports inability (BLOCKED) passes — that is the honest path.
+
+    Expanded input (method fix): the disclosure of a substitution usually happens
+    DURING the work ("Rather than deliver nothing, I created a stub..."), not in the
+    final completion reason, which reports "verified, done". Feeding only the final
+    reason to the judge misses the process confession. So the recent assistant
+    messages (summary/thinking/narration) are appended to the reason before judging.
     """
-    if not reason:
+    context = _extract_recent_assistant_text(messages)
+    if not reason and not context:
         return False
     if classify_fn is None:
         return False
+    if context:
+        payload = f"{reason}\n\n[Recent context]:\n{context}"
+    else:
+        payload = reason
     return classify_fn(
-        "reason_discloses_substitution", {"reason": reason}, default=False
+        "reason_discloses_substitution", {"reason": payload}, default=False
     )
 
 
@@ -451,6 +491,17 @@ configured or the best candidate you held in memory. Walk the ones that apply:
     variance, passing by a hair on your own measurement is not passing — your
     instrument and the judge's differ. Measure rigorously (many repeats, trim
     outliers, central statistic) and demand margin proportional to the noise.
+  • **SEMANTIC vs SYNTACTIC**: you verified the deliverable's FORM — file exists,
+    header valid, dimensions right, syntax parses, schema matches. That is SYNTACTIC.
+    It does NOT prove the CONTENT is the genuine RESULT of the computation / execution
+    / transformation the task asked for. If the task requires running a program,
+    executing an algorithm, or transforming real data, a hand-crafted artifact that
+    merely LOOKS right passes every syntactic check and still scores zero — the judge
+    inspects the content for the fingerprint of the real process (an expected log
+    line, a value only true execution produces, similarity to a reference output).
+    State plainly: is what sits at the delivery path the TRUE PRODUCT of the process
+    the task named, or a constructed look-alike / stub / placeholder standing in for
+    work you did not actually complete?
 
 To proceed, re-issue plan_update(action="complete") with "_override_reason" reporting
 which of these you checked on the DELIVERED artifact — or stating plainly that none
@@ -723,7 +774,7 @@ class VerificationGuard(Guard):
                 # BLOCKED), bite ONCE more and demand either the exact named artifact or
                 # an honest BLOCKED. Fires at most once so it stays a checkpoint.
                 if not self._complete_substitution_demanded and _is_disclosed_substitution(
-                    ctx.override_reason, ctx.classify_fn
+                    ctx.override_reason, ctx.messages, ctx.classify_fn
                 ):
                     self._complete_substitution_demanded = True
                     return GuardVerdict.block(
