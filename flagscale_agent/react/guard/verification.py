@@ -465,43 +465,27 @@ apply (e.g. no file delivered, no search, no noisy metric). This gate fires once
 # contents, and temp/backup cleanup. Fires once; overridable via the completion
 # path's text override channel (kernel._extract_text_override feeds _override_reason
 # into tool_args for the tool_name=="" completion ctx).
-_TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — final delivery checks. The judge reads the delivery path cold.
+_TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — a short wrap-up to close cleanly.
 
-NEAR vs FAR END — check this before anything else. Your verification ran at the near end (your shell, your env, your sample). The judge observes the far end — a fresh process, a bare non-login invocation, the artifact reloaded
-cold from disk. Ask "what will be DIFFERENT when someone else runs this?" — then
-manufacture that difference and READ the result.
+This is an always-do finish-line routine (whether or not a plan_update(complete)
+cascade also ran). It covers three light hygiene items that are easy to forget but
+apply to every completion — NOT a re-run of deep delivery checks:
 
-  • command accepted ≠ the target's own state actually changed
-  • it runs when I TYPE it ≠ it runs when a PROGRAM calls it bare (no PATH/rc/alias/cwd priming)
-  • it runs under MY invocation ≠ it runs under the GRADER's invocation — "how will the grader call this?" Run it that way.
-  • I confirmed the artifact I chose to produce ≠ I confirmed the artifact at the path/name the task or its source fixed
-  • it worked on my sample ≠ it holds on an input that differs in scale / distribution / format
+  1. **NEAR vs FAR** — the one load-bearing question. You verified at the near end
+     (your shell, your env, your sample). The consumer observes the far end: a fresh
+     process, a bare non-login invocation, the artifact reloaded cold from disk. Ask
+     "what will be DIFFERENT when someone else runs this?" — then manufacture that
+     difference and READ the result. If your evidence is an ARGUMENT ("should work",
+     "is fine") rather than an OBSERVATION you ran at the far end and read, you have
+     not verified.
 
-If your evidence is an ARGUMENT ("should work", "is fine") rather than an OBSERVATION
-you ran at the far end and read, you have not verified.
+  2. **TEMP & .bak CLEANUP** — scratch/temp files, verification byproducts, and ANY
+     .bak/.backup files YOU created, cleaned out. Cheap and easy to forget.
 
-**List the exact commands you ran to verify** — the actual shell lines. "I tested it"
-without the command is an argument, not an observation.
-
-Re-read the task description and list every constraint it states. Verify your
-deliverable satisfies EACH one — the one you skipped is the one that fails.
-
-Three delivery checks on what sits at the delivery path:
-
-  1. **PATH & CONSTRAINT**: deliverable at the EXACT path/name the task named? Task's
-     named constraints (version/format/count/value) all satisfied? A GIVEN has zero
-     tolerance.
-  2. **EXACT CONTENTS**: delivery path holds the named set and NOTHING MORE? A stray
-     sibling fails an exact-contents check as hard as a missing file, silently.
-  3. **TEMP & BACKUP CLEANUP**: scratch/temp files, verification byproducts, and ANY
-     .bak backups YOU created cleaned out? Delete *.bak, *.backup before finishing.
-
-**Memory review** — before completing, run memory_list() and check:
-   (1) Any new fact/pitfall/insight to save?
-   (2) Can any existing pitfall be elevated to an insight (recurring pattern)?
-   (3) Any existing fact invalidated by this session's work?
-   Act on findings directly — write new entries, supersede stale ones.
-   Do NOT report suggestions to the user for confirmation.
+  3. **MEMORY REVIEW** — run memory_list(): any new fact/pitfall/insight worth
+     saving, any pitfall recurring enough to become an insight, any existing fact
+     this session invalidated? Act directly — write/supersede entries. Do NOT report
+     suggestions to the user for confirmation.
 
 Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced, or
 "none apply">. This gate fires once."""
@@ -635,19 +619,20 @@ class VerificationGuard(Guard):
             ) is not None
         )
         if ctx.tool_name == "" and _is_completion and ctx.llm_responded:
-            # This gate fires regardless of plan state — it is a final delivery
-            # check, not a plan-specific check. It backstops agents that either
-            # skip plan_update(complete) entirely or went through it but had the
-            # Fifth gate (delivery hygiene) released by an override reason written
-            # for an earlier gate (intra-guard gate-crosstalk). Even single-step
-            # tasks (no plan) need path/constraint/exact-contents/temp-cleanup
-            # verification before completion.
+            # Wrap-up check fired at every task completion. It is a light,
+            # always-applicable finish-line routine — near/far observation-vs-
+            # argument check, temp/.bak cleanup, memory review — NOT a re-run of
+            # the plan_update(complete) cascade's deep delivery verification.
             #
-            # Stale prior-turn completions are excluded by ctx.llm_responded (set
-            # only on the completion-path consultation, right after the LLM emits
-            # the sentinel this iteration) — NOT by tracking whether
-            # plan_update(complete) ran this turn. The _text_complete_hygiene_
-            # demanded flag ensures it fires at most once per turn.
+            # No overlap with the cascade: the cascade owns deep delivery checks
+            # (optimized/general/generalizes, reloaded-artifact, exact-contents);
+            # this owns the always-do wrap-up hygiene. Both can fire on a planned
+            # task without re-asking the same thing, because their content is
+            # disjoint. The earlier "re-run" complaint was about duplicated deep
+            # checks in this message, which have been removed — not about this
+            # gate firing at all. So it fires whether or not a cascade ran.
+            #
+            # Fires at most once per turn via _text_complete_hygiene_demanded.
             if not self._text_complete_hygiene_demanded:
                 if not ctx.override_reason.strip():
                     self._text_complete_hygiene_demanded = True
@@ -656,7 +641,7 @@ class VerificationGuard(Guard):
                         reason="text_complete_hygiene",
                         category="verification_required",
                     )
-                # Override provided → agent checked the delivery path. Release.
+                # Override provided → agent did the wrap-up. Release.
                 self._text_complete_hygiene_demanded = True
             return None
 
