@@ -190,9 +190,12 @@ Then decide what kind of task this was, because that decides what "done" means:
     ADDED but HOW the deliverable gets addressed — your interactive shell resolves
     it via PATH/rc/alias/cwd, while the consumer invokes it bare. "It runs when I
     TYPE it" is not "it runs when a PROGRAM calls it": an artifact meant to be found
-    by name must live in the target's standard install location. Re-run the check
-    the bare way the consumer will — would it still pass without the setup you
-    personally added and without your shell having been primed to find it?
+    by name must live in the target's standard install location. Look at HOW you
+    already invoked it in your trace: if some run already exercised the bare/clean
+    way the consumer will (no personal setup, shell not primed to find it), CITE
+    that run — no re-run needed. Only if EVERY invocation in your trace leaned on
+    your primed shell (PATH/rc/alias/cwd) or locally-added setup is a single bare
+    re-run warranted to close that specific gap.
     **Exception lists**: if the task named a precise list of exceptions, that
     enumeration is a closed constraint — a failure outside the list does not earn a
     place on it. And "this failure is pre-existing / external / unrelated to my
@@ -231,8 +234,14 @@ fail to generalize, or general yet not the best available. Answer each on its ow
   3. GENERALIZES — you verified under conditions you could OBSERVE. The real use
      imposes conditions you could NOT observe. Name that gap concretely, then say
      whether you REPRODUCED it and read the result, or merely argued it would be
-     fine. The gap is never zero — manufacture it (perturb the input, run in a fresh
-     context) and watch what happens first.
+     fine. The gap is never zero. FIRST mine your own trace: did a command you
+     ALREADY ran, or an output you ALREADY read, exercise this gap? If so, CITE it
+     (which command, what the output showed) — that retrospective evidence IS an
+     observation, no re-run needed. Re-running an already-answered check — above all
+     a long pipeline — to re-confirm what the trace already shows is wasted work.
+     ONLY if the trace genuinely lacks evidence for a gap that MATTERS to
+     correctness, run the minimal targeted probe (perturb the one property, one
+     cheap run) that closes THAT gap — never re-run the whole task.
 
 If an axis does not apply, say so. To proceed, re-issue plan_update(action="complete")
 with "_override_reason" that answers all three against the real purpose. This is
@@ -378,6 +387,10 @@ It explains why your approach OUGHT to be right — "reasonable", "conservative"
 what you RAN and READ. A confident rationale for a wrong answer is still a wrong
 answer.
 
+The observation may ALREADY exist in your trace — a command you ran, an output you
+read. FIRST cite that if it answers the question; you only need a fresh run when the
+trace genuinely lacks it. Do not re-run a check the trace already settled.
+
 Produce one, then complete:
 
   • **Known-answer sample**: if the task handed you a sample whose correct answer
@@ -422,6 +435,11 @@ REPRODUCE it. Two paths:
     set-membership / normalized comparison over an exact-form test. Keep the
     GIVEN/RANGE line sharp: a value the TASK named you reproduce verbatim; only the
     forms YOU read off the sample are magic.
+
+Either path is a CHEAP targeted probe — run your solution once on one perturbed
+input, or enumerate the field's distinct values — NOT a re-run of the whole
+pipeline. If those distinct values are already visible in your trace, cite them
+instead of re-running.
 
 To proceed, re-issue plan_update(action="complete") with "_override_reason" naming a
 concrete result you OBSERVED on an input OTHER than the original sample — a perturbed
@@ -528,9 +546,14 @@ clean):
      load-bearing question. You verified at the near end (your shell, your env, your
      sample). The consumer observes the far end: a fresh process, a bare non-login
      invocation, the artifact reloaded cold from disk. Ask "what will be DIFFERENT
-     when someone else runs this?" — then manufacture that difference and READ the
-     result. If your evidence is an ARGUMENT ("should work", "is fine") rather than an
-     OBSERVATION you ran at the far end and read, you have not verified.
+     when someone else runs this?" — then FIRST answer it from your EXISTING trace:
+     is there a command you already ran, or an output you already read, that shows
+     the far-end behavior? If yes, CITE it (which command, what it showed) — that is
+     your observation, no re-run needed. Manufacture the difference and run it ONLY
+     when your trace has no such evidence AND the gap is material; re-running to
+     re-confirm what you already observed is waste. If your evidence is an ARGUMENT
+     ("should work", "is fine") rather than an OBSERVATION — whether cited from the
+     trace or freshly probed — you have not verified.
 
   2. **TEMP & BUILD CLEANUP** (do this AFTER far-end verification, not before — the
      fresh runs, reloads, and re-builds in step 1 often generate new byproducts, so

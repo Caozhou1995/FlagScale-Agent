@@ -679,6 +679,39 @@ class TestTaskCompleteRecheck:
         for _lit in ("threshold of 25", "cutoff of 2000", "exceeds 40", "rises more than 40"):
             assert _lit not in low, f"leaked concrete tuned magic number: {_lit!r}"
 
+    def test_complete_recheck_generalizes_axis_prefers_trace_over_rerun(self):
+        """Axis 3 GENERALIZES must be retrospective-first: mine the existing trace for
+        a command already run / output already read that exercises the gap, and CITE
+        it as the observation. A fresh run is the FALLBACK, warranted only when the
+        trace lacks evidence for a MATERIAL gap — and then a minimal targeted probe,
+        never a re-run of the whole (long) pipeline. This encodes the user's intent:
+        self-audit by reviewing prior reasoning/commands, do not re-run by default."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        # retrospective-first: mine the trace, cite what already ran
+        assert "mine your own trace" in low
+        assert "already ran" in low and "already read" in low
+        assert "cite it" in low
+        assert "retrospective evidence is an observation" in low
+        # re-running an already-answered check is waste
+        assert "no re-run needed" in low
+        assert "wasted work" in low
+        # fresh run is the gated fallback, and it is a minimal probe not a full re-run
+        assert "only if the trace genuinely lacks evidence" in low
+        assert "minimal targeted probe" in low
+        assert "never re-run the whole task" in low
+
+    def test_complete_recheck_env_portability_prefers_existing_bare_invocation(self):
+        """The environment-portability check must also be retrospective-first: if some
+        invocation in the trace already ran the bare/clean way the consumer will, cite
+        it; a bare re-run is warranted only when EVERY traced invocation leaned on the
+        primed shell / local setup."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        assert "how you already invoked it in your trace" in low
+        assert "cite" in low
+        assert "only if every invocation in your trace" in low
+
     def test_open_ended_depth_vs_breadth_discriminator(self):
         """Open-ended branch must teach how to judge whether 'distinct' attempts
         were actually distinct: a clustered/near-tie spread across attempts means
@@ -1616,6 +1649,43 @@ class TestTextCompleteHygieneGate:
         assert "argument" in low and "observation" in low
         # Override channel intact.
         assert "_override_reason" in msg
+
+    def test_wrap_up_near_far_prefers_existing_trace_over_rerun(self):
+        """Step 1 NEAR vs FAR must be retrospective-first: answer from an existing
+        command/output in the trace and cite it before manufacturing a fresh run.
+        Re-running to re-confirm what was already observed is waste; a fresh probe is
+        gated on the trace lacking evidence AND the gap being material. An argument —
+        whether cited or freshly probed — still is not verification."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "existing trace" in low
+        assert "already ran" in low or "already read" in low
+        assert "cite it" in low
+        assert "no re-run needed" in low
+        assert "re-running to re-confirm what you already observed is waste" in low
+        # fresh run is the gated fallback
+        assert "only when your trace has no such evidence" in low
+
+    def test_observation_demand_prefers_existing_trace(self):
+        """The observation-demand gate must first point at the trace: the observation
+        may already exist (a command run, an output read); only a genuine absence
+        warrants a fresh run. Do not re-run a check the trace already settled."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_OBSERVATION_DEMAND
+        low = " ".join(_TASK_COMPLETE_OBSERVATION_DEMAND.lower().split())
+        assert "already exist in your trace" in low
+        assert "cite that" in low
+        assert "do not re-run a check the trace already settled" in low
+
+    def test_generalization_demand_is_cheap_probe_not_full_rerun(self):
+        """The generalization gate must frame its check as a CHEAP targeted probe
+        (one perturbed run, or enumerate visible distinct values) rather than a re-run
+        of the whole pipeline; and if the distinct values are already visible in the
+        trace, cite them instead of re-running."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_GENERALIZATION_DEMAND
+        low = " ".join(_TASK_COMPLETE_GENERALIZATION_DEMAND.lower().split())
+        assert "cheap targeted probe" in low
+        assert "not a re-run of the whole" in low
+        assert "already visible in your trace" in low
 
     def test_memory_review_demands_updating_stale_entries(self):
         # The MEMORY REVIEW item is not write-only: it must push the agent to
