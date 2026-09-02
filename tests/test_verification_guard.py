@@ -1605,6 +1605,28 @@ class TestTextCompleteHygieneGate:
         # Override channel intact.
         assert "_override_reason" in msg
 
+    def test_memory_review_demands_updating_stale_entries(self):
+        # The MEMORY REVIEW item is not write-only: it must push the agent to
+        # RECONCILE existing entries this session touched, covering BOTH stale
+        # triggers — (a) a value/command/path READ from memory that reality then
+        # refuted, and (b) an insight/pitfall direction this session already
+        # implemented/verified/disproved. A wrong memory is worse than none.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # Reconcile pass is named and framed as the usually-skipped one.
+        assert "reconcile" in low
+        assert "worse than no memory" in low
+        # Trigger (a): read-then-refuted — command errored / path wrong / config stale.
+        assert "read" in low and ("refuted" in low or "contradicted" in low)
+        assert "known-wrong" in low
+        # Must fix EVERY copy, not just the one read (sibling sweep).
+        assert "sibling" in low or "every copy" in low
+        # Trigger (b): implemented/verified/disproved direction.
+        assert "implemented" in low and "disproved" in low
+        # Act now, not deferred.
+        assert "supersede" in low
+
     def test_wrap_up_does_not_duplicate_cascade_deep_checks(self):
         # The removed blocks: the numbered "three delivery checks", the
         # exact-command listing demand, and the "re-read every constraint" block.

@@ -46,6 +46,64 @@ import time
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
+def _extract_recent_activity(messages, limit: int = 8, lookback: int = 30) -> str:
+    """Collect the agent's recent activity trace for the loop judge.
+
+    Walks back through at most ``lookback`` messages, gathering, in chronological
+    order, the agent's own narration (assistant text) and the tools it invoked
+    (name + the single most identifying argument — a shell command or a file path).
+    This is what the LLM judge reads to decide whether the agent is looping in one
+    method-class or has actually escaped downward/upward.
+
+    Intentionally content-agnostic: it does not parse or count anything itself
+    (no signatures, no regex, no thresholds) — it only assembles the trace and
+    hands the semantic judgment to the judge, per the design constraint.
+    """
+    if not messages:
+        return ""
+    entries: list[str] = []
+    for msg in reversed(messages[-lookback:]):
+        role = msg.get("role")
+        if role == "assistant":
+            content = msg.get("content", "")
+            text = ""
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                parts = [
+                    item.get("text", "")
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") == "text"
+                ]
+                text = " ".join(p for p in parts if p)
+            # Tool calls invoked in this assistant turn (name + key arg).
+            calls = msg.get("tool_calls") or []
+            call_descs: list[str] = []
+            for tc in calls:
+                name = tc.get("name", "")
+                args = tc.get("arguments", {}) or {}
+                key_arg = (
+                    args.get("command")
+                    or args.get("path")
+                    or args.get("url")
+                    or ""
+                )
+                key_arg = str(key_arg).strip().replace("\n", " ")
+                if len(key_arg) > 160:
+                    key_arg = key_arg[:160] + "…"
+                call_descs.append(f"{name}({key_arg})" if key_arg else name)
+            line = ""
+            if text.strip():
+                line = text.strip()
+            if call_descs:
+                line = (line + " " if line else "") + "→ " + ", ".join(call_descs)
+            if line:
+                entries.append(line)
+        if len(entries) >= limit:
+            break
+    return "\n".join(reversed(entries))
+
+
 class PlanUpdateGuard(Guard):
     """Detects being stuck on one plan step and prompts self-diagnosis.
 
@@ -123,6 +181,46 @@ class PlanUpdateGuard(Guard):
             return True
         notes = args.get("notes") or ""
         return bool(notes.strip())
+
+    # Prepended to the block body when the LLM judge decides the agent is looping.
+    _LOOP_ESCAPE_NOTE = (
+        "\n\n⚠️ The recent trace looks like a LOOP: you keep editing the same "
+        "target and re-running the whole program, without isolating a smaller unit "
+        "or switching method-class. Re-running the entire thing is SIDEWAYS — it "
+        "does not tell you WHICH assumption is wrong. Escape now:\n"
+        "— DOWNWARD: write the smallest possible test that exercises ONE unit in "
+        "isolation (a single function, one instruction, one syscall, one case). If "
+        "it passes, the bug is in integration/scale; if it fails, the bug is in that "
+        "unit — either way you learn something a full rerun cannot tell you.\n"
+        "— UPWARD: reach outside the current tactic — consult documentation "
+        "(web_fetch) or a reference implementation / library for the problem class, "
+        "or adopt a different tool. If you have been hand-rolling something a "
+        "standard component already does, switch to it.\n"
+        "A minimal isolating test or a genuine method-class switch clears this — "
+        "another edit-and-rerun of the whole program does not."
+    )
+
+    def _loop_diagnosis(self, ctx) -> str:
+        """Return the loop-escape note iff the LLM judge sees a sideways loop.
+
+        Delegates the semantic judgment to ``ctx.classify_fn`` (the LLM judge),
+        feeding it the recent activity trace. Returns an empty string when no judge
+        is available or the judge says the agent is NOT looping — so the block
+        degrades gracefully to its prior behavior. No parsing/counting/regex here.
+        """
+        classify_fn = getattr(ctx, "classify_fn", None)
+        if classify_fn is None:
+            return ""
+        activity = _extract_recent_activity(getattr(ctx, "messages", None))
+        if not activity.strip():
+            return ""
+        try:
+            looping = classify_fn(
+                "agent_stuck_in_sideways_loop", {"activity": activity}, default=False
+            )
+        except Exception:
+            return ""
+        return self._LOOP_ESCAPE_NOTE if looping else ""
 
     def __init__(self, task_plan, time_fn=time.monotonic):
         self._task_plan = task_plan
@@ -288,9 +386,18 @@ class PlanUpdateGuard(Guard):
                 if escalate:
                     # Advisory nudges were ignored this many times — force a stop.
                     self._block_pending = True
+                    # LLM-judge loop diagnosis: does the recent activity show the
+                    # agent repeating one method-class (edit-same-file + rerun-whole-
+                    # program) instead of escaping downward/upward? If so, name the
+                    # loop concretely in the block so the escape is unmistakable.
+                    # Semantic judgment is delegated to the judge — no signatures,
+                    # counting, or regex here (design constraint). Gracefully skips
+                    # when no judge is wired.
+                    loop_note = self._loop_diagnosis(ctx)
                     return GuardVerdict.block(
                         message=(
                             body
+                            + loop_note
                             + f"\n\nThat is {self._stall_trigger_count} stall "
                             f"reminders with no plan_update — earlier advisories had no "
                             f"effect, so this one BLOCKS. A vague 'I am making progress' "

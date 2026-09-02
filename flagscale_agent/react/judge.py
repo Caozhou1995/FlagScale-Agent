@@ -127,6 +127,38 @@ enough" — without reporting inability (BLOCKED, did not deliver, abandoned).
 Answer NO (fine, allow) when it reports the exact named thing, reports BLOCKED /
 inability, or no substitution is involved.
 Reply ONLY: {{"real": true/false}}""",
+
+    "agent_stuck_in_sideways_loop": """\
+An agent has been flagged as stalled on one task step — many tool calls with no
+plan progress. Below is a trace of what it did most recently (its own narration of
+each action and the tools it invoked).
+
+Recent activity:
+{activity}
+
+Question: is the agent LOOPING — repeating the SAME method-class over and over —
+rather than escaping the stall? The two genuine escapes are:
+- DOWNWARD: shrink the problem to the smallest unit that isolates ONE assumption
+  (test a single function/instruction/case in isolation), instead of re-running the
+  whole program end-to-end each time.
+- UPWARD: switch to a different method-class (reach for a library/tool/standard
+  technique, consult documentation, change the approach itself).
+
+A LOOP looks like: editing the same file then re-running the same whole program,
+again and again; tweaking one value and re-running the full pipeline; trying
+variant after variant of the same tactic (a faster rewrite, a different constant,
+a reorder) — all SIDEWAYS moves within one method-class. The tell is that each
+round re-runs the entire thing rather than isolating a single unit, and no new
+method-class or smaller experiment appears.
+
+Answer YES (a real problem, block) when the recent activity is dominated by
+re-running the same whole program and editing the same target, with no smaller
+isolating experiment and no switch of method-class.
+Answer NO (fine, allow) when the agent has already gone DOWNWARD (built a minimal
+isolating test) or UPWARD (switched method-class, consulted a reference, adopted a
+different tool), or when the activity is varied enough that it is clearly not
+looping.
+Reply ONLY: {{"real": true/false}}""",
 }
 
 
