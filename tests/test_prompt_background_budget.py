@@ -28,6 +28,20 @@ class TestBackgroundToolGuidance:
         low = SYSTEM_PROMPT_STATIC.lower()
         assert "detach" in low
 
+    def test_warns_against_wait_spin_loop(self):
+        # Task 2 (prompt-only): backgrounding then repeatedly waiting with no
+        # other work is synchronous blocking in disguise.
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "synchronous blocking" in low
+        # Must frame the win as doing OTHER work while the job runs.
+        assert "other useful work" in low or "other work" in low
+
+    def test_says_background_jobs_stay_monitored(self):
+        # Task 1 surfaced in the prompt: backgrounded/auto-detached jobs stay
+        # health-monitored and can be terminated if they later hang.
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "health-monitored" in low or "health monitored" in low
+
 
 class TestTimeBudgetGuidance:
     def test_has_time_budget_section(self):
