@@ -148,10 +148,14 @@ step moves toward THAT, not a nearby goal your own framing swapped in. Verifying
 wrong question thoroughly is still off-target. When your reading of the task and its
 plain wording pull apart, the wording wins.
 
-To proceed, re-issue plan_update(step_done) with "_override_reason" stating that you
-re-checked the result against each criterion and re-examined the premises you relied on.
-This is not a content check — any override_reason lets the step through; the point is
-that you stopped to look before committing."""
+To proceed, re-issue plan_update(step_done) with "_override_reason" that names a
+CONCRETE ANCHOR, not a summary of diligence. "I re-checked and it's correct" is the
+empty answer this asks you to replace. Point at one of: the value you OBSERVED vs the
+value the criterion required (report both), the exact premise you re-tested and what
+retesting it showed, or — if a premise genuinely cannot be tested here — say so in
+those words. An anchor you can point to, or an explicit "no evidence for X"; not an
+adjective. This is not a content check — any override_reason lets the step through;
+the point is that a reason with no anchor is itself the signal you did not look."""
 
 _TASK_COMPLETE_RECHECK_REMINDER = """[VerificationGuard] Before completing the whole task — one look back at the finish line.
 
@@ -244,9 +248,16 @@ fail to generalize, or general yet not the best available. Answer each on its ow
      cheap run) that closes THAT gap — never re-run the whole task.
 
 If an axis does not apply, say so. To proceed, re-issue plan_update(action="complete")
-with "_override_reason" that answers all three against the real purpose. This is
-not a content check — any override_reason lets it through; the point is that you
-stopped and looked along every axis before deciding you are done."""
+with "_override_reason" that gives each axis a CONCRETE ANCHOR, not a verdict:
+  • OPTIMIZED — name the measured number you hold AND the alternative you ruled out
+    (by what measurement), or state no distinct alternative exists.
+  • GENERAL — name the sibling input you considered and what your method does on it,
+    or the one property you special-cased and why it is safe.
+  • GENERALIZES — cite the command/output in your trace that already exercised the
+    gap, OR the probe you ran, OR say explicitly "no evidence — gap unclosed".
+"Optimized, general, and it generalizes" is the empty answer this replaces — three
+adjectives point at nothing. This is not a content check — any override_reason lets
+it through; the point is that an axis with no anchor is the axis you did not look at."""
 
 
 _POST_RECOVERY_REMINDER = """[VerificationGuard] Context was just recovered via hard_reset.
@@ -521,9 +532,14 @@ configured or the best candidate you held in memory. Walk the ones that apply:
     the task named, or a constructed look-alike / stub / placeholder standing in for
     work you did not actually complete?
 
-To proceed, re-issue plan_update(action="complete") with "_override_reason" reporting
-which of these you checked on the DELIVERED artifact — or stating plainly that none
-apply (e.g. no file delivered, no search, no noisy metric). This gate fires once."""
+To proceed, re-issue plan_update(action="complete") with "_override_reason" that, for
+each item you checked, names the CONCRETE ANCHOR you saw on the DELIVERED artifact —
+the path you read, the command you ran against it, the value it returned — not the
+bare claim "I checked reloaded-fresh and exact-contents". "I verified the delivered
+file" is the empty answer this replaces: it names no path, no command, no value. If
+an item does not apply, say which and why (e.g. "no search, so no best-so-far"). An
+anchor per applicable item, or an explicit "none apply" — not a checklist of ticks.
+This gate fires once."""
 
 
 # Covers the PURE-TEXT [TASK_COMPLETE] finish path (no tool_name), which bypasses
@@ -569,9 +585,22 @@ clean):
 
   3. **RE-READ TASK & CONFIRM DELIVERY** — go back to the task description and read
      it again, then confirm the CURRENT on-disk state satisfies every delivery
-     requirement it states. This is the authoritative check: not "did cleanup break
-     something" but "does what sits at the delivery path right now match what the task
-     asked for". For EACH requirement the task states, OBSERVE (do not assume):
+     requirement AND every CONSTRAINT it states. This is the authoritative check: not
+     "did cleanup break something" but "does what sits at the delivery path right now
+     match what the task asked for". For EACH requirement AND constraint the task
+     states, OBSERVE (do not assume):
+       • CONSTRAINTS / QUALIFIERS (check these FIRST — the easiest to satisfy in FORM
+         while missing in CONTENT) — a task names a subject and usually qualifies it:
+         a point in TIME ("as of <date>", "at the time of", "top entry then"), an
+         exact VERSION / timestamp / commit / size, a SUBSET or region, a specific
+         METRIC definition or threshold. These are GIVENs with ZERO tolerance — a
+         successor, a newer entry, a near-equivalent is NOT the named thing. Re-list
+         every qualifier as a first-class line and confirm your answer's CONTENT
+         literally honors each. A file at the right path in the right format can still
+         answer a NEARBY question the task did not ask (the current leader instead of
+         the point-in-time leader, v3.0 instead of v2.2) — that scores zero as hard as
+         a missing file, and silently. Ask: what did the task pin down that a confident
+         answer would casually drift past?
        • file path — every required output exists at its EXACT required path, not a
          near-miss location, not a renamed or parent-dir copy
        • contents & format — each output is non-empty, well-formed, and in the format

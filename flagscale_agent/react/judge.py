@@ -317,7 +317,7 @@ class Judge:
         output_changed: bool = True, stall_count: int = 0,
         expectation: str = "", activity: str = "",
         command_history: str = "", container_resources: str = "",
-        output_pattern: str = "",
+        output_pattern: str = "", task_budget: str = "",
     ) -> dict:
         """Evaluate whether a long-running command is healthy.
 
@@ -352,6 +352,19 @@ class Judge:
         output at all). This helps the judge distinguish a healthy silent
         compute from a truly stuck process. When empty, behavior is identical
         to no-pattern mode.
+
+        task_budget: optional free-text summary of the WHOLE-TASK wall-clock
+        budget — how long the entire task has been running so far (cumulative
+        across every command, not just this one) versus the total time the task
+        is allowed before the external harness terminates it. This is distinct
+        from the per-command rate/ETA criterion, which only asks whether THIS
+        command finishes inside ITS own timeout. The task-budget view lets the
+        judge notice that the cumulative session is consuming most of its total
+        allowance while the current method-class is unlikely to complete the
+        remaining work in the remaining time, and — only when the slowness is a
+        configurable choice, never a hardware/network hard limit — emit an
+        advisory to switch to a faster method-class that still meets every task
+        requirement. When empty, behavior is identical to no-budget mode.
         """
         prompt = _HEALTH_PROMPT.format(
             command=command, elapsed=elapsed,
@@ -368,6 +381,8 @@ class Judge:
             prompt += self._build_resources_block(container_resources)
         if output_pattern:
             prompt += self._build_pattern_block(output_pattern)
+        if task_budget:
+            prompt += self._build_task_budget_block(task_budget)
         return self._call_and_parse(prompt) or {"kill": False}
 
     @staticmethod
@@ -492,6 +507,59 @@ class Judge:
             "  'monitoring window' or short deadline it must produce output within;\n"
             "  the only time-based hard limit is the explicit overall timeout named\n"
             "  in the kill criteria above.\n"
+        )
+
+    @staticmethod
+    def _build_task_budget_block(task_budget: str) -> str:
+        """Build the whole-task wall-clock budget section for the health prompt.
+
+        Returns "" when no budget summary was supplied, so the prompt is
+        byte-identical to the pre-budget version and no content leaks in.
+
+        This is deliberately DISTINCT from the per-command rate/ETA kill
+        criterion in the main prompt: that one asks whether THIS single command
+        finishes inside ITS own timeout. This block asks the task-level
+        question — has the CUMULATIVE session (every command so far) consumed so
+        much of the TOTAL task allowance that the current method-class can no
+        longer plausibly finish the remaining work before the external harness
+        terminates the whole task?
+        """
+        summary = (task_budget or "").strip()
+        if not summary:
+            return ""
+        return (
+            "\n## Task-level time budget (cumulative wall-clock)\n\n"
+            "Beyond this one command, the WHOLE TASK runs under a fixed overall\n"
+            "wall-clock budget enforced by an external harness. The cumulative\n"
+            "time spent so far across every command, versus that total budget, is:\n\n"
+            f"    {summary}\n\n"
+            "This is a TASK-LEVEL judgment, separate from the per-command\n"
+            "rate/ETA criterion above (which only asks whether THIS command\n"
+            "finishes inside ITS own timeout). Here the question is whether the\n"
+            "cumulative session has consumed enough of its total allowance that\n"
+            "the CURRENT method-class is unlikely to complete the remaining work\n"
+            "before the whole task is terminated — e.g. most of the budget is\n"
+            "gone yet the agent is still turning knobs on an approach that keeps\n"
+            "landing short.\n\n"
+            "When that is the case, do NOT kill on this basis alone — emit an\n"
+            "advisory (kill=false) whose reason states how much of the budget is\n"
+            "spent and asks the agent to weigh whether continuing the current\n"
+            "method-class can finish in the time left, versus switching to a\n"
+            "faster method-class. Two hard constraints on that advisory:\n"
+            "- Rule out hardware/network hard limits first. If the run is already\n"
+            "  saturating the resources it was given (a legitimately I/O- or\n"
+            "  bandwidth-bound transfer, a compute already using all cores), no\n"
+            "  method change the agent makes would speed it up — say nothing. Only\n"
+            "  raise this when the cost is a CONFIGURABLE CHOICE under the agent's\n"
+            "  control (an oversized setting, an unnecessarily expensive method,\n"
+            "  under-used parallelism, redundant re-runs).\n"
+            "- NEVER suggest shrinking the task to fit the budget — do not lower\n"
+            "  the quality/accuracy target, cut the required input, or drop a\n"
+            "  requirement. Redirect only to a genuinely faster method that STILL\n"
+            "  meets every target the task set. If you cannot name such a method,\n"
+            "  prefer staying silent over a budget-driven advisory.\n"
+            "Escalate to kill only if a separate hard kill criterion above is\n"
+            "also met.\n"
         )
 
     def reset_turn(self):

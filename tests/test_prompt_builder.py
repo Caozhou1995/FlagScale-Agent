@@ -451,6 +451,25 @@ class TestSystemPromptContent:
         # The mandatory web_fetch checkpoint is scoped to novel-problem tasks, not ANY task.
         assert "UNFAMILIAR ALGORITHM / NOVEL PROBLEM" in p
 
+    def test_cost_weighted_verification_present(self):
+        # Principle 1: the price of feedback sets the thinking-vs-running mix.
+        # As one iteration gets more expensive, invest more in reasoning and buy
+        # fewer, better-targeted observations — WITHOUT weakening the rule that
+        # only an observation verifies.
+        p = self._prompt()
+        assert "COST-WEIGHTED VERIFICATION" in p
+        # It must not overturn observation>argument — theory reduces the NUMBER
+        # of observations, it does not replace them.
+        assert "theory still ENDS in an observation" in p
+        # The three self-deception guards must all be stated, since "it's
+        # expensive" is a tempting excuse to skip verifying.
+        assert "must be OBSERVED" in p          # cost is measured, not asserted
+        assert "not license to stop running" in p  # no-cheap-proxy != skip-run
+        # Guidance, not case-by-case: no hardcoded time/size threshold leaks in.
+        for w in ("minute", "hour", "gb", "second"):
+            # allow the word inside larger tokens but not as a standalone threshold
+            assert f" {w} " not in p.lower(), f"cost principle must stay threshold-free, found '{w}'"
+
 
 # ── refresh() session_dir passthrough ───────────────────────────────────
 

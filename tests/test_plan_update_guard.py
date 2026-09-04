@@ -99,6 +99,66 @@ class TestPlanUpdateGuardIterationCounting:
             # the question comes early (before the down/up escape prescription)
             assert msg.index("what did the last round tell you") < msg.index("downward")
     
+    def test_advisory_demands_three_part_fact_not_summary(self):
+        """Advisory stall message must demand THREE-PART fact (what/how/result),
+        not accept summary like 'I confirmed assumption X'. Defends against
+        empty affirmation masquerading as information gain."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tp = TaskPlan(tmpdir)
+            tp.create("Test", ["Step 1"])
+            tp.update_step(1, "doing")
+            
+            guard = PlanUpdateGuard(tp)
+            
+            verdict = None
+            for i in range(10):
+                verdict = guard.check_post(GuardContext(tool_name="shell", turn_count=i))
+            
+            assert verdict is not None
+            msg = verdict.message.lower()
+            # demands three-part form explicitly
+            assert "three-part" in msg
+            assert "(1)" in msg and "(2)" in msg and "(3)" in msg
+            # the three parts: assumption, how tested, result
+            assert "assumption" in msg
+            assert "how you tested" in msg
+            assert "result" in msg or "value/output" in msg
+            # explicitly names empty answer
+            assert "empty answer" in msg
+            assert "i confirmed assumption x" in msg or "confirmed assumption" in msg
+            # points out what's missing in the empty answer
+            assert "names no test" in msg or "no test, no result" in msg
+    
+    def test_block_demands_one_assumption_tested_not_summary(self):
+        """Block override_reason must name ONE assumption tested + result,
+        not accept 'I am making progress'. Defends against vague affirmation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tp = TaskPlan(tmpdir)
+            tp.create("Test", ["Step 1"])
+            tp.update_step(1, "doing")
+            
+            guard = PlanUpdateGuard(tp)
+            
+            # Fire reminders until block
+            verdict = None
+            for i in range(100):
+                ctx = GuardContext(tool_name="shell", turn_count=i)
+                verdict = guard.check_post(ctx)
+                if verdict and verdict.action == "block":
+                    break
+            
+            assert verdict is not None
+            assert verdict.action == "block"
+            msg = verdict.message.lower()
+            # block demands ONE assumption in three-part form
+            assert "one assumption" in msg
+            assert "three-part" in msg
+            # override_reason must carry the three-part fact
+            assert "three-part fact (what/how/result)" in msg
+            # explicitly names the empty answer that does NOT clear
+            assert "i confirmed x is correct" in msg
+            assert "names no test, no result" in msg
+    
     def test_periodic_reminders_10_then_every_20(self):
         """Reminders fire at 10, then every 20 after: 10, 30, 50, 70, 90.
 
@@ -324,12 +384,8 @@ class TestPlanUpdateGuardEscalation:
             assert "shipping best" in v3.message
             # The block demands a concrete, falsifiable fact — not a vague
             # "I'm progressing" defence (guards against defensive-note escape).
-            assert "falsifiable" in v3.message
-            assert "vague" in v3.message.lower()
-            assert (
-                "refuted" in v3.message.lower()
-                or "eliminated" in v3.message.lower()
-            )
+            assert "THREE-PART form" in v3.message
+            assert "empty answer" in v3.message
             # Side-channel clause: on deliverable+threshold tasks, a fact only
             # clears the block if OBSERVED AT THE DELIVERABLE (edit + re-run +
             # measure), not derived in a scratch script / prototype / on paper.
@@ -466,3 +522,121 @@ class TestPlanUpdateGuardEscalation:
             clock.advance(PlanUpdateGuard.TIME_REMIND_SECONDS + 1)
             v3 = guard.check_post(GuardContext(tool_name="shell"))
             assert v3 is not None and v3.action == "block"
+
+
+class TestStallSelfCheckReframe:
+    """The reminder must FRAME as a proxy/self-check, not assert a stall, and
+    must offer a two-branch exit (progressing → continue; zero-gain → escape)."""
+
+    def _fire_count(self, tmpdir):
+        tp = TaskPlan(tmpdir)
+        tp.create("Test", ["Step 1"])
+        tp.update_step(1, "doing")
+        guard = PlanUpdateGuard(tp)
+        verdict = None
+        for i in range(10):
+            verdict = guard.check_post(GuardContext(tool_name="shell", turn_count=i))
+        return verdict
+
+    def test_message_frames_as_proxy_not_assertion(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v = self._fire_count(tmpdir)
+            msg = v.message.lower()
+            # PROXY framing: counter does not prove a stall
+            assert "proxies for a stall" in msg
+            assert "do not prove you are" in msg
+            assert "checkpoint" in msg
+            # verdict is the AGENT's, not the counter's
+            assert "you decide the verdict" in msg
+
+    def test_message_has_progressing_branch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v = self._fire_count(tmpdir)
+            msg = v.message.lower()
+            # YES branch: cheap continue for an agent that is progressing
+            assert "progressing, not" in msg
+            assert "must not derail real progress" in msg
+
+    def test_message_has_zero_gain_branch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v = self._fire_count(tmpdir)
+            msg = v.message.lower()
+            # NO branch: this is the real stall
+            assert "information gain is zero" in msg
+            assert "the real stall" in msg
+
+
+class TestSignalDifferentiatedHint:
+    """COUNT and TIME are two views with different remedies; the reminder must
+    name the remedy matching whichever signal fired."""
+
+    def _guard(self, tmpdir, clock):
+        tp = TaskPlan(tmpdir)
+        tp.create("Test", ["Step 1"])
+        tp.update_step(1, "doing")
+        return PlanUpdateGuard(tp, time_fn=clock)
+
+    def test_count_only_gives_action_layer_hint(self):
+        # 10 fast calls, no wall-clock advance → COUNT fires, TIME does not.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            clock = _FakeClock()
+            guard = self._guard(tmpdir, clock)
+            verdict = None
+            for i in range(10):
+                verdict = guard.check_post(GuardContext(tool_name="shell", turn_count=i))
+            msg = verdict.message.lower()
+            assert "count signal" in msg
+            assert "thrashing" in msg
+            assert "stop acting" in msg
+            # time-specific remedy absent when only count fired
+            assert "reasoning in circles" not in msg
+
+    def test_time_only_gives_thinking_layer_hint(self):
+        # 2 calls, long think between → TIME fires, COUNT (10) does not.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            clock = _FakeClock()
+            guard = self._guard(tmpdir, clock)
+            assert guard.check_post(GuardContext(tool_name="shell")) is None
+            clock.advance(PlanUpdateGuard.TIME_REMIND_SECONDS + 1)
+            verdict = guard.check_post(GuardContext(tool_name="shell"))
+            msg = verdict.message.lower()
+            assert "time signal" in msg
+            assert "reasoning in circles" in msg
+            assert "observation" in msg
+            # action-layer remedy absent when only time fired
+            assert "thrashing" not in msg
+
+    def test_both_signals_give_both_hints(self):
+        # 10 calls AND >180s elapsed on the 10th → both fire together.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            clock = _FakeClock()
+            guard = self._guard(tmpdir, clock)
+            verdict = None
+            for i in range(9):
+                verdict = guard.check_post(GuardContext(tool_name="shell", turn_count=i))
+            clock.advance(PlanUpdateGuard.TIME_REMIND_SECONDS + 1)
+            verdict = guard.check_post(GuardContext(tool_name="shell", turn_count=9))
+            msg = verdict.message.lower()
+            assert "count signal" in msg
+            assert "time signal" in msg
+
+
+class TestBlockTwoBranchClearance:
+    """The escalated block must say it is easy to clear when progressing, and
+    that inability to name a fact is itself proof of looping."""
+
+    def test_block_states_easy_clear_when_progressing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tp = TaskPlan(tmpdir)
+            tp.create("Test", ["Step 1"])
+            tp.update_step(1, "doing")
+            guard = PlanUpdateGuard(tp)
+            verdict = None
+            for i in range(100):
+                verdict = guard.check_post(GuardContext(tool_name="shell", turn_count=i))
+                if verdict and verdict.action == "block":
+                    break
+            assert verdict.action == "block"
+            msg = verdict.message.lower()
+            assert "easy to clear if" in msg
+            assert "inability" in msg and "looping" in msg

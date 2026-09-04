@@ -180,6 +180,27 @@ class TestVerificationGuard:
         for w in ("august", "mteb", "scandinavian", "leaderboard", "time boundary"):
             assert w not in low
 
+    def test_premise_recheck_demands_concrete_anchor_not_summary(self):
+        """The override_reason instruction must require a CONCRETE ANCHOR (value/command/
+        path) or explicit "no evidence", not accept summary-of-diligence ("I re-checked").
+        This defends against self-audit degenerating into empty affirmation."""
+        from flagscale_agent.react.guard.verification import _STEP_DONE_RECHECK_REMINDER
+        low = _STEP_DONE_RECHECK_REMINDER.lower()
+        # demands concrete anchor in override_reason
+        assert "concrete anchor" in low
+        # explicitly names the empty answer this replaces
+        assert "empty answer" in low
+        assert "re-checked and it's correct" in low or "i re-checked" in low
+        # offers specific anchor types: value observed vs expected, premise tested
+        assert "value you observed" in low or "observed vs" in low
+        assert "premise you re-tested" in low or "re-tested and what" in low
+        # provides escape hatch for untestable premise — but must SAY SO explicitly
+        assert "no evidence" in low
+        # preserves override mechanism — any reason passes, but lack of anchor IS signal
+        assert "not a content check" in low
+        assert "any override_reason lets" in low or "any override_reason" in low
+        assert "reason with no anchor" in low
+
     def test_post_recovery_inject_on_first_step_doing(self):
         """After notify_recovery(), should inject reminder on first step_doing."""
         guard = VerificationGuard()
@@ -447,6 +468,27 @@ class TestConstraintGuidanceBlockedComputation:
         for w in ("mips", "doom", "frame", "bmp", "vm.js", "640", "400"):
             assert not re.search(r"\b" + re.escape(w) + r"\b", low), f"leaked task term: {w!r}"
 
+    def test_delivery_hygiene_demands_concrete_anchor_per_item(self):
+        """Override_reason must name CONCRETE ANCHOR per checked item (path/command/value),
+        not bare claim 'I checked reloaded-fresh'. Defends against checklist-of-ticks."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
+        # demands concrete anchor in override_reason
+        assert "concrete anchor" in low
+        # per-item anchor: path/command/value
+        assert "path you read" in low or "command you ran" in low
+        assert "value it returned" in low or "value" in low
+        # explicitly names empty answer
+        assert "empty answer" in low
+        assert "i checked reloaded-fresh" in low or "i verified the delivered file" in low
+        # the claim that names no specifics
+        assert "names no path, no command, no value" in low or "no path, no command" in low
+        # escape: explicit "none apply"
+        assert "none apply" in low
+        # preserves override mechanism
+        assert "not a content check" not in low  # delivery_hygiene doesn't say this
+        assert "_override_reason" in _TASK_COMPLETE_DELIVERY_HYGIENE
+
 
 
 class TestTaskCompleteRecheck:
@@ -540,12 +582,40 @@ class TestTaskCompleteRecheck:
         # generalizes axis names the observe-vs-real-use gap and reproducing it
         assert "gap" in low
         assert "reproduce" in low or "reproduced" in low
-        # still routes through the override checkpoint answering all three
+        # still routes through the override checkpoint answering each axis
         assert "_override_reason" in _TASK_COMPLETE_RECHECK_REMINDER
-        assert "all three" in low
+        # strengthened: override must give each axis a CONCRETE ANCHOR, not a verdict
+        assert "concrete anchor" in low
+        assert "not a verdict" in low
         # no case-by-case task specifics
         for dom in ("sql", "sparql", "compcert", "chess", "fasttext"):
             assert dom not in low, f"task-specific leak: {dom!r}"
+
+    def test_complete_recheck_demands_concrete_anchor_per_axis(self):
+        """Each of the three axes must demand a CONCRETE ANCHOR (value/measurement/
+        command/explicit no-evidence), not accept a verdict adjective ("optimized").
+        Defends against three-adjective answers with no substance."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        full = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        anchor = "run these orthogonal"
+        low = full[full.index(anchor):]
+        # demands concrete anchor per axis in override_reason
+        assert "concrete anchor" in low
+        # each axis gets specific anchor requirements
+        assert "measured number" in low  # OPTIMIZED
+        assert "alternative you ruled out" in low  # OPTIMIZED
+        assert "sibling input" in low or "property you special-cased" in low  # GENERAL
+        assert "cite the command" in low or "probe you ran" in low  # GENERALIZES
+        # explicitly names empty answer: three adjectives
+        assert "empty answer" in low
+        assert "optimized, general, and it generalizes" in low or "three adjectives" in low
+        # provides explicit no-evidence escape per axis
+        assert "no evidence" in low
+        # each axis description now includes "or state/say explicitly"
+        assert "state" in low or "say explicitly" in low
+        # preserves override mechanism
+        assert "not a content check" in low
+        assert "any override_reason lets" in low
 
     def test_complete_recheck_reanchors_on_user_ask_before_kind(self):
         """Before classifying task kind, the reminder must force a re-anchor on the
@@ -1710,17 +1780,45 @@ class TestTextCompleteHygieneGate:
         assert "supersede" in low
 
     def test_wrap_up_does_not_duplicate_cascade_deep_checks(self):
-        # The removed blocks: the numbered "three delivery checks", the
-        # exact-command listing demand, and the "re-read every constraint" block.
-        # These are the cascade's job (gates 4/5); the text gate must not repeat
-        # them, else planned tasks get asked twice.
+        # The removed blocks: the numbered "three delivery checks" and the
+        # exact-command listing demand. These are the cascade's job (gates 4/5);
+        # the text gate must not repeat them verbatim, else planned tasks get
+        # asked twice.
+        #
+        # NOTE: a LIGHT constraint/qualifier re-check IS intentionally present in
+        # step 3 (see test_wrap_up_rechecks_constraints_not_just_form). The pure-
+        # text finish path bypasses the plan_update(complete) cascade entirely, so
+        # for single-shot tasks this gate is the ONLY place a dropped qualifier
+        # (point-in-time, version, subset) can still be caught. What we forbid here
+        # is duplicating the cascade's HEAVY blocks, not the concept of a
+        # constraint check.
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
 
         low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
         assert "three delivery checks" not in low
         assert "path & constraint" not in low
         assert "list the exact commands you ran to verify" not in low
-        assert "list every constraint" not in low
+
+    def test_wrap_up_rechecks_constraints_not_just_form(self):
+        # Regression: the mteb-leaderboard task finished via the pure-text
+        # [TASK_COMPLETE] path (no cascade). Its finish routine confirmed only
+        # delivery FORM (path/format/count) and shipped an answer that violated the
+        # task's point-in-time qualifier — a newer entry instead of the leader at
+        # the stated time. Step 3 must OBSERVE constraint CONTENT, not just form:
+        # re-list every qualifier (time / version / subset / metric) as a
+        # first-class item and confirm the answer literally honors each.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # constraints/qualifiers named as a first-class re-check, not just files
+        assert "constraint" in low and "qualifier" in low
+        # the qualifier categories are enumerated in the abstract
+        assert "time" in low
+        assert "version" in low and "subset" in low and "metric" in low
+        # framed as content-vs-form with zero tolerance (a GIVEN, not a range)
+        assert "zero tolerance" in low
+        # the specific failure mode: a right-form answer to a nearby question
+        assert "nearby question" in low
 
     def test_wrap_up_names_the_no_cascade_reason(self):
         # The message should tell the agent WHY it is being asked now: this finish

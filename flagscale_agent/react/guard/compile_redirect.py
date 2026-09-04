@@ -174,14 +174,39 @@ While you are here — parallelism strategy, before you commit the full build:
     error in noise; a single-threaded probe surfaces it cleanly. Once the probe
     confirms it configures and starts compiling, scale up:
       timeout 120 make -j1 2>&1 | tee build.probe.log   # probe: clean first error
-      J=$(nproc); M=$(awk '/MemAvailable/{print int($2/2000000)}' /proc/meminfo)
-      J=$(( M<J ? M : J )); J=$(( J<1 ? 1 : J ))         # ~2GB/compiler, memory-bounded
+      # CGROUP-AWARE core/mem detection: in a container `nproc` and /proc/meminfo
+      # report the HOST (e.g. 256 cores / 1TB) even when the cgroup caps you at
+      # 1 CPU / 2GB. Reading the host over-parallelizes and OOM-kills the build.
+      # Read the cgroup limit FIRST, fall back to host only when unlimited.
+      Q=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null | awk '{if($1!="max")print int($1/$2)}')   # cores v2
+      [ -z "$Q" ] && Q=$(awk 'END{if($1>0)print int($1/p)}' p=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null) /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null)  # v1
+      NP=$(nproc); C=${Q:-$NP}; [ "$C" -gt "$NP" ] 2>/dev/null && C=$NP; [ "$C" -lt 1 ] 2>/dev/null && C=1
+      LIM=$(cat /sys/fs/cgroup/memory.max 2>/dev/null); [ "$LIM" = "max" ] && LIM=""      # mem v2
+      [ -z "$LIM" ] && LIM=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)  # v1
+      HOSTKB=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+      if [ -n "$LIM" ] && [ "$LIM" -lt $((HOSTKB*1024)) ] 2>/dev/null; then AVKB=$((LIM/1024)); else AVKB=$HOSTKB; fi
+      M=$(( AVKB/2000000 ))                              # ~2GB/compiler, memory-bounded
+      J=$C; J=$(( M<J ? M : J )); J=$(( J<1 ? 1 : J ))   # min(cgroup-cores, mem-bound)
+      J=$(( J>32 ? 32 : J ))                             # absolute cap: >32 thrashes cache/BW
+      echo "Using -j$J (cgroup-cores=$C host-nproc=$NP mem-bound=$M)"
       make -j$J 2>&1 | tee build.log                     # then bounded-parallel build
-  • NEVER use bare `make -j` or `make -j$(nproc)` WITHOUT the memory cap above: an
-    unbounded `-j` forks as many compilers as the dependency graph allows and
-    routinely OOMs or thrashes a small (4-8GB) box, killing the build. Cap `-j` by
-    available memory (each compiler process can use 1-2GB). On a tiny container the
-    formula naturally degrades to -j2 or -j1; on a big host it uses the cores.
+  • NEVER use bare `make -j` or `make -j$(nproc)` WITHOUT the caps above. THREE caps
+    matter, and ALL are needed:
+      1. CGROUP cap (C/LIM): in a container, `nproc` and /proc/meminfo show the HOST,
+         not your slice. A 2GB / 1-CPU cgroup with `-j32` (host said 256 cores) forks
+         32 cc1plus each needing ~1GB → instant OOM-kill (`Killed signal terminated
+         program cc1plus`) and 1-CPU thrash. Always read /sys/fs/cgroup/{cpu.max,
+         memory.max} (v2) or the cpu.cfs_*/memory.limit_in_bytes (v1) and take the
+         min against the host.
+      2. MEMORY cap (M): each compiler can use 1-2GB; an unbounded `-j` forks as many
+         compilers as the graph allows and OOMs/thrashes a small (4-8GB) box.
+      3. ABSOLUTE cap (32): a big host (256 cores / ~1TB RAM) passes the memory cap
+         with a huge J (e.g. -j256). That is NOT faster — 256 heavy C++ compilers
+         saturate cache and memory bandwidth, thrash the scheduler, and spawn a
+         256-node process tree that starves the monitor. Mid-size projects (Caffe,
+         etc.) build fastest around -j8..32; beyond ~32 the return is flat-to-negative.
+    On a 2GB/1-CPU container the formula lands at -j1; on a big host it settles
+    at 32 instead of running away to the core count.
   • For other build systems, apply the same memory-bounded parallelism:
       cargo build -j "$J" 2>&1 | tee build.log
       cmake --build . -j "$J" 2>&1 | tee build.log
