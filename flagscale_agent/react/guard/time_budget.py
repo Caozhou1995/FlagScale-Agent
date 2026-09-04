@@ -62,7 +62,17 @@ class TimeBudgetGuard(Guard):
 
     # Ordered high→low so the FIRST crossed-but-unfired threshold is the most
     # severe one still pending. Each maps to (label, builder).
-    _THRESHOLDS = (90, 75, 50)
+    #
+    # Why 25% is the FIRST rung (not 50%): the earliest advisory carries the
+    # "front-load the expensive steps, background the long ones, re-check the
+    # plan" guidance — but those are levers you can only pull EARLY, while the
+    # decision window is still open. By 50% the costly download/compile/train has
+    # either already started or already should have; the advice arrives after the
+    # window it applies to has closed (observed: a run that only started its
+    # dataset download at ~13% budget and gave up at ~40% would never even see a
+    # 50% nudge). Firing at 25% puts the pacing guidance where the agent has
+    # enough trajectory to gauge its burn rate AND enough budget left to correct.
+    _THRESHOLDS = (90, 75, 50, 25)
 
     def __init__(self, stats_fn):
         """stats_fn() -> dict|None with keys elapsed/budget/remaining/pct.
@@ -142,12 +152,27 @@ class TimeBudgetGuard(Guard):
                 "the same one. And immediately write-through the best valid result you "
                 "have to the delivery path so a timeout cannot wipe it out."
             )
-        else:  # 50
+        elif thr >= 50:
             tail = (
-                " You are past the halfway mark. Re-check your plan against the time "
-                "left: front-load the expensive steps, run long operations in the "
-                "background (background=true) and do OTHER real work while they run — "
-                "never block idle on a long job. If a step is overrunning its share, "
-                "shrink it or pick a faster method now."
+                " You are past the halfway mark — a HEALTH CHECK, not a pacing tip. "
+                "Ask concretely: have the expensive steps (downloads, builds, "
+                "trainings) actually STARTED, and are they on track to FINISH before "
+                "the budget runs out? At the current rate, will a complete valid "
+                "deliverable exist at its required path in time? If the answer is not "
+                "a confident yes, treat that as the signal to change course now while "
+                "budget remains — and make sure the best valid result you already have "
+                "is written through to the delivery path."
+            )
+        else:  # 25
+            tail = (
+                " You are a quarter of the way in — the RIGHT moment to set your pace, "
+                "while the decision window is still open. Re-check your plan against "
+                "the time left: front-load the expensive steps (long downloads, "
+                "builds, trainings) and START the longest/riskiest one NOW rather than "
+                "later; run long operations in the background (background=true) and do "
+                "OTHER real work while they run — never block idle on a long job. "
+                "Order independent expensive steps to overlap instead of queueing them "
+                "serially. Getting this pacing right now is far cheaper than "
+                "discovering at 75% that a slow step should have started at 25%."
             )
         return head + tail

@@ -45,30 +45,43 @@ class TestTaskBudgetBlock:
         assert "50m" in block and "83% used" in block
         assert "budget" in block.lower()
 
-    def test_budget_block_distinct_from_per_command(self):
-        # Must frame a TASK-LEVEL, cumulative, whole-task judgment and explicitly
-        # contrast with the per-command rate/ETA criterion.
+    def test_budget_block_is_cumulative_wall_clock(self):
+        # Still frames a TASK-LEVEL cumulative whole-task fact.
         low = Judge._build_task_budget_block("x").lower()
         assert "cumulative" in low
         assert "task-level" in low or "task level" in low
-        assert "per-command" in low or "this command" in low
 
-    def test_budget_block_prefers_advisory_not_kill(self):
+    def test_budget_block_is_fuel_gauge_only(self):
+        # The block must present itself as a FUEL GAUGE (report the fact), not a
+        # driver: no kill on budget alone, and it stays an advisory (kill=false).
         low = Judge._build_task_budget_block("x").lower()
+        assert "fuel gauge" in low or "fuel-gauge" in low
         assert "advisory" in low or "kill=false" in low
-        assert "method-class" in low or "method class" in low
+        # never kill on budget alone
+        assert "not a kill criterion" in low or "never kill" in low
 
-    def test_budget_block_excludes_hw_net_limits(self):
+    def test_budget_block_does_not_steer_the_approach(self):
+        # Regression (insight/tbench/fasttext_fzron4y_monitor_claim_refuted): the
+        # judge must NOT recommend switching methods/method-classes or otherwise
+        # decide HOW the agent drives — that is the agent's call. The fuel gauge
+        # reports fuel; it does not grab the wheel.
         low = Judge._build_task_budget_block("x").lower()
-        assert "hardware" in low and "network" in low
-        assert "configurable" in low
+        assert "not the driver" in low or "you are the fuel gauge" in low
+        # explicitly forbids method-switch steering
+        assert "switching methods" in low or "method-class" in low or "method class" in low
+        assert "do not recommend" in low or "do not" in low
+        # forbids shrinking the task too (still an anti-downgrade guard)
+        assert "shrink" in low or "shrinking" in low
 
-    def test_budget_block_forbids_shrinking_task(self):
+    def test_budget_block_reminds_to_think_not_what_to_do(self):
+        # The one permitted nudge: state the fact + ask the agent to think
+        # carefully given the remaining budget. It must NOT prescribe a specific
+        # action.
         low = Judge._build_task_budget_block("x").lower()
-        assert "never" in low
-        # must forbid lowering quality/accuracy or cutting required input
-        assert "quality" in low or "accuracy" in low
-        assert "requirement" in low or "input" in low
+        assert "think carefully" in low
+        assert "remaining" in low or "time left" in low
+        # must NOT dictate the specific move
+        assert "never as a specific instruction" in low or "not as a specific" in low
 
     def test_budget_block_is_generic_no_task_specifics(self):
         block = Judge._build_task_budget_block("x").lower()
