@@ -252,6 +252,33 @@ or install is normal; prefer an advisory (kill=false) and let the fixed-cadence
 heartbeat keep watching.
 When uncertain about network: KILL — network hangs don't self-resolve.
 
+## Detaching to the background (a third option besides continue/kill)
+
+Some commands are HEALTHY and making genuine forward progress, yet are simply
+LONG — a model training run, a large-but-advancing build, a long download whose
+bytes are steadily climbing, a compute job whose own counter is moving. Killing
+these would throw away good work; but blocking the agent on them wastes the
+agent's own working time while it just waits.
+
+For exactly this case, recommend DETACHING the command to the background instead.
+When detached, the command keeps running as a background job the agent can poll
+or wait on later (via the shell_jobs tool), while the agent is freed NOW to do
+other useful work in parallel. Nothing is lost and no time is wasted.
+
+Recommend background (action="background") when ALL of these hold:
+- the command is healthy — no crash/error/OOM/deadlock signatures, and (when
+  activity is provided) resources show it is actively working, and
+- it is making real forward progress — output or a progress counter is advancing,
+  or it is a known long-running class (training, large build, big transfer), and
+- it will PLAUSIBLY FINISH if left alone (this is the opposite of the "rate too
+  slow to ever finish in budget" kill case) — it is just slow enough that the
+  agent should not sit idle blocking on it.
+
+Do NOT recommend background when the command is actually STUCK (that is a kill),
+nor when it is short enough that waiting the few remaining checks is fine
+(that is continue / kill=false). Background is specifically for "healthy, will
+finish, but long enough that the agent's time is better spent elsewhere".
+
 ## Writing the kill reason (when kill=true)
 
 A kill frees the agent, but the agent will simply relaunch a near-identical
@@ -279,7 +306,15 @@ still meets every requirement the task stated — never to a weaker deliverable.
 If you cannot name a faster method that preserves the task's stated targets,
 prefer an advisory (kill=false) over killing.
 
-Reply ONLY: {{"kill": true/false, "reason": "..."}}"""
+## Reply format
+
+Reply ONLY a JSON object with an "action" and a "reason":
+{{"action": "continue"|"kill"|"background", "reason": "..."}}
+- "continue": healthy, let it keep running under the monitor (advisory reason ok).
+- "kill": terminate now (reason MUST be actionable, per the section above).
+- "background": healthy but long — detach so the agent is freed while it finishes.
+For backward compatibility you may instead reply {{"kill": true/false, "reason": "..."}};
+kill=true is treated as action="kill", kill=false as action="continue"."""
 
 
 # ── Judge ─────────────────────────────────────────────────────────────────────
@@ -383,7 +418,29 @@ class Judge:
             prompt += self._build_pattern_block(output_pattern)
         if task_budget:
             prompt += self._build_task_budget_block(task_budget)
-        return self._call_and_parse(prompt) or {"kill": False}
+        decision = self._call_and_parse(prompt) or {}
+        return self._normalize_health_decision(decision)
+
+    @staticmethod
+    def _normalize_health_decision(decision) -> dict:
+        """Normalize a health decision into {action, kill, reason}.
+
+        Accepts either the new schema ({"action": "continue"|"kill"|"background"})
+        or the legacy schema ({"kill": true/false}). Always returns all three
+        fields so downstream callers (the shell monitor) can branch on `action`
+        while old code that reads `kill` still works. On an empty/garbled reply
+        (LLM error, bad JSON), defaults to the safe no-op: continue/kill=False.
+        """
+        if not isinstance(decision, dict):
+            return {"action": "continue", "kill": False, "reason": ""}
+        reason = decision.get("reason", "") or ""
+        action = decision.get("action")
+        if isinstance(action, str):
+            action = action.strip().lower()
+        if action not in ("continue", "kill", "background"):
+            # Fall back to the legacy kill flag.
+            action = "kill" if decision.get("kill") else "continue"
+        return {"action": action, "kill": action == "kill", "reason": reason}
 
     @staticmethod
     def _build_history_block(command_history: str) -> str:

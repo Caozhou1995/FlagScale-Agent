@@ -283,6 +283,120 @@ def _strip_trailing_pipe(command: str):
     return stripped, post_fn
 
 
+# --- Background job registry ---
+#
+# A long-running command can be launched with background=true, or a healthy but
+# long command can be DETACHED from the synchronous monitor loop by the health
+# judge (kill→background). Both paths hand the running process to this registry
+# so the agent is freed to do other work instead of blocking. The registry is a
+# process-wide singleton because both ShellTool (which detaches) and
+# ShellJobsTool (which polls/waits/kills) must see the same jobs.
+
+class _BackgroundJob:
+    """A detached/background shell command still running under reader threads.
+
+    The reader threads keep appending to stdout_chunks/stderr_chunks after
+    detach — they are NOT joined or killed. poll() reports incremental output
+    since the last poll via a per-job read cursor over the chunk lists.
+    """
+
+    def __init__(self, job_id, command, proc, stdout_chunks, stderr_chunks,
+                 t_out, t_err, start, health_sampler=None):
+        self.job_id = job_id
+        self.command = command
+        self.proc = proc
+        self.stdout_chunks = stdout_chunks
+        self.stderr_chunks = stderr_chunks
+        self.t_out = t_out
+        self.t_err = t_err
+        self.start = start
+        self.health_sampler = health_sampler
+        # Read cursors: how many chunks the caller has already seen.
+        self._out_cursor = 0
+        self._err_cursor = 0
+        self.finished_at = None  # wall time the proc was first observed exited
+
+    @property
+    def running(self):
+        return self.proc.poll() is None
+
+    @property
+    def returncode(self):
+        return self.proc.poll()
+
+    def status_str(self):
+        if self.running:
+            return "running"
+        rc = self.returncode
+        return "done" if rc == 0 else f"exited({rc})"
+
+    def new_output(self):
+        """Return output appended since the last poll, advancing the cursors."""
+        out = "".join(self.stdout_chunks[self._out_cursor:])
+        err = "".join(self.stderr_chunks[self._err_cursor:])
+        self._out_cursor = len(self.stdout_chunks)
+        self._err_cursor = len(self.stderr_chunks)
+        return out + err
+
+    def full_output(self):
+        return "".join(self.stdout_chunks) + "".join(self.stderr_chunks)
+
+
+class _JobRegistry:
+    """Process-wide registry of background jobs, keyed by job_id."""
+
+    def __init__(self):
+        self._jobs: dict[str, _BackgroundJob] = {}
+        self._lock = threading.Lock()
+        self._counter = 0
+
+    def add(self, command, proc, stdout_chunks, stderr_chunks,
+            t_out, t_err, start, health_sampler=None):
+        with self._lock:
+            self._counter += 1
+            job_id = f"job{self._counter}"
+            self._jobs[job_id] = _BackgroundJob(
+                job_id, command, proc, stdout_chunks, stderr_chunks,
+                t_out, t_err, start, health_sampler,
+            )
+            return job_id
+
+    def get(self, job_id):
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def all(self):
+        with self._lock:
+            return list(self._jobs.values())
+
+    def remove(self, job_id):
+        with self._lock:
+            return self._jobs.pop(job_id, None)
+
+    def cleanup_all(self):
+        """Kill every still-running job. Called at agent shutdown to avoid
+        leaving orphaned/zombie processes behind."""
+        with self._lock:
+            jobs = list(self._jobs.values())
+            self._jobs.clear()
+        for job in jobs:
+            try:
+                if job.health_sampler is not None:
+                    job.health_sampler.stop()
+            except Exception:
+                pass
+            try:
+                if job.proc.poll() is None:
+                    job.proc.kill()
+                    job.proc.wait(timeout=3)
+            except Exception:
+                pass
+
+
+# Process-wide singleton.
+_JOB_REGISTRY = _JobRegistry()
+
+
 # --- ShellTool ---
 
 class ShellTool(Tool):
@@ -294,6 +408,17 @@ class ShellTool(Tool):
             "command": {
                 "type": "string",
                 "description": "The shell command to execute.",
+            },
+            "background": {
+                "type": "boolean",
+                "description": (
+                    "Launch as a long-running background job and return a job "
+                    "handle IMMEDIATELY instead of blocking. Use this for any "
+                    "command you expect to take more than a minute or two "
+                    "(compiling a large project, training, big downloads) so you "
+                    "are freed to make progress on other steps. Poll it later "
+                    "with the shell_jobs tool. Default: false (run synchronously)."
+                ),
             },
         },
         "required": ["command"],
@@ -364,6 +489,47 @@ class ShellTool(Tool):
             self._cached_resources = ""
         return self._cached_resources
 
+    def _detach_to_background(self, command, proc, stdout_chunks,
+                              stderr_chunks, t_out, t_err, start,
+                              health_sampler, reason=""):
+        """Detach a healthy-but-long running command to the background.
+
+        Called from the monitor loop when the health judge decides the command
+        is healthy and making progress but is long enough that the agent should
+        not keep blocking on it. Unlike a kill, the process KEEPS RUNNING: we
+        stop the health sampler (a backgrounded job is no longer monitored) but
+        do NOT kill the process and do NOT join the reader threads — they keep
+        draining the pipes into the same chunk lists the registry job holds, so
+        later poll/wait sees the full output. Returns the DETACHED handle string
+        the agent gets in place of the (would-be) blocking result.
+        """
+        # Stop the sampler thread; the backgrounded job runs unmonitored.
+        try:
+            if health_sampler is not None:
+                health_sampler.stop()
+        except Exception:
+            pass
+        job_id = _JOB_REGISTRY.add(
+            command, proc, stdout_chunks, stderr_chunks,
+            t_out, t_err, start, health_sampler=None,
+        )
+        elapsed = int(time.time() - start)
+        self._record_history(command, "backgrounded", time.time() - start)
+        reason_line = f"Reason: {reason}\n" if reason else ""
+        return (
+            f"DETACHED as {job_id} (after {elapsed}s): {command}\n"
+            f"{reason_line}"
+            f"The health monitor judged this command healthy and still making "
+            f"progress, but long enough that blocking on it wastes your time. "
+            f"It is now running in the background; you are NOT blocked and "
+            f"NOTHING was killed. Continue with other useful work now. Check "
+            f"progress later with the shell_jobs tool: "
+            f"shell_jobs(action=\"poll\", job_id=\"{job_id}\") for incremental "
+            f"output, or shell_jobs(action=\"wait\", job_id=\"{job_id}\") to "
+            f"block until it finishes. Do NOT relaunch it — it is already "
+            f"running."
+        )
+
     def execute(self, **kwargs) -> str:
         command = kwargs.get("command", "")
         if not command:
@@ -372,6 +538,7 @@ class ShellTool(Tool):
             return f"ERROR: shell command must be a string, got {type(command).__name__}: {repr(command)[:200]}"
 
         quiet = kwargs.pop("_quiet", False)
+        background = bool(kwargs.get("background", False))
 
         # Self-kill protection
         if _SELF_KILL_RE.search(command):
@@ -421,6 +588,29 @@ class ShellTool(Tool):
             t_err = threading.Thread(target=_read_stream, args=(proc.stderr, stderr_chunks), daemon=True)
             t_out.start()
             t_err.start()
+
+            # ── Background launch: register and return a handle immediately ──
+            # The reader threads keep draining the pipes; the process runs on
+            # under the registry. We do NOT start the health sampler or the
+            # synchronous monitor loop — the whole point is to not block. The
+            # agent polls progress later via the shell_jobs tool.
+            if background:
+                start = time.time()
+                job_id = _JOB_REGISTRY.add(
+                    command, proc, stdout_chunks, stderr_chunks,
+                    t_out, t_err, start, health_sampler=None,
+                )
+                self._record_history(command, "backgrounded", 0.0)
+                return (
+                    f"BACKGROUNDED as {job_id}: {command}\n"
+                    f"The command is running in the background; you are NOT "
+                    f"blocked. Continue with other steps now. Check progress "
+                    f"later with the shell_jobs tool: "
+                    f"shell_jobs(action=\"poll\", job_id=\"{job_id}\") for "
+                    f"incremental output, or shell_jobs(action=\"wait\", "
+                    f"job_id=\"{job_id}\") to block until it finishes. "
+                    f"Do NOT relaunch it — it is already running."
+                )
 
             # Background health sampler — see _HealthSampler docstring. The
             # main loop below NEVER calls get_process_health directly; it only
@@ -717,8 +907,20 @@ class ShellTool(Tool):
                                 "container_resources": self._detect_resources(),
                                 "health_advisory": health_reason,
                             },
-                        ) or {"kill": False}
-                        if decision.get("kill"):
+                        ) or {"action": "continue", "kill": False}
+                        _action = decision.get("action")
+                        if _action is None:
+                            # Legacy shape: derive action from the kill flag.
+                            _action = "kill" if decision.get("kill") else "continue"
+                        if _action == "background":
+                            # Healthy but long: detach and free the agent instead
+                            # of killing. The process keeps running as a job.
+                            return self._detach_to_background(
+                                command, proc, stdout_chunks, stderr_chunks,
+                                t_out, t_err, start, _health_sampler,
+                                reason=decision.get("reason", ""),
+                            )
+                        if _action == "kill":
                             _health_sampler.stop()
                             proc.kill()
                             t_out.join(timeout=2)
@@ -815,3 +1017,134 @@ class ShellTool(Tool):
             raise
         except Exception as e:
             return f"ERROR: {e}"
+
+
+# --- ShellJobsTool ---
+
+class ShellJobsTool(Tool):
+    """Manage background shell jobs launched via shell(background=true) or
+    detached from the synchronous monitor by the health judge (kill→background).
+
+    This is the polling/control counterpart to ShellTool's launch side. It never
+    blocks longer than the caller-supplied timeout on `wait`, so a runaway
+    background job cannot silently burn the whole task budget.
+    """
+
+    name = "shell_jobs"
+    description = (
+        "List, poll, wait on, or kill background shell jobs (started with "
+        "shell(background=true) or auto-detached from a long healthy command). "
+        "Use 'poll' to read incremental output without blocking, 'wait' to block "
+        "until a job finishes (bounded by timeout), 'list' to see all jobs, and "
+        "'kill' to terminate one."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "poll", "wait", "kill"],
+                "description": (
+                    "list: show all background jobs and their status. "
+                    "poll: return output appended since the last poll (does NOT "
+                    "block). wait: block until the job exits or `timeout` seconds "
+                    "elapse. kill: terminate the job."
+                ),
+            },
+            "job_id": {
+                "type": "string",
+                "description": (
+                    "Job handle (e.g. 'job1') from a BACKGROUNDED/DETACHED "
+                    "message. Required for poll/wait/kill; ignored for list."
+                ),
+            },
+            "timeout": {
+                "type": "integer",
+                "description": (
+                    "For action='wait': max seconds to block before returning "
+                    "control (the job keeps running if still unfinished). "
+                    "Default 60. Keep this small and poll in a loop so you never "
+                    "block on a single call for long."
+                ),
+            },
+        },
+        "required": ["action"],
+    }
+
+    def _fmt_job_line(self, job):
+        elapsed = time.time() - job.start
+        return f"{job.job_id}: [{job.status_str()}] {elapsed:.0f}s  {job.command[:80]}"
+
+    def execute(self, **kwargs) -> str:
+        action = kwargs.get("action", "")
+        job_id = kwargs.get("job_id", "")
+        timeout = kwargs.get("timeout", 60)
+        try:
+            timeout = int(timeout)
+        except (TypeError, ValueError):
+            timeout = 60
+
+        if action == "list":
+            jobs = _JOB_REGISTRY.all()
+            if not jobs:
+                return "No background jobs."
+            return "Background jobs:\n" + "\n".join(
+                self._fmt_job_line(j) for j in jobs
+            )
+
+        if action in ("poll", "wait", "kill"):
+            if not job_id:
+                return f"ERROR: action='{action}' requires a job_id."
+            job = _JOB_REGISTRY.get(job_id)
+            if job is None:
+                known = ", ".join(j.job_id for j in _JOB_REGISTRY.all()) or "(none)"
+                return f"ERROR: no such job '{job_id}'. Known jobs: {known}"
+
+            if action == "poll":
+                new_out = job.new_output()
+                header = self._fmt_job_line(job)
+                body = new_out if new_out.strip() else "(no new output since last poll)"
+                body = _truncate_output(body)
+                if not job.running:
+                    _JOB_REGISTRY.remove(job_id)
+                    header += "  [finished — removed from registry]"
+                return f"{header}\n{body}"
+
+            if action == "wait":
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    if not job.running:
+                        break
+                    time.sleep(min(1.0, max(0.1, deadline - time.time())))
+                job.t_out.join(timeout=0.5)
+                job.t_err.join(timeout=0.5)
+                header = self._fmt_job_line(job)
+                if job.running:
+                    body = _truncate_output(job.new_output()) or "(still running)"
+                    return (
+                        f"{header}  [still running after {timeout}s wait]\n{body}\n"
+                        f"Not finished yet. Poll again or wait more."
+                    )
+                new_out = _truncate_output(job.new_output())
+                _JOB_REGISTRY.remove(job_id)
+                return f"{header}  [finished — removed from registry]\n{new_out}"
+
+            if action == "kill":
+                if job.health_sampler is not None:
+                    try:
+                        job.health_sampler.stop()
+                    except Exception:
+                        pass
+                if job.running:
+                    try:
+                        job.proc.kill()
+                        job.proc.wait(timeout=3)
+                    except Exception:
+                        pass
+                _JOB_REGISTRY.remove(job_id)
+                return f"Killed {job_id}: {job.command[:80]}"
+
+        return (
+            f"ERROR: unknown action '{action}'. "
+            f"Use one of: list, poll, wait, kill."
+        )

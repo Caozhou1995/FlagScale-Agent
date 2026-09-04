@@ -108,7 +108,41 @@ class TestJudgeHealth:
         provider = MockProvider(["garbage"])
         judge = Judge(provider)
         result = judge.health("cmd", "out", "1m", True, 0)
-        assert result == {"kill": False}
+        # Garbled reply → safe no-op: continue / not killed.
+        assert result["kill"] is False
+        assert result["action"] == "continue"
+
+    def test_health_normalizes_action_field(self):
+        # New schema: action present, kill flag derived from it.
+        for action, expect_kill in [
+            ("continue", False), ("kill", True), ("background", False),
+        ]:
+            provider = MockProvider([
+                '{"action": "%s", "reason": "r"}' % action
+            ])
+            judge = Judge(provider)
+            result = judge.health("cmd", "out", "1m", True, 0)
+            assert result["action"] == action
+            assert result["kill"] is expect_kill
+            assert result["reason"] == "r"
+
+    def test_health_legacy_kill_flag_maps_to_action(self):
+        # Backward compat: old {"kill": true/false} shape → action derived.
+        provider = MockProvider(['{"kill": true, "reason": "x"}'])
+        judge = Judge(provider)
+        result = judge.health("cmd", "out", "1m", True, 0)
+        assert result["action"] == "kill"
+        assert result["kill"] is True
+
+        provider = MockProvider(['{"kill": false}'])
+        judge = Judge(provider)
+        result = judge.health("cmd", "out", "1m", True, 0)
+        assert result["action"] == "continue"
+        assert result["kill"] is False
+
+    def test_health_prompt_mentions_background(self):
+        from flagscale_agent.react.judge import _HEALTH_PROMPT
+        assert "background" in _HEALTH_PROMPT.lower()
 
     def test_health_prompt_has_no_next_check_seconds(self):
         # Monitor loop uses a FIXED 30s cadence; the LLM must not be asked for a
