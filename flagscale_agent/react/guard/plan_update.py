@@ -12,17 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PlanUpdateGuard — detects being stuck on one step and prompts self-diagnosis.
+"""PlanUpdateGuard — flags a POSSIBLE stall and prompts a self-check.
 
-Many iterations on the SAME step without progress is the runtime signature of a
-stall. This guard fires on that timing to prompt diagnosis: escape DOWNWARD (smaller
-experiment) or UPWARD (different method-class), never SIDEWAYS (another variant).
+Many iterations (or long wall-clock) on the SAME step without a plan_update is a
+PROXY for a stall, not proof of one — an agent may be legitimately progressing
+(many productive steps) or running a valid long op. So the guard does NOT assert
+"you are stalled"; it fires a checkpoint that hands the verdict to the agent via a
+falsifiable self-check: can you name, for each recent round, one concrete new fact
+(three-part: assumption / how tested / result)? If yes → progressing, record it and
+continue. If no (rounds ending "nothing new") → information gain is zero, the real
+stall; escape DOWNWARD (smaller experiment) or UPWARD (different method-class),
+never SIDEWAYS (another variant).
 
-Two orthogonal signals, either fires the same reminder:
+Two orthogonal signals, each a DIFFERENT view with a DIFFERENT remedy:
 - COUNT: tool calls since last plan_update. First at FIRST_REMIND, then every
-  REMIND_INTERVAL. Catches DENSE stalls (many quick thrashing calls).
+  REMIND_INTERVAL. Catches DENSE stalls (many quick thrashing calls) — the
+  action-layer symptom; remedy is stop-and-diagnose.
 - TIME: wall-clock since last plan_update, every TIME_REMIND_SECONDS. Catches
-  SPARSE stalls (few calls but long thinks between them).
+  SPARSE stalls (few calls but long thinks) — the thinking-layer symptom; remedy
+  is convert deliberation into a real observation.
+The reminder names whichever signal(s) fired so the remedy matches the symptom.
 
 Escalation: every ESCALATE_AFTER-th reminder (across both signals) becomes a BLOCK
 instead of inject, then the counter resets: inject, inject, block, repeat. A block
@@ -287,12 +296,13 @@ class PlanUpdateGuard(Guard):
                         "stall block: no step state changed and no notes recorded — "
                         "an empty guard-clearing ping. To continue: (a) mark the stalled "
                         "step done/skipped, or (b) plan_update with a note naming ONE "
-                        "concrete, falsifiable fact (value measured, assumption "
-                        "confirmed/refuted, candidate eliminated) plus the next "
-                        "method-class. If the task requires an output that does not "
+                        "fact in THREE-PART form — the assumption you tested, HOW you "
+                        "tested it (command/probe), the RESULT (value/output/conclusion). "
+                        "\"I confirmed the config is correct\" is empty — it names no "
+                        "test, no result. If the task requires an output that does not "
                         "exist on disk, write the crudest valid version to the path "
-                        "now. If you cannot name a fact, that proves you are looping — "
-                        "switch method-class, do not ping again."
+                        "now. If you cannot name a three-part fact, that proves you are "
+                        "looping — switch method-class, do not ping again."
                     ),
                     reason="empty_ping_does_not_clear_block",
                     category="plan_update",
@@ -353,16 +363,52 @@ class PlanUpdateGuard(Guard):
                 self._stall_trigger_count += 1
                 escalate = self._stall_trigger_count % self.ESCALATE_AFTER == 0
 
+                # Signal-differentiated hint. COUNT and TIME are two DIFFERENT views
+                # of a possible stall and point at different remedies, so name the
+                # one(s) that actually fired instead of collapsing to one generic
+                # line. Dense count = thrashing at the ACTION layer → stop acting and
+                # diagnose. Sparse-but-slow time = circling at the THINKING layer →
+                # convert deliberation into a real observation. Both = say both.
+                count_hint = (
+                    "— COUNT signal: many ACTIONS, no recorded progress. This is the "
+                    "action-layer symptom (thrashing). Stop acting and DIAGNOSE before "
+                    "the next call — a faster/retuned variant of what just failed will "
+                    "fail the same way."
+                )
+                time_hint = (
+                    "— TIME signal: long wall-clock, few actions — the thinking-layer "
+                    "symptom (reasoning in circles). More deliberation in place will not "
+                    "move you; convert the next thought into an OBSERVATION — run the "
+                    "smallest experiment that returns a REAL output and read it."
+                )
+                if fire_count and fire_time:
+                    signal_hint = count_hint + "\n" + time_hint
+                elif fire_time:
+                    signal_hint = time_hint
+                else:
+                    signal_hint = count_hint
+
                 body = (
-                    f"[PlanUpdate] {sig} on step {step_id} with no plan update — "
-                    f"the runtime signature of a stall. First, answer concretely: "
-                    f"what did the last round tell you that you did not already know? "
-                    f"Name the specific fact — a value measured, an assumption "
-                    f"confirmed or refuted, a candidate eliminated. If your honest "
-                    f"answer is \"nothing new\" / \"same as expected\" / \"still don't "
-                    f"know why\", that is proof your information gain is zero and you "
-                    f"are looping — not a phrasing problem. You cannot fix a stall by "
-                    f"thinking harder in the same place; only a new fact moves you.\n\n"
+                    f"[PlanUpdate] {sig} on step {step_id} with no plan update. Count "
+                    f"and time are only PROXIES for a stall — they do NOT prove you are "
+                    f"stuck; they are a checkpoint that says STOP and FIND OUT. Run this "
+                    f"self-check now (you decide the verdict, not the counter):\n\n"
+                    f"  Can you name, for EACH of the last few rounds, what did the last "
+                    f"round tell you that you did not already know — one concrete new "
+                    f"fact in THREE-PART form: (1) the assumption you tested, (2) HOW you "
+                    f"tested it (command/probe/measurement), (3) the RESULT "
+                    f"(value/output/conclusion)?\n\n"
+                    f"  → YES, every round produced a new fact: you are PROGRESSING, not "
+                    f"stalled. Record the latest fact in a one-line plan_update note and "
+                    f"continue — this check is cheap by design and must not derail real "
+                    f"progress.\n\n"
+                    f"  → NO — recent rounds ended \"nothing new\" / \"same as expected\" "
+                    f"/ \"still don't know why\": your information gain is zero. THAT is "
+                    f"the real stall, and it is not a phrasing problem — \"I confirmed "
+                    f"assumption X\" is the empty answer (it names no test, no result). "
+                    f"You cannot fix this by thinking harder in the same place; only a "
+                    f"new fact moves you.\n\n"
+                    f"{signal_hint}\n\n"
                     f"Escape routes (pick one):\n"
                     f"— DOWNWARD: smallest experiment isolating which assumption is "
                     f"wrong.\n"
@@ -400,22 +446,23 @@ class PlanUpdateGuard(Guard):
                             + loop_note
                             + f"\n\nThat is {self._stall_trigger_count} stall "
                             f"reminders with no plan_update — earlier advisories had no "
-                            f"effect, so this one BLOCKS. A vague 'I am making progress' "
-                            f"does NOT clear this — only a concrete, falsifiable fact does. "
-                            f"To continue: (a) plan_update whose note names ONE assumption "
-                            f"your last experiment tested and the result that REFUTED or "
-                            f"confirmed it, plus the next method-class to try — or, if "
-                            f"oscillating around a plateau, mark done after shipping best "
-                            f"(\"gains stopped, further tuning adds variance\"); or "
-                            f"(b) override with _override_reason stating the concrete new "
-                            f"fact produced (value measured, hypothesis eliminated, bug "
-                            f"found). For deliverable+threshold tasks: a fact only clears "
-                            f"this block if OBSERVED AT THE DELIVERABLE — edited it, "
-                            f"re-ran, measured score before/after. Derivation in a scratch "
-                            f"script, prototype, or on paper is side-channel work, not "
-                            f"progress — if the deliverable's score hasn't moved, you are "
-                            f"optimizing the wrong medium. Land the next change in the "
-                            f"deliverable and measure it."
+                            f"effect, so this one BLOCKS. This block is easy to clear IF "
+                            f"you are actually progressing: name the concrete new fact "
+                            f"and continue. If you cannot name one, that inability IS the "
+                            f"proof you are looping — do not ping again, switch "
+                            f"method-class. To continue: (a) plan_update whose "
+                            f"note names ONE assumption in THREE-PART form — the assumption, "
+                            f"how you tested it (command/probe), the result (value/output) — "
+                            f"plus the next method-class to try. \"I confirmed X is correct\" "
+                            f"is empty — it names no test, no result. Or, if oscillating "
+                            f"around a plateau, mark done after shipping best; or (b) override "
+                            f"with _override_reason stating the three-part fact (what/how/result). "
+                            f"For deliverable+threshold tasks: a fact only clears this block "
+                            f"if OBSERVED AT THE DELIVERABLE — edited it, re-ran, measured "
+                            f"score before/after. Derivation in a scratch script, prototype, "
+                            f"or on paper is side-channel work, not progress — if the "
+                            f"deliverable's score hasn't moved, you are optimizing the wrong "
+                            f"medium. Land the next change in the deliverable and measure it."
                         ),
                         reason="repeated_stall_ignored",
                         category="plan_update",

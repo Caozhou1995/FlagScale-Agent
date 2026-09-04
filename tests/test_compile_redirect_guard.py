@@ -147,6 +147,44 @@ class TestCompileRedirectGuard:
         assert "EXIT" in msg or "exit code" in msg.lower() or "exit:" in msg.lower()
         assert "which" in msg
 
+    def test_message_caps_parallelism_absolutely(self):
+        # Regression (caffe -j256): the memory-bounded formula alone does NOT
+        # cap J on a big host (256 cores / ~1TB RAM passes the memory cap with a
+        # huge J). 256 heavy compilers thrash cache/BW and spawn a process tree
+        # that starves the monitor. The message must add an ABSOLUTE cap on top
+        # of the memory cap so J settles at a sane value on big hosts.
+        v = self.g.check_pre(_ctx("make -j > build.log 2>&1"))
+        assert v.action == "block"
+        msg = v.message
+        # the shell formula must clamp J to an absolute ceiling of 32
+        assert "J>32" in msg or "J > 32" in msg
+        assert "32" in msg
+        # and the prose must explain WHY an unbounded big-host J is harmful
+        assert "absolute cap" in msg.lower()
+        low = msg.lower()
+        assert "thrash" in low or "bandwidth" in low or "starve" in low
+
+    def test_message_makes_parallelism_cgroup_aware(self):
+        # Regression (pitfall/flagscale_agent/shell_oom_cgroup_blindspot, caffe
+        # -j32 OOM): inside a container `nproc` and /proc/meminfo report the HOST
+        # (256 cores / 909GB) even when the cgroup caps the process at 1 CPU /
+        # 2GB. The old formula read only the host and picked -j32, forking 32
+        # cc1plus that the kernel OOM-killed. The message's shell formula must
+        # read the cgroup limit FIRST and take the min against the host.
+        v = self.g.check_pre(_ctx("make -j > build.log 2>&1"))
+        assert v.action == "block"
+        msg = v.message
+        # must read the cgroup limit files (v2 primary, v1 fallback)
+        assert "/sys/fs/cgroup/cpu.max" in msg
+        assert "/sys/fs/cgroup/memory.max" in msg
+        assert "cfs_quota_us" in msg or "cfs_period_us" in msg   # v1 cpu path
+        assert "memory.limit_in_bytes" in msg                    # v1 mem path
+        # prose must explain the host-vs-cgroup trap and name the cc1plus OOM
+        low = msg.lower()
+        assert "cgroup" in low
+        assert "container" in low
+        assert "cc1plus" in low
+
     def test_message_advises_one_by_one_install(self):
         """The block message must advise installing critical packages ONE BY ONE,
         not all at once — a multi-package install can freeze for 10+ minutes."""

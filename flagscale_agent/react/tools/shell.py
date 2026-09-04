@@ -464,6 +464,8 @@ class ShellTool(Tool):
             _prev_cpu_time = None   # Cumulative CPU secs (liveness signal A)
             _prev_io_bytes = None   # Cumulative IO bytes (liveness signal A)
             _prev_rss_mb = None     # RSS MB (liveness signal A)
+            _prev_health_time = None  # Wall clock of the last fresh health sample
+            _tree_cpu_pct = 0.0     # Tree-wide CPU% derived from cpu_time delta
             idle_count = 0          # Consecutive no-output + flat-counter samples
             _last_health_seq = -1   # Seq of the last health sample we acted on
 
@@ -585,6 +587,7 @@ class ShellTool(Tool):
                     # cumulative CPU time / IO bytes are monotonic counters, so
                     # a positive delta proves the process is actually working —
                     # this vetoes heuristic kills. None on the first sample.
+                    _now_health = time.time()
                     if _prev_cpu_time is None:
                         progress_signals = None  # no baseline yet
                     else:
@@ -593,9 +596,25 @@ class ShellTool(Tool):
                             'io_bytes_delta': proc_health.get('io_bytes', 0.0) - _prev_io_bytes,
                             'rss_delta': (proc_health.get('memory_mb', 0.0) - _prev_rss_mb) * 1024 * 1024,
                         }
+                        # Tree-wide CPU% for the human-readable activity string
+                        # shown to the LLM judge. The parent-only cpu_percent
+                        # from psutil reads ~0% for a launcher/wrapper parent
+                        # even while its children saturate cores. Deriving it
+                        # from the tree cpu_time delta over the wall interval
+                        # (cpu_secs consumed / wall_secs elapsed * 100) reflects
+                        # the WHOLE tree and costs zero extra syscalls — the
+                        # cpu_time was already summed during the health walk.
+                        # >100% is expected and correct for multi-core work.
+                        _wall_dt = _now_health - _prev_health_time if _prev_health_time else 0.0
+                        if _wall_dt > 0:
+                            _tree_cpu_pct = max(
+                                0.0,
+                                progress_signals['cpu_time_delta'] / _wall_dt * 100.0,
+                            )
                     _prev_cpu_time = proc_health.get('cpu_time', 0.0)
                     _prev_io_bytes = proc_health.get('io_bytes', 0.0)
                     _prev_rss_mb = proc_health.get('memory_mb', 0.0)
+                    _prev_health_time = _now_health
 
                     # Idle tracking: a sample is idle when there is NO new output
                     # AND all three cumulative counters are flat (same test the
@@ -661,9 +680,25 @@ class ShellTool(Tool):
                     # apart from a healthy silent one (no output but actively
                     # computing) instead of guessing from silence alone.
                     if self._health_judge_fn:
+                        # Report TREE-wide CPU% and memory, not the parent-only
+                        # psutil snapshot. A launcher/wrapper parent (bash sleep,
+                        # a training driver that forks workers) reads ~0% CPU and
+                        # ~2 MB RSS on its own even while children saturate cores
+                        # and use gigabytes — which made the judge repeatedly
+                        # (mis)report "CPU is 0% with only 2 MB memory" and
+                        # false-flag healthy jobs as hung. _tree_cpu_pct is
+                        # derived from the cpu_time delta over the wall interval;
+                        # memory_mb is now the summed tree RSS. On the very first
+                        # sample (no delta baseline yet) _tree_cpu_pct is 0.0, so
+                        # fall back to the parent snapshot to avoid a misleading
+                        # hard 0%.
+                        _cpu_display = (
+                            _tree_cpu_pct if progress_signals is not None
+                            else proc_health['cpu_percent']
+                        )
                         activity = (
-                            f"CPU {proc_health['cpu_percent']:.0f}%, "
-                            f"memory {proc_health['memory_mb']:.0f} MB, "
+                            f"CPU {_cpu_display:.0f}% (whole process tree), "
+                            f"memory {proc_health['memory_mb']:.0f} MB (whole tree), "
                             f"live child processes {proc_health['children_alive']}"
                             f" of {proc_health['num_children']}"
                         )

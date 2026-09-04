@@ -59,6 +59,13 @@ def _ctx(override=None):
                         override_reason=override)
 
 
+def _release_backup(startup):
+    """Surface the backup block (so accept_override routes to that phase), then
+    release it — mirrors the registry's owner-scoped override path."""
+    startup.check_pre(GuardContext(tool_name="shell", tool_args={"command": "ls"}))
+    startup.accept_override("no irreplaceable inputs in this trajectory", _ctx())
+
+
 class TestSeverityRanking:
     def test_non_overridable_surfaces_before_overridable(self):
         # Even though the overridable guard has the lower priority number (would
@@ -172,10 +179,14 @@ class TestCompcertSequenceNoDeadlock:
 
     def _reg(self):
         from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
-        from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
+        from flagscale_agent.react.guard.startup import StartupGuard
         reg = GuardRegistry()
         reg.register(CompileRedirectGuard())
-        reg.register(KnowledgeSkillGuard(single_shot=True))
+        # StartupGuard owns the non-overridable single-shot START gates (network
+        # probe + research) that used to live in KnowledgeSkillGuard.
+        startup = StartupGuard(single_shot=True)
+        _release_backup(startup)
+        reg.register(startup)
         return reg
 
     def test_version_checks_not_blocked_by_compile_redirect(self):
@@ -190,40 +201,36 @@ class TestCompcertSequenceNoDeadlock:
                 assert v.guard_name != "compile_redirect", \
                     f"compile_redirect must not block transient cmd: {cmd}"
 
-    def test_single_shot_gate_is_the_only_hard_wall(self):
-        # Drive enough non-meta calls to trip the single-shot early gate; when it
-        # fires it is non-overridable, and it is presented as the knowledge_skill
-        # guard — never masked by a stale compile_redirect block.
+    def test_startup_gate_is_the_only_hard_wall(self):
+        # Drive a real-work call; the START research gate (threshold=1) fires,
+        # is non-overridable, and is presented as the startup guard — never
+        # masked by a stale compile_redirect block.
         reg = self._reg()
-        blocked_by = None
-        for i in range(5):
-            ctx = GuardContext(tool_name="shell",
-                               tool_args={"command": f"gcc --version # {i}"})
-            v = reg.check_pre(ctx)
-            if v is not None and v.action == "block" and not v.overridable:
-                blocked_by = v.guard_name
-                break
-            # simulate the call executing (post-check advances the counter)
-            ctx.tool_result = "ok"
-            reg.check_post(ctx)
-        assert blocked_by == "knowledge_skill", \
-            "the single-shot early gate should be the surfaced non-overridable block"
-
-    def test_compile_override_never_releases_knowledge_gate(self):
-        # The core anti-deadlock invariant: a compile_redirect-flavored override
-        # reason must never release the knowledge_skill non-overridable gate.
-        from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
-        reg = GuardRegistry()
-        ks = KnowledgeSkillGuard(single_shot=True)
-        reg.register(ks)
-        # fast-forward to just under the threshold
-        ks._single_shot_call_count = ks.SINGLE_SHOT_EARLY_THRESHOLD - 1
         ctx = GuardContext(tool_name="shell",
-                           tool_args={"command": "gcc --version"},
+                           tool_args={"command": "gcc -c foo.c -o foo.o"})
+        v = reg.check_pre(ctx)
+        assert v is not None and v.action == "block" and not v.overridable
+        assert v.guard_name == "startup", \
+            "the START research gate should be the surfaced non-overridable block"
+
+    def test_compile_override_never_releases_startup_gate(self):
+        # The core anti-deadlock invariant: a compile_redirect-flavored override
+        # reason must never release the startup non-overridable research gate.
+        from flagscale_agent.react.guard.startup import StartupGuard
+        reg = GuardRegistry()
+        startup = StartupGuard(single_shot=True)
+        _release_backup(startup)
+        # satisfy the network probe so the research gate is the active wall
+        probe = GuardContext(tool_name="shell",
+                             tool_args={"command": "curl -sI https://x"})
+        startup.check_pre(probe); probe.tool_result = "ok"; startup.check_post(probe)
+        reg.register(startup)
+        ctx = GuardContext(tool_name="shell",
+                           tool_args={"command": "gcc -c foo.c"},
                            override_reason="this build already writes its own log file")
         v = reg.check_pre(ctx)
         assert v is not None and v.action == "block" and v.overridable is False
-        assert v.guard_name == "knowledge_skill"
+        assert v.guard_name == "startup"
 
 
 class TestTieBreakAndPrecedence:

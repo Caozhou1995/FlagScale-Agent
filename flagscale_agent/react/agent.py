@@ -83,6 +83,8 @@ from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
 
+from flagscale_agent.react.guard.find_guard import FindGuard
+
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
@@ -191,6 +193,13 @@ class WorkerAgent:
         self._total_iterations: int = 0
         self._original_user_task: str = ""
         self._session_start: float = time.time()
+        # Wall-clock start of the CURRENT turn. Re-stamped at the top of every
+        # _react_loop so task-budget accounting resets per turn (interactive mode
+        # runs many turns over a long-lived session; only the current turn's
+        # elapsed time is meaningful against a per-task budget). In single-shot
+        # mode a turn == the whole session, so this coincides with _session_start.
+        # Initialized here so it is always set even before the first turn.
+        self._turn_start: float = self._session_start
         self._session_input_tokens: int = 0
         self._session_output_tokens: int = 0
 
@@ -216,10 +225,15 @@ class WorkerAgent:
         guard_registry = GuardRegistry()
         # Register native guards - all guards registered unconditionally
         guard_registry.register(ArgTypeGuard(tool_registry=self.tool_registry))
-        # Backup guard runs FIRST (priority=5) — force a backup before the first
-        # destructive in-place op on an irreplaceable resource.
-        from flagscale_agent.react.guard.backup import BackupGuard
-        guard_registry.register(BackupGuard())
+        # StartupGuard runs FIRST (priority=5) — the START phase of the
+        # three-phase framework. Its ordered pipeline gates real work:
+        # BackupPhase (back up irreplaceable inputs before the 1st shell) →
+        # NetworkProbePhase (lightweight probe before the 1st heavy net op,
+        # single-shot only) → ResearchPhase (one research pass before real work,
+        # single-shot only). Replaces the standalone BackupGuard.
+        from flagscale_agent.react.guard.startup import StartupGuard
+        self._startup_guard = StartupGuard()
+        guard_registry.register(self._startup_guard)
         from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
         guard_registry.register(CompileRedirectGuard())
         guard_registry.register(ShellSafetyGuard())
@@ -237,6 +251,7 @@ class WorkerAgent:
         guard_registry.register(PlanUpdateGuard(task_plan=self.task_plan))
         guard_registry.register(TrainingMonitorGuard())
         guard_registry.register(PackageSearchGuard())
+        guard_registry.register(FindGuard())
 
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
@@ -343,11 +358,62 @@ class WorkerAgent:
 
     def _health_judge(self, command: str, recent_output: str, elapsed: str,
                       output_changed: bool = True, stall_count: int = 0,
-                      activity: str = "") -> dict:
+                      activity: str = "", command_history: str = "",
+                      container_resources: str = "", health_advisory: str = "",
+                      **_ignored) -> dict:
+        # The shell monitor loop forwards richer context (command_history,
+        # container_resources, health_advisory). Accept and forward the fields
+        # judge.health understands; **_ignored absorbs any future field the
+        # loop adds without breaking this call (a mismatch here silently
+        # disables the whole LLM judge, since the bounded worker swallows the
+        # TypeError and returns None).
         expectation = self._current_expectation_anchor()
         return self.judge.health(
             command, recent_output, elapsed, output_changed, stall_count,
             expectation=expectation, activity=activity,
+            command_history=command_history,
+            container_resources=container_resources,
+            task_budget=self._task_budget_summary(),
+        )
+
+    def _task_budget_summary(self) -> str:
+        """Summarize whole-task cumulative wall-clock vs the total time budget.
+
+        Returns "" when no budget is configured (env FLAGSCALE_AGENT_TIME_BUDGET_SEC
+        unset or non-positive), so the health prompt stays byte-identical to the
+        no-budget version. When set, reports elapsed-since-turn-start and the
+        total budget so the judge can reason about the task-level allowance.
+
+        Elapsed is measured from the CURRENT turn's start (self._turn_start,
+        re-stamped each _react_loop), not from session start: an interactive
+        session may span many turns over hours, and only the active turn's time
+        is meaningful against a per-task budget. In single-shot mode a turn is
+        the whole session, so the two coincide.
+        """
+        raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "").strip()
+        if not raw:
+            return ""
+        try:
+            budget = float(raw)
+        except (TypeError, ValueError):
+            return ""
+        if budget <= 0:
+            return ""
+        elapsed = max(0.0, time.time() - self._turn_start)
+        remaining = budget - elapsed
+        pct = (elapsed / budget) * 100.0 if budget else 0.0
+
+        def _fmt(sec: float) -> str:
+            sec = int(max(0.0, sec))
+            m, s = divmod(sec, 60)
+            h, m = divmod(m, 60)
+            if h:
+                return f"{h}h{m:02d}m"
+            return f"{m}m{s:02d}s"
+
+        return (
+            f"cumulative task time elapsed {_fmt(elapsed)} of total budget "
+            f"{_fmt(budget)} ({pct:.0f}% used, ~{_fmt(remaining)} remaining)"
         )
 
     def _current_expectation_anchor(self) -> str:
@@ -809,11 +875,12 @@ class WorkerAgent:
         # after an observation budget) rather than merely reminding.
         if getattr(self, "_plan_guard", None) is not None:
             self._plan_guard.set_single_shot(True)
-        # Same rationale: no human to nudge toward external knowledge, so the
-        # KnowledgeSkill guard fires one early research advisory before the
-        # first real implementation call.
-        if getattr(self, "_knowledge_guard", None) is not None:
-            self._knowledge_guard.set_single_shot(True)
+        # Same rationale: no human to nudge toward setup discipline, so the
+        # StartupGuard enables its single-shot phases (NetworkProbePhase requiring
+        # a lightweight probe before the first heavy net op, and ResearchPhase
+        # requiring one research pass before real work).
+        if getattr(self, "_startup_guard", None) is not None:
+            self._startup_guard.set_single_shot(True)
         self._inject_context()
         self.history.append({"role": "user", "content": query})
         try:
@@ -1091,6 +1158,7 @@ class WorkerAgent:
     def _react_loop(self):
         """Kernel-based react loop."""
         self.turn_count += 1
+        self._turn_start = time.time()
         self._interrupted = False
         self._turn_iteration_count = 0
         self._context_pressure_warned = False

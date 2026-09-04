@@ -19,6 +19,8 @@ import pytest
 from flagscale_agent.react.tools.process_health import (
     detect_output_anomalies,
     should_kill_process,
+    system_mem_pressure,
+    _cgroup_mem_pressure,
 )
 
 
@@ -45,6 +47,88 @@ class TestDetectOutputAnomalies:
         assert result['oom_killed'] is False
         assert result['killed_count'] == 0
         assert result['repeated_errors'] is False
+
+    def test_cc1plus_oom_signature_detected(self):
+        # REGRESSION (pitfall/flagscale_agent/shell_oom_cgroup_blindspot):
+        # the kernel OOM-killer reaps cc1plus and g++ reports it as the line
+        # below. The old oom_indicators list missed this, so an OOM build
+        # looked healthy. This is the EXACT caffe-cifar-10 build.log signature.
+        output = (
+            "[ 45%] Building CXX object caffe.dir/layer_factory.cpp.o\n"
+            "g++: fatal error: Killed signal terminated program cc1plus\n"
+            "compilation terminated.\n"
+            "g++: fatal error: Killed signal terminated program cc1plus\n"
+            "compilation terminated.\n"
+            "make: *** Waiting for unfinished jobs....\n"
+        )
+        result = detect_output_anomalies(output)
+        assert result['oom_killed'] is True
+        assert result['killed_count'] >= 2
+
+    def test_cc1_variant_signature_detected(self):
+        output = "cc1: fatal error: Killed signal terminated program cc1\n"
+        result = detect_output_anomalies(output)
+        assert result['oom_killed'] is True
+
+    def test_ice_killed_signature_detected(self):
+        output = "internal compiler error: Killed\n"
+        result = detect_output_anomalies(output)
+        assert result['oom_killed'] is True
+
+    def test_normal_build_no_false_oom(self):
+        # A healthy build that merely contains the word "signal" or "program"
+        # must NOT trip the OOM detector.
+        output = (
+            "Configuring signal handlers\n"
+            "[ 50%] Building program main.o\n"
+            "[100%] Linking CXX executable caffe\n"
+        )
+        result = detect_output_anomalies(output)
+        assert result['oom_killed'] is False
+
+
+class TestCgroupMemPressure:
+    """
+    pitfall/flagscale_agent/shell_oom_cgroup_blindspot: in a container psutil
+    reports the HOST RAM, so system_mem_pressure never fires while a build
+    OOM-thrashes inside a small cgroup slice. The probe must prefer cgroup
+    accounting and fall back to host only when there is no enforced limit.
+    """
+
+    def test_cgroup_v2_pressure_true(self, tmp_path, monkeypatch):
+        (tmp_path / "memory.max").write_text("2147483648\n")       # 2GB limit
+        (tmp_path / "memory.current").write_text("2040109465\n")   # ~95% used
+        self._point_v2(monkeypatch, tmp_path)
+        assert _cgroup_mem_pressure(0.10) is True
+
+    def test_cgroup_v2_pressure_false(self, tmp_path, monkeypatch):
+        (tmp_path / "memory.max").write_text("2147483648\n")
+        (tmp_path / "memory.current").write_text("536870912\n")    # 25% used
+        self._point_v2(monkeypatch, tmp_path)
+        assert _cgroup_mem_pressure(0.10) is False
+
+    def test_cgroup_v2_unlimited_returns_none(self, tmp_path, monkeypatch):
+        (tmp_path / "memory.max").write_text("max\n")
+        self._point_v2(monkeypatch, tmp_path)
+        # no v1 files either → None (defer to host)
+        assert _cgroup_mem_pressure(0.10) is None
+
+    @staticmethod
+    def _point_v2(monkeypatch, tmp_path):
+        real_open = open
+
+        def fake_open(path, *a, **k):
+            p = str(path)
+            if p == "/sys/fs/cgroup/memory.max":
+                return real_open(tmp_path / "memory.max", *a, **k)
+            if p == "/sys/fs/cgroup/memory.current":
+                return real_open(tmp_path / "memory.current", *a, **k)
+            # everything else (v1 paths) must miss
+            if p.startswith("/sys/fs/cgroup/memory/"):
+                raise FileNotFoundError(p)
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", fake_open)
 
 
 class TestShouldKillProcess:

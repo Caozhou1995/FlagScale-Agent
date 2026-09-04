@@ -16,7 +16,31 @@
 
 from __future__ import annotations
 
+import time
+
 import psutil
+
+
+# Hard cap on how many children a single health sample will walk. A giant
+# parallel build (make -j256) spawns hundreds of compiler processes; walking the
+# WHOLE tree means children(recursive=True) + 2 /proc reads per process = 500+
+# syscalls, and every one runs Python bytecode that holds the GIL between the
+# blocking read()s. On a disk saturated by the build, one full walk can take
+# minutes, and while the sampler thread grinds through it the main heartbeat
+# thread cannot get a GIL time-slice — so the heartbeat starves (observed: a
+# 644s gap during a caffe -j256 build even though the sampler was already a
+# single background thread). Capping the walk bounds per-sample cost regardless
+# of tree size: the liveness signal (tree-wide cpu_time/io deltas) stays
+# representative from a large sample, and num_children still reports the true
+# total via len() before truncation.
+MAX_CHILDREN_WALK = 64
+
+# Yield the GIL every this-many processes during the walk so the main heartbeat
+# thread gets scheduled even mid-sample. time.sleep(0) is not reliable for a GIL
+# handoff in CPython; a tiny non-zero sleep forces the interpreter to release
+# the GIL and reschedule waiting threads.
+_GIL_YIELD_EVERY = 8
+_GIL_YIELD_SECS = 0.001
 
 
 # Consecutive idle samples (no output AND flat CPU/IO/RSS) before a hard kill.
@@ -61,6 +85,13 @@ def get_process_health(proc_pid: int) -> dict:
         # health-monitor design). Used by shell.py to compute deltas.
         cpu_time = 0.0
         io_bytes = 0.0
+        # Parent's OWN instantaneous CPU% (parent-only snapshot). Kept for
+        # backward compat, but NOTE it is misleading for a launcher/wrapper
+        # parent (bash sleep, a training driver that forks workers) which sits
+        # at ~0% while its children burn CPU. Callers should prefer the
+        # tree-wide cpu_time delta for a truthful "is it working" signal and
+        # the tree-wide memory_mb below for a truthful footprint. See the
+        # tree-RSS accumulation in the walk loop.
         if not is_zombie:
             try:
                 cpu = p.cpu_percent(interval=0.1)
@@ -71,7 +102,11 @@ def get_process_health(proc_pid: int) -> dict:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
         
-        # Child processes (+ accumulate tree-wide cpu_time / io_bytes)
+        # Child processes (+ accumulate tree-wide cpu_time / io_bytes).
+        # num_children/alive_children report the TRUE total (cheap: one
+        # children() call + is_running() checks), but the expensive per-process
+        # cpu_times()/io_counters() walk below is capped at MAX_CHILDREN_WALK to
+        # keep a single sample bounded on a giant build tree (see module docstring).
         try:
             children = p.children(recursive=True)
             num_children = len(children)
@@ -81,7 +116,19 @@ def get_process_health(proc_pid: int) -> dict:
             num_children = 0
             alive_children = 0
 
-        for proc_obj in [p] + list(children):
+        # Tree-wide RSS. The parent-only `mem` above is ~2MB for a bash/launcher
+        # wrapper even while its workers use gigabytes; summing RSS over the
+        # walked tree gives the footprint a human/LLM judge expects to see.
+        # Accumulated in the SAME walk as cpu_time/io_bytes — no extra syscalls.
+        # Capped at MAX_CHILDREN_WALK like the counters, so it is a large-sample
+        # lower bound on a giant tree, never an unbounded cost.
+        tree_mem = mem  # start from the parent's own RSS
+        walk_list = [p] + list(children)[:MAX_CHILDREN_WALK]
+        for _i, proc_obj in enumerate(walk_list):
+            # Periodically release the GIL so the main heartbeat thread is
+            # scheduled even while this (potentially slow, disk-bound) walk runs.
+            if _i and _i % _GIL_YIELD_EVERY == 0:
+                time.sleep(_GIL_YIELD_SECS)
             try:
                 t = proc_obj.cpu_times()
                 cpu_time += t.user + t.system
@@ -93,12 +140,22 @@ def get_process_health(proc_pid: int) -> dict:
             except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError,
                     NotImplementedError):
                 pass
+            # Skip the parent (index 0): its RSS is already in tree_mem seed.
+            if _i:
+                try:
+                    tree_mem += proc_obj.memory_info().rss / 1024 / 1024
+                except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                    pass
         
         return {
             'alive': p.is_running(),
             'zombie': is_zombie,
             'cpu_percent': cpu,
-            'memory_mb': mem,
+            # memory_mb reports the TREE footprint (parent + walked children),
+            # not the parent-only RSS. This is what shell.py surfaces to the
+            # LLM judge, so a launcher wrapper no longer looks like "2 MB".
+            'memory_mb': tree_mem,
+            'memory_mb_parent': mem,
             'num_children': num_children,
             'children_alive': alive_children,
             'cpu_time': cpu_time,
@@ -110,6 +167,7 @@ def get_process_health(proc_pid: int) -> dict:
             'zombie': False,
             'cpu_percent': 0.0,
             'memory_mb': 0.0,
+            'memory_mb_parent': 0.0,
             'num_children': 0,
             'children_alive': 0,
             'cpu_time': 0.0,
@@ -117,13 +175,58 @@ def get_process_health(proc_pid: int) -> dict:
         }
 
 
+def _cgroup_mem_pressure(threshold_ratio: float) -> "bool | None":
+    """
+    Return True/False from the CONTAINER's cgroup memory accounting, or None
+    when there is no enforced cgroup limit (bare metal / unlimited).
+
+    In a container psutil.virtual_memory() reports the HOST (e.g. 909GB total)
+    even when the cgroup caps the process at 2GB. A build that OOM-kills inside
+    the 2GB slice leaves host `available` almost untouched, so the host-based
+    check never fires. Reading the cgroup limit+usage is the only way to see
+    the real pressure the process actually experiences.
+    """
+    # cgroup v2: unified files
+    try:
+        with open('/sys/fs/cgroup/memory.max') as f:
+            raw = f.read().strip()
+        if raw != 'max':
+            limit = int(raw)
+            with open('/sys/fs/cgroup/memory.current') as f:
+                usage = int(f.read().strip())
+            if limit > 0:
+                return (limit - usage) < limit * threshold_ratio
+    except (OSError, ValueError):
+        pass
+    # cgroup v1: per-controller files
+    try:
+        with open('/sys/fs/cgroup/memory/memory.limit_in_bytes') as f:
+            limit = int(f.read().strip())
+        # v1 "unlimited" is a huge sentinel (~ PAGE_COUNTER_MAX); treat as no cap
+        if 0 < limit < (1 << 62):
+            with open('/sys/fs/cgroup/memory/memory.usage_in_bytes') as f:
+                usage = int(f.read().strip())
+            return (limit - usage) < limit * threshold_ratio
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def system_mem_pressure(threshold_ratio: float = 0.10) -> bool:
     """
-    Return True if the system is under real memory pressure — available memory
+    Return True if the process is under real memory pressure — available memory
     has dropped below `threshold_ratio` of total. This is the ONLY evidence
     (besides an explicit "Killed" in output) that turns a child-count drop into
     an OOM verdict. Without it, a child drop is treated as normal convergence.
+
+    Prefers the CONTAINER's cgroup limit over the host total: in a container
+    psutil sees the host RAM (e.g. 909GB) and would never report pressure even
+    while the process OOM-thrashes inside a 2GB cgroup slice. Falls back to the
+    host figure only when no cgroup limit is enforced.
     """
+    cg = _cgroup_mem_pressure(threshold_ratio)
+    if cg is not None:
+        return cg
     try:
         vm = psutil.virtual_memory()
         return vm.available < vm.total * threshold_ratio
@@ -147,13 +250,21 @@ def detect_output_anomalies(recent_output: str) -> dict:
     # Count "Killed" messages
     killed_count = sum(1 for line in lines if 'Killed' in line)
     
-    # OOM indicators
+    # OOM indicators. Note the compiler-driver signatures: when the kernel OOM
+    # killer reaps a compiler subprocess (cc1plus/cc1/lto1), gcc/g++ reports it
+    # as "Killed signal terminated program cc1plus" (or "... program cc1") and
+    # make follows with Error 137 / signal 9. Matching only "Out of memory" or
+    # "Error 137" misses the first, clearest line and lets an OOM build look
+    # like a normal in-progress compile.
     oom_indicators = [
         'Error 137',
         'Out of memory',
         'MemoryError',
         'cannot allocate memory',
         'OOM killer',
+        'Killed signal terminated program',   # gcc/g++ driver: OOM-killed cc1plus
+        'signal terminated program cc1',       # cc1 / cc1plus variants
+        'internal compiler error: Killed',     # ICE wording when cc1plus is reaped
     ]
     oom_killed = any(indicator in recent_output for indicator in oom_indicators)
     
