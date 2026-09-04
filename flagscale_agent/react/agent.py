@@ -56,7 +56,7 @@ from flagscale_agent.react.tools.edit_file import EditFileTool
 from flagscale_agent.react.tools.load_knowledge import LoadKnowledgeTool
 from flagscale_agent.react.tools.load_skill import LoadSkillTool
 from flagscale_agent.react.tools.read_file import ReadFileTool
-from flagscale_agent.react.tools.shell import ShellTool
+from flagscale_agent.react.tools.shell import ShellTool, ShellJobsTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
 # find_log removed - merged into monitor
@@ -300,6 +300,9 @@ class WorkerAgent:
                 health_judge_fn=self._health_judge,
             )
         )
+        # Background-job control tool: poll/wait/list/kill jobs started with
+        # shell(background=true) or auto-detached from the monitor loop.
+        self.tool_registry.register(ShellJobsTool())
         
         # Knowledge and skill tools
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
@@ -481,6 +484,13 @@ class WorkerAgent:
         def _handler(signum, frame):
             try:
                 self._save_conversation(completed=False)
+            except Exception:
+                pass
+            # Reap any still-running background shell jobs so a timeout kill
+            # does not leave orphaned build/train processes behind.
+            try:
+                from flagscale_agent.react.tools.shell import _JOB_REGISTRY
+                _JOB_REGISTRY.cleanup_all()
             except Exception:
                 pass
             # Restore the default disposition and re-raise so the process
@@ -783,6 +793,12 @@ class WorkerAgent:
         # Generate session summary before saving
         summary = self._generate_session_summary()
         self._save_conversation(completed=False, session_summary=summary)
+        # Reap any still-running background shell jobs before exiting.
+        try:
+            from flagscale_agent.react.tools.shell import _JOB_REGISTRY
+            _JOB_REGISTRY.cleanup_all()
+        except Exception:
+            pass
         sys.exit(0)
 
     # ── Main entry ──────────────────────────────────────────────────────────
@@ -894,6 +910,11 @@ class WorkerAgent:
             # the process mid-run is handled separately by the SIGTERM handler
             # installed in _install_signal_handlers().
             self._auto_save()
+            try:
+                from flagscale_agent.react.tools.shell import _JOB_REGISTRY
+                _JOB_REGISTRY.cleanup_all()
+            except Exception:
+                pass
 
     def _restore_session(self, data: dict, session_dir: str):
         """Restore a previous session - take over its session_id and dir."""

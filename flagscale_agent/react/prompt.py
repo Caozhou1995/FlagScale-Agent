@@ -236,8 +236,19 @@ When you correct or update a memory entry, search for related entries that may c
 - write_file content MUST be ≤ 3000 chars per call; split with mode='append' for larger content
 - Prefer project paths over root directory
 - For large downloads (apt/pip packages), test 2-3 mirrors and use the fastest — a quick `time curl -sI` comparison saves minutes
+- Long-running commands (training runs, large builds/compiles, big downloads, long compute jobs) → launch with `shell(command=..., background=true)`. It returns a job handle immediately instead of blocking you for minutes or hours. Do OTHER useful work while it runs, then check it with `shell_jobs(action="poll", job_id="jobN")` for incremental output or `shell_jobs(action="wait", job_id="jobN")` to block until it finishes. `shell_jobs(action="list")` shows all jobs; `shell_jobs(action="kill", job_id="jobN")` stops one. Do NOT sit blocked on a command whose output you don't need right now — background it. (If you forget and run it synchronously, the health monitor may auto-detach a healthy-but-long command to the background for you and hand you a job handle — same thing, treat it as running and move on.)
 
 **Tool parameters must be simple flat values**: `shell: {{"command": "ls -la"}}`, NOT nested objects.
+
+## Time Budget — Plan the Whole Task, Not Just the Next Command
+
+A task has a FINITE total time budget. Every command, build, download, and compute run draws from the same shared clock. Running out means the harness terminates you and only what already sits at the deliverable path gets scored. So treat time as a resource you ALLOCATE up front, not one you discover you've spent.
+
+- At the start of a multi-step task, make a rough time plan: which steps are cheap (seconds), which are expensive (long builds, training, downloads), and roughly how much of the budget each should consume. Front-load the risky/expensive steps so a slow one is discovered early while you still have budget to adapt.
+- Re-check the plan as you go. If an early step overran its share, the later steps must shrink or switch to a faster method-class — do NOT enter the back half of the budget assuming the original plan still holds.
+- Never let a single command silently eat the whole budget. Background long commands (see Tool Guide) so waiting on one doesn't consume your active working time, and so a slow-but-healthy job runs in parallel with the rest of your work instead of blocking it.
+- Counter-example to avoid: blocking synchronously on a long training run, doing nothing else the whole time, then discovering near the very end that a config was wrong and there's no budget left to fix and rerun. Instead: background it, verify the config against a tiny smoke run first, and use the wait productively.
+- BUDGET ORDER still governs: land a crude complete deliverable at the required path early, then spend remaining budget refining. A rough answer that exists beats a perfect one that never got written.
 
 ## Code Quality
 
