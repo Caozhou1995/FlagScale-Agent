@@ -87,6 +87,7 @@ from flagscale_agent.react.guard.find_guard import FindGuard
 
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
+from flagscale_agent.react.guard.time_budget import TimeBudgetGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
@@ -99,9 +100,12 @@ from flagscale_agent.react.judge import Judge
 from flagscale_agent.react.commands import CommandHandler
 
 
-# Default per-turn time budget (24h) used when FLAGSCALE_AGENT_TIME_BUDGET_SEC
-# is unset or unparseable. An explicit 0/negative env value disables reporting.
-_DEFAULT_TIME_BUDGET_SEC = 86400
+# NOTE: there is deliberately NO internal default time budget. When the
+# FLAGSCALE_AGENT_TIME_BUDGET_SEC env var is unset/unparseable/non-positive, no
+# external harness is enforcing a wall, so _task_budget_stats() reports None and
+# no budget figure is surfaced to the agent or the health judge. Fabricating a
+# large default (e.g. 24h) would falsely signal abundant time and invite
+# leisurely work — see _task_budget_stats for the full rationale.
 
 
 # ── WorkerAgent ──────────────────────────────────────────────────────────────
@@ -261,6 +265,10 @@ class WorkerAgent:
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
+        # Time-budget awareness guard: injects escalating wall-clock advisories
+        # (50/75/90%) so the agent itself — not just the health judge — reacts to
+        # cumulative task time. Silent when no concrete wall was injected.
+        guard_registry.register(TimeBudgetGuard(stats_fn=self._task_budget_stats))
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
@@ -392,15 +400,24 @@ class WorkerAgent:
             task_budget=self._task_budget_summary(),
         )
 
-    def _task_budget_summary(self) -> str:
-        """Summarize whole-task cumulative wall-clock vs the total time budget.
+    def _task_budget_stats(self) -> dict | None:
+        """Resolve the whole-task wall-clock budget as structured numbers.
 
-        A single turn defaults to a 24h (86400s) budget when the env var
-        FLAGSCALE_AGENT_TIME_BUDGET_SEC is unset or unparseable; explicitly
-        setting it to 0 (or a negative value) disables budget reporting and
-        returns "" so the health prompt stays byte-identical to the no-budget
-        version. When active, reports elapsed-since-turn-start and the total
-        budget so the judge can reason about the task-level allowance.
+        Returns a dict {elapsed, budget, remaining, pct} (all floats/seconds)
+        ONLY when an external harness has injected a concrete, enforced wall via
+        the env var FLAGSCALE_AGENT_TIME_BUDGET_SEC. Returns None otherwise.
+
+        Design: the tb-adapter always exports this env to the value it actually
+        enforces via asyncio.wait_for (the real harbor wall, or its own concrete
+        fallback). The ONLY case where the env is unset is a standalone /
+        interactive run with NO external time enforcement — there, a real
+        deadline does not exist, so we must NOT fabricate one. In particular we
+        deliberately do NOT fabricate a large code-uniformity default (e.g.
+        24h): reporting that as a "budget" would tell the agent (and the health
+        judge) it has abundant time and invite it to work leisurely. Unset /
+        unparseable / non-positive env => None => no budget
+        reporting anywhere (the health prompt stays byte-identical to the
+        no-budget version, and the TimeBudgetGuard stays silent).
 
         Elapsed is measured from the CURRENT turn's start (self._turn_start,
         re-stamped each _react_loop), not from session start: an interactive
@@ -410,20 +427,38 @@ class WorkerAgent:
         """
         raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "").strip()
         if not raw:
-            budget = float(_DEFAULT_TIME_BUDGET_SEC)
-        else:
-            try:
-                budget = float(raw)
-            except (TypeError, ValueError):
-                # Unparseable value falls back to the default budget rather than
-                # silently disabling the accounting.
-                budget = float(_DEFAULT_TIME_BUDGET_SEC)
+            # No external harness enforcing a wall -> no real deadline exists.
+            return None
+        try:
+            budget = float(raw)
+        except (TypeError, ValueError):
+            # Unparseable -> treat as no injected wall rather than fabricating
+            # the 24h default.
+            return None
         if budget <= 0:
             # Explicit 0 / negative disables budget reporting.
-            return ""
+            return None
         elapsed = max(0.0, time.time() - self._turn_start)
         remaining = budget - elapsed
         pct = (elapsed / budget) * 100.0 if budget else 0.0
+        return {
+            "elapsed": elapsed,
+            "budget": budget,
+            "remaining": remaining,
+            "pct": pct,
+        }
+
+    def _task_budget_summary(self) -> str:
+        """Free-text summary of cumulative wall-clock vs the injected budget.
+
+        Returns "" when no concrete wall was injected (see _task_budget_stats),
+        so the health prompt stays byte-identical to the no-budget version and
+        no 24h-default figure ever leaks to the judge. When a real wall exists,
+        reports elapsed-since-turn-start, the total, percent used and remaining.
+        """
+        stats = self._task_budget_stats()
+        if stats is None:
+            return ""
 
         def _fmt(sec: float) -> str:
             sec = int(max(0.0, sec))
@@ -434,8 +469,9 @@ class WorkerAgent:
             return f"{m}m{s:02d}s"
 
         return (
-            f"cumulative task time elapsed {_fmt(elapsed)} of total budget "
-            f"{_fmt(budget)} ({pct:.0f}% used, ~{_fmt(remaining)} remaining)"
+            f"cumulative task time elapsed {_fmt(stats['elapsed'])} of total budget "
+            f"{_fmt(stats['budget'])} ({stats['pct']:.0f}% used, "
+            f"~{_fmt(stats['remaining'])} remaining)"
         )
 
     def _current_expectation_anchor(self) -> str:

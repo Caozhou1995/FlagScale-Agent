@@ -259,6 +259,7 @@ _TOOL_ICONS = {
     "flagscale_train_monitor": "🚂",
     "evict": "🗑️",
     "recall": "↩️",
+    "shell_jobs": "🧵",
 
 }
 
@@ -506,7 +507,11 @@ def tool_start(name, args_summary=""):
         label += f" {args_summary}"
     # Display full label without truncation for reviewer visibility
     _print(dim(label), end="", flush=True)
-    if name == "shell":
+    # shell always spins (blocks for the whole run). shell_jobs only spins on
+    # 'wait', which blocks up to `timeout`s — list/poll/kill return instantly
+    # and read better inline.
+    spins = name == "shell" or (name == "shell_jobs" and args_summary.startswith("wait"))
+    if spins:
         _active_spinner = _Spinner()
         _print()
         _active_spinner.start()

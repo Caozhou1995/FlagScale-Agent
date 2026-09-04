@@ -431,8 +431,12 @@ class TestSystemPromptContent:
         # domain leak guard: the PRESERVE passage must teach copy-first as a general
         # reflex, not via one engine's internals. No specific store/format name may
         # appear (sqlite, wal, sqlite_master, sha256 are all case-by-case leakage).
-        for w in ("sqlite", "wal", "sqlite_master", "sha256"):
+        for w in ("sqlite", "sqlite_master", "sha256"):
             assert w not in p.lower()
+        # "wal" must be checked as a STANDALONE word (the DB write-ahead-log term),
+        # not a substring — otherwise legitimate words like "wall-clock" false-trip.
+        import re as _re
+        assert not _re.search(r"\bwal\b", p.lower())
 
     def test_known_problem_class_first_move_present(self):
         # Principle 1: name the problem class and use its standard technique before enumerating.

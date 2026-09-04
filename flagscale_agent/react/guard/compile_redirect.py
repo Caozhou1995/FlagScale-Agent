@@ -203,14 +203,28 @@ While you are here — parallelism strategy, before you commit the full build:
       3. ABSOLUTE cap (32): a big host (256 cores / ~1TB RAM) passes the memory cap
          with a huge J (e.g. -j256). That is NOT faster — 256 heavy C++ compilers
          saturate cache and memory bandwidth, thrash the scheduler, and spawn a
-         256-node process tree that starves the monitor. Mid-size projects (Caffe,
-         etc.) build fastest around -j8..32; beyond ~32 the return is flat-to-negative.
+         256-node process tree that starves the monitor. Mid-size C/C++ projects
+         build fastest around -j8..32; beyond ~32 the return is flat-to-negative.
     On a 2GB/1-CPU container the formula lands at -j1; on a big host it settles
     at 32 instead of running away to the core count.
   • For other build systems, apply the same memory-bounded parallelism:
       cargo build -j "$J" 2>&1 | tee build.log
       cmake --build . -j "$J" 2>&1 | tee build.log
       ninja -j "$J" 2>&1 | tee build.log
+
+OVERLAP THE BUILD WITH INDEPENDENT EXPENSIVE STEPS — a build is long, and other
+costly steps this task needs usually do NOT depend on the build's output. A dataset /
+model / asset download needs only the network; an unrelated package install needs only
+the index. Running them AFTER the build finishes wastes wall-clock the per-task budget
+cannot spare — the download sits idle behind the compile for no reason. Instead, launch
+the build in the BACKGROUND (background=true) and kick off the dependency-free steps
+NOW so they run concurrently, then join on all of them:
+  <build cmd> 2>&1 | tee build.log     # background=true → returns a job handle
+  # immediately, while it compiles, start the independent download/install:
+  wget/curl <dataset-url> ... 2>&1 | tee fetch.log   (also background=true)
+Only steps that truly need the build's output (run the compiled binary, train on the
+built framework) stay ordered after it. Total wall-clock becomes the LONGEST branch,
+not the SUM of all steps. Map which steps feed which BEFORE serializing them.
 
 If this command is short, already streams its own progress, or output is intentionally
 discarded, override with "_override_reason" explaining why.
