@@ -1251,6 +1251,44 @@ class ShellJobsTool(Tool):
         elapsed = time.time() - job.start
         return f"{job.job_id}: [{job.status_str()}] {elapsed:.0f}s  {job.command[:80]}"
 
+    def _set_wait_hint(self, job, activity="", finished=False):
+        """Push a live one-line progress hint onto the active spinner during a
+        'wait', so the terminal shows what the job is doing instead of a frozen
+        '🧵 shell_jobs wait' line. No-op when there is no color spinner."""
+        try:
+            from flagscale_agent.react import display
+        except Exception:
+            return
+        spinner = getattr(display, "_active_spinner", None)
+        if spinner is None:
+            return
+        parts = [f"{job.job_id} [{job.status_str()}]"]
+        # Latest non-empty output line, peeked WITHOUT advancing the read
+        # cursors (new_output would consume what the final return needs). Scan
+        # only the last few chunks to stay O(1) on long-running jobs.
+        try:
+            recent = (job.stdout_chunks[-5:] + job.stderr_chunks[-5:])
+        except Exception:
+            recent = []
+        last_line = ""
+        for chunk in reversed(recent):
+            for ln in reversed(chunk.splitlines()):
+                if ln.strip():
+                    last_line = ln.strip()
+                    break
+            if last_line:
+                break
+        if last_line:
+            parts.append(f"│ {last_line[:80]}")
+        if activity:
+            parts.append(f"🩺 {activity[:60]}")
+        if finished:
+            parts.append("✓ finished")
+        try:
+            spinner.set_hint("  ".join(parts))
+        except Exception:
+            pass
+
     def _health_tick(self, job):
         """Run one health/liveness tick against a backgrounded job's live
         sampler and return {'kill': bool, 'reason': str, 'activity': str}.
@@ -1398,7 +1436,14 @@ class ShellJobsTool(Tool):
                     if time.time() >= _next_tick:
                         tick = self._health_tick(job)
                         if tick['kill'] and job.running:
+                            self._set_wait_hint(job, tick.get('activity', ''),
+                                                 finished=False)
                             return self._kill_unhealthy(job, tick['reason'])
+                        # Surface live progress on the spinner so the wait line
+                        # is not a frozen "🧵 shell_jobs wait" — the user sees
+                        # the job's status, latest output, and health activity.
+                        self._set_wait_hint(job, tick.get('activity', ''),
+                                            finished=False)
                         _next_tick = time.time() + _tick_every
                     time.sleep(min(1.0, max(0.1, deadline - time.time())))
                 job.t_out.join(timeout=0.5)

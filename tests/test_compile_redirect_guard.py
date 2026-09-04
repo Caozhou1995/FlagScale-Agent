@@ -206,3 +206,30 @@ class TestCompileRedirectGuard:
         assert "menhir" not in msg.lower()
         assert "ocamlfind" not in msg.lower()
         assert "opam" not in msg.lower()
+
+    def test_message_advises_overlapping_independent_steps(self):
+        """Regression (insight/tbench/caffe_timeout_rootcause_budget_exhaustion):
+        the build and a dependency-free download/install were run SERIALLY, so the
+        download idled behind the ~8min build and burned the per-task budget. The
+        block message must steer toward overlapping the background build with the
+        independent expensive steps (download/install) instead of serializing them."""
+        v = self.g.check_pre(_ctx("make -j > build.log 2>&1"))
+        assert v.action == "block"
+        msg = v.message
+        low = msg.lower()
+        # must name the overlap concept and the background mechanism
+        assert "overlap" in low
+        assert "background" in low
+        # must call out that independent steps do NOT depend on the build output
+        assert "independent" in low or "depend" in low
+        # must name the concrete independent steps: download and install
+        assert "download" in low
+        assert "install" in low
+        # must express the wall-clock model: longest branch, not the sum
+        assert "longest" in low or "not the sum" in low or "concurrent" in low
+        # generic, no dataset/task/framework leaking anywhere in the message —
+        # the whole guard fires on EVERY build command, so it must not name a
+        # concrete benchmark task, dataset, or framework.
+        assert "cifar" not in low
+        assert "caffe" not in low
+        assert "fasttext" not in low

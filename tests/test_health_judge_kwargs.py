@@ -57,6 +57,7 @@ class _Stub:
 
     _health_judge = WorkerAgent._health_judge
     _task_budget_summary = WorkerAgent._task_budget_summary
+    _task_budget_stats = WorkerAgent._task_budget_stats
     _current_expectation_anchor = WorkerAgent._current_expectation_anchor
 
     def __init__(self, turn_start, judge):
@@ -90,14 +91,17 @@ def test_health_judge_forwards_loop_kwargs_without_error(monkeypatch):
     assert judge.last_kwargs.get("container_resources") == "8GB"
 
 
-def test_task_budget_summary_defaults_to_24h_when_env_unset(monkeypatch):
-    # Unset env -> a turn defaults to a 24h (86400s) budget, not disabled.
+def test_task_budget_summary_disabled_when_env_unset(monkeypatch):
+    # Unset env -> NO external wall enforced -> budget reporting disabled.
+    # We deliberately do NOT fabricate a 24h code-uniformity default: reporting
+    # one would tell the agent/judge it has day-scale time and invite leisurely
+    # work. Byte-identical to the no-budget health prompt, and TimeBudgetGuard
+    # stays silent.
     import time
     monkeypatch.delenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", raising=False)
     stub = _Stub(turn_start=time.time(), judge=_FakeJudge())
-    summary = stub._task_budget_summary()
-    assert summary != ""
-    assert "24h00m" in summary  # 86400s total budget
+    assert stub._task_budget_summary() == ""
+    assert stub._task_budget_stats() is None
 
 
 def test_task_budget_summary_disabled_when_env_zero(monkeypatch):
@@ -122,14 +126,14 @@ def test_task_budget_summary_reports_elapsed_and_budget(monkeypatch):
     assert "50% used" in summary or "49% used" in summary or "51% used" in summary
 
 
-def test_task_budget_summary_invalid_env_falls_back_to_default(monkeypatch):
-    # Unparseable value falls back to the 24h default rather than disabling.
+def test_task_budget_summary_invalid_env_disables(monkeypatch):
+    # Unparseable value -> treated as no injected wall (disabled), NOT a 24h
+    # fallback. We never fabricate a deadline from a garbage env value.
     import time
     monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "not-a-number")
     stub = _Stub(turn_start=time.time(), judge=_FakeJudge())
-    summary = stub._task_budget_summary()
-    assert summary != ""
-    assert "24h00m" in summary
+    assert stub._task_budget_summary() == ""
+    assert stub._task_budget_stats() is None
 
 
 def test_task_budget_measured_from_turn_not_session(monkeypatch):
