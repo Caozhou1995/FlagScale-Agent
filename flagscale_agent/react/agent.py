@@ -99,6 +99,11 @@ from flagscale_agent.react.judge import Judge
 from flagscale_agent.react.commands import CommandHandler
 
 
+# Default per-turn time budget (24h) used when FLAGSCALE_AGENT_TIME_BUDGET_SEC
+# is unset or unparseable. An explicit 0/negative env value disables reporting.
+_DEFAULT_TIME_BUDGET_SEC = 86400
+
+
 # ── WorkerAgent ──────────────────────────────────────────────────────────────
 
 class WorkerAgent:
@@ -382,10 +387,12 @@ class WorkerAgent:
     def _task_budget_summary(self) -> str:
         """Summarize whole-task cumulative wall-clock vs the total time budget.
 
-        Returns "" when no budget is configured (env FLAGSCALE_AGENT_TIME_BUDGET_SEC
-        unset or non-positive), so the health prompt stays byte-identical to the
-        no-budget version. When set, reports elapsed-since-turn-start and the
-        total budget so the judge can reason about the task-level allowance.
+        A single turn defaults to a 24h (86400s) budget when the env var
+        FLAGSCALE_AGENT_TIME_BUDGET_SEC is unset or unparseable; explicitly
+        setting it to 0 (or a negative value) disables budget reporting and
+        returns "" so the health prompt stays byte-identical to the no-budget
+        version. When active, reports elapsed-since-turn-start and the total
+        budget so the judge can reason about the task-level allowance.
 
         Elapsed is measured from the CURRENT turn's start (self._turn_start,
         re-stamped each _react_loop), not from session start: an interactive
@@ -395,12 +402,16 @@ class WorkerAgent:
         """
         raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "").strip()
         if not raw:
-            return ""
-        try:
-            budget = float(raw)
-        except (TypeError, ValueError):
-            return ""
+            budget = float(_DEFAULT_TIME_BUDGET_SEC)
+        else:
+            try:
+                budget = float(raw)
+            except (TypeError, ValueError):
+                # Unparseable value falls back to the default budget rather than
+                # silently disabling the accounting.
+                budget = float(_DEFAULT_TIME_BUDGET_SEC)
         if budget <= 0:
+            # Explicit 0 / negative disables budget reporting.
             return ""
         elapsed = max(0.0, time.time() - self._turn_start)
         remaining = budget - elapsed
