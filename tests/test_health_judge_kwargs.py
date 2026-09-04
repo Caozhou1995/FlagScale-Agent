@@ -90,10 +90,24 @@ def test_health_judge_forwards_loop_kwargs_without_error(monkeypatch):
     assert judge.last_kwargs.get("container_resources") == "8GB"
 
 
-def test_task_budget_summary_empty_when_env_unset(monkeypatch):
+def test_task_budget_summary_defaults_to_24h_when_env_unset(monkeypatch):
+    # Unset env -> a turn defaults to a 24h (86400s) budget, not disabled.
     import time
     monkeypatch.delenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", raising=False)
     stub = _Stub(turn_start=time.time(), judge=_FakeJudge())
+    summary = stub._task_budget_summary()
+    assert summary != ""
+    assert "24h00m" in summary  # 86400s total budget
+
+
+def test_task_budget_summary_disabled_when_env_zero(monkeypatch):
+    # Explicit 0 (or negative) disables budget reporting -> byte-identical
+    # no-budget health prompt.
+    import time
+    monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "0")
+    stub = _Stub(turn_start=time.time(), judge=_FakeJudge())
+    assert stub._task_budget_summary() == ""
+    monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "-5")
     assert stub._task_budget_summary() == ""
 
 
@@ -108,13 +122,14 @@ def test_task_budget_summary_reports_elapsed_and_budget(monkeypatch):
     assert "50% used" in summary or "49% used" in summary or "51% used" in summary
 
 
-def test_task_budget_summary_invalid_env_is_empty(monkeypatch):
+def test_task_budget_summary_invalid_env_falls_back_to_default(monkeypatch):
+    # Unparseable value falls back to the 24h default rather than disabling.
     import time
     monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "not-a-number")
     stub = _Stub(turn_start=time.time(), judge=_FakeJudge())
-    assert stub._task_budget_summary() == ""
-    monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "0")
-    assert stub._task_budget_summary() == ""
+    summary = stub._task_budget_summary()
+    assert summary != ""
+    assert "24h00m" in summary
 
 
 def test_task_budget_measured_from_turn_not_session(monkeypatch):
