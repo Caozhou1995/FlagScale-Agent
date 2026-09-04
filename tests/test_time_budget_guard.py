@@ -70,8 +70,9 @@ class TestTimeBudgetGuardSilence:
         assert g.check_post(make_ctx(tool_name="")) is None
 
     def test_below_first_threshold_is_silent(self):
+        # First rung is now 25% — below it the guard stays silent.
         s = _Stats()
-        s.pct = 40.0
+        s.pct = 20.0
         g = TimeBudgetGuard(stats_fn=s)
         assert g.check_post(make_ctx()) is None
 
@@ -81,10 +82,22 @@ class TestTimeBudgetGuardThresholds:
         s = _Stats()
         g = TimeBudgetGuard(stats_fn=s)
 
-        s.pct = 55.0
+        # 25% is the new earliest rung: pacing / front-load guidance.
+        s.pct = 30.0
         v = g.check_post(make_ctx())
         assert v is not None and v.action == "inject"
-        assert v.reason == "time_budget_50pct"
+        assert v.reason == "time_budget_25pct"
+        # front-load / pacing language, fired while the decision window is open
+        assert "front-load" in v.message or "front load" in v.message
+        assert "background=true" in v.message
+        # Same threshold must not refire.
+        assert g.check_post(make_ctx()) is None
+
+        s.pct = 55.0
+        v = g.check_post(make_ctx())
+        assert v is not None and v.reason == "time_budget_50pct"
+        # 50% is now a HEALTH CHECK, not a repeat of the pacing tip.
+        assert "HEALTH CHECK" in v.message or "health check" in v.message.lower()
         # Same threshold must not refire.
         assert g.check_post(make_ctx()) is None
 

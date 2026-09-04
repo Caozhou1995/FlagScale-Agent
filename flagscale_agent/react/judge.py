@@ -573,50 +573,42 @@ class Judge:
         Returns "" when no budget summary was supplied, so the prompt is
         byte-identical to the pre-budget version and no content leaks in.
 
-        This is deliberately DISTINCT from the per-command rate/ETA kill
-        criterion in the main prompt: that one asks whether THIS single command
-        finishes inside ITS own timeout. This block asks the task-level
-        question — has the CUMULATIVE session (every command so far) consumed so
-        much of the TOTAL task allowance that the current method-class can no
-        longer plausibly finish the remaining work before the external harness
-        terminates the whole task?
+        This block is a FUEL GAUGE, not a driver. It reports the objective
+        cumulative wall-clock fact (total allowance vs. spent so far) and asks
+        the agent to think carefully in light of it. It deliberately does NOT
+        judge whether the current method-class can still finish, does NOT
+        recommend switching methods, and does NOT steer the approach — those are
+        the agent's own decisions. The health judge's only authority is the
+        binary liveness/kill call; deciding HOW to drive with the remaining time
+        belongs to the agent, which has the full task context the judge lacks.
         """
         summary = (task_budget or "").strip()
         if not summary:
             return ""
         return (
-            "\n## Task-level time budget (cumulative wall-clock)\n\n"
+            "\n## Task-level time budget (cumulative wall-clock) — FUEL GAUGE ONLY\n\n"
             "Beyond this one command, the WHOLE TASK runs under a fixed overall\n"
             "wall-clock budget enforced by an external harness. The cumulative\n"
             "time spent so far across every command, versus that total budget, is:\n\n"
             f"    {summary}\n\n"
-            "This is a TASK-LEVEL judgment, separate from the per-command\n"
-            "rate/ETA criterion above (which only asks whether THIS command\n"
-            "finishes inside ITS own timeout). Here the question is whether the\n"
-            "cumulative session has consumed enough of its total allowance that\n"
-            "the CURRENT method-class is unlikely to complete the remaining work\n"
-            "before the whole task is terminated — e.g. most of the budget is\n"
-            "gone yet the agent is still turning knobs on an approach that keeps\n"
-            "landing short.\n\n"
-            "When that is the case, do NOT kill on this basis alone — emit an\n"
-            "advisory (kill=false) whose reason states how much of the budget is\n"
-            "spent and asks the agent to weigh whether continuing the current\n"
-            "method-class can finish in the time left, versus switching to a\n"
-            "faster method-class. Two hard constraints on that advisory:\n"
-            "- Rule out hardware/network hard limits first. If the run is already\n"
-            "  saturating the resources it was given (a legitimately I/O- or\n"
-            "  bandwidth-bound transfer, a compute already using all cores), no\n"
-            "  method change the agent makes would speed it up — say nothing. Only\n"
-            "  raise this when the cost is a CONFIGURABLE CHOICE under the agent's\n"
-            "  control (an oversized setting, an unnecessarily expensive method,\n"
-            "  under-used parallelism, redundant re-runs).\n"
-            "- NEVER suggest shrinking the task to fit the budget — do not lower\n"
-            "  the quality/accuracy target, cut the required input, or drop a\n"
-            "  requirement. Redirect only to a genuinely faster method that STILL\n"
-            "  meets every target the task set. If you cannot name such a method,\n"
-            "  prefer staying silent over a budget-driven advisory.\n"
-            "Escalate to kill only if a separate hard kill criterion above is\n"
-            "also met.\n"
+            "Treat this strictly as a FUEL-GAUGE READING you pass through to the\n"
+            "agent — how much time is total, how much is already spent. It is NOT\n"
+            "a kill criterion and NOT a reason to change your liveness verdict:\n"
+            "never kill on the basis of the task budget alone (escalate to kill\n"
+            "only if a separate hard kill criterion above is independently met).\n\n"
+            "You are the fuel gauge, not the driver. Do NOT judge whether the\n"
+            "current approach can still finish in the time left, do NOT recommend\n"
+            "switching methods or method-classes, do NOT suggest shrinking the\n"
+            "task, and do NOT otherwise steer HOW the agent should proceed —\n"
+            "those decisions require the full task context you do not have, and\n"
+            "they belong to the agent alone.\n\n"
+            "When the budget is worth surfacing, emit an advisory (kill=false)\n"
+            "whose reason does exactly two things and nothing more: (1) state the\n"
+            "objective budget fact (total vs. spent), and (2) remind the agent to\n"
+            "think carefully and deliberately in light of the remaining time\n"
+            "before its next move. Phrase (2) as a prompt to reflect — e.g.\n"
+            "'given the remaining budget, think carefully about how best to\n"
+            "proceed' — never as a specific instruction on WHAT to do.\n"
         )
 
     def reset_turn(self):
