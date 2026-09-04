@@ -153,8 +153,10 @@ def test_monitor_detach_backgrounds_instead_of_kill():
     job = _JOB_REGISTRY.get("job1")
     assert job is not None, "detached job was not registered"
     assert job.running, "detached process was killed instead of backgrounded"
-    # Health sampler must be stopped for a backgrounded job.
-    assert job.health_sampler is None
+    # A detached job must stay MONITORED: the sampler is handed to the registry
+    # job alive (NOT stopped) so shell_jobs can still catch a later hang.
+    assert job.health_sampler is not None
+    assert job.evaluator is not None
 
 
 def test_monitor_kill_still_kills():
@@ -189,3 +191,132 @@ def test_monitor_continue_lets_it_run():
     assert "TERMINATED" not in out
     assert "DETACHED" not in out
     assert "hi" in out
+
+
+# --- Task 1: backgrounded jobs stay health-monitored via shell_jobs ---
+
+
+class _StubEvaluator:
+    """Deterministic evaluator standing in for _HealthEvaluator so we can
+    exercise ShellJobsTool's health tick without depending on real /proc
+    sample timing."""
+
+    def __init__(self, result):
+        self._result = result
+        self.calls = 0
+
+    def evaluate(self, sampler, stdout_chunks, stderr_chunks, elapsed):
+        self.calls += 1
+        return dict(self._result)
+
+
+def test_background_launch_attaches_live_sampler_and_evaluator():
+    """shell(background=true) must start a sampler and evaluator so the job
+    stays monitored (the fix: previously it ran unmonitored)."""
+    sh = ShellTool()
+    sh.execute(command="sleep 5", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    assert job is not None
+    assert job.health_sampler is not None, "background job has no live sampler"
+    assert job.evaluator is not None, "background job has no evaluator"
+
+
+def test_health_tick_kill_on_hard_indicator():
+    """When the evaluator's hard indicators say should_kill, _health_tick
+    returns kill without needing the LLM judge."""
+    jobs = ShellJobsTool()
+    sh = ShellTool()
+    sh.execute(command="sleep 30", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    job.evaluator = _StubEvaluator({
+        "status": "ok", "should_kill": True, "kill_reason": "silent stall",
+        "activity": "CPU 0% (whole process tree)", "output_changed": False,
+        "stall_count": 9, "recent_text": "",
+    })
+    tick = jobs._health_tick(job)
+    assert tick["kill"] is True
+    assert tick["reason"] == "silent stall"
+
+
+def test_health_tick_skip_when_no_fresh_sample():
+    """status='skip' (no fresh sample this tick) must NOT kill and must
+    preserve the previous note."""
+    jobs = ShellJobsTool()
+    sh = ShellTool()
+    sh.execute(command="sleep 30", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    job.health_note = "previous note"
+    job.evaluator = _StubEvaluator({"status": "skip", "output_changed": False,
+                                     "stall_count": 1, "recent_text": ""})
+    tick = jobs._health_tick(job)
+    assert tick["kill"] is False
+    assert tick["activity"] == "previous note"
+
+
+def test_health_tick_judge_fallback_kills():
+    """Hard indicators pass (should_kill False) but the LLM judge returns
+    action='kill' — _health_tick must escalate to kill."""
+    def judge(command, recent_output, elapsed, **kwargs):
+        return {"action": "kill", "reason": "judge says hung"}
+
+    jobs = ShellJobsTool(health_judge_fn=judge)
+    sh = ShellTool()
+    sh.execute(command="sleep 30", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    job.evaluator = _StubEvaluator({
+        "status": "ok", "should_kill": False, "kill_reason": "",
+        "activity": "CPU 0%", "output_changed": False,
+        "stall_count": 3, "recent_text": "",
+    })
+    tick = jobs._health_tick(job)
+    assert tick["kill"] is True
+    assert "judge says hung" in tick["reason"]
+
+
+def test_kill_unhealthy_returns_terminated_and_removes():
+    jobs = ShellJobsTool()
+    sh = ShellTool()
+    sh.execute(command="sleep 30", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    msg = jobs._kill_unhealthy(job, "silent stall")
+    assert msg.startswith("TERMINATED job1")
+    assert "change your method class" in msg
+    assert _wait_until(lambda: not job.running, timeout=5)
+    assert _JOB_REGISTRY.get("job1") is None
+
+
+def test_wait_kills_hung_job_via_judge():
+    """End-to-end: a backgrounded job whose judge verdict is kill gets
+    TERMINATED from inside a bounded wait (the core bug: previously
+    unmonitored)."""
+    def judge(command, recent_output, elapsed, **kwargs):
+        return {"action": "kill", "reason": "hung after detach"}
+
+    jobs = ShellJobsTool(health_judge_fn=judge)
+    sh = ShellTool()
+    sh.execute(command="sleep 30", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    job.evaluator = _StubEvaluator({
+        "status": "ok", "should_kill": False, "kill_reason": "",
+        "activity": "CPU 0%", "output_changed": False,
+        "stall_count": 5, "recent_text": "",
+    })
+    out = jobs.execute(action="wait", job_id="job1", timeout=3)
+    assert "TERMINATED job1" in out
+    assert "hung after detach" in out
+    assert _JOB_REGISTRY.get("job1") is None
+
+
+def test_poll_surfaces_health_note():
+    jobs = ShellJobsTool()
+    sh = ShellTool()
+    sh.execute(command="sleep 30", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    job.evaluator = _StubEvaluator({
+        "status": "ok", "should_kill": False, "kill_reason": "",
+        "activity": "CPU 42% (whole process tree)", "output_changed": True,
+        "stall_count": 0, "recent_text": "",
+    })
+    out = jobs.execute(action="poll", job_id="job1")
+    assert "🩺" in out
+    assert "CPU 42%" in out

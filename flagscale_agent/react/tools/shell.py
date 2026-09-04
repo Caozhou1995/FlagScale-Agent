@@ -178,6 +178,155 @@ def _run_health_judge_bounded(fn, args, kwargs, timeout=_HEALTH_JUDGE_TIMEOUT_SE
     return result.get("value")
 
 
+class _HealthEvaluator:
+    """One tick of the health/liveness decision, extracted so BOTH the
+    synchronous monitor loop and the ShellJobsTool background poller can run
+    the exact same logic against a _HealthSampler.
+
+    It holds the incremental state the decision needs across ticks (stall /
+    idle counters, previous cumulative CPU/IO/RSS counters, the last acted-on
+    sample seq). Each tick:
+      • compute output_changed from the latest output snapshot,
+      • read the sampler (O(1), never blocks on /proc),
+      • handle the stale / fresh / non-fresh sample cases exactly as the sync
+        loop does (neutral fallback for a stuck sampler; skip when no fresh
+        sample so counters are never fabricated),
+      • derive liveness deltas + idle_count,
+      • call should_kill_process,
+      • build the human-readable activity string for the LLM judge.
+
+    Returns a dict; status='skip' means "no fresh health info this tick, do
+    nothing" (heartbeat already handled by the caller).
+    """
+
+    def __init__(self):
+        self.stall_count = 0
+        self.idle_count = 0
+        self._had_children = False
+        self._prev_num_children = 0
+        self._prev_cpu_time = None
+        self._prev_io_bytes = None
+        self._prev_rss_mb = None
+        self._prev_health_time = None
+        self._tree_cpu_pct = 0.0
+        self._last_health_seq = -1
+        self._last_output_snapshot = ""
+
+    def evaluate(self, sampler, stdout_chunks, stderr_chunks, elapsed):
+        """Run one health tick. Returns a decision dict:
+            {'status': 'skip'}  — no fresh sample, do nothing this tick, or
+            {'status': 'ok', 'should_kill': bool, 'kill_reason': str,
+             'activity': str, 'output_changed': bool, 'stall_count': int,
+             'recent_text': str}
+        """
+        from flagscale_agent.react.tools.process_health import (
+            detect_output_anomalies,
+            should_kill_process,
+        )
+
+        recent_text = "".join(stdout_chunks[-20:] + stderr_chunks[-20:])
+        current_snapshot = "".join(stdout_chunks[-10:] + stderr_chunks[-10:])
+
+        # Empty output counts as a STALL, not "changed" (see sync loop).
+        output_changed = (
+            bool(current_snapshot) and current_snapshot != self._last_output_snapshot
+        )
+        if not output_changed:
+            self.stall_count += 1
+        else:
+            self.stall_count = 0
+        self._last_output_snapshot = current_snapshot
+
+        proc_health, _sample_age, _sample_seq = sampler.latest()
+        _fresh = proc_health is not None and _sample_seq != self._last_health_seq
+        _stale = (
+            _sample_age is not None
+            and _sample_age > 3 * _PROCESS_HEALTH_TIMEOUT_SECS
+        )
+        if _stale:
+            _base_cpu = self._prev_cpu_time if self._prev_cpu_time is not None else 0.0
+            _base_io = self._prev_io_bytes if self._prev_io_bytes is not None else 0.0
+            proc_health = {
+                'alive': True, 'zombie': False,
+                'cpu_percent': 1.0, 'memory_mb': self._prev_rss_mb or 0.0,
+                'num_children': self._prev_num_children,
+                'children_alive': max(1, self._prev_num_children),
+                'cpu_time': _base_cpu + 1.0, 'io_bytes': _base_io,
+            }
+        elif not _fresh:
+            return {'status': 'skip', 'output_changed': output_changed,
+                    'stall_count': self.stall_count, 'recent_text': recent_text}
+        else:
+            self._last_health_seq = _sample_seq
+
+        output_anomalies = detect_output_anomalies(recent_text)
+        if proc_health['num_children'] > 0:
+            self._had_children = True
+
+        _now_health = time.time()
+        if self._prev_cpu_time is None:
+            progress_signals = None
+        else:
+            progress_signals = {
+                'cpu_time_delta': proc_health.get('cpu_time', 0.0) - self._prev_cpu_time,
+                'io_bytes_delta': proc_health.get('io_bytes', 0.0) - self._prev_io_bytes,
+                'rss_delta': (proc_health.get('memory_mb', 0.0) - self._prev_rss_mb) * 1024 * 1024,
+            }
+            _wall_dt = _now_health - self._prev_health_time if self._prev_health_time else 0.0
+            if _wall_dt > 0:
+                self._tree_cpu_pct = max(
+                    0.0, progress_signals['cpu_time_delta'] / _wall_dt * 100.0,
+                )
+        self._prev_cpu_time = proc_health.get('cpu_time', 0.0)
+        self._prev_io_bytes = proc_health.get('io_bytes', 0.0)
+        self._prev_rss_mb = proc_health.get('memory_mb', 0.0)
+        self._prev_health_time = _now_health
+
+        if progress_signals is None:
+            is_idle = False
+        else:
+            counters_flat = (
+                progress_signals.get('cpu_time_delta', 0.0) <= 0.5
+                and progress_signals.get('io_bytes_delta', 0.0) <= (1 << 20)
+                and abs(progress_signals.get('rss_delta', 0.0)) <= (1 << 20)
+            )
+            is_idle = (not output_changed) and counters_flat
+        if is_idle:
+            self.idle_count += 1
+        else:
+            self.idle_count = 0
+
+        should_kill, kill_reason = should_kill_process(
+            elapsed, output_changed, self.stall_count,
+            proc_health, output_anomalies, self._had_children,
+            self._prev_num_children,
+            progress_signals=progress_signals,
+            idle_count=self.idle_count,
+        )
+        self._prev_num_children = proc_health['num_children']
+
+        _cpu_display = (
+            self._tree_cpu_pct if progress_signals is not None
+            else proc_health['cpu_percent']
+        )
+        activity = (
+            f"CPU {_cpu_display:.0f}% (whole process tree), "
+            f"memory {proc_health['memory_mb']:.0f} MB (whole tree), "
+            f"live child processes {proc_health['children_alive']}"
+            f" of {proc_health['num_children']}"
+        )
+
+        return {
+            'status': 'ok',
+            'should_kill': should_kill,
+            'kill_reason': kill_reason,
+            'activity': activity,
+            'output_changed': output_changed,
+            'stall_count': self.stall_count,
+            'recent_text': recent_text,
+        }
+
+
 # --- Self-kill protection ---
 
 _SELF_KILL_RE = re.compile(
@@ -311,6 +460,14 @@ class _BackgroundJob:
         self.t_err = t_err
         self.start = start
         self.health_sampler = health_sampler
+        # Per-job health evaluator: when a live sampler is attached (the job was
+        # detached/backgrounded WITHOUT stopping monitoring), shell_jobs uses
+        # this to run the same liveness/kill logic the synchronous loop runs, so
+        # a backgrounded job that later hangs still gets caught. None when the
+        # job has no live sampler (nothing to evaluate).
+        self.evaluator = _HealthEvaluator() if health_sampler is not None else None
+        # Last human-readable health note (activity / advisory), surfaced by poll.
+        self.health_note = ""
         # Read cursors: how many chunks the caller has already seen.
         self._out_cursor = 0
         self._err_cursor = 0
@@ -496,22 +653,20 @@ class ShellTool(Tool):
 
         Called from the monitor loop when the health judge decides the command
         is healthy and making progress but is long enough that the agent should
-        not keep blocking on it. Unlike a kill, the process KEEPS RUNNING: we
-        stop the health sampler (a backgrounded job is no longer monitored) but
-        do NOT kill the process and do NOT join the reader threads — they keep
-        draining the pipes into the same chunk lists the registry job holds, so
-        later poll/wait sees the full output. Returns the DETACHED handle string
-        the agent gets in place of the (would-be) blocking result.
+        not keep blocking on it. Unlike a kill, the process KEEPS RUNNING and
+        stays MONITORED: we hand the still-running health sampler to the
+        registry job (we do NOT stop it) so shell_jobs can keep evaluating the
+        job's liveness and catch a later hang. We do NOT kill the process and
+        do NOT join the reader threads — they keep draining the pipes into the
+        same chunk lists the registry job holds, so later poll/wait sees the
+        full output. Returns the DETACHED handle string the agent gets in place
+        of the (would-be) blocking result.
         """
-        # Stop the sampler thread; the backgrounded job runs unmonitored.
-        try:
-            if health_sampler is not None:
-                health_sampler.stop()
-        except Exception:
-            pass
+        # Keep the sampler ALIVE and hand it to the registry: a backgrounded job
+        # remains monitored so shell_jobs(wait/poll) can still detect a hang.
         job_id = _JOB_REGISTRY.add(
             command, proc, stdout_chunks, stderr_chunks,
-            t_out, t_err, start, health_sampler=None,
+            t_out, t_err, start, health_sampler=health_sampler,
         )
         elapsed = int(time.time() - start)
         self._record_history(command, "backgrounded", time.time() - start)
@@ -591,14 +746,25 @@ class ShellTool(Tool):
 
             # ── Background launch: register and return a handle immediately ──
             # The reader threads keep draining the pipes; the process runs on
-            # under the registry. We do NOT start the health sampler or the
-            # synchronous monitor loop — the whole point is to not block. The
-            # agent polls progress later via the shell_jobs tool.
+            # under the registry. We do NOT run the synchronous monitor loop —
+            # the whole point is to not block. But we DO start the health
+            # sampler and hand it to the registry job, so shell_jobs(wait/poll)
+            # can still evaluate the job's liveness and catch a later hang. The
+            # sampler is the same O(1)-to-read background thread the sync loop
+            # uses; it costs one thread and does not block the agent.
             if background:
                 start = time.time()
+                from flagscale_agent.react.tools.process_health import (
+                    get_process_health,
+                )
+                _sampler_interval = min(_PROCESS_HEALTH_TIMEOUT_SECS,
+                                        min(30, self._remind_interval))
+                _bg_sampler = _HealthSampler(
+                    get_process_health, proc.pid, interval=_sampler_interval,
+                ).start()
                 job_id = _JOB_REGISTRY.add(
                     command, proc, stdout_chunks, stderr_chunks,
-                    t_out, t_err, start, health_sampler=None,
+                    t_out, t_err, start, health_sampler=_bg_sampler,
                 )
                 self._record_history(command, "backgrounded", 0.0)
                 return (
@@ -1038,6 +1204,16 @@ class ShellJobsTool(Tool):
         "until a job finishes (bounded by timeout), 'list' to see all jobs, and "
         "'kill' to terminate one."
     )
+    def __init__(self, health_judge_fn=None, history_fn=None, resources_fn=None):
+        # Optional LLM health judge (same one ShellTool uses). When provided,
+        # wait ticks run it as a soft fallback after the hard indicators, so a
+        # backgrounded job that later hangs is caught even if the hard rules
+        # miss it. history_fn/resources_fn give the judge the same context the
+        # sync loop passes; both optional (judge tolerates empty strings).
+        self._health_judge_fn = health_judge_fn
+        self._history_fn = history_fn
+        self._resources_fn = resources_fn
+
     parameters = {
         "type": "object",
         "properties": {
@@ -1075,6 +1251,92 @@ class ShellJobsTool(Tool):
         elapsed = time.time() - job.start
         return f"{job.job_id}: [{job.status_str()}] {elapsed:.0f}s  {job.command[:80]}"
 
+    def _health_tick(self, job):
+        """Run one health/liveness tick against a backgrounded job's live
+        sampler and return {'kill': bool, 'reason': str, 'activity': str}.
+
+        Mirrors the synchronous monitor loop: first the hard indicators
+        (should_kill_process, inside _HealthEvaluator.evaluate), then — only if
+        the hard rules passed — the optional LLM judge as a soft fallback. A
+        backgrounded job is already detached, so the only actionable verdict
+        here is 'kill'; 'background' is a no-op (already backgrounded) and
+        'continue' just refreshes the advisory note.
+        """
+        noop = {'kill': False, 'reason': '', 'activity': job.health_note}
+        if job.evaluator is None or job.health_sampler is None:
+            return noop
+        elapsed = time.time() - job.start
+        res = job.evaluator.evaluate(
+            job.health_sampler, job.stdout_chunks, job.stderr_chunks, elapsed,
+        )
+        if res.get('status') != 'ok':
+            # No fresh sample this tick — keep the last note, do nothing.
+            return {'kill': False, 'reason': '', 'activity': job.health_note}
+        job.health_note = res['activity']
+        if res['should_kill']:
+            return {'kill': True, 'reason': res['kill_reason'],
+                    'activity': res['activity']}
+        # Hard indicators passed. Soft fallback: LLM judge (if wired), same
+        # bounded call the sync loop uses, so a stalled gateway can't freeze us.
+        if self._health_judge_fn:
+            time_str = f"{int(elapsed)}s"
+            decision = _run_health_judge_bounded(
+                self._health_judge_fn,
+                (job.command, res['recent_text'], time_str),
+                {
+                    "output_changed": res['output_changed'],
+                    "stall_count": res['stall_count'],
+                    "activity": res['activity'],
+                    "command_history": (
+                        self._history_fn(job.command) if self._history_fn else ""
+                    ),
+                    "container_resources": (
+                        self._resources_fn() if self._resources_fn else ""
+                    ),
+                    "health_advisory": res['kill_reason'],
+                },
+            ) or {"action": "continue", "kill": False}
+            _action = decision.get("action")
+            if _action is None:
+                _action = "kill" if decision.get("kill") else "continue"
+            if _action == "kill":
+                return {'kill': True,
+                        'reason': decision.get("reason", "Unhealthy command"),
+                        'activity': res['activity']}
+            # "background" is a no-op here (already backgrounded); "continue"
+            # just carries the reason forward as the surfaced note.
+            _reason = decision.get("reason", "")
+            if _reason:
+                job.health_note = f"{res['activity']} — {_reason}"
+        return {'kill': False, 'reason': '', 'activity': job.health_note}
+
+    def _kill_unhealthy(self, job, reason):
+        """Stop the sampler, kill the process, remove the job, and return the
+        same TERMINATED redirection message the synchronous monitor emits."""
+        elapsed = time.time() - job.start
+        if job.health_sampler is not None:
+            try:
+                job.health_sampler.stop()
+            except Exception:
+                pass
+        try:
+            job.proc.kill()
+            job.proc.wait(timeout=3)
+        except Exception:
+            pass
+        job.t_out.join(timeout=0.5)
+        job.t_err.join(timeout=0.5)
+        partial = _truncate_output(job.new_output())
+        _JOB_REGISTRY.remove(job.job_id)
+        return (
+            f"TERMINATED {job.job_id}: {reason} (after {int(elapsed)}s).\n"
+            f"This was stopped by the health monitor, not by the command "
+            f"itself. Do not relaunch a variant of the same approach — treat "
+            f"the reason above as a redirection and change your method class "
+            f"before running anything similar again.\n"
+            f"Output:\n{partial}"
+        )
+
     def execute(self, **kwargs) -> str:
         action = kwargs.get("action", "")
         job_id = kwargs.get("job_id", "")
@@ -1101,30 +1363,60 @@ class ShellJobsTool(Tool):
                 return f"ERROR: no such job '{job_id}'. Known jobs: {known}"
 
             if action == "poll":
+                # Run a health tick first so a backgrounded job that has since
+                # hung is caught even on a non-blocking poll, and so the note we
+                # surface is fresh.
+                tick = self._health_tick(job)
+                if tick['kill'] and job.running:
+                    return self._kill_unhealthy(job, tick['reason'])
                 new_out = job.new_output()
                 header = self._fmt_job_line(job)
+                if tick['activity']:
+                    header += f"  🩺 {tick['activity']}"
                 body = new_out if new_out.strip() else "(no new output since last poll)"
                 body = _truncate_output(body)
                 if not job.running:
+                    if job.health_sampler is not None:
+                        try:
+                            job.health_sampler.stop()
+                        except Exception:
+                            pass
                     _JOB_REGISTRY.remove(job_id)
                     header += "  [finished — removed from registry]"
                 return f"{header}\n{body}"
 
             if action == "wait":
                 deadline = time.time() + timeout
+                # Cadence for the in-wait health tick: at most once per sampler
+                # interval, but no less often than every second so a fast hang
+                # is still caught within the bounded wait.
+                _tick_every = 1.0
+                _next_tick = time.time() + _tick_every
                 while time.time() < deadline:
                     if not job.running:
                         break
+                    if time.time() >= _next_tick:
+                        tick = self._health_tick(job)
+                        if tick['kill'] and job.running:
+                            return self._kill_unhealthy(job, tick['reason'])
+                        _next_tick = time.time() + _tick_every
                     time.sleep(min(1.0, max(0.1, deadline - time.time())))
                 job.t_out.join(timeout=0.5)
                 job.t_err.join(timeout=0.5)
                 header = self._fmt_job_line(job)
                 if job.running:
+                    if job.health_note:
+                        header += f"  🩺 {job.health_note}"
                     body = _truncate_output(job.new_output()) or "(still running)"
                     return (
                         f"{header}  [still running after {timeout}s wait]\n{body}\n"
                         f"Not finished yet. Poll again or wait more."
                     )
+                if job.health_sampler is not None:
+                    try:
+                        job.health_sampler.stop()
+                    except Exception:
+                        pass
                 new_out = _truncate_output(job.new_output())
                 _JOB_REGISTRY.remove(job_id)
                 return f"{header}  [finished — removed from registry]\n{new_out}"

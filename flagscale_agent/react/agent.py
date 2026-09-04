@@ -298,16 +298,24 @@ class WorkerAgent:
         self.tool_registry.register(ReadFileTool())
         self.tool_registry.register(WriteFileTool())
         self.tool_registry.register(EditFileTool())
+        _shell_tool = ShellTool(
+            remind_interval=self.config.shell_remind_interval,
+            env=self.config.shell_env,
+            health_judge_fn=self._health_judge,
+        )
+        self.tool_registry.register(_shell_tool)
+        # Background-job control tool: poll/wait/list/kill jobs started with
+        # shell(background=true) or auto-detached from the monitor loop. Wire the
+        # SAME health judge + the ShellTool instance's history/resource helpers
+        # so a backgrounded job that later hangs is caught by the same liveness
+        # logic (and gets the same judge context) the synchronous monitor uses.
         self.tool_registry.register(
-            ShellTool(
-                remind_interval=self.config.shell_remind_interval,
-                env=self.config.shell_env,
+            ShellJobsTool(
                 health_judge_fn=self._health_judge,
+                history_fn=_shell_tool._build_history_str,
+                resources_fn=_shell_tool._detect_resources,
             )
         )
-        # Background-job control tool: poll/wait/list/kill jobs started with
-        # shell(background=true) or auto-detached from the monitor loop.
-        self.tool_registry.register(ShellJobsTool())
         
         # Knowledge and skill tools
         self.tool_registry.register(LoadSkillTool(self.skill_manager))
