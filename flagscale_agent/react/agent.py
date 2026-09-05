@@ -84,6 +84,7 @@ from flagscale_agent.react.guard.training_monitor import TrainingMonitorGuard
 from flagscale_agent.react.guard.package_search import PackageSearchGuard
 
 from flagscale_agent.react.guard.find_guard import FindGuard
+from flagscale_agent.react.guard.shell_jobs_wait import ShellJobsWaitGuard
 
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
@@ -261,6 +262,7 @@ class WorkerAgent:
         guard_registry.register(TrainingMonitorGuard())
         guard_registry.register(PackageSearchGuard())
         guard_registry.register(FindGuard())
+        guard_registry.register(ShellJobsWaitGuard())
 
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
