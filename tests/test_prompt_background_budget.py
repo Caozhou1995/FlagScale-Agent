@@ -125,22 +125,27 @@ class TestTimeBudgetGuidance:
 
     def test_fans_out_independent_experiments(self):
         # Regression (insight/tbench/fasttext_blind_wait_discipline): a search
-        # that retrained variants ONE AT A TIME on a 256-core/1TB box wasted
-        # budget. The prompt must teach fanning out many same-kind independent
-        # runs (sweep/seeds/configs) as concurrent background jobs when hardware
-        # has spare capacity — a distinct axis from step-overlap.
+        # that retrained variants ONE AT A TIME wasted budget. The prompt must
+        # teach fanning out many same-kind independent runs (sweep/seeds/configs)
+        # as concurrent background jobs — a distinct axis from step-overlap.
         low = SYSTEM_PROMPT_STATIC.lower()
         assert "fan out independent experiments" in low
         # names the same-kind-many-runs case (sweep / configs / seeds / trials)
         assert "sweep" in low or "trials" in low or "seeds" in low
-        # ties launching to available hardware capacity, sized to the box
-        assert "spare capacity" in low or "hardware" in low
-        assert "oversubscribe" in low or "size it to the box" in low
+        # cultivates the concurrency TRADE-OFF rather than naming specific
+        # hardware: more concurrency slows each trial, so the goal is the degree
+        # that minimizes TOTAL wall-clock, not the maximum you can fit.
+        assert "trade-off" in low
+        assert "total wall-clock" in low
+        assert "minimizes total wall-clock" in low or "best total time" in low
+        # optimum is often in the middle, and measure a small batch when unsure
+        assert "concurrency degree" in low
+        assert "measure one small concurrent batch" in low or "measure" in low
         # the two guards: distinct output paths + write-through-bank the winner
         assert "distinct path" in low or "clobber" in low
         assert "write-through" in low
         # serial vs concurrent cost framing
-        assert "serially" in low or "one at a time" in low
+        assert "serial" in low or "one at a time" in low
         # generic, no task/framework leaking
         assert "fasttext" not in low
         assert "caffe" not in low

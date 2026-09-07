@@ -24,16 +24,19 @@ continue. If no (rounds ending "nothing new") → information gain is zero, the 
 stall; escape DOWNWARD (smaller experiment) or UPWARD (different method-class),
 never SIDEWAYS (another variant).
 
-Two orthogonal signals, each a DIFFERENT view with a DIFFERENT remedy:
-- COUNT: tool calls since last plan_update. First at FIRST_REMIND, then every
-  REMIND_INTERVAL. Catches DENSE stalls (many quick thrashing calls) — the
-  action-layer symptom; remedy is stop-and-diagnose.
-- TIME: wall-clock since last plan_update, every TIME_REMIND_SECONDS. Catches
-  SPARSE stalls (few calls but long thinks) — the thinking-layer symptom; remedy
-  is convert deliberation into a real observation.
-The reminder names whichever signal(s) fired so the remedy matches the symptom.
+Firing signal: TIME only — wall-clock since last plan_update, every
+TIME_REMIND_SECONDS. Catches a step that has run long without recorded progress;
+the remedy is to convert deliberation into a real observation (or, if waiting on
+in-flight background jobs, record that and continue).
 
-Escalation: every ESCALATE_AFTER-th reminder (across both signals) becomes a BLOCK
+Why TIME only (concurrency): a tool-call COUNT used to be a second trigger, but
+once the agent can run jobs in parallel, one wall-clock window carries many more
+tool calls — poll/wait on each in-flight job — so a count threshold fires on
+legitimate parallel supervision rather than on a stall. Wall-clock is invariant to
+concurrency, so it is the trustworthy proxy. The tool-call count is still SHOWN in
+the reminder as context, but it never gates firing.
+
+Escalation: every ESCALATE_AFTER-th reminder becomes a BLOCK
 instead of inject, then the counter resets: inject, inject, block, repeat. A block
 forces a substantive plan_update (or override) before continuing. Counters reset
 on plan_update/plan_create. Meta tools (plan_status, evict, memory_read, ...) don't
@@ -125,15 +128,12 @@ class PlanUpdateGuard(Guard):
     name = "plan_update"
     priority = 50
 
-    # Fire the first reminder early — a stall caught early is cheap to escape.
-    FIRST_REMIND = 10
-    # After the first, remind periodically but spaced out, so a repeated nudge on
-    # the same step does not dilute into noise the agent learns to skip.
-    REMIND_INTERVAL = 20
-    # Wall-clock stall signal: remind every this many seconds on the same step,
-    # independent of tool-call count. Catches sparse-but-slow thrash.
+    # Wall-clock stall signal: remind every this many seconds on the same step.
+    # This is the ONLY firing trigger — tool-call count no longer gates (see module
+    # docstring: concurrency inflates the count with legitimate parallel job
+    # supervision, so only wall-clock cleanly proxies a stall).
     TIME_REMIND_SECONDS = 180
-    # Every ESCALATE_AFTER-th stall reminder (counting across both signals)
+    # Every ESCALATE_AFTER-th stall reminder
     # escalates from advisory inject to a blocking verdict, then the counter
     # resets and the cycle repeats: inject, inject, block, inject, inject, block.
     # An advisory nudge can be read and ignored; a block cannot — it forces the
@@ -158,6 +158,46 @@ class PlanUpdateGuard(Guard):
         "step_done", "step_skip", "complete", "abandon",
         "add_steps", "update_acceptance", "batch",
     ))
+
+    @staticmethod
+    def _supplies_thinking(ctx) -> bool:
+        """True iff THIS call supplies a fresh plan-level problem model.
+
+        Detected from tool_args (not plan state) so it keys off what the agent
+        actively did in this call: action='set_thinking', or any plan_update /
+        plan_create carrying a non-empty ``thinking``. This is the "rebuilt the
+        model" signal — the deliberate/deep-thinking move, as opposed to a
+        retrospective note or a fast action.
+        """
+        args = getattr(ctx, "tool_args", None) or {}
+        if args.get("action") == "set_thinking":
+            return True
+        t = args.get("thinking")
+        return bool(t and str(t).strip())
+
+    @classmethod
+    def _clears_escalated_block(cls, ctx) -> bool:
+        """Stricter bar than _is_substantive_update, for an ESCALATED block only.
+
+        Once the guard has escalated to a block, the agent has already ignored
+        multiple advisory nudges — the situation is a demonstrated loop. A bare
+        retrospective note ("I confirmed X is better") is exactly the shallow
+        rationalization that let the thrash resume, so notes ALONE no longer
+        clear the block. Real cognition must have moved, shown by EITHER:
+          - a genuine progress action (step done/skipped, plan complete/abandon,
+            steps added, acceptance refined, batch) — plan state actually moved; or
+          - a rebuilt plan-level problem MODEL (a fresh ``thinking`` with a
+            falsifiable prediction) — deliberate thinking actually happened.
+        plan_create (a whole new plan) also clears.
+        """
+        if getattr(ctx, "tool_name", "") == "plan_create":
+            return True
+        if getattr(ctx, "tool_name", "") != "plan_update":
+            return False
+        args = getattr(ctx, "tool_args", None) or {}
+        if args.get("action", "") in cls._PROGRESS_ACTIONS:
+            return True
+        return cls._supplies_thinking(ctx)
 
     @classmethod
     def _is_substantive_update(cls, ctx) -> bool:
@@ -246,9 +286,8 @@ class PlanUpdateGuard(Guard):
         # the quantity the reminder should display, cumulative like the count n.
         # Reset only on plan_update/plan_create. None = not yet anchored.
         self._stall_start = None
-        # How many stall reminders have fired since the last plan_update. Shared
-        # across BOTH signals (count and time) — the agent perceives "I've been
-        # nudged N times", regardless of which signal produced each nudge. The
+        # How many stall reminders (all TIME-triggered) have fired since the last
+        # plan_update — the agent perceives "I've been nudged N times". The
         # first ESCALATE_AFTER-1 fire as inject (advisory); the ESCALATE_AFTER-th
         # escalates to a block, then this resets to 0 (cycle repeats). A block is
         # only reached after the agent has IGNORED that many advisory nudges — so
@@ -284,35 +323,56 @@ class PlanUpdateGuard(Guard):
         # a real response (a step marked done, or a concrete fact in notes).
         if ctx.tool_name in ("plan_update", "plan_create"):
             substantive = self._is_substantive_update(ctx)
-            # A block is pending clearance and this update is an empty ping (no
-            # state change, no notes): re-block. The agent must actually respond
-            # — mark the step done/skipped, or record a concrete fact in notes —
-            # not merely ping the guard to reset the timers. Timers are left
-            # untouched so the situation is unchanged until a real response comes.
-            if self._block_pending and not substantive:
+            # Clearance bar depends on tier. An ESCALATED block (_block_pending)
+            # means the agent already ignored multiple advisory nudges — a proven
+            # loop — so the bar is the STRICTER _clears_escalated_block: a genuine
+            # progress action OR a rebuilt problem model (fresh `thinking` with a
+            # prediction). A bare retrospective note no longer clears it, because
+            # "I confirmed X is better" is exactly the shallow rationalization that
+            # let the thrash resume. Below the block tier, any substantive update
+            # (including a concrete note) still resets the timers as before.
+            clears = self._clears_escalated_block(ctx)
+            if self._block_pending and not clears:
                 return GuardVerdict.block(
                     message=(
-                        "[PlanUpdate] This plan_update does not clear the pending "
-                        "stall block: no step state changed and no notes recorded — "
-                        "an empty guard-clearing ping. To continue: (a) mark the stalled "
-                        "step done/skipped, or (b) plan_update with a note naming ONE "
-                        "fact in THREE-PART form — the assumption you tested, HOW you "
-                        "tested it (command/probe), the RESULT (value/output/conclusion). "
-                        "\"I confirmed the config is correct\" is empty — it names no "
-                        "test, no result. If the task requires an output that does not "
-                        "exist on disk, write the crudest valid version to the path "
-                        "now. If you cannot name a three-part fact, that proves you are "
-                        "looping — switch method-class, do not ping again."
+                        "[PlanUpdate] This plan_update does not clear the ESCALATED "
+                        "stall block. You have already ignored several advisory nudges "
+                        "on this step — that is a demonstrated loop, so a bare note no "
+                        "longer clears it (a retrospective \"I confirmed X is better\" is "
+                        "the exact shallow rationalization that lets the thrash resume). "
+                        "Real cognition must have MOVED. Clear it with EITHER:\n"
+                        "  (a) a genuine progress action — mark the stalled step "
+                        "done/skipped, or complete/abandon the plan (plan state actually "
+                        "moves); OR\n"
+                        "  (b) a REBUILT problem model — plan_update(action='set_thinking', "
+                        "thinking=...) (or any action carrying `thinking=`) that names, for "
+                        "the WHOLE task: the real bottleneck, the load-bearing hypothesis, "
+                        "the evidence, and a FALSIFIABLE prediction for your next move "
+                        "('if I change X, the metric should reach ~Y'). If you cannot state "
+                        "a NEW prediction, that inability IS the proof you are looping on "
+                        "one method-class — switch class (DOWNWARD: isolate one unit; "
+                        "UPWARD: a different technique / web_fetch the standard method), "
+                        "do not ping again.\n"
+                        "If the task requires an output that does not exist on disk yet, "
+                        "BUDGET ORDER: write the crudest complete-but-valid version to the "
+                        "exact path now, then resume."
                     ),
-                    reason="empty_ping_does_not_clear_block",
+                    reason="shallow_update_does_not_clear_escalated_block",
                     category="plan_update",
                 )
             self._iters_since_update = 0
             self._time_anchor = self._time_fn()
             self._stall_start = self._time_anchor
-            if substantive:
+            # Below the block tier, a substantive update resets the escalation
+            # counter (as before). When a block IS pending, only a stricter
+            # clearance (progress action or rebuilt model) lifts it — reached here
+            # only when `clears` is True.
+            if self._block_pending:
+                if clears:
+                    self._stall_trigger_count = 0
+                    self._block_pending = False
+            elif substantive:
                 self._stall_trigger_count = 0
-                self._block_pending = False
             return None
 
         # Meta tools don't count and don't tick the clock.
@@ -327,11 +387,13 @@ class PlanUpdateGuard(Guard):
         if self._stall_start is None:
             self._stall_start = now
 
-        # COUNT signal: first at FIRST_REMIND, then every REMIND_INTERVAL after.
+        # n is retained only as a DISPLAY quantity ("N tool calls elapsed") — it no
+        # longer GATES firing. Concurrency changed what a tool-call count means: once
+        # the agent can run jobs in parallel, one wall-clock window carries many more
+        # calls (poll/wait on each in-flight job), so a count threshold fires on
+        # legitimate parallel supervision, not on a stall. Wall-clock is invariant to
+        # concurrency, so TIME is the only trustworthy stall proxy — fire on it alone.
         n = self._iters_since_update
-        fire_count = n == self.FIRST_REMIND or (
-            n > self.FIRST_REMIND and (n - self.FIRST_REMIND) % self.REMIND_INTERVAL == 0
-        )
         # TIME signal: fire once per TIME_REMIND_SECONDS window. Re-anchor on fire
         # so the next window starts fresh (periodic wall-clock reminders).
         elapsed = now - self._time_anchor
@@ -339,7 +401,7 @@ class PlanUpdateGuard(Guard):
         if fire_time:
             self._time_anchor = now
 
-        if fire_count or fire_time:
+        if fire_time:
             doing_steps = [s for s in steps if s.get("status") == "doing"]
             if doing_steps:
                 step_id = doing_steps[0].get("id")
@@ -351,48 +413,35 @@ class PlanUpdateGuard(Guard):
                 # the real stall duration and mismatch the cumulative count n.
                 total_stuck = now - self._stall_start
                 mins = int(total_stuck // 60)
-                if fire_count and fire_time:
-                    sig = f"{n} tool calls and ~{mins} min elapsed"
-                elif fire_time:
-                    sig = f"~{mins} min elapsed ({n} tool calls)"
-                else:
-                    sig = f"{n} iterations"
+                # Only the TIME signal gates firing now; the count is shown as
+                # context, never as the trigger.
+                sig = f"~{mins} min elapsed ({n} tool calls)"
 
                 # Count this reminder. Every ESCALATE_AFTER-th one escalates to a
                 # block; then reset so the cycle repeats (inject, inject, block).
                 self._stall_trigger_count += 1
                 escalate = self._stall_trigger_count % self.ESCALATE_AFTER == 0
 
-                # Signal-differentiated hint. COUNT and TIME are two DIFFERENT views
-                # of a possible stall and point at different remedies, so name the
-                # one(s) that actually fired instead of collapsing to one generic
-                # line. Dense count = thrashing at the ACTION layer → stop acting and
-                # diagnose. Sparse-but-slow time = circling at the THINKING layer →
-                # convert deliberation into a real observation. Both = say both.
-                count_hint = (
-                    "— COUNT signal: many ACTIONS, no recorded progress. This is the "
-                    "action-layer symptom (thrashing). Stop acting and DIAGNOSE before "
-                    "the next call — a faster/retuned variant of what just failed will "
-                    "fail the same way."
+                # TIME is the only firing signal. Wall-clock elapsed on one step
+                # without recorded progress is the stall proxy; the remedy is to
+                # convert deliberation into a real observation. (The tool-call count
+                # is no longer a trigger — under concurrency it inflates with
+                # legitimate parallel job supervision, so it cannot distinguish a
+                # stall from healthy multi-job waiting.)
+                signal_hint = (
+                    "— TIME signal: wall-clock has elapsed on this step without "
+                    "recorded progress. If you are waiting on in-flight background "
+                    "jobs, that is legitimate — record it in a note and continue. "
+                    "Otherwise, more deliberation in place will not move you; convert "
+                    "the next thought into an OBSERVATION — run the smallest experiment "
+                    "that returns a REAL output and read it."
                 )
-                time_hint = (
-                    "— TIME signal: long wall-clock, few actions — the thinking-layer "
-                    "symptom (reasoning in circles). More deliberation in place will not "
-                    "move you; convert the next thought into an OBSERVATION — run the "
-                    "smallest experiment that returns a REAL output and read it."
-                )
-                if fire_count and fire_time:
-                    signal_hint = count_hint + "\n" + time_hint
-                elif fire_time:
-                    signal_hint = time_hint
-                else:
-                    signal_hint = count_hint
 
                 body = (
-                    f"[PlanUpdate] {sig} on step {step_id} with no plan update. Count "
-                    f"and time are only PROXIES for a stall — they do NOT prove you are "
-                    f"stuck; they are a checkpoint that says STOP and FIND OUT. Run this "
-                    f"self-check now (you decide the verdict, not the counter):\n\n"
+                    f"[PlanUpdate] {sig} on step {step_id} with no plan update. Elapsed "
+                    f"wall-clock is only a PROXY for a stall — it does NOT prove you are "
+                    f"stuck; it is a checkpoint that says STOP and FIND OUT. Run this "
+                    f"self-check now (you decide the verdict, not the clock):\n\n"
                     f"  Can you name, for EACH of the last few rounds, what did the last "
                     f"round tell you that you did not already know — one concrete new "
                     f"fact in THREE-PART form: (1) the assumption you tested, (2) HOW you "
@@ -446,21 +495,31 @@ class PlanUpdateGuard(Guard):
                             + loop_note
                             + f"\n\nThat is {self._stall_trigger_count} stall "
                             f"reminders with no plan_update — earlier advisories had no "
-                            f"effect, so this one BLOCKS. This block is easy to clear IF "
-                            f"you are actually progressing: name the concrete new fact "
-                            f"and continue. If you cannot name one, that inability IS the "
-                            f"proof you are looping — do not ping again, switch "
-                            f"method-class. To continue: (a) plan_update whose "
-                            f"note names ONE assumption in THREE-PART form — the assumption, "
-                            f"how you tested it (command/probe), the result (value/output) — "
-                            f"plus the next method-class to try. \"I confirmed X is correct\" "
-                            f"is empty — it names no test, no result. Or, if oscillating "
-                            f"around a plateau, mark done after shipping best; or (b) override "
-                            f"with _override_reason stating the three-part fact (what/how/result). "
-                            f"For deliverable+threshold tasks: a fact only clears this block "
-                            f"if OBSERVED AT THE DELIVERABLE — edited it, re-ran, measured "
-                            f"score before/after. Derivation in a scratch script, prototype, "
-                            f"or on paper is side-channel work, not progress — if the "
+                            f"effect, so this one BLOCKS. Because you have now ignored "
+                            f"several nudges, the clearance bar is RAISED: a bare "
+                            f"retrospective note no longer clears this block (\"I confirmed "
+                            f"X is better\" is the exact shallow rationalization that lets "
+                            f"the thrash resume). Real cognition must have MOVED. Clear it "
+                            f"with EITHER:\n"
+                            f"  (a) a genuine PROGRESS action — mark the stalled step "
+                            f"done/skipped, or complete/abandon (plan state actually moves; "
+                            f"if oscillating around a plateau, ship the best version you "
+                            f"already measured and mark done); OR\n"
+                            f"  (b) a REBUILT problem model — plan_update(action='set_thinking', "
+                            f"thinking=...) (or any action carrying `thinking=`) naming, for "
+                            f"the WHOLE task: the real bottleneck, the load-bearing "
+                            f"hypothesis, the evidence, and a FALSIFIABLE prediction for your "
+                            f"next move ('if I change X, the metric should reach ~Y'). This "
+                            f"is the HOME for deep thinking as opposed to another fast tweak. "
+                            f"If you cannot state a NEW prediction, that inability IS the "
+                            f"proof you are looping on one method-class — switch class "
+                            f"(DOWNWARD: isolate one unit; UPWARD: a different technique / "
+                            f"web_fetch the standard method), do not ping again; or (c) "
+                            f"override with _override_reason.\n"
+                            f"For deliverable+threshold tasks: your model/prediction only "
+                            f"counts if it will be TESTED AT THE DELIVERABLE — edit it, "
+                            f"re-run, measure score before/after. A prediction validated only "
+                            f"in a scratch script or on paper is side-channel work — if the "
                             f"deliverable's score hasn't moved, you are optimizing the wrong "
                             f"medium. Land the next change in the deliverable and measure it."
                         ),

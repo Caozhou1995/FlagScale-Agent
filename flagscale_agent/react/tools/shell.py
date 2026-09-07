@@ -1163,6 +1163,16 @@ class ShellTool(Tool):
             # post_fn so a trailing head/tail pipe still sees full output first.
             output = _truncate_output(output)
 
+            # Surface the RAW process exit code when the command did not exit 0.
+            # We report the fact, not an interpretation — no mapping of specific
+            # codes to causes (e.g. 137 → OOM) lives here or in the prompt. The
+            # LLM sees the actual code and judges what it means, because the same
+            # code means different things across programs and platforms. A clean
+            # exit (0) adds no line, to keep normal output uncluttered.
+            rc = proc.poll() if proc is not None else None
+            if rc is not None and rc != 0 and not output.startswith(("TERMINATED", "ERROR")):
+                output = f"{output}\n[exit code: {rc}]"
+
             # Record command outcome for future health-judge context.
             outcome = "completed"
             if output.startswith("TERMINATED"):
