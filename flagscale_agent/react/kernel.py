@@ -235,10 +235,13 @@ class AgentKernel:
                         # endpoint (e.g. GLM) would never take the reasoning path.
                         thinking_text = response.get("thinking") or ""
                         was_reasoning_only = bool(thinking_text.strip())
+                        was_thinking_capped = bool(response.get("thinking_capped"))
                         empty_retries = getattr(self, "_empty_output_retries", 0)
                         if empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
-                            if was_reasoning_only:
+                            if was_thinking_capped:
+                                d.display.warn(f"Thinking reached runtime cap (retry {empty_retries + 1}/3), forcing convergence...")
+                            elif was_reasoning_only:
                                 d.display.warn(f"Reasoning produced content but no visible output (retry {empty_retries + 1}/3), continuing...")
                             else:
                                 d.display.warn(f"Empty LLM output (retry {empty_retries + 1}/3), auto-continuing...")
@@ -249,7 +252,26 @@ class AgentKernel:
                             # pop_last_assistant() which mutates _messages for real.
                             d.history.pop_last_assistant()
                             # Inject a targeted nudge
-                            if was_reasoning_only:
+                            if was_thinking_capped:
+                                # The runtime cap aborted a monolithic thinking
+                                # stream. Same re-injection as the resume path
+                                # (assistant thinking blocks are dropped by the
+                                # GLM endpoint and the aborted stream has no
+                                # valid signature), but the directive is
+                                # CONVERGENCE, not resume: the model must land
+                                # its next concrete step now — segmented
+                                # reasoning beats one 20-minute thought.
+                                nudge = (
+                                    "[system: your reasoning reached its runtime length cap and was stopped. "
+                                    "Your reasoning so far is reproduced below — do NOT continue it. "
+                                    "Land the next concrete step NOW: either call a tool to test your "
+                                    "next hypothesis, or output your answer. Deep problems are solved "
+                                    "stepwise; experiments beat more thinking.]\n\n"
+                                    "<previous_reasoning>\n"
+                                    f"{thinking_text}\n"
+                                    "</previous_reasoning>"
+                                )
+                            elif was_reasoning_only:
                                 # Many providers (e.g. GLM Anthropic-compat endpoint)
                                 # DROP assistant thinking blocks from the input, so
                                 # the model cannot see its own reasoning on retry.

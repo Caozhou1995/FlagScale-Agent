@@ -1365,8 +1365,20 @@ class WorkerAgent:
         current_tool = None
         stream_truncated = False
         reasoning_only = False
+        thinking_capped = False
         usage = {}
         self._streaming_in_code_block = False
+
+        # ── Runtime thinking cap (see thinking_cap.py) ──
+        # Abort a monolithic thinking stream once it reaches
+        # config.thinking_budget estimated tokens. cap_budget <= 0 disables
+        # the cap entirely (default config → behavior identical to before).
+        # Only trips while the response is PURE thinking: once text or tool
+        # calls exist, the response already has visible output and aborting
+        # would only truncate genuine work.
+        from flagscale_agent.react.thinking_cap import ThinkingCapCounter
+        cap_budget = getattr(self.config, "thinking_budget", 0) or 0
+        thinking_counter = ThinkingCapCounter()
 
         stream = retry_with_backoff(
             lambda: self.provider.chat_stream(messages, schemas),
@@ -1467,6 +1479,23 @@ class WorkerAgent:
                             display._write(display.dim(event["content"]))
                         else:
                             display._write(event["content"])
+                        # ── Runtime cap check ──
+                        if not thinking_capped and not content_parts and not tool_calls:
+                            thinking_counter.add(event["content"])
+                            capped_now, _capped_at = thinking_counter.state(cap_budget)
+                            if capped_now:
+                                thinking_capped = True
+                                reasoning_only = True
+                                display._write(
+                                    display.dim(
+                                        f"\n[thinking reached {cap_budget} token cap — forcing convergence]"
+                                    )
+                                )
+                                # Abort the stream. The kernel re-injects the
+                                # accumulated thinking as a user message with a
+                                # convergence directive, so the reasoning is
+                                # segmented, not lost.
+                                break
                     elif event["type"] == "thinking_start":
                         if not thinking_cleared:
                             display.thinking_done()
@@ -1486,6 +1515,13 @@ class WorkerAgent:
                         }
                     elif event["type"] == "done":
                         break
+                if thinking_capped:
+                    # Release the underlying HTTP stream promptly instead of
+                    # waiting for GC (we abandoned the generator mid-iteration).
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
                 break
             except KeyboardInterrupt:
                 if not thinking_cleared:
@@ -1546,7 +1582,7 @@ class WorkerAgent:
             if not parsed_tool_calls:
                 parsed_tool_calls = None
 
-        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated, "reasoning_only": reasoning_only, "thinking": thinking_text or None, "signature": thinking_signature or None}, usage
+        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated, "reasoning_only": reasoning_only, "thinking_capped": thinking_capped, "thinking": thinking_text or None, "signature": thinking_signature or None}, usage
 
     # ── Tool execution (delegated to ToolExecutor) ──────────────────────────
 
