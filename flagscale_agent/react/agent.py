@@ -406,8 +406,10 @@ class WorkerAgent:
         """Resolve the whole-task wall-clock budget as structured numbers.
 
         Returns a dict {elapsed, budget, remaining, pct} (all floats/seconds)
-        ONLY when an external harness has injected a concrete, enforced wall via
-        the env var FLAGSCALE_AGENT_TIME_BUDGET_SEC. Returns None otherwise.
+        ONLY when a concrete per-turn wall exists, from either source (config
+        field time_budget_sec, e.g. via --time-budget-sec, takes precedence over
+        the env var FLAGSCALE_AGENT_TIME_BUDGET_SEC that an external harness
+        injects). Returns None otherwise.
 
         Design: the tb-adapter always exports this env to the value it actually
         enforces via asyncio.wait_for (the real harbor wall, or its own concrete
@@ -427,16 +429,25 @@ class WorkerAgent:
         is meaningful against a per-task budget. In single-shot mode a turn is
         the whole session, so the two coincide.
         """
-        raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "").strip()
-        if not raw:
-            # No external harness enforcing a wall -> no real deadline exists.
-            return None
-        try:
-            budget = float(raw)
-        except (TypeError, ValueError):
-            # Unparseable -> treat as no injected wall rather than fabricating
-            # the 24h default.
-            return None
+        # Config field (e.g. via --time-budget-sec) takes precedence; fall back
+        # to the env var that an external harness injects. Either source carries
+        # the same meaning: a per-turn wall-clock budget that drives time
+        # warnings + wrap-up (it is NOT a hard kill on its own).
+        budget = None
+        cfg_budget = getattr(self.config, "time_budget_sec", 0.0) or 0.0
+        if cfg_budget and cfg_budget > 0:
+            budget = float(cfg_budget)
+        else:
+            raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "").strip()
+            if not raw:
+                # No external harness enforcing a wall -> no real deadline exists.
+                return None
+            try:
+                budget = float(raw)
+            except (TypeError, ValueError):
+                # Unparseable -> treat as no injected wall rather than fabricating
+                # the 24h default.
+                return None
         if budget <= 0:
             # Explicit 0 / negative disables budget reporting.
             return None

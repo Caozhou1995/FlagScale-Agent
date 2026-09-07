@@ -86,6 +86,7 @@ class AgentConfig:
     skill_dirs: List[str] = field(default_factory=list)
     shell_env: Dict[str, str] = field(default_factory=dict)
     max_continuations: int = 200
+    time_budget_sec: float = 0.0  # 0 = unset; >0 = per-turn wall-clock budget driving time warnings + wrap-up (NOT a hard kill)
     _config_path: Optional[str] = field(default=None, repr=False)
 
     def __post_init__(self):
