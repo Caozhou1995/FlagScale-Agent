@@ -31,10 +31,24 @@ Key design decisions:
     injected (standalone / interactive runs). In that case this guard stays
     completely silent — it never invents a deadline, and never nags a session
     that has no real time pressure.
-  • Percentage thresholds, not absolute seconds. The same 50/75/90% ladder works
-    for a 20-minute wall and a 1-hour wall without any per-task tuning.
-  • Inject, never block. Time is a hard external constraint; blocking would only
-    burn a round. The agent needs a nudge, not a gate.
+  • Percentage thresholds, not absolute seconds. The same 25/50/75/90/100% ladder
+    works for a 20-minute wall and a 1-hour wall without any per-task tuning.
+  • Two modes on the ladder:
+      - 25/50/75%   → check_post inject (pacing / health-check advisories).
+      - 90%         → check_pre BLOCK (overridable) — forces the agent to state
+                      that a deliverable exists or that THIS call produces it,
+                      before spending a near-final tool call on exploration.
+      - 100%        → check_post inject (WRAP-UP). The per-turn wall-clock is
+                      spent: this is the agent's last stretch this turn. The
+                      message tells it to finalize the current result and, if it
+                      needs a human decision or more input to go further, hand
+                      control back with NEED_USER_INPUT. This is deliberately an
+                      inject, NOT a block: at/after timeout the agent must be free
+                      to produce its closing response (and NEED_USER_INPUT) without
+                      a gate standing in front of it. The 90% block is therefore
+                      scoped to [90, 100) — once the wall is fully spent it steps
+                      aside so the wrap-up can proceed. The agent is trusted to
+                      understand "time is up, close out" without a hard stop.
   • Fire each threshold at most once per turn (a _fired set), so it does not
     spam every tool call once past 50%.
 """
@@ -72,7 +86,7 @@ class TimeBudgetGuard(Guard):
     # dataset download at ~13% budget and gave up at ~40% would never even see a
     # 50% nudge). Firing at 25% puts the pacing guidance where the agent has
     # enough trajectory to gauge its burn rate AND enough budget left to correct.
-    _THRESHOLDS = (90, 75, 50, 25)
+    _THRESHOLDS = (100, 90, 75, 50, 25)
 
     def __init__(self, stats_fn):
         """stats_fn() -> dict|None with keys elapsed/budget/remaining/pct.
@@ -111,8 +125,11 @@ class TimeBudgetGuard(Guard):
             return None
 
         pct = stats.get("pct", 0.0)
-        # Block only at 90%+, once per turn (acts as checkpoint, not repeated wall).
-        if pct >= 90 and 90 not in self._fired:
+        # Block only in the [90, 100) window, once per turn (a checkpoint, not a
+        # repeated wall). At/after 100% the wall-clock is fully spent and the guard
+        # must NOT block: the agent needs a clear path to emit its wrap-up response
+        # (and NEED_USER_INPUT) — that final rung is handled as a check_post inject.
+        if 90 <= pct < 100 and 90 not in self._fired:
             # Mark ALL crossed thresholds as spent, preventing check_post from
             # re-injecting lower advisories and preventing this block from re-firing.
             for t in self._THRESHOLDS:
@@ -182,6 +199,25 @@ class TimeBudgetGuard(Guard):
         elapsed = _fmt(stats.get("elapsed", 0.0))
         remaining = _fmt(stats.get("remaining", 0.0))
         pct = stats.get("pct", 0.0)
+        if thr >= 100:
+            # Per-turn wall-clock fully spent. This is a WRAP-UP nudge, not a gate:
+            # the agent is free to run its closing tool calls, but should now be
+            # finishing, not starting new work.
+            return (
+                f"[TimeBudget] TIME IS UP — {pct:.0f}% of your enforced wall-clock "
+                f"budget for this turn is spent ({elapsed} used). Treat this as your "
+                f"final stretch: this turn is ending. Do NOT start new work or open a "
+                f"new line of investigation. Instead:\n"
+                f"  1. Make sure a COMPLETE, valid result is written through to its "
+                f"required delivery path RIGHT NOW — a crude-but-complete answer that "
+                f"is banked beats a perfect one that never gets saved.\n"
+                f"  2. Briefly record where things stand (state / decisions) to memory "
+                f"or plan notes so the next turn can resume cleanly.\n"
+                f"  3. Then close out. If finishing genuinely needs a human decision, "
+                f"more input, or an action you cannot take, hand control back with "
+                f"NEED_USER_INPUT stating exactly what you need and the current state — "
+                f"rather than burning the overrun on more attempts."
+            )
         head = (
             f"[TimeBudget] {pct:.0f}% of your enforced wall-clock budget is gone "
             f"({elapsed} used, ~{remaining} left before the harness terminates the "
