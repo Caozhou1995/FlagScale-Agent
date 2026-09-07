@@ -141,12 +141,78 @@ class TestTimeBudgetGuardThresholds:
         assert g.check_post(make_ctx()) is not None
 
     def test_inject_only_never_blocks(self):
+        # 25/50/75 remain inject-only in check_post
         s = _Stats()
         g = TimeBudgetGuard(stats_fn=s)
-        for p in (55.0, 78.0, 92.0):
+        for p in (30.0, 55.0, 78.0):
             s.pct = p
             v = g.check_post(make_ctx())
             assert v is None or v.action == "inject"
+
+
+class TestTimeBudgetGuard90Block:
+    """90% threshold now blocks in check_pre rather than injecting in check_post."""
+
+    def test_90_blocks_in_check_pre(self):
+        s = _Stats()
+        g = TimeBudgetGuard(stats_fn=s)
+        s.pct = 92.0
+        v = g.check_pre(make_ctx())
+        assert v is not None
+        assert v.action == "block"
+        assert v.reason == "time_budget_90pct_block"
+        assert v.overridable is True
+        assert "CRITICAL CHECKPOINT" in v.message
+        assert "deliverable" in v.message.lower()
+
+    def test_90_block_fires_once_per_turn(self):
+        s = _Stats()
+        g = TimeBudgetGuard(stats_fn=s)
+        s.pct = 92.0
+        # First call blocks
+        v = g.check_pre(make_ctx())
+        assert v is not None and v.action == "block"
+        # Second call in same turn does not re-block
+        assert g.check_pre(make_ctx()) is None
+        # After reset_turn, it blocks again
+        g.reset_turn()
+        v = g.check_pre(make_ctx())
+        assert v is not None and v.action == "block"
+
+    def test_90_block_suppresses_check_post_inject(self):
+        # When check_pre fires and marks 90 as spent, check_post should not
+        # emit a duplicate inject for the same threshold.
+        s = _Stats()
+        g = TimeBudgetGuard(stats_fn=s)
+        s.pct = 92.0
+        # check_pre blocks and marks 90 as fired
+        v_pre = g.check_pre(make_ctx())
+        assert v_pre is not None and v_pre.action == "block"
+        # check_post should now be silent (90 already fired)
+        v_post = g.check_post(make_ctx())
+        assert v_post is None
+
+    def test_below_90_does_not_block(self):
+        s = _Stats()
+        g = TimeBudgetGuard(stats_fn=s)
+        s.pct = 89.0
+        assert g.check_pre(make_ctx()) is None
+
+    def test_jump_past_90_blocks_once(self):
+        # Jumping 30 -> 95 should block at 90, marking all thresholds as spent.
+        s = _Stats()
+        g = TimeBudgetGuard(stats_fn=s)
+        s.pct = 95.0
+        v = g.check_pre(make_ctx())
+        assert v is not None and v.action == "block"
+        # check_post should not inject any lower thresholds
+        assert g.check_post(make_ctx()) is None
+
+    def test_no_tool_name_does_not_block(self):
+        s = _Stats()
+        g = TimeBudgetGuard(stats_fn=s)
+        s.pct = 95.0
+        assert g.check_pre(make_ctx(tool_name="")) is None
 
 
 class TestFmt:

@@ -88,6 +88,58 @@ class TimeBudgetGuard(Guard):
         # we have already announced.
         self._fired = set()
 
+    def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        """Block at 90%+ budget to force explicit deliverable reasoning.
+        
+        At the CRITICAL 90% threshold, switch from advisory (check_post inject) to
+        blocking gate (check_pre block). The agent must explicitly state EITHER:
+          (1) A complete deliverable already exists at its required path, OR
+          (2) This specific tool call will produce/finalize the deliverable.
+        
+        If neither is true, the agent should STOP optimizing and write a crude-but-
+        complete answer instead. The override_reason becomes the forcing function.
+        """
+        if not ctx.tool_name:
+            return None
+
+        stats = None
+        try:
+            stats = self._stats_fn() if self._stats_fn else None
+        except Exception:
+            return None
+        if not stats:
+            return None
+
+        pct = stats.get("pct", 0.0)
+        # Block only at 90%+, once per turn (acts as checkpoint, not repeated wall).
+        if pct >= 90 and 90 not in self._fired:
+            # Mark ALL crossed thresholds as spent, preventing check_post from
+            # re-injecting lower advisories and preventing this block from re-firing.
+            for t in self._THRESHOLDS:
+                if pct >= t:
+                    self._fired.add(t)
+            
+            elapsed = _fmt(stats.get("elapsed", 0.0))
+            remaining = _fmt(stats.get("remaining", 0.0))
+            message = (
+                f"[TimeBudget] CRITICAL CHECKPOINT — {pct:.0f}% of your enforced "
+                f"wall-clock budget is spent ({elapsed} used, ~{remaining} left). "
+                f"Before executing this tool, you must satisfy ONE of these:\n\n"
+                f"  (1) A complete, valid deliverable ALREADY EXISTS at its required path.\n"
+                f"  (2) THIS specific tool call will produce or finalize the deliverable.\n\n"
+                f"If NEITHER is true — if you are exploring, optimizing, or refining — "
+                f"STOP. Write a crude-but-complete answer to the delivery path RIGHT NOW "
+                f"instead. To proceed, your _override_reason must explicitly state which "
+                f"case (1 or 2) applies and cite the deliverable path or the tool's output."
+            )
+            return GuardVerdict.block(
+                message=message,
+                reason="time_budget_90pct_block",
+                category="time_budget",
+                overridable=True,
+            )
+        return None
+
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # Only react to an actually-executed tool call, matching how the other
         # cadence guards (memory_discipline) advance on real work rather than on
