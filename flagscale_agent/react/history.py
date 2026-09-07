@@ -228,6 +228,27 @@ class HistoryManager:
         """Return messages list. No aging or compaction — evict/recall handles context."""
         return _validate_tool_pairs(list(self._messages))
 
+    def pop_last_assistant(self) -> Optional[Dict[str, Any]]:
+        """Remove and return the trailing assistant message from the REAL history.
+
+        get_messages() returns a validated SHALLOW COPY — mutating that copy
+        never touches self._messages. Callers that need to actually remove the
+        last assistant message (e.g. empty-output retry) must use this method.
+
+        Scope: operates ONLY on _messages (the LLM prompt). _full_log is the
+        append-only audit log — the popped message stays there, so session
+        persistence, recall_from_full_log, and _ext_idx bookkeeping (the popped
+        message holds the highest ext index; new appends only go higher) are
+        all unaffected. Not protected by ContextPressureGuard because it never
+        touches _full_log.
+
+        Returns None (and does nothing) if history is empty or the last
+        message is not an assistant message.
+        """
+        if self._messages and self._messages[-1].get("role") == "assistant":
+            return self._messages.pop()
+        return None
+
     def get_message_at(self, index: int) -> Optional[Dict[str, Any]]:
         """Return message at given index (external), or None if not found/evicted.
 

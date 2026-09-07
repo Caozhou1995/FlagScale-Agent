@@ -227,7 +227,14 @@ class AgentKernel:
 
                     # ── Empty output defense: auto-retry up to 3 times ──
                     if not assistant_text.strip():
-                        was_reasoning_only = response.get("reasoning_only", False)
+                        # Provider-agnostic reasoning detection: BOTH providers
+                        # normalize reasoning into response["thinking"]
+                        # (anthropic: thinking blocks; openai: reasoning_content).
+                        # Do NOT rely on response["reasoning_only"] — that flag is
+                        # only ever set by openai_provider, so an anthropic-compat
+                        # endpoint (e.g. GLM) would never take the reasoning path.
+                        thinking_text = response.get("thinking") or ""
+                        was_reasoning_only = bool(thinking_text.strip())
                         empty_retries = getattr(self, "_empty_output_retries", 0)
                         if empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
@@ -235,13 +242,29 @@ class AgentKernel:
                                 d.display.warn(f"Reasoning produced content but no visible output (retry {empty_retries + 1}/3), continuing...")
                             else:
                                 d.display.warn(f"Empty LLM output (retry {empty_retries + 1}/3), auto-continuing...")
-                            # Remove the empty assistant message we just appended
-                            msgs = d.history.get_messages()
-                            if msgs and msgs[-1].get("role") == "assistant":
-                                msgs.pop()
+                            # Remove the empty assistant message we just appended.
+                            # NOTE: get_messages() returns a shallow copy — popping
+                            # that copy is a no-op on the real history (the
+                            # thinking block would stay in the LLM prompt). Use
+                            # pop_last_assistant() which mutates _messages for real.
+                            d.history.pop_last_assistant()
                             # Inject a targeted nudge
                             if was_reasoning_only:
-                                nudge = "[system: your reasoning was generated but produced no visible output. Output your answer or next action directly — do not repeat the reasoning.]"
+                                # Many providers (e.g. GLM Anthropic-compat endpoint)
+                                # DROP assistant thinking blocks from the input, so
+                                # the model cannot see its own reasoning on retry.
+                                # Re-inject the FULL thinking content as a user
+                                # message so the model resumes from its prior
+                                # reasoning instead of starting over.
+                                nudge = (
+                                    "[system: your previous response generated reasoning but no visible output, "
+                                    "and the reasoning was not preserved in the conversation. Your full reasoning "
+                                    "is reproduced below — resume from where it left off and output your answer "
+                                    "or next action directly. Do NOT repeat the reasoning.]\n\n"
+                                    "<previous_reasoning>\n"
+                                    f"{thinking_text}\n"
+                                    "</previous_reasoning>"
+                                )
                             else:
                                 nudge = "[system: empty response detected, please continue your work]"
                             d.history.append({"role": "user", "content": nudge})
