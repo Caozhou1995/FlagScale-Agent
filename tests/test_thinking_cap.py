@@ -345,17 +345,45 @@ class TestKernelCappedNudge:
         assert "runtime length cap" not in nudge
         assert "uncapped reasoning" in nudge
 
-    def test_capped_retries_exhaust_to_max_retries(self):
-        """3 capped responses in a row → stop_reason empty_output_max_retries.
-        (Counter resets to 0 on exhaustion by design — next turn starts fresh.)"""
+    def test_cap_retry_sanity_cap_at_50(self):
+        """Independent cap-retry budget: at 50 consecutive cap-trips the turn
+        stops with its OWN stop reason (never empty_output_max_retries).
+        (White-box: pre-set counter simulates 50 prior cap-trips — avoids
+        needing max_iterations >= 51 in the harness.)"""
         h = _RealHistoryHarness()
         kernel = h.build([
             {"content": None, "tool_calls": None, "thinking": "r",
              "thinking_capped": True, "reasoning_only": True},
         ])
+        kernel._cap_retries = 50
         result = kernel.run_turn()
-        assert result.stop_reason == "empty_output_max_retries"
-        assert kernel._empty_output_retries == 0  # reset on exhaust (L295)
+        assert result.stop_reason == "thinking_cap_max_retries"
+        assert kernel._cap_retries == 0  # reset on exhaust (next turn fresh)
+        # Untouched by cap path — attribute may not even exist if no
+        # empty/reasoning-only retry ever happened (lazy getattr in kernel).
+        assert getattr(kernel, "_empty_output_retries", 0) == 0
+
+    def test_many_capped_retries_then_success_survives(self):
+        """6 capped responses then a real answer → turn completes.
+        Old code died at the 4th cap-trip (3-strike); new code re-nudges."""
+        h = _RealHistoryHarness()
+        kernel = h.build([
+            {"content": None, "tool_calls": None, "thinking": "r",
+             "thinking_capped": True, "reasoning_only": True},
+        ] * 6 + [
+            {"content": "[TASK_COMPLETE]", "tool_calls": []},
+        ])
+        result = kernel.run_turn()
+        assert result.stop_reason == "explicit_signal"
+        # No empty-output retries were consumed by cap-trips
+        assert kernel._empty_output_retries == 0
+        # Final success reset the per-turn cap counter
+        assert kernel._cap_retries == 0
+        # Every cap-trip re-injected a convergence nudge (full thinking)
+        nudges = [m for m in h.history.messages
+                  if m.get("role") == "user" and "previous_reasoning" in (m.get("content") or "")]
+        assert len(nudges) == 6
+        assert all("Land the next concrete step NOW" in m["content"] for m in nudges)
 
     def test_no_thinking_empty_output_unchanged(self):
         """Plain empty response (no thinking) → generic nudge, no cap mention."""
