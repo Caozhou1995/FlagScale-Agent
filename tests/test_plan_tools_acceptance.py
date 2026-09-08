@@ -138,3 +138,60 @@ class TestPlanUpdateToolUpdateAcceptance:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-xvs"])
+
+
+class TestPlanToolsThinking:
+    """plan_create/plan_update expose the plan-level `thinking` slot."""
+
+    def test_create_with_thinking(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        tool = PlanCreateTool(tp)
+        result = tool.execute(
+            title="Test", steps=["A"],
+            thinking="bottleneck: data too small; predict 5x lifts acc",
+        )
+        assert "Plan created" in result
+        plan = tp.get_active()
+        assert plan["thinking"] == "bottleneck: data too small; predict 5x lifts acc"
+        assert plan["thinking_updated"] > 0.0
+
+    def test_create_without_thinking_ok(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        tool = PlanCreateTool(tp)
+        result = tool.execute(title="Test", steps=["A"])
+        assert "Plan created" in result
+        assert tp.get_active()["thinking"] == ""
+
+    def test_set_thinking_action(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        tp.create("Test", ["A"], thinking="first model")
+        tool = PlanUpdateTool(tp)
+        result = tool.execute(
+            action="set_thinking",
+            thinking="rebuilt: real bottleneck is LR; predict 0.61->0.64",
+        )
+        assert "ERROR" not in result
+        plan = tp.get_active()
+        assert plan["thinking"] == "rebuilt: real bottleneck is LR; predict 0.61->0.64"
+        assert "first model" not in plan["thinking"]
+
+    def test_set_thinking_empty_fails(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        tp.create("Test", ["A"])
+        tool = PlanUpdateTool(tp)
+        result = tool.execute(action="set_thinking", thinking="")
+        assert "ERROR" in result
+
+    def test_thinking_alongside_other_action(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        tp.create("Test", ["A", "B"])
+        tool = PlanUpdateTool(tp)
+        result = tool.execute(
+            action="step_done", step_id=1,
+            thinking="model: step A confirmed tokenizer fix; predict B trivial",
+        )
+        assert "ERROR" not in result
+        plan = tp.get_active()
+        # both the progress action AND the model update took effect
+        assert plan["steps"][0]["status"] == "done"
+        assert "tokenizer fix" in plan["thinking"]
