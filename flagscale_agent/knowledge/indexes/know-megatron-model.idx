@@ -1,6 +1,6 @@
 # know-megatron-model
 # Megatron模型层：Transformer抽象、MLA/MTP、RoPE、混合精度、MoE、内存优化
-# Source: Megatron-LM-FL @ c024887
+# Source: Megatron-LM-FL @ e15cb692
 
 # To read a section: load_knowledge(name='know-megatron-model', doc='<path below>', start_line=<L>, end_line=<L>)
 # Do NOT pass these doc paths to read_file — they are knowledge-internal.

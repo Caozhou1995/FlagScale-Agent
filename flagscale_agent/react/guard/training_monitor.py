@@ -21,7 +21,10 @@ No escalation, no whitelist complexity — just block once until monitor is call
 from __future__ import annotations
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
-from flagscale_agent.react.guard.utils import _is_flagscale_launch_command
+from flagscale_agent.react.guard.utils import (
+    READ_ONLY_TOOLS,
+    _is_flagscale_launch_command,
+)
 
 
 # Error patterns that indicate the launch command failed
@@ -91,12 +94,42 @@ class TrainingMonitorGuard(Guard):
             self._launch_detected = False
             return None
 
+        # Read-only tools never change training state; blocking them makes a
+        # latched launch impossible to DIAGNOSE (can't read logs, check memory,
+        # update the plan, or free context). They are explicitly permitted.
+        if ctx.tool_name in READ_ONLY_TOOLS:
+            return None
+
+        # Agent-infrastructure tools that manage the agent itself (context
+        # hygiene, planning, memory). Blocking these while training runs breaks
+        # the agent loop and never serves the monitoring goal — the training is
+        # observed via flagscale_train_monitor, not via plan/memory writes.
+        _AGENT_INFRA_TOOLS = frozenset({
+            "plan_create", "plan_update", "plan_status",
+            "memory_read", "memory_write", "memory_list",
+            "evict", "recall", "hard_reset",
+            "flagscale_train_monitor",
+        })
+        if ctx.tool_name in _AGENT_INFRA_TOOLS:
+            return None
+
         return GuardVerdict.block(
             "[TrainingMonitor] Training launched. Must call "
             "flagscale_train_monitor(output_dir='...') immediately to observe progress.",
             reason="must_monitor_after_launch",
             category="training_monitor",
         )
+
+    def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        """Validate LLM's override reason. Only called for block verdicts.
+
+        Default: accept any reason longer than 5 chars.
+        Override for stricter validation.
+        """
+        if bool(reason and len(reason.strip()) > 5):
+            self._launch_detected = False
+            return True
+        return False
 
     def reset_turn(self):
         """State persists across turns."""

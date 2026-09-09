@@ -37,11 +37,25 @@ def _is_flagscale_launch_command(cmd: str) -> bool:
 
     Supports compound commands (cd xxx && flagscale train ...).
     Strips quoted content to avoid grep "flagscale train" false positives.
+    Strips heredoc bodies BEFORE quote-stripping so that writing a script
+    which CONTAINS a launch line (cat > x <<EOF ... flagscale train ... EOF)
+    is not misread as launching — the launch token lives inside the body text,
+    not in the executed command line.
     """
     if not isinstance(cmd, str):
         return False
 
     cmd_lower = cmd.lower()
+
+    # Remove heredoc bodies first (<<[-]TAG ... line-with-TAG). Must run before
+    # quote-stripping: stripping quotes first erases the opening <<'TAG' marker
+    # and mangles the body, so the closing tag can no longer be matched.
+    cmd_lower = re.sub(
+        r"<<-?\s*['\"]?(\w+)['\"]?\b.*?^\1[ \t]*$",
+        "",
+        cmd_lower,
+        flags=re.MULTILINE | re.DOTALL,
+    )
 
     # Remove quoted content to avoid false positives like grep "flagscale train"
     cleaned = re.sub(r'''["'][^"']*["']''', '', cmd_lower)

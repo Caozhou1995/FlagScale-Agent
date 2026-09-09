@@ -5,13 +5,16 @@
 _sources:
   megatron_lm_fl:
     repo: Megatron-LM-FL
-    commit: c024887
+    commit: e15cb692  # v0.18.2 (PR#109); 18/19章+14章cuda_graph区块按此实测, 01-13/15-17章基于c024887编写
   transformerengine_fl:
     repo: TransformerEngine-FL
-    commit: 2cb485f
+    commit: 129ada24  # v2.17主体(#105) + #115 vendor overlap factory契约(09章0节)
   megatron_energon:
     repo: Megatron-Energon
     commit: bef8be2
+  flagscale:
+    repo: FlagScale
+    commit: b5741d04  # 本地HEAD; 上游+2(#1275 Enflame CICD, #1282 昆仑芯P800)未拉取
   nccl:
     repo: NCCL
     commit: docs-only
@@ -45,6 +48,8 @@ know-megatron-training:
     - megatron_lm_fl/12_dist_checkpointing.md
     - megatron_lm_fl/13_training_loop.md
     - megatron_lm_fl/14_transformer_layer_spec.md
+    - megatron_lm_fl/18_cuda_graph.md
+    - megatron_lm_fl/19_core_structure.md
 
 know-megatron-model:
   description: "Megatron模型层：Transformer抽象、MLA/MTP、RoPE、混合精度、MoE、内存优化"
