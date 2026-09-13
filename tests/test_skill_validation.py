@@ -46,6 +46,7 @@ EXPECTED_SKILLS = {
     "infer-plugin-upgrade",
     "te-upstream-sync",
     "mg-fl-upstream-sync",
+    "train-moe-perf",
 }
 
 REQUIRED_FRONTMATTER_FIELDS = {"name", "description"}

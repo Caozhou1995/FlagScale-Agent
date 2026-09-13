@@ -262,8 +262,6 @@ ssh <host> "docker exec \
   2>&1 | tee <log_dir>/offline_<model>_$(date +%Y%m%d_%H%M%S).log"
 ```
 
-Monitor: `monitor(file=<log_file>, success_pattern='Generated text:|Output:', fail_pattern='ERROR|Traceback', duration=600)`
-
 ### 4c. Hardware-specific failure patterns on NVIDIA A800/A100
 
 These are documented from past upgrades as reference. New upgrades may encounter different issues.

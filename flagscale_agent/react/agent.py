@@ -211,6 +211,8 @@ class WorkerAgent:
         # Initialized here so it is always set even before the first turn.
         self._turn_start: float = self._session_start
         self._session_input_tokens: int = 0
+        # Cumulative count of messages evicted this session (dashboard gauge).
+        self._evict_count: int = 0
         self._session_output_tokens: int = 0
 
 
@@ -247,6 +249,25 @@ class WorkerAgent:
         from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
         guard_registry.register(CompileRedirectGuard())
         guard_registry.register(ShellSafetyGuard())
+        # VcsBackupGuard: targeted block on destructive git ops (checkout --,
+        # reset --hard, clean -f, stash drop/clear, ...) — protects uncommitted
+        # work from irreversible loss (e.g. a checkout discarding a patch).
+        from flagscale_agent.react.guard.vcs_backup import VcsBackupGuard
+        guard_registry.register(VcsBackupGuard())
+        # IpPortGuard: post-check advisory when a shell command touches an IP
+        # literal or an SSH-family port flag. IPs and ports are a proven
+        # hallucination hotspot (two host segments, three SSH port roles) — the
+        # inject-only reminder pushes verification against the authoritative
+        # memory fact and on-disk hostfile instead of recall. Never blocks.
+        from flagscale_agent.react.guard.ip_port import IpPortGuard
+        guard_registry.register(IpPortGuard())
+        # LongTimeShellGuard: block long foreground sleep/timeout (>30s) on
+        # non-background shell calls. The agent has repeatedly burned minutes
+        # on `sleep 180`-style foreground waits instead of backgrounding the
+        # job and polling shell_jobs — the guard forces the doctrine at the
+        # right layer (block+override), background=true passes freely.
+        from flagscale_agent.react.guard.longtimeshell import LongTimeShellGuard
+        guard_registry.register(LongTimeShellGuard())
 
         # Reliability guards (P7)
 
@@ -370,6 +391,14 @@ class WorkerAgent:
 
     def _refresh_system_prompt(self, memory_context: str = "", plan_context: str = ""):
         tool_names = [t.name for t in self.tool_registry.all_tools()]
+        # Feed the runtime gauges to the dashboard before each rebuild.
+        try:
+            self._prompt_builder.runtime_stats = {
+                "evict_count": self._evict_count,
+                "budget": self._task_budget_stats(),
+            }
+        except Exception:
+            pass  # dashboard degrades to existing lines, never crashes the turn
         self._prompt_builder.refresh(
             history=self.history,
             active_skill_content={},
@@ -1272,6 +1301,16 @@ class WorkerAgent:
         for tc in tool_calls:
             self._last_tool_calls_deque.append(tc["name"])
         self._total_iterations += 1
+
+        # Count evicted messages (dashboard gauge: shows the agent how much
+        # context it has already swapped out this session).
+        for tc in tool_calls:
+            if tc["name"] == "evict":
+                n = (tc.get("arguments") or {}).get("indexes") or []
+                try:
+                    self._evict_count += len(n)
+                except TypeError:
+                    pass
 
         # Refresh system prompt if plan tools were used
         if any(tc["name"] in ("plan_create", "plan_update", "plan_status")

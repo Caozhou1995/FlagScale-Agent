@@ -30,6 +30,9 @@ _sources:
   profiling:
     repo: Profiling-Analysis
     commit: docs-only
+  linear_attention:
+    repo: flash-linear-attention
+    commit: f470469e  # 快照时刻(2026-09-11)前最后 commit(#980, 2026-09-10); /tmp/FLA 快照(2026-09-11, 515py/147k行)双文件 blob 指纹逐字节验证 = 此提交; 全部行号按此实测, 引用前建议 git grep 复核
 
 know-megatron-parallel:
   description: "Megatron并行机制：TP/PP/DP/CP/EP进程组创建、通信模式、流水线调度"
@@ -183,3 +186,15 @@ know-energon:
     - megatron_energon/04_metadataset.md
     - megatron_energon/05_wrappers.md
     - megatron_energon/06_distributed_loading.md
+
+know-moe-training:
+  description: "MoE预训练性能优化：架构层(细粒度/共享专家/SCMoE/CE-MoE)、路由与负载均衡(aux loss/expert bias/group-limited)、EP与混合并行、All-to-All通信优化(DeepEP/NCCL EP/megakernel/低比特通信)、内核与显存(GroupedGEMM/FP8)、训练稳定性、评测与成本、FlagScale配置映射"
+  docs:
+    - moe_training/01_moe_pretrain_perf_survey.md
+    - moe_training/02_kimi_k3_k25_training_infra.md
+    - moe_training/03_deepep_source_analysis.md
+
+know-linear-attention:
+  description: "线性注意力FLA：GDN/GLA layer集成、chunk分块与WY三角解、递推状态kernel(chunk_delta_h)、门控cumsum、autograd管线、CP状态接力、dispatch/autotune缓存、平台坑表与调优"
+  docs:
+    - linear_attention/01_fla_source_analysis.md

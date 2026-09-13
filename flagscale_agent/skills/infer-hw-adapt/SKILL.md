@@ -83,7 +83,7 @@ ssh <ssh_host> "docker exec <container> bash -c '
 '"
 ```
 
-Monitor with `duration=120`, `process_pattern="pytest"`. Unit tests complete in under 60s on most backends; if pytest dies the monitor returns immediately.
+Inspect the tee'd log for `passed`/`failed` counts and tracebacks. Unit tests complete in under 60s on most backends.
 
 Purpose: verify import compatibility, API surface, basic plugin registration.
 

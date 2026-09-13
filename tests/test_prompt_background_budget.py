@@ -3,12 +3,68 @@ system prompt (prompt.py SYSTEM_PROMPT_STATIC)."""
 
 from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 
+SECTION_ORDER = [ln for ln in SYSTEM_PROMPT_STATIC.splitlines() if ln.startswith("## ")]
+
+
+class TestPromptSectionStructure:
+    """Structure regression (user review 20260914): the Dashboard section was
+    demoted to a '###' under Tool Guide, splitting the tool list; the ORDER
+    bullet was 4-space indented, so CommonMark glued it into the OVERLAP item
+    as a continuation line."""
+
+    def test_dashboard_is_top_level_section(self):
+        assert "## Dashboard — Your Instrument Panel" in SECTION_ORDER
+
+    def test_dashboard_not_nested_under_tool_guide(self):
+        assert "### Dashboard" not in SYSTEM_PROMPT_STATIC
+
+    def test_tool_guide_starts_with_tool_mapping(self):
+        after = SYSTEM_PROMPT_STATIC.split("## Tool Guide", 1)[1]
+        body = after.split("\n\n", 1)[1].split("## ", 1)[0]
+        assert body.lstrip().startswith("- Read/edit files →")
+
+    def test_order_bullet_is_sibling_tactic(self):
+        assert "\n- ORDER THE INDEPENDENT STEPS:" in SYSTEM_PROMPT_STATIC
+
+    def test_no_indented_tactic_lines(self):
+        for ln in SYSTEM_PROMPT_STATIC.splitlines():
+            assert not ln.startswith("    ORDER"), ln[:40]
+            assert not ln.startswith("    OVERLAP"), ln[:40]
+            assert not ln.startswith("    FAN OUT"), ln[:40]
+
 
 class TestBackgroundToolGuidance:
     def test_tool_guide_mentions_background_launch(self):
         low = SYSTEM_PROMPT_STATIC.lower()
         assert "background=true" in low
         assert "shell_jobs" in low
+
+    def test_no_stale_timeout_escalation_numbers(self):
+        # 20260914 压缩重写: 旧文案的 300s→900s 超时升级示例已过时
+        # (guard 实际硬门是 60s), 指针指向 guard 常量而非复述数字。
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "300s" not in low
+        assert "900s" not in low
+        assert "shelljobswaitguard" in low
+
+    def test_background_bullets_stay_compressed(self):
+        # 防回胖: 两条 bullet 合计不得超过 2500 字符
+        # (20260914 压缩后实测 1872, 增补元认知枚举后 ~2212)。
+        lines = SYSTEM_PROMPT_STATIC.splitlines()
+        bullets = [ln for ln in lines if ln.startswith("- Long-running commands")
+                   or ln.startswith("- Backgrounding only pays")]
+        assert len(bullets) == 2
+        assert sum(len(b) for b in bullets) < 2500
+
+    def test_wait_time_covers_metacognitive_work(self):
+        # 用户 doctrine (20260914): 等待期的 useful work 不止准备下游步骤,
+        # 还包括复盘之前/总结现在(memory)/规划未来(计划)/重审当下(前提)。
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "recap what the last steps taught you" in low
+        assert "write memory" in low
+        assert "update the plan" in low
+        assert "sketch the post-join steps" in low
+        assert "re-audit the current approach's premises" in low
 
     def test_tool_guide_lists_poll_and_wait(self):
         # The agent must know how to check a backgrounded job later.
