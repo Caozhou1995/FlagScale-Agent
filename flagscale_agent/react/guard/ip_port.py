@@ -21,9 +21,10 @@ denied-by-design, container→container), and stale memory entries have
 repeatedly produced false "node down" verdicts and wrong-node probes.
 
 This guard never blocks. After a shell command that touches an IP literal or an
-SSH-family port flag, it injects a one-per-turn reminder: authoritative values
+SSH-family port flag, it injects a reminder: authoritative values
 come from memory facts and on-disk hostfiles, not from recall; and port role
-must be distinguished before diagnosing.
+must be distinguished before diagnosing. Every matching command fires —
+a batch of ssh fan-outs gets one reminder per command, not one per turn.
 """
 
 from __future__ import annotations
@@ -57,21 +58,19 @@ This is an advisory only — no action is blocked. Override/retry freely; the re
 class IpPortGuard(Guard):
     """Inject-only advisory after shell commands touching IPs/ports.
 
-    Fires at most once per turn (reset_turn clears the latch) so a batch of
-    ssh fan-out commands produces one reminder, not one per command.
+    Fires on EVERY matching command (no per-turn latch): each new ssh/scp/nc
+    command that touches an IP or port gets its own reminder, since each
+    command is an independent hallucination risk.
     """
 
     name = "ip_port"
     priority = 12  # early among post-checks; advisory only, order barely matters
 
-    def __init__(self):
-        self._done = False
-
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         return None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        if self._done or ctx.tool_name != "shell":
+        if ctx.tool_name != "shell":
             return None
 
         command = str(ctx.tool_args.get("command", ""))
@@ -84,12 +83,8 @@ class IpPortGuard(Guard):
         if not triggered:
             return None
 
-        self._done = True
         return GuardVerdict.inject(
             message=_IP_PORT_MESSAGE,
             reason="ip_or_port_in_command",
             category="ip_port",
         )
-
-    def reset_turn(self):
-        self._done = False

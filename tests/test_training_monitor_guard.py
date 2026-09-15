@@ -175,3 +175,86 @@ class TestOverrideResetsLatch:
         _latch(g)
         assert g.accept_override("go", _ctx()) is False
         assert g._launch_detected is True
+
+
+# ── 4. Shell-aware detection: ssh wrapper + quote false positives ───────────
+#
+# Regression for the production miss: the real launch shape is
+#   ssh -i key -p 60023 host '... && $E/bin/flagscale train qwen36 -c x.yaml'
+# The old predicate stripped single-quoted content, erasing the `flagscale
+# train` token → launch never detected. Symmetrically, a bare `"flagscale
+# train"` argument in a grep/echo could be misread when quote pairing broke.
+# The shell-aware predicate tokenizes with shlex and DESCENDS into ssh/bash -c.
+
+
+class TestSshWrappedLaunchDetected:
+
+    def test_ssh_single_quoted_launch(self):
+        assert _is_flagscale_launch_command(
+            "ssh -i /k/id -p 60023 root@10.8.2.152 "
+            "'cd /x/FlagScale && flagscale train qwen36 -c conf/x.yaml'"
+        ) is True
+
+    def test_ssh_quoted_launch_without_dryrun_flag(self):
+        assert _is_flagscale_launch_command(
+            "ssh host 'nohup flagscale train qwen3 -c c.yaml'"
+        ) is True
+
+    def test_ssh_launch_with_env_var_binary_path(self):
+        assert _is_flagscale_launch_command(
+            "ssh -p 60023 host 'timeout 240 $ENV/bin/flagscale train qwen36 "
+            "-c examples/qwen36/conf/train_llm_flash_v2.yaml'"
+        ) is True
+
+    def test_bash_c_launch(self):
+        assert _is_flagscale_launch_command(
+            "bash -c 'flagscale train qwen3 -c c.yaml'"
+        ) is True
+
+    def test_ssh_dryrun_still_excluded(self):
+        assert _is_flagscale_launch_command(
+            "ssh host 'flagscale train qwen3 -c c.yaml --dryrun'"
+        ) is False
+
+    def test_ssh_stop_still_excluded(self):
+        assert _is_flagscale_launch_command(
+            "ssh host 'flagscale train qwen3 --stop'"
+        ) is False
+
+    def test_ssh_wrapped_guard_latches(self):
+        g = TrainingMonitorGuard()
+        cmd = (
+            "ssh -i /k/id -p 60023 root@10.8.2.152 "
+            "'cd /x/FlagScale && flagscale train qwen36 -c conf/x.yaml'"
+        )
+        g.check_post(_ctx("shell", {"command": cmd}, tool_result="started\n"))
+        assert g._launch_detected is True
+
+
+class TestQuoteFalsePositivesStaySilent:
+
+    def test_read_only_grep_with_double_quoted_token(self):
+        assert _is_flagscale_launch_command(
+            'grep -n "flagscale train " log.txt'
+        ) is False
+
+    def test_read_only_grep_mixed_quotes(self):
+        # The exact shape that used to false-positive: " and ' mixed, so the
+        # old pairing was off-by-one and leaked the token.
+        assert _is_flagscale_launch_command(
+            "grep -rn \"flagscale train\" conf/ | grep -i 'qwen'"
+        ) is False
+
+    def test_echo_single_quoted_token(self):
+        assert _is_flagscale_launch_command(
+            "echo 'flagscale train qwen3'"
+        ) is False
+
+    def test_substring_word_not_a_launch(self):
+        # `dev_flagscale` must not be mistaken for the `flagscale` program.
+        assert _is_flagscale_launch_command("git push origin dev_flagscale") is False
+
+    def test_grep_command_stays_silent_after_ssh(self):
+        assert _is_flagscale_launch_command(
+            "ssh host 'grep \"flagscale train\" /tmp/train.log'"
+        ) is False

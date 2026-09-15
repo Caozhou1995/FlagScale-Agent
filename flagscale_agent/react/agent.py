@@ -48,7 +48,8 @@ from flagscale_agent.react.retry import retry_with_backoff, _is_context_limit_er
 from flagscale_agent.react.session import (
     save_conversation, load_conversation, mark_completed,
     find_resumable_sessions, list_sessions, get_session_dir,
-    append_session_index, get_recent_sessions,
+    acquire_session_lock, release_session_lock, get_session_lock_holder,
+    SessionLockedError, dir_empty_except_lock, SESSION_LOCK_FILE,
 )
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.tools import ToolRegistry
@@ -139,6 +140,19 @@ class WorkerAgent:
         os.makedirs(session_dir, exist_ok=True)
         self._session_dir = session_dir
         self._sessions_root = sessions_root
+        # Concurrency guard: a session dir is single-owner state (every save
+        # rewrites conversation.json/full.json wholesale, swap_store keys by
+        # external index, plans/active.yaml is one pointer). Take the lock
+        # BEFORE anything reads or writes the directory; the fresh uuid makes
+        # a collision here essentially impossible, but the check is cheap and
+        # turns a silent corruption into a loud error if it ever happens.
+        try:
+            self._session_lock_fd = acquire_session_lock(session_dir)
+        except SessionLockedError as e:
+            raise RuntimeError(
+                f"new session directory is unexpectedly locked "
+                f"(existing content at {session_dir}?): {e}"
+            ) from e
 
 
         # Provider and history must be created before ContextManager
@@ -611,6 +625,14 @@ class WorkerAgent:
     def _save_conversation(self, completed: bool = False, session_summary: str = None):
         if not self.history.messages:
             return
+        # Keep the resume-list preview in sync with the actual conversation.
+        # If no explicit summary is provided, regenerate one from the current
+        # input history on EVERY save — otherwise a summary written by an old
+        # crash/exception save stays frozen on disk forever (session.py
+        # preserves any existing session_summary), so the resume list shows
+        # stale turns while turn_count keeps advancing.
+        if session_summary is None and self._session_input_history:
+            session_summary = self._generate_session_summary()
         save_conversation(
             self._session_dir, self._session_id,
             self.history.messages,
@@ -1015,10 +1037,31 @@ class WorkerAgent:
 
     def _restore_session(self, data: dict, session_dir: str):
         """Restore a previous session - take over its session_id and dir."""
-        # Take over the old session identity
+        # Concurrency guard: refuse to bind a directory another live agent
+        # process holds. This must happen BEFORE any state is re-pointed.
+        holder = get_session_lock_holder(session_dir)
+        if holder:
+            print(display.red(
+                f"[resume] REFUSED: session directory is held by another live agent "
+                f"process (PID {holder.get('pid')}, started {holder.get('start', '?')}: "
+                f"{holder.get('cmd', '?')}). Two processes writing the same session "
+                f"would corrupt each other's history. Resume a different session or "
+                f"stop the holder first."
+            ))
+            raise SessionLockedError(session_dir, holder)
+
+        # Rebinding: release the old directory's lock only after the new one
+        # is secured. Same-dir rebind (already-bound directory re-restored)
+        # and cross-dir rebind both end holding exactly one lock.
         old_session_dir = self._session_dir
+        old_lock_fd = getattr(self, "_session_lock_fd", None)
+        new_lock_fd = acquire_session_lock(session_dir)  # raises SessionLockedError if taken meanwhile
         self._session_id = data.get("session_id", self._session_id)
         self._session_dir = session_dir
+        if new_lock_fd is not old_lock_fd:
+            if old_lock_fd is not None:
+                release_session_lock(old_lock_fd)
+            self._session_lock_fd = new_lock_fd
 
         # Re-point plan to old session's dirs
         self.task_plan._dir = os.path.join(session_dir, "plans")
@@ -1030,12 +1073,13 @@ class WorkerAgent:
             swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
         )
 
-        # Clean up the empty new session dir if it's different
-        if old_session_dir != session_dir:
+        # Clean up the empty new session dir if it's different. The emptiness
+        # predicate must ignore dotfiles (the lock file lives there), else a
+        # fresh dir that only ever held .session.lock is never removed.
+        if old_session_dir != session_dir and dir_empty_except_lock(old_session_dir):
             try:
                 import shutil
-                if os.path.isdir(old_session_dir) and not os.listdir(old_session_dir):
-                    shutil.rmtree(old_session_dir, ignore_errors=True)
+                shutil.rmtree(old_session_dir, ignore_errors=True)
             except Exception:
                 pass
 
@@ -1190,6 +1234,14 @@ class WorkerAgent:
             return
 
         session_dir = get_session_dir(target["session_id"])
+        # Concurrency guard before reading state: if another live agent holds
+        # this directory, refuse. Continuing here would fork the history.
+        holder = get_session_lock_holder(session_dir)
+        if holder:
+            err = SessionLockedError(session_dir, holder)
+            print(display.red(f"\n[reload] REFUSED: {err}\n"
+                              f"[reload] Stop the other agent process first, then retry /reload.\n"))
+            sys.exit(1)
         # Load full conversation data (find_resumable_sessions only returns metadata)
         conv_path = os.path.join(session_dir, "conversation.json")
         try:
@@ -1221,6 +1273,15 @@ class WorkerAgent:
         steps = active.get("steps", [])
         icons = {"pending": "⬜", "doing": "🔄", "done": "✅", "skipped": "⏭", "blocked": "🚫"}
         lines = [f'<active-plan title="{active.get("title", "")}">']
+        # Plan-level problem model (the agent's CURRENT hypothesis). Rendered in
+        # full — never truncated — so the dashboard can carry it permanently.
+        # Absent/empty thinking omits the block entirely (byte-identical to the
+        # pre-hypothesis behavior).
+        thinking = (active.get("thinking") or "").strip()
+        if thinking:
+            lines.append("<current-hypothesis>")
+            lines.append(thinking)
+            lines.append("</current-hypothesis>")
         current_step = None
         for s in steps:
             icon = icons.get(s.get("status", "pending"), "?")

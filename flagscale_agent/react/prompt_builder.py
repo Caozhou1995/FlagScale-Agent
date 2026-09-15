@@ -143,6 +143,20 @@ class PromptBuilder:
         import re
         parts = []
 
+        # Extract the plan-level hypothesis (if any) and REMOVE it from the
+        # working copy before step parsing. It is free text and may contain
+        # patterns like "[🔄] Step N:" that would otherwise corrupt step
+        # counting. Rendered in full below — never truncated.
+        hypothesis = ""
+        if plan_context:
+            hyp_match = re.search(
+                r"<current-hypothesis>(.*?)</current-hypothesis>",
+                plan_context, re.DOTALL,
+            )
+            if hyp_match:
+                hypothesis = hyp_match.group(1).strip()
+                plan_context = plan_context.replace(hyp_match.group(0), "")
+
         if plan_context:
             # Extract title from <active-plan title="...">
             title_match = re.search(r'title="([^"]*)"', plan_context)
@@ -246,6 +260,13 @@ class PromptBuilder:
             parts.append("BG: " + ", ".join(bg_parts[:4]))
             if len(jobs) > 4:
                 parts[-1] += f" (+{len(jobs) - 4} more)"
+
+        # Hypothesized problem model, rendered as its own multi-line section BELOW
+        # the metric line — a single "|"-joined line cannot hold it untruncated.
+        # Permanently resident; falsifying/updating it is the agent's own action
+        # (plan_update set_thinking), not a guard.
+        if hypothesis:
+            return " | ".join(parts) + f"\n\nHypothesis (current problem model):\n{hypothesis}"
 
         return " | ".join(parts)
 

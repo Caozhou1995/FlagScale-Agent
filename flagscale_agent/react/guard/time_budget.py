@@ -146,8 +146,14 @@ class TimeBudgetGuard(Guard):
                 f"  (2) THIS specific tool call will produce or finalize the deliverable.\n\n"
                 f"If NEITHER is true — if you are exploring, optimizing, or refining — "
                 f"STOP. Write a crude-but-complete answer to the delivery path RIGHT NOW "
-                f"instead. To proceed, your _override_reason must explicitly state which "
-                f"case (1 or 2) applies and cite the deliverable path or the tool's output."
+                f"instead. Also, while you still hold the FULL context that is about to "
+                f"be lost at timeout: memory_write() the reusable facts that live only "
+                f"in this window (exact commands, paths, env state, pitfalls — the "
+                f"survival-range test: cross-session truth -> memory, GLOBAL; this-"
+                f"session progress -> plan notes; do not dump what one ls/grep can "
+                f"cheaply re-derive). To proceed, your _override_reason "
+                f"must explicitly state which case (1 or 2) applies and cite the "
+                f"deliverable path or the tool's output."
             )
             return GuardVerdict.block(
                 message=message,

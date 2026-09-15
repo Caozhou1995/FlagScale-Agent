@@ -52,7 +52,7 @@ NO_TRIGGER = [
 class TestTrigger:
     def test_all_trigger_forms_inject(self):
         for cmd in TRIGGER:
-            g = IpPortGuard()  # fresh guard: the once-per-turn latch otherwise silences cmd 2+
+            g = IpPortGuard()  # per-command semantics: a fresh guard behaves identically
             v = g.check_post(_shell(cmd))
             assert v is not None, f"should inject: {cmd}"
             assert v.action == "inject", f"should be inject (not block): {cmd}"
@@ -89,20 +89,28 @@ class TestNoTrigger:
                                          tool_args={"path": "x"})) is None
 
 
-class TestOncePerTurn:
-    def test_latch_fires_once_then_silences(self):
+class TestPerCommand:
+    def test_fires_on_every_matching_command(self):
+        # Design: no per-turn latch — each matching command is an independent
+        # hallucination risk and gets its own reminder (user decision 20260914).
         g = IpPortGuard()
-        first = g.check_post(_shell("ssh -p 22 root@192.0.2.10 hostname"))
-        assert first is not None
-        for _ in range(5):
-            assert g.check_post(_shell("ssh -p 22 root@192.0.2.50 hostname")) is None
+        for _ in range(3):
+            v = g.check_post(_shell("ssh -p 22 root@192.0.2.10 hostname"))
+            assert v is not None, "every matching command must inject"
+            assert v.action == "inject"
 
-    def test_reset_turn_rearms(self):
+    def test_same_command_repeats_within_turn(self):
         g = IpPortGuard()
-        g.check_post(_shell("ssh root@192.0.2.10 hostname"))
-        assert g.check_post(_shell("ssh root@192.0.2.10 hostname")) is None
-        g.reset_turn()
         assert g.check_post(_shell("ssh root@192.0.2.10 hostname")) is not None
+        assert g.check_post(_shell("ssh root@192.0.2.10 hostname")) is not None
+
+    def test_reset_turn_is_base_default(self):
+        # The turn-latch override was removed; reset_turn falls back to the
+        # base-class no-op — calling it must be safe and change nothing.
+        g = IpPortGuard()
+        g.reset_turn()  # must not raise
+        v = g.check_post(_shell("ssh root@192.0.2.10 hostname"))
+        assert v is not None
 
 
 class TestMessageContent:
