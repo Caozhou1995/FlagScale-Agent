@@ -87,6 +87,175 @@ _GREP_BROAD_ROOTS = {
 _CMD_PREFIXES = {"sudo", "env", "command", "nohup", "time", "nice", "stdbuf"}
 
 
+# ── Hidden-find detection: payloads handed to remote/shell EXECUTORS ──
+#
+# The sanitize pass strips quoted regions to avoid false-positives on string
+# data (`echo 'a | find b'`). But a quoted region passed to an EXECUTOR is not
+# data — it is a payload the executor will run (possibly on a remote host or
+# inside a container, i.e. on NFS trees even slower than local ones):
+#
+#   ssh host "docker exec c bash -lc 'find / -name x'"
+#
+# After stripping quotes, the guard sees only `ssh` and `head`. This block
+# closes that gap: when a statement's command word is an executor, its quoted
+# arguments and heredoc body are re-scanned recursively for the same
+# violations (find / broad recursive grep), bounded depth.
+
+_EXECUTORS = {
+    "ssh", "scp", "sftp", "mosh", "kubectl", "docker", "podman", "nerdctl",
+    "ctr", "crictl", "nsenter", "su", "sudo", "doas", "setsid", "stdbuf",
+    "nohup", "xargs", "parallel", "env",
+}
+_SHELL_WRAPPERS = {"bash", "sh", "zsh", "fish", "csh", "tcsh", "ksh", "dash"}
+
+_MAX_PAYLOAD_DEPTH = 6
+
+
+def _extract_payloads(sanitized: str) -> list[str]:
+    """Collect quoted regions from `sanitized` (heredocs already blanked).
+
+    Returns each quoted region's raw contents, so inner layers of nested
+    quoting remain visible to the re-scanner (ssh "docker ... 'find ...'").
+    """
+    payloads: list[str] = []
+    i, n = 0, len(sanitized)
+    quote = None
+    buf: list[str] = []
+    while i < n:
+        c = sanitized[i]
+        if quote is None:
+            if c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c in ("'", '"'):
+                quote = c
+                i += 1
+                continue
+            i += 1
+        elif c == "\\" and quote == '"' and i + 1 < n:
+            buf.append(c)
+            buf.append(sanitized[i + 1])
+            i += 2
+        elif c == quote:
+            payloads.append("".join(buf))
+            buf = []
+            quote = None
+            i += 1
+        else:
+            buf.append(c)
+            i += 1
+    if quote is not None and buf:
+        payloads.append("".join(buf))
+    return payloads
+
+
+def _statement_command_word(toks: list[str]) -> str | None:
+    """First real command word of a token list, skipping VAR=val and prefixes."""
+    idx = 0
+    while idx < len(toks) and ("=" in toks[idx] or toks[idx] in _CMD_PREFIXES):
+        idx += 1
+    return toks[idx] if idx < len(toks) else None
+
+
+def _cmd_base(word: str | None) -> str:
+    """Basename of a command word, quote-stripped.
+
+    `/usr/bin/find` -> `find`; `find"` (closing quote glued to the token
+    after quote-region splitting) -> `find`.
+    """
+    return word.strip("'\"").rsplit("/", 1)[-1] if word else ""
+
+
+def _statement_find_violation(text: str) -> GuardVerdict | None:
+    """find as a statement's command word.
+
+    Covers forms the anchored _FIND_RE misses: absolute paths
+    (`/usr/bin/find ...`) and prefix forms (`sudo find ...`, `nohup find
+    ...`, `VAR=val find ...`). Used at both top level and inside payloads.
+    """
+    for stmt in _STMT_SPLIT_RE.split(text):
+        if _cmd_base(_statement_command_word(stmt.split())) == "find":
+            return GuardVerdict.block(
+                _FIND_MESSAGE, reason="find_invocation", category="find_guard",
+            )
+    return None
+
+
+def _violation_in_shell_text(text: str) -> GuardVerdict | None:
+    """Scan an already-sanitized shell fragment for find / broad grep."""
+    v = _statement_find_violation(text)
+    if v is not None:
+        return v
+    if _FIND_RE.search(text):
+        return GuardVerdict.block(
+            _FIND_MESSAGE, reason="find_invocation", category="find_guard",
+        )
+    if _grep_is_broad(text):
+        return GuardVerdict.block(
+            _GREP_MESSAGE, reason="broad_recursive_grep", category="find_guard",
+        )
+    return None
+
+
+def _cmd_subst_violation(sanitized: str) -> GuardVerdict | None:
+    """find inside `$( ... )` or backticks (command substitution executes)."""
+    for m in re.finditer(r"\$\(([^()]*)\)|`([^`]*)`", sanitized):
+        inner = m.group(1) or m.group(2) or ""
+        # Prefix with a dummy separator so a leading find is a command word.
+        v = _violation_in_shell_text("dummy_sep; " + inner)
+        if v is not None:
+            return v
+    return None
+
+
+def _xargs_find_violation(toks: list[str]) -> GuardVerdict | None:
+    """find as a bare token after an executor: `xargs find` (stdin-driven
+    walk) and `kubectl exec pod -- find ...` (no quoting layer to carry the
+    payload, the find token rides bare in the statement)."""
+    head = _cmd_base(_statement_command_word(toks))
+    if head not in _EXECUTORS and head != "xargs":
+        return None
+    for tok in toks[1:]:
+        if _cmd_base(tok) == "find":
+            return GuardVerdict.block(
+                _FIND_MESSAGE, reason="find_invocation", category="find_guard",
+            )
+    return None
+
+
+def _hidden_violation(cmd: str, depth: int = 0) -> GuardVerdict | None:
+    """Detect find / broad grep hidden inside executor payloads.
+
+    `cmd` is the RAW command; this function blanks heredoc bodies itself (a
+    heredoc is stdin data, never executed) but KEEPS quoted regions — they
+    are payloads an executor (ssh, docker, kubectl, bash -lc, ...) will run,
+    often against remote hosts or NFS trees where a stray recursive find is
+    the slowest of all.
+
+    Recursion: a payload's own statement may itself be an executor (ssh ->
+    docker exec -> bash -lc), so payloads are re-scanned with the same rule,
+    bounded by _MAX_PAYLOAD_DEPTH. Pure data payloads (echo / python -c) are
+    never re-scanned — their command word is not an executor.
+    """
+    if depth >= _MAX_PAYLOAD_DEPTH:
+        return None
+    blanked = _strip_heredocs(cmd)
+    for stmt in _STMT_SPLIT_RE.split(blanked):
+        toks = stmt.split()
+        v = _xargs_find_violation(toks)
+        if v is not None:
+            return v
+        word = _cmd_base(_statement_command_word(toks))
+        if word in _EXECUTORS or word in _SHELL_WRAPPERS:
+            for payload in _extract_payloads(stmt):
+                v = _violation_in_shell_text(payload)
+                if v is None:
+                    v = _hidden_violation(payload, depth + 1)
+                if v is not None:
+                    return v
+    return _cmd_subst_violation(blanked)
+
+
 def _grep_is_broad(sanitized: str) -> bool:
     """True if `sanitized` invokes a RECURSIVE grep over a broad root.
 
@@ -265,7 +434,9 @@ class FindGuard(Guard):
         # Block on EVERY find invocation (not once-per-turn): each new find that
         # lacks an override should be stopped. The registry's override mechanism
         # releases a single call when _override_reason is supplied for it.
-        if _FIND_RE.search(sanitized):
+        # _statement_find_violation adds token-anchored coverage for absolute
+        # paths (/usr/bin/find) and prefix forms (sudo/nohup/VAR=val find).
+        if _FIND_RE.search(sanitized) or _statement_find_violation(sanitized):
             return GuardVerdict.block(
                 _FIND_MESSAGE,
                 reason="find_invocation",
@@ -279,6 +450,16 @@ class FindGuard(Guard):
                 reason="broad_recursive_grep",
                 category="find_guard",
             )
+
+        # Hidden invocations: find / broad grep inside payloads handed to
+        # remote/shell executors (ssh, docker, kubectl, bash -lc, ...) or
+        # command substitution. Quote-stripping above makes these invisible;
+        # they still execute (often on remote NFS trees, where a stray
+        # recursive find is the slowest of all). Pass the RAW command —
+        # _hidden_violation re-derives its own quote-preserving view.
+        hidden = _hidden_violation(command)
+        if hidden is not None:
+            return hidden
 
         return None
 

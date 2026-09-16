@@ -239,3 +239,108 @@ class TestScopedGrepAllowed:
         g = FindGuard()
         # 'grep' as a non-command token should not trip the broad-grep path.
         assert g.check_pre(_shell("echo grep -rn foo /")) is None
+
+
+class TestHiddenFind:
+    """find / broad grep inside executor payloads and command substitution.
+
+    The top-level sanitize pass strips quoted regions (so `echo 'a | find b'`
+    stays allowed); but a quoted region handed to ssh/docker/bash is CODE the
+    executor will run — often on a remote host or NFS tree. Regression: the
+    user's real command escaped detection through ssh -> docker exec ->
+    bash -lc -> single-quoted find.
+    """
+
+    USER_ESCAPED = (
+        'ssh root@10.8.2.152 "docker exec caozhou_v2 bash -lc '
+        "'find / -maxdepth 8 -name .session.lock -path \"*sessions*\" "
+        '2>/dev/null | head -50\'"'
+    )
+
+    # ── block: executor payloads ──
+
+    def test_user_escaped_command_blocks(self):
+        v = FindGuard().check_pre(_shell(self.USER_ESCAPED))
+        assert v is not None and v.action == "block"
+
+    def test_ssh_docker_bash_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "docker exec c bash -lc \'find /x -name y\'"')) is not None
+
+    def test_ssh_direct_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "find /x -name y"')) is not None
+
+    def test_abs_path_find_in_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "/usr/bin/find / -name y"')) is not None
+
+    def test_xargs_find_in_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "ls | xargs find"')) is not None
+
+    def test_xargs_find_local_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ls | xargs find / -name y")) is not None
+
+    def test_broad_grep_in_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "docker exec c bash -c \'grep -r pattern /data\'"')) is not None
+
+    def test_kubectl_exec_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("kubectl exec pod -- find / -name y")) is not None
+
+    # ── block: command substitution executes ──
+
+    def test_cmd_subst_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo $(find / -name y)")) is not None
+
+    def test_backtick_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo `find / -name y`")) is not None
+
+    # ── block: top-level prefix / absolute-path forms (fixed here too) ──
+
+    def test_top_abs_path_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("/usr/bin/find / -name y")) is not None
+
+    def test_top_var_prefix_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("FOO=1 find / -name y")) is not None
+
+    def test_top_nohup_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("nohup find / -name y")) is not None
+
+    def test_top_sudo_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("sudo find / -name y")) is not None
+
+    # ── pass: pure data must NOT trip the hidden path ──
+
+    def test_echo_quoted_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo 'a | find b'")) is None
+
+    def test_python_c_quoted_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("python3 -c \"print('find /x')\"")) is None
+
+    def test_heredoc_body_find_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("python3 - <<'EOF'\nfind / -name y\nEOF")) is None
+
+    def test_plain_ssh_ls_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "ls /tmp"')) is None
+
+    def test_docker_exec_ls_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("docker exec c ls /data")) is None
+
+    def test_ssh_head_pipeline_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "ls /x | head -5"')) is None
