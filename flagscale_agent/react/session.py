@@ -21,6 +21,7 @@ Layout:
 import fcntl
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -126,12 +127,74 @@ def release_session_lock(fd: int) -> None:
 
 
 def dir_empty_except_lock(session_dir: str) -> bool:
-    """True if session_dir holds nothing but the lock file (and dotfiles)."""
+    """True if session_dir holds nothing but the lock file, dotfiles, and
+    EMPTY subdirectories.
+
+    Empty subdirs (a freshly-created swap_store/ or plans/ that never
+    received data) carry no information and must not pin an abandoned
+    session dir on disk forever — that was the accumulation bug: __init__
+    always materializes swap_store/, so a reload's old dir could never
+    satisfy the old dotfile-only predicate. Any real content at any depth
+    (a conversation.json, a swap shard, a plan yaml) still counts as
+    non-empty and protects the directory.
+    """
     try:
         entries = os.listdir(session_dir)
     except OSError:
         return False
-    return all(e.startswith(".") for e in entries)
+    for e in entries:
+        if e.startswith("."):
+            continue
+        p = os.path.join(session_dir, e)
+        if os.path.isdir(p) and not os.listdir(p):
+            continue  # empty subdir — ignorable
+        return False
+    return True
+
+
+# A candidate must be at least this old before clean_stale_empty_sessions
+# will remove it: guards against racing a concurrently booting process in
+# the window between its makedirs(session_dir) and acquire_session_lock.
+CLEAN_MIN_AGE_SEC = 600
+
+
+def clean_stale_empty_sessions(sessions_root: str, min_age_sec: int = CLEAN_MIN_AGE_SEC) -> list:
+    """Remove session dirs that are empty-except-lock, unlocked, and stale.
+
+    Reload/resume used to leave behind empty shell dirs (dotfiles + an empty
+    swap_store/). This is the one-off sweeper for the accumulated backlog and
+    the standing hook that keeps the root clean. A directory is removed only
+    when ALL hold:
+      - dir_empty_except_lock() is True (no recoverable content),
+      - no live process holds its lock (get_session_lock_holder is None),
+      - its mtime is at least min_age_sec old (not a boot-in-progress).
+    Returns the list of removed dir paths. Best-effort: failures are skipped.
+    """
+    removed: list = []
+    try:
+        entries = os.listdir(sessions_root)
+    except OSError:
+        return removed
+    now = time.time()
+    for e in entries:
+        d = os.path.join(sessions_root, e)
+        if not os.path.isdir(d):
+            continue
+        if not dir_empty_except_lock(d):
+            continue
+        if get_session_lock_holder(d) is not None:
+            continue
+        try:
+            if now - os.stat(d).st_mtime < min_age_sec:
+                continue
+        except OSError:
+            continue
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+            removed.append(d)
+        except Exception:
+            continue
+    return removed
 
 
 def get_session_lock_holder(session_dir: str) -> Optional[dict]:

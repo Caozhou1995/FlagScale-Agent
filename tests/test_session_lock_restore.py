@@ -23,12 +23,14 @@ The conversation-restore part is covered by test_conversation_full_restore.py.
 import json
 import os
 import shutil
+import time
 
 import pytest
 
 from flagscale_agent.react.session import (
     SESSION_LOCK_FILE, acquire_session_lock, release_session_lock,
     dir_empty_except_lock, get_session_lock_holder, SessionLockedError,
+    clean_stale_empty_sessions, CLEAN_MIN_AGE_SEC,
 )
 
 
@@ -54,12 +56,23 @@ class TestDirEmptyExceptLock:
             json.dump({}, f)
         assert dir_empty_except_lock(d) is False
 
-    def test_dir_with_swap_store_subdir_not_empty(self, tmp_path):
-        # Regression context: old predicate `not os.listdir()` also rejected
-        # empty swap_store/ shells — but BOTH predicates must reject dirs
-        # holding real content, and must not touch sessions with data.
-        d = str(tmp_path / "hassub")
+    def test_dir_with_empty_swap_store_subdir_is_empty(self, tmp_path):
+        # Semantics flip (2026-09): SwapStore/TaskPlan __init__ always
+        # makedirs their subdirs, so an abandoned reload dir holds an empty
+        # swap_store/ and nothing else. The old dotfile-only predicate kept
+        # those shells forever (the accumulation bug). An empty subdir
+        # carries no data -> still counts as empty.
+        d = str(tmp_path / "emptysub")
         os.makedirs(os.path.join(d, "swap_store"))
+        assert dir_empty_except_lock(d) is True
+
+    def test_dir_with_nonempty_subdir_not_empty(self, tmp_path):
+        # The flip must not open a hole: real content at ANY depth protects
+        # the directory. A swap shard inside swap_store/ makes it non-empty.
+        d = str(tmp_path / "deepdata")
+        os.makedirs(os.path.join(d, "swap_store"))
+        with open(os.path.join(d, "swap_store", "3.json"), "w") as f:
+            json.dump({"idx": 3}, f)
         assert dir_empty_except_lock(d) is False
 
     def test_missing_dir_is_not_empty(self, tmp_path):
@@ -107,6 +120,11 @@ def _restore_lock_prefix(agent, data, session_dir):
     agent.task_plan._dir = os.path.join(session_dir, "plans")
     if old_session_dir != session_dir and dir_empty_except_lock(old_session_dir):
         shutil.rmtree(old_session_dir, ignore_errors=True)
+    # agent.py also sweeps stale empty shells across the root on every resume.
+    try:
+        clean_stale_empty_sessions(agent._sessions_root)
+    except Exception:
+        pass
 
 
 class TestRestoreSessionGuard:
@@ -156,3 +174,62 @@ def fake_agent(tmp_path):
     old_dir = str(tmp_path / "aaaa1111")
     os.makedirs(old_dir)
     return _FakeAgent(old_dir, str(tmp_path))
+
+class TestCleanStaleEmptySessions:
+    """The sweeper that reaps accumulated empty shell dirs.
+
+    Three-condition guard: empty-except-lock AND unlocked AND stale. Each
+    test holds two conditions fixed and varies the third, so a failure
+    localizes to one condition.
+    """
+
+    def _age(self, d, seconds):
+        old = time.time() - seconds
+        os.utime(d, (old, old))
+
+    def test_stale_empty_unlocked_is_removed(self, tmp_path):
+        d = str(tmp_path / "stale_shell")
+        os.makedirs(os.path.join(d, "swap_store"))
+        self._age(d, CLEAN_MIN_AGE_SEC + 60)
+        removed = clean_stale_empty_sessions(str(tmp_path))
+        assert d in removed
+        assert not os.path.isdir(d)
+
+    def test_locked_empty_is_kept(self, tmp_path):
+        # Even a stale+empty dir is kept while a live process holds its lock
+        # (that process may still be booting/writing). Condition isolated:
+        # only the lock differs from test_stale_empty_unlocked_is_removed.
+        d = str(tmp_path / "locked_shell")
+        os.makedirs(os.path.join(d, "swap_store"))
+        self._age(d, CLEAN_MIN_AGE_SEC + 60)
+        fd = acquire_session_lock(d)
+        try:
+            removed = clean_stale_empty_sessions(str(tmp_path))
+            assert d not in removed
+            assert os.path.isdir(d)
+        finally:
+            release_session_lock(fd)
+
+    def test_fresh_empty_is_kept(self, tmp_path):
+        # Only staleness differs here: a fresh empty dir may be a process
+        # between makedirs() and acquire_session_lock().
+        d = str(tmp_path / "fresh_shell")
+        os.makedirs(os.path.join(d, "swap_store"))  # mtime == now
+        removed = clean_stale_empty_sessions(str(tmp_path))
+        assert d not in removed
+        assert os.path.isdir(d)
+
+    def test_stale_nonempty_is_kept(self, tmp_path):
+        # Only emptiness differs: recoverable content pins the dir forever.
+        d = str(tmp_path / "stale_data")
+        os.makedirs(d)
+        with open(os.path.join(d, "conversation.json"), "w") as f:
+            json.dump({"session_id": "x"}, f)
+        self._age(d, CLEAN_MIN_AGE_SEC + 3600)
+        removed = clean_stale_empty_sessions(str(tmp_path))
+        assert d not in removed
+        assert os.path.isdir(d)
+
+    def test_missing_root_is_noop(self, tmp_path):
+        removed = clean_stale_empty_sessions(str(tmp_path / "does_not_exist"))
+        assert removed == []

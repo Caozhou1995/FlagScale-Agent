@@ -50,6 +50,7 @@ from flagscale_agent.react.session import (
     find_resumable_sessions, list_sessions, get_session_dir,
     acquire_session_lock, release_session_lock, get_session_lock_holder,
     SessionLockedError, dir_empty_except_lock, SESSION_LOCK_FILE,
+    clean_stale_empty_sessions,
 )
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.tools import ToolRegistry
@@ -1080,15 +1081,44 @@ class WorkerAgent:
             swap_store=SwapStore(os.path.join(session_dir, "swap_store")),
         )
 
+        # Re-point recall_search to the restored session's log. The tool captured
+        # self._session_dir at registration time (the fresh, empty dir __init__
+        # created); after a resume/reload rebind it must search the RESTORED
+        # directory's conversation_full.json, not the abandoned one. Registry
+        # register() overwrites by name, so re-registering replaces the instance.
+        from flagscale_agent.react.tools.recall_search import RecallSearchTool
+        self.tool_registry.register(RecallSearchTool(session_dir))
+
+        # Same capture-at-registration problem for tools that captured
+        # self._session_id: restore has just replaced _session_id, but the old
+        # instances would keep tagging memory entries / plans with the
+        # abandoned fresh session id. Re-register under the restored id.
+        from flagscale_agent.react.tools.memory_write import MemoryWriteTool
+        from flagscale_agent.react.tools.plan_create import PlanCreateTool
+        self.tool_registry.register(MemoryWriteTool(
+            self.memory, self._session_id, task_plan=self.task_plan))
+        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
+
         # Clean up the empty new session dir if it's different. The emptiness
-        # predicate must ignore dotfiles (the lock file lives there), else a
-        # fresh dir that only ever held .session.lock is never removed.
+        # predicate must ignore dotfiles (the lock file lives there) AND empty
+        # subdirectories (SwapStore/TaskPlan __init__ makedirs their dirs), else
+        # a fresh dir that only ever held .session.lock + swap_store/ is never
+        # removed and empty shells accumulate across reloads.
         if old_session_dir != session_dir and dir_empty_except_lock(old_session_dir):
             try:
                 import shutil
                 shutil.rmtree(old_session_dir, ignore_errors=True)
             except Exception:
                 pass
+
+        # Opportunistic sweep: every resume/reload is a natural point to reap
+        # stale empty shells (abandoned __init__ dirs from past reloads) across
+        # the whole sessions root. Three-condition guard inside: empty-except-
+        # lock + no live lock holder + mtime older than CLEAN_MIN_AGE_SEC.
+        try:
+            clean_stale_empty_sessions(self._sessions_root)
+        except Exception:
+            pass
 
         # Restore _full_log from conversation_full.json if it exists.
         # This preserves the complete audit trail across /reload and hard resets.
