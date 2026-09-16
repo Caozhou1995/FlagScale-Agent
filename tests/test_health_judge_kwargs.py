@@ -23,6 +23,7 @@ task-budget summary is computed from the env var.
 """
 
 import inspect
+from types import SimpleNamespace
 
 from flagscale_agent.react.agent import WorkerAgent
 
@@ -66,6 +67,11 @@ class _Stub:
         # time counts against a per-task budget).
         self._turn_start = turn_start
         self.judge = judge
+        # _task_budget_stats reads the config-level budget first (agent.py
+        # getattr(self.config, "time_budget_sec", 0.0)). These tests exercise
+        # the ENV-VAR fallback path, so the stub config carries 0.0 — same
+        # semantics as a default AgentConfig with no --time-budget-sec flag.
+        self.config = SimpleNamespace(time_budget_sec=0.0)
 
         class _NoPlan:
             def get_active(self_inner):
