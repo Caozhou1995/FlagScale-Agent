@@ -371,7 +371,7 @@ _RESEARCH_BLOCK_MESSAGE = (
     "standard technique before writing more code:\n"
     "  • web_fetch() — EXTERNAL domains (any field where your prior knowledge may "
     "not reflect the current standard method).\n"
-    "  • load_knowledge() / load_skill() — INTERNAL FlagScale domains.\n"
+    "  • load_knowledge() / load_skill() — INTERNAL domains.\n"
     "  • A substantive networked shell op (git clone / pip / apt install / wget / "
     "curl download) — real external dependency acquisition — also counts.\n"
     "The dangerous case is when the example looks simple and you feel NO gap — "

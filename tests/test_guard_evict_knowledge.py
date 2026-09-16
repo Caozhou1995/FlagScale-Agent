@@ -273,6 +273,9 @@ class TestKnowledgeSkillGuard:
         assert "external" in msg
         # no-alternative claim is flagged as a knowledge gap
         assert "no other method" in msg or "knowledge gap" in msg
+        # INTERNAL/EXTERNAL labels are product-neutral (no brand qualifier)
+        assert "internal domain" in msg
+        assert "flagscale" not in msg
 
     def test_block_mentions_web_fetch_and_no_alternative(self):
         """Block text must cover web_fetch and the no-alternative-claim trap."""
@@ -286,6 +289,22 @@ class TestKnowledgeSkillGuard:
         msg = verdict.message.lower()
         assert "web_fetch" in msg
         assert "no better" in msg or "no other method" in msg
+
+    def test_block_internal_external_wording_symmetric(self):
+        """INTERNAL/EXTERNAL domain labels must stay product-neutral and symmetric.
+
+        The mechanism text describes the knowledge channel, not its contents, so
+        neither label should carry a product/brand qualifier (e.g. "FlagScale").
+        """
+        guard = KnowledgeSkillGuard()
+        for i in range(guard.BLOCK_THRESHOLD - 1):
+            ctx = _make_ctx(tool_name="shell")
+            _advance(guard, ctx)
+        verdict = guard.check_pre(_make_ctx(tool_name="shell"))
+        assert verdict is not None and verdict.action == "block"
+        assert "INTERNAL domains" in verdict.message
+        assert "EXTERNAL domains" in verdict.message
+        assert "FlagScale" not in verdict.message
 
 
 
