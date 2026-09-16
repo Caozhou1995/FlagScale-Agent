@@ -21,6 +21,7 @@ def test_guard_registry_complete():
     from flagscale_agent.react.guard.package_search import PackageSearchGuard
     from flagscale_agent.react.guard.unit_test import UnitTestGuard
     from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
+    from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
     from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
     from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
     from flagscale_agent.react.guard.arg_type import ArgTypeGuard
@@ -33,6 +34,7 @@ def test_guard_registry_complete():
     PackageSearchGuard()
     UnitTestGuard()
     MemoryDisciplineGuard()
+    MemoryPostCheckGuard()
     PostEvictRecoveryGuard()
     KnowledgeSkillGuard()
 
@@ -55,6 +57,7 @@ def test_tool_registry_complete():
     from flagscale_agent.react.tools.memory_list import MemoryListTool
     from flagscale_agent.react.tools.plan_create import PlanCreateTool
     from flagscale_agent.react.tools.plan_status import PlanStatusTool
+    from flagscale_agent.react.tools.recall_search import RecallSearchTool
 
     # Verify imports resolve (some tools need constructor args, so just check class exists)
     assert ShellTool is not None
@@ -73,6 +76,7 @@ def test_tool_registry_complete():
     assert MemoryListTool is not None
     assert PlanCreateTool is not None
     assert PlanStatusTool is not None
+    assert RecallSearchTool is not None
 
 
 def test_guard_registry_no_shared_state():

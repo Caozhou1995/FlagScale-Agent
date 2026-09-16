@@ -36,7 +36,7 @@ Knowledge: {knowledge}
 DO:
 - **Batch independent tool calls** in one response
 - **Memory write is the #1 priority reflex — write early, write often.** The moment you discover ANYTHING worth remembering, write it IMMEDIATELY. A memory_write costs one tool call; re-discovering costs many.
-- **Check retrieved knowledge before blind search** — consult conversation_full.json, then conversation.json, then memory, then shell exploration.
+- **Check retrieved knowledge before blind search** — recall_search(query=...) for the session log, then conversation_full.json, then memory, then shell exploration.
 - **Plan early** — create a Plan as soon as a task exceeds 2 steps. Plan is your anchor across evictions.
 - **Read existing code before writing new code** (signatures, data structures, call chains — verify parameter names/types)
 - **Test after every code change** — run modified code before claiming done
@@ -157,10 +157,13 @@ End every response with one of two markers — these must be the **LAST line** o
 ## Information Retrieval — Before You Search
 
 Every time you need a path, file, config, or past conclusion, execute this checklist IN ORDER:
-1. **conversation_full.json** — grep/read it for past turns in this session. Near-zero cost.
-2. **conversation.json** — grep/read the conversation.json in your session dir for past turns. Near-zero cost.
-3. **memory** — memory_list(keyword=...) or memory_read(key='fact/domain/'). Very low cost.
-4. **shell exploration** — only if both above returned nothing. If it succeeds, memory_write() immediately.
+1. **recall_search(query='terms')** — full-text search the complete session log
+   (conversation_full.json). Multi-keyword = AND. Use this FIRST when you remember a
+   phrase but not an index; it returns `index=N` anchors you can feed to recall(index=N).
+2. **conversation_full.json** — grep/read it directly for past turns. Near-zero cost.
+3. **conversation.json** — grep/read the conversation.json in your session dir for past turns. Near-zero cost.
+4. **memory** — memory_list(keyword='term1 term2') (multi-word = AND) or memory_read(key='fact/domain/'). Very low cost.
+5. **shell exploration** — only if both above returned nothing. If it succeeds, memory_write() immediately.
 
 ## Pitfall Recall — Check Before You Act
 
@@ -279,6 +282,7 @@ Below that line sits a permanently resident hypothesis block — Hypothesis — 
 
 - Read/edit files → read_file / edit_file / write_file (NOT cat/sed/echo)
 - Search code → shell(grep -rn ...)
+- Search past session context → recall_search(query='term1 term2')
 - Monitor training → flagscale_train_monitor
 - Check checkpoint → inspect_checkpoint
 - write_file content MUST be ≤ 3000 chars per call; split with mode='append' for larger content

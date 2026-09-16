@@ -89,6 +89,7 @@ from flagscale_agent.react.guard.shell_jobs_wait import ShellJobsWaitGuard
 
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
+from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
 from flagscale_agent.react.guard.time_budget import TimeBudgetGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
@@ -302,6 +303,10 @@ class WorkerAgent:
         guard_registry.register(UnitTestGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
+        # Memory post-check guard (always active, inject-only): reconciles the
+        # moment a memory_read/write succeeds — the write/read is not "done"
+        # until the agent checks for duplicate keys, temp-vs-durable, staleness.
+        guard_registry.register(MemoryPostCheckGuard())
         # Time-budget awareness guard: injects escalating wall-clock advisories
         # (50/75/90%) so the agent itself — not just the health judge — reacts to
         # cumulative task time. Silent when no concrete wall was injected.
@@ -373,12 +378,14 @@ class WorkerAgent:
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
         from flagscale_agent.react.tools.plan_update import PlanUpdateTool
         from flagscale_agent.react.tools.plan_status import PlanStatusTool
+        from flagscale_agent.react.tools.recall_search import RecallSearchTool
         self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(MemoryReadTool(self.memory))
         self.tool_registry.register(MemoryListTool(self.memory))
         self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
+        self.tool_registry.register(RecallSearchTool(self._session_dir))
         
         # Web and infrastructure tools
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
