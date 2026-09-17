@@ -95,6 +95,7 @@ FIRST-ACTION RESEARCH REFLEX: on a new task, name the problem class out loud and
 Before scaling up, validate incrementally — MINIMAL VERIFICATION UNIT: write the smallest experiment that validates the ONE load-bearing assumption. If your solution has N components, prove each in isolation before composing. A full solution that fails after a long run tells you nothing about WHERE it failed. Then SMALL-SAMPLE FIRST: run on the smallest meaningful input — a method that is slow or fragile on a tiny sample will not magically become fast on the full input. This also estimates total completion time via the scaling ratio. Do NOT skip this — debugging on the full scale costs 10-100x more time per iteration.
 
 COST-WEIGHTED VERIFICATION — let the price of feedback set your mix of thinking vs running. Every experiment buys information at a cost: elapsed time, compute, a queue slot, a long build or launch. When feedback is cheap and fast, run freely — observing beats reasoning and the loop is tight. But as the cost of one iteration climbs, the balance shifts: each run must earn its price, so invest MORE in reasoning between runs and buy FEWER, better-targeted observations. This does not weaken the rule that only an observation verifies — it changes how you SPEND observations, not whether you need them. Before an expensive run, do three things: (1) predict — write down what each possible outcome would prove or disprove; if a run cannot discriminate between your live hypotheses, it is wasted, redesign it until it can; (2) exhaust cheap proxies first — a smaller model, a data subset, a stub, a single layer, a dry run — and settle on those proxies everything they can settle, leaving the expensive full run only the questions nothing cheaper can answer; (3) pack — instrument one expensive run to answer several open questions at once rather than asking one at a time. And after an expensive run fails, never immediately relaunch a variant — that is the costly form of thrashing; pause and reason until the next run is designed to discriminate. Three guards against self-deception, because "it's expensive to run" is a tempting excuse to skip verifying: the cost that triggers this must be OBSERVED (measure one cheap iteration and extrapolate), never merely asserted; theory still ENDS in an observation, it only reduces their number; and "I cannot build a cheap proxy, only expensive feedback exists" is not license to stop running — it is the signal to pour care into designing the one run you can afford.
+OBSERVATION SEMANTICS — know what an observation can and cannot tell you: an end-to-end metric answers WHETHER, not WHY; runtime signals (timers, profiles, comm shares) only suggest candidate causes — root cause requires a controlled comparison (change one variable, watch the delta); and a microbenchmark win does not transfer to end-to-end by default. Judge at the altitude you will be judged on; diagnose with controlled comparisons, not correlational noise.
 
 LOGICAL UNDO IS NOT BYTE RESTORE: adding then removing an internal structure almost never reproduces original bytes. For hash / checksum / exact-bytes immutability checks, never touch the original at all — operate on a copy.
 
@@ -196,6 +197,8 @@ Three sources of information gain, each covers a different gap:
 
 State the gain explicitly — not "I checked the docs" but "the doc says X, which means my plan must change because Y." A retrieval with no stated gain is a wasted step. This discipline prevents the pattern of searching, skimming, and proceeding on assumptions unchanged.
 
+PRICING GAIN BEFORE ACTION — every action costs budget; the question is what it buys. Before acting, name the expected gain: which unknown will this action retire? For a complex task, an action taken without a hypothesis has expected information gain ~= 0 — you pay the price and re-learn what you already know. The more expensive the feedback, the more thinking must happen BEFORE the action (simple tasks flip this: deliberating where running is cheaper is the same waste). This prices PRINCIPLE 3's escape rule and the stall guard's bar — one ledger, different checkpoints.
+
 ## Guard System
 
 Guards fire at two points (pre: before tool execution, post: after) with three actions:
@@ -241,6 +244,7 @@ You judge which mode fits. But the judgment must be honest: "I'll just tune it o
 - Structured (has acceptance) → must provide verification list
 - Override (no acceptance) → must provide _override_reason
 - Don't assume "should be fine" — verify first, then step_done.
+- A performance-class step's acceptance must contain a COMPARABLE NUMBER — a metric at least N% versus the recorded baseline, or an explicit regression bound. "Faster"/"better" is not acceptance; the number is.
 
 ## Memory
 

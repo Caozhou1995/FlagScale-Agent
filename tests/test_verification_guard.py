@@ -1683,10 +1683,11 @@ class TestTextCompleteHygieneGate:
         assert verdict is not None
         assert verdict.reason == "text_complete_hygiene"
 
-    def test_wrap_up_message_is_four_light_items_in_order(self):
+    def test_wrap_up_message_is_five_light_items_in_order(self):
         # User decision: the text-complete gate is a LIGHT wrap-up for runs that
         # did NOT go through the plan_update(complete) cascade — near/far, temp/build
-        # cleanup, re-read-task delivery confirm, memory review. It must NOT re-run
+        # cleanup, re-read-task delivery confirm, memory review, harness-gap capture.
+        # It must NOT re-run
         # the cascade's deep checks (three delivery-path checks, exact-command
         # listing, every-constraint re-read) — those belong to the cascade, and
         # re-asking them here is the duplication the user removed.
@@ -1694,7 +1695,7 @@ class TestTextCompleteHygieneGate:
 
         msg = _TEXT_COMPLETE_HYGIENE
         low = msg.lower()
-        # Four wrap-up items present.
+        # Five wrap-up items present.
         assert "near vs far" in low
         assert "far end" in low and "near end" in low
         assert "cleanup" in low and (".bak" in low or "temp" in low)
@@ -1702,14 +1703,16 @@ class TestTextCompleteHygieneGate:
         assert "confirm delivery" in low  # step 3 re-reads task & confirms delivery
         assert "memory review" in low and "memory_list()" in low
         # Order is load-bearing: near/far FIRST (may create files), then cleanup,
-        # then delivery re-confirm (cleanup can over-reach), then memory.
+        # then delivery re-confirm (cleanup can over-reach), then memory, then the
+        # harness-gap meta-question LAST (it reflects on everything above).
         # Anchor on the numbered section headers (**...**) so intro mentions of the
         # same words don't skew the positions.
         near_pos = low.index("**near vs far**")
         clean_pos = low.index("**temp & build cleanup**")
         confirm_pos = low.index("**re-read task & confirm delivery**")
         mem_pos = low.index("**memory review & update**")
-        assert near_pos < clean_pos < confirm_pos < mem_pos
+        gap_pos = low.index("**harness gap & capture**")
+        assert near_pos < clean_pos < confirm_pos < mem_pos < gap_pos
         # The order rationale is stated explicitly (verify before clean, re-confirm
         # after clean).
         assert "load-bearing" in low
@@ -1778,6 +1781,32 @@ class TestTextCompleteHygieneGate:
         assert "implemented" in low and "disproved" in low
         # Act now, not deferred.
         assert "supersede" in low
+
+    def test_wrap_up_harness_gap_item_captures_not_just_reports(self):
+        """Item 5 is the meta-question: did this session expose a gap in the agent
+        harness itself (guards/gates/prompts/tools/memory) worth codifying? It must
+        (a) name the harness machinery explicitly, (b) list concrete tell-tale
+        shapes, (c) demand DURABLE capture via memory_write (insight/agent/), not
+        prose-only reporting, and (d) permit an explicit 'none' — but push back on
+        the reflex 'none' for sessions that edited configs/code or debugged tooling."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # (a) the harness machinery is named, not just "a gap"
+        assert "harness gap & capture" in low
+        assert "guards, gates, prompts, tools, or memory" in low
+        # (b) concrete tell-tale shapes are enumerated
+        assert "twice with no guard" in low
+        assert "post-check/inject" in low
+        assert "not consulted before acting" in low
+        # (c) durable capture: memory_write of an insight, not a note to the user
+        assert "memory_write()" in low
+        assert "insight/agent/" in low
+        assert "digest direction" in low
+        assert "target artifact" in low
+        # (d) explicit none is allowed, but the escape-hatch needs a real look
+        assert 'answer "none" explicitly' in low
+        assert "deserves a real look" in low
 
     def test_wrap_up_does_not_duplicate_cascade_deep_checks(self):
         # The removed blocks: the numbered "three delivery checks" and the
