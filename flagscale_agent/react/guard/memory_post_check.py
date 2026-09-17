@@ -12,26 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""MemoryPostCheckGuard — post-write / post-read self-reconciliation nudge.
+"""MemoryPostCheckGuard — always-on post-write / post-read reconcile reminder.
 
-MemoryDisciplineGuard reminds the agent to USE memory; this guard fires the
-instant a memory op *succeeds* and asks the agent to reconcile what it just
-did against what memory already holds. The failure it targets is memory
-self-poisoning: writing a near-duplicate key, recording a one-off temp value as
-if it were durable truth (bloat poisons later retrieval), or reading a stale
-entry and acting on it as current (the entry recorded what was true when
-written, not now).
+Fires an advisory inject on EVERY successful memory_write / memory_read —
+no cooldown, no per-key dedup, no per-session cap (removed by design: the
+reconcile habit should be exercised on every memory op, not occasionally).
+Failure paths stay silent: a failed write, an empty/missed read, and
+non-memory tools never fire.
 
 Two injects:
 - after memory_write success ("Memorized [...]") → 4-point reconcile
   (contradiction/supersede · durability · generalization · key hygiene)
-- after memory_read success (entry/s found) → 3-point reconcile
+- after memory_read success (entry/entries found) → 3-point reconcile
   (staleness vs live env · conflict with other entries · did it answer)
 
-Advisory only (inject, never block). Throttled so it guides, not nags:
-- a write for a given key nudges at most once per session;
-- a global cooldown of COOLDOWN post-checks between any two nudges;
-- read nudges capped at MAX_READ_NUDGES per session.
+Advisory only (inject, never block).
 """
 
 from __future__ import annotations
@@ -40,38 +35,21 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
 class MemoryPostCheckGuard(Guard):
-    """Reconcile memory the moment a read/write succeeds."""
+    """Reconcile memory the moment a read/write succeeds — every time."""
 
     name = "memory_post_check"
     priority = 88  # Advisory — below the hard gates, above nothing critical
-
-    COOLDOWN = 4          # post-checks to stay silent after a nudge
-    MAX_READ_NUDGES = 5   # cap read-nudges so a read-heavy loop isn't spammed
-
-    def __init__(self):
-        self._since_last = 0
-        self._nudged_write_keys: set[str] = set()
-        self._read_nudges = 0
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         # Post-only guard — never inspect a call before it runs.
         return None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        self._since_last += 1
-
         if ctx.tool_name == "memory_write" and ctx.tool_result:
             result = str(ctx.tool_result)
             if "Memorized [" not in result:
                 return None  # write failed / errored — nothing to reconcile
             key = str(ctx.tool_args.get("key", ""))
-            if key and key in self._nudged_write_keys:
-                return None
-            if self._since_last < self.COOLDOWN:
-                return None
-            if key:
-                self._nudged_write_keys.add(key)
-            self._since_last = 0
             return GuardVerdict.inject(
                 f"[MemoryPostCheck] You just wrote '{key or '?'}'. The write is not "
                 "'done' until you have self-reconciled — check these in order and "
@@ -98,12 +76,6 @@ class MemoryPostCheckGuard(Guard):
             # Only nudge when the read actually returned content.
             if "Content:" not in result and "entries:" not in result:
                 return None
-            if self._read_nudges >= self.MAX_READ_NUDGES:
-                return None
-            if self._since_last < self.COOLDOWN:
-                return None
-            self._read_nudges += 1
-            self._since_last = 0
             key = str(ctx.tool_args.get("key", ""))
             return GuardVerdict.inject(
                 f"[MemoryPostCheck] You just read '{key or '?'}'. Memory is a CLAIM, "
