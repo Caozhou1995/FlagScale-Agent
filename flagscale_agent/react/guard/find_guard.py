@@ -37,10 +37,12 @@ Detection is shell-aware so it does not over- or under-block:
     `\\nfind ...` on its own line is blocked — previously such a find escaped
     the guard entirely.
   * A RECURSIVE `grep` whose walk starts at a broad root (`/`, `/mnt`,
-    `/public-nvme`, ...) is blocked the same way — a whole-tree recursive grep
-    is as slow and filesystem-heavy as a bare find. Scoped greps
-    (`grep -rn PATTERN ./src`), non-recursive greps, and greps into a specific
-    subdirectory pass freely; they are what the guard recommends instead.
+    `/public-nvme`, ...) OR at an unbounded cwd-relative target (`.`, `..`,
+    `~`, a bare `*` glob, or no target at all) is blocked the same way — a
+    whole-tree recursive grep is as slow and filesystem-heavy as a bare find.
+    Scoped greps (`grep -rn PATTERN ./src`), non-recursive greps, and greps
+    into a specifically named subdirectory pass freely; they are what the
+    guard recommends instead.
 """
 
 from __future__ import annotations
@@ -81,6 +83,38 @@ _GREP_BROAD_ROOTS = {
     "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/usr", "/var",
     "/clistorage", "/public-nvme", "/public-mixed",
 }
+
+# Targets that make a recursive grep UNBOUNDED relative to the shell's cwd.
+# The guard cannot statically know the cwd, so these are conservatively broad:
+# a recursive walk from `.`, `..`, `~`, a bare `*` glob, or NO target at all
+# (grep defaults to `.`) can cover an entire tree/mount depending on where the
+# command runs. A NAMED component (`./src`, `src`, `/path/to/src`) is scoped and
+# still passes. One rule per target semantics — the round-2 lesson.
+_GREP_CWD_RELATIVE_TARGETS = {
+    ".", "..", "~", "*", ".*",
+    # always-unbounded env vars — never a scoped subdirectory.
+    "$HOME", "${HOME}", "$PWD", "${PWD}", "$OLDPWD", "${OLDPWD}",
+}
+
+
+def _grep_target_is_broad(tok: str) -> bool:
+    """True if a grep TARGET token is a broad root or a cwd-relative anchor.
+
+    Broad = an explicit system/shared-mount root (see _GREP_BROAD_ROOTS) OR an
+    unbounded cwd-relative anchor: `.`/`..`/`~` (any chain of `..` components),
+    a bare `*` glob, `$HOME`-like env vars, and the whole-tree glob forms
+    (`./*`, `../*`, `~/*`). A target naming a real component (`./src`, `src`,
+    `/public-nvme/proj/src`) is scoped -> False.
+    """
+    t = tok.rstrip("/") or "/"
+    if t in _GREP_BROAD_ROOTS or t in _GREP_CWD_RELATIVE_TARGETS:
+        return True
+    # `.`/`..`/`~` optionally followed by more `.`/`..`/`*` components, with any
+    # number of slashes between them (`..//..` is the same path as `../..`):
+    # `.`, `./`, `..`, `../..`, `./.`, `./*`, `../*`, `~/*`.
+    if re.fullmatch(r"(?:\.\.?|~)(?:/+(?:\.\.?|\*+))*/*", t):
+        return True
+    return False
 
 
 # Prefix words that may precede the real command word (`sudo grep ...`).
@@ -290,15 +324,25 @@ def _grep_is_broad(sanitized: str) -> bool:
             continue
 
         recursive = False
-        broad = False
+        positionals = []
         for t in toks[idx + 1:]:
             if t in _GREP_RECURSIVE_LONG:
                 recursive = True
             elif t.startswith("-") and not t.startswith("--") and re.search(r"[rR]", t[1:]):
                 recursive = True
-            elif (t.rstrip("/") or "/") in _GREP_BROAD_ROOTS:
-                broad = True
-        if recursive and broad:
+            elif t.startswith("-"):
+                continue  # other option (--include=..., -e, --regexp=..., --)
+            else:
+                positionals.append(t)
+        if not recursive:
+            continue
+        # This layer sees SANITIZED text: a quoted pattern was blanked away, so
+        # the first positional is AMBIGUOUS (it may be the pattern). Treat it as
+        # a target only when it stands alone; otherwise targets are the
+        # positionals after it. The no-target case (grep defaults to `.`) is
+        # caught by the quote-preserving lexer path `_toks_recursive_broad`.
+        targets = positionals[1:] if len(positionals) >= 2 else positionals
+        if any(_grep_target_is_broad(t) for t in targets):
             return True
     return False
 
@@ -557,17 +601,44 @@ def _resolve_var(tok: str, tainted: dict[str, str]) -> str:
 
 
 def _toks_recursive_broad(toks: list[str]) -> bool:
-    """Recursive flag + broad root present in a token tail (grep checks)."""
+    """True if a grep token tail is a RECURSIVE grep over a broad/unbounded root.
+
+    The tokens come from the quote-MERGING lexer, so the pattern is intact: the
+    FIRST positional is the PATTERN (grep grammar) and targets are the
+    positionals AFTER it. Broad when any target is broad (explicit root OR
+    cwd-relative anchor) OR when there is NO target at all — a recursive grep
+    with no file operand defaults to `.`, i.e. the cwd, and is unbounded.
+    """
     recursive = False
-    broad = False
+    pattern_supplied = False  # pattern given by -e/--regexp/-f/--file ...
+    positionals: list[str] = []
     for t in toks:
         if t in _GREP_RECURSIVE_LONG:
             recursive = True
         elif t.startswith("-") and not t.startswith("--") and re.search(r"[rR]", t[1:]):
             recursive = True
-        elif (t.rstrip("/") or "/") in _GREP_BROAD_ROOTS:
-            broad = True
-    return recursive and broad
+        elif t.startswith("-"):
+            # Inline pattern/file forms (`--regexp=PAT`, `-ePAT`, `--file=F`)
+            # embed their argument in the option token, so the FIRST positional
+            # is then a TARGET, not the pattern. A bare `-e`/`--regexp`/`-f`
+            # leaves its argument as the next positional (already dropped by the
+            # positionals[1:] rule below), so it does not set this flag.
+            if t.startswith("--regexp=") or t.startswith("--file="):
+                pattern_supplied = True
+            elif len(t) > 2 and t[1] in "ef":
+                pattern_supplied = True
+            continue  # other option (--include=..., -e, --, ...)
+        else:
+            positionals.append(t)
+    if not recursive:
+        return False
+    # When the pattern came from an inline option, every positional is a target;
+    # otherwise the first positional is the pattern (grep grammar) and targets
+    # are those after it.
+    targets = positionals if pattern_supplied else positionals[1:]
+    if not targets:
+        return True
+    return any(_grep_target_is_broad(t) for t in targets)
 
 
 def _shell_tail_reads_stdin(toks: list[str]) -> bool:
@@ -744,8 +815,10 @@ _FIND_MESSAGE = (
 
 _GREP_MESSAGE = (
     "[FindGuard] a RECURSIVE `grep` over a broad root (`/`, `/mnt`, "
-    "`/public-nvme`, ...) is slow and hammers the filesystem — same cost class "
-    "as a bare `find`. Prefer the internal information-retrieval order:\n"
+    "`/public-nvme`, ...) or from an unbounded cwd-relative target (`.`, `..`, "
+    "`~`, a bare `*` glob, or no target at all) is slow and hammers the "
+    "filesystem — same cost class as a bare `find`. Prefer the internal "
+    "information-retrieval order:\n"
     "\n"
     "  1. conversation_full.json / conversation.json (session dir) — the earlier "
     "hit may already be recorded. Near-zero cost.\n"

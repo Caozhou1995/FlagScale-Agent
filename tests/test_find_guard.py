@@ -209,6 +209,43 @@ class TestBroadGrepBlocked:
         g = FindGuard()
         assert g.check_pre(_shell("cd /tmp && grep -rn x /home")).action == "block"
 
+    def test_grep_recursive_cwd_relative_targets_block(self):
+        g = FindGuard()
+        # `.` / `./` / `..` / `~` resolve to the cwd/parent/home at runtime;
+        # the guard cannot prove they are bounded, so a recursive walk from
+        # them is broad.
+        for target in (".", "./", "..", "~", "~/"):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_grep_recursive_bare_glob_blocks(self):
+        g = FindGuard()
+        for target in ("*", ".*", "./*"):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_grep_recursive_no_target_blocks(self):
+        g = FindGuard()
+        # No file operand -> grep defaults to `.` (the cwd) -> unbounded.
+        v = g.check_pre(_shell("grep -rln pat"))
+        assert v is not None and v.reason == "broad_recursive_grep"
+
+    def test_user_real_command_blocks(self):
+        g = FindGuard()
+        # Regression: a recursive grep piped through head, with a `.` target,
+        # was the exact command that escaped the guard before this fix.
+        cmd = ('cd /workspace/caozhou/baseline_v2 && ls *.py | head -30; '
+               r'echo "==="; grep -rln "initialize_model_parallel\|' 
+               'destroy_model_parallel" --include=*.py . 2>/dev/null | '
+               'grep -v site-packages | head')
+        v = g.check_pre(_shell(cmd))
+        assert v is not None and v.reason == "broad_recursive_grep"
+
+    def test_grep_cwd_relative_in_executor_payload_blocks(self):
+        g = FindGuard()
+        v = g.check_pre(_shell('ssh h "grep -rln pat ."'))
+        assert v is not None and v.reason == "broad_recursive_grep"
+
 
 class TestScopedGrepAllowed:
     """Scoped / non-recursive greps pass — they are what the guard recommends."""
@@ -239,6 +276,20 @@ class TestScopedGrepAllowed:
         g = FindGuard()
         # 'grep' as a non-command token should not trip the broad-grep path.
         assert g.check_pre(_shell("echo grep -rn foo /")) is None
+
+    def test_grep_quoted_pattern_with_scoped_target_allowed(self):
+        g = FindGuard()
+        # sanitize() blanks the quoted pattern, so the top-level layer must not
+        # mistake the scoped target for a pattern (any-positional rule). The
+        # lexer path keeps the pattern intact and sees a scoped target.
+        assert g.check_pre(_shell('grep -rn "foo" ./src')) is None
+        assert g.check_pre(_shell(r"grep -rln 'a\|b' --include=*.py ./src")) is None
+
+    def test_grep_named_component_target_allowed(self):
+        g = FindGuard()
+        # A named directory component is scoped even without `./`.
+        assert g.check_pre(_shell("grep -rln pat src")) is None
+        assert g.check_pre(_shell("grep -rln pat /workspace/caozhou/baseline_v2")) is None
 
 
 class TestHiddenFind:
@@ -479,3 +530,46 @@ class TestHiddenEscapeFamilies:
         g = FindGuard()
         assert g.check_pre(_shell("grep p /etc/hosts")) is None
         assert g.check_pre(_shell("grep -rn p ./src")) is None
+
+
+class TestCwdRelativeEscapeFamily:
+    """Round-3/4 hardening: the FULL cwd-relative / inline-pattern escape set.
+
+    These lock the two adversarial defects found after round-2: (a) deep `.`
+    chains (`../..`, `./.`) and always-unbounded env vars (`$HOME`, `${PWD}`)
+    escaped; (b) an inline pattern option (`--regexp=.`, `-e.`, `-fF`) was
+    mistaken for the pattern, so the real scoped target was dropped and the
+    call over-blocked.
+    """
+
+    def test_deep_dot_chain_blocks(self):
+        g = FindGuard()
+        for target in ("../..", "../../", "./.", "././.", "..//.."):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_cwd_env_vars_block(self):
+        g = FindGuard()
+        for target in ("$HOME", "${HOME}", "$PWD", "${PWD}", "$OLDPWD"):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_inline_pattern_with_scoped_target_allowed(self):
+        g = FindGuard()
+        # The pattern is INSIDE the option; the positional is a real target.
+        assert g.check_pre(_shell("grep -rn --regexp=. ./src")) is None
+        assert g.check_pre(_shell("grep -rn -e. ./src")) is None
+        assert g.check_pre(_shell("grep -rn -f pats.txt ./src")) is None
+
+    def test_inline_pattern_with_broad_target_blocks(self):
+        g = FindGuard()
+        # Inline pattern + a broad positional target must still block.
+        assert g.check_pre(_shell("grep -rn --regexp=. . ./src")).reason == "broad_recursive_grep"
+        assert g.check_pre(_shell("grep -rn -e. ./src .")).reason == "broad_recursive_grep"
+
+    def test_bare_pattern_option_keeps_scoped_target_allowed(self):
+        g = FindGuard()
+        # A BARE -e/--regexp takes the next token as its pattern; the remaining
+        # positional is the scoped target -> allowed.
+        assert g.check_pre(_shell("grep -rn -e . ./src")) is None
+        assert g.check_pre(_shell("grep -rn --regexp . ./src")) is None
