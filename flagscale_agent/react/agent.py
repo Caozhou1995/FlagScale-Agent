@@ -89,6 +89,7 @@ from flagscale_agent.react.guard.find_guard import FindGuard
 from flagscale_agent.react.guard.shell_jobs_wait import ShellJobsWaitGuard
 
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
+from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
 from flagscale_agent.react.guard.time_budget import TimeBudgetGuard
@@ -302,6 +303,12 @@ class WorkerAgent:
         guard_registry.register(ShellJobsWaitGuard())
 
         guard_registry.register(UnitTestGuard())
+        # PostEditFarEndGuard (always active, inject-only): after EVERY successful
+        # write_file/edit_file, remind the agent to verify the FAR end — valid-for-
+        # type on the edited file, the consumer's read path, and (for agent source)
+        # that the live process still runs old code until /reload. Generic across
+        # file types, unlike UnitTestGuard. Never blocks.
+        guard_registry.register(PostEditFarEndGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
         # Memory post-check guard (always active, inject-only): reconciles the
