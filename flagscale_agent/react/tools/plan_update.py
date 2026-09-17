@@ -20,6 +20,12 @@ import re
 
 from flagscale_agent.react.tools.base import Tool
 
+_THINKING_ECHO = (
+    "Model recorded — it is now your working theory. What does it PREDICT for "
+    "your next move, and what is the cheapest observation that could kill it? "
+    "Run that."
+)
+
 
 # Pattern to extract integer from strings like "step_1", "step 2", "Step_3", "#4"
 _STEP_ID_RE = re.compile(r'(?:step[_\s]?)?#?(\d+)', re.IGNORECASE)
@@ -138,7 +144,7 @@ class PlanUpdateTool(Tool):
                 if not thinking or not str(thinking).strip():
                     return "ERROR: thinking text required for set_thinking."
                 self._plan.set_thinking(str(thinking))
-                return self._plan.summary()
+                return self._plan.summary() + "\n\n" + _THINKING_ECHO
             if action == "step_done":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
@@ -203,8 +209,12 @@ class PlanUpdateTool(Tool):
             else:
                 return f"ERROR: Unknown action '{action}'."
             # thinking may accompany any action (e.g. step_done + updated model).
+            # A recorded model earns its keep only by generating the next
+            # falsifiable observation — echo the challenge when one is recorded.
+            echo = ""
             if thinking and str(thinking).strip():
                 self._plan.set_thinking(str(thinking))
-            return self._plan.summary()
+                echo = "\n\n" + _THINKING_ECHO
+            return self._plan.summary() + echo
         except Exception as e:
             return f"ERROR: {e}"
