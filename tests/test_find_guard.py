@@ -344,3 +344,138 @@ class TestHiddenFind:
     def test_ssh_head_pipeline_allowed(self):
         g = FindGuard()
         assert g.check_pre(_shell('ssh h "ls /x | head -5"')) is None
+
+
+class TestHiddenEscapeFamilies:
+    """Round-2: systematic shell-escape coverage (obfuscation, wrappers,
+    pipe-to-shell, command substitution, variable taint, line continuation).
+
+    Each family pairs a MUST-block positive with controls that must stay
+    allowed (data payloads, non-executor words, scoped commands).
+    """
+
+    # --- obfuscated command words (quote-in-word / backslash / ANSI-C) ---
+    def test_quote_in_word_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("f'in'd /data")) is not None
+
+    def test_backslash_in_word_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("f\\ind /data")) is not None
+
+    def test_quote_glued_pairs_block(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("'f'ind /data")) is not None
+        assert g.check_pre(_shell("fi'nd' /data")) is not None
+
+    def test_ansi_c_quoting_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("$'find' /data")) is not None
+
+    def test_ansi_c_quoting_as_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo $'find' /data")) is None
+
+    # --- line continuation splitting the command word ---
+    def test_continuation_in_word_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("fi\\\nnd /data")) is not None
+
+    def test_continuation_inside_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "fi\\\nnd /x"')) is not None
+
+    # --- subshell / brace / process substitution ---
+    def test_subshell_and_brace_block(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("(find /data)")) is not None
+        assert g.check_pre(_shell("{ find /data; }")) is not None
+
+    def test_process_substitution_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("cat <(find /data)")) is not None
+
+    # --- variable taint ---
+    def test_tainted_variable_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("X=find; $X /data")) is not None
+        assert g.check_pre(_shell('ssh h "X=find; $X /x"')) is not None
+
+    def test_tainted_non_executor_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("X=findutils; ls $X")) is None
+
+    def test_untainted_var_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ls $X")) is None
+
+    # --- executor wrappers (timeout / eval / stdbuf / ...) ---
+    def test_timeout_wrapped_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("timeout 5 find /data")) is not None
+
+    def test_eval_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('eval "find /data"')) is not None
+
+    def test_stdbuf_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("stdbuf -o0 find /data")) is not None
+
+    def test_wrapper_without_find_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("timeout 5 ls /data")) is None
+
+    # --- pipe-to-shell (echo payload | sh / bash / <<<) ---
+    def test_pipe_to_sh_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo 'find /x' | sh")) is not None
+
+    def test_double_quoted_payload_pipe_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('echo "find /data -name x" | bash')) is not None
+
+    def test_herestring_pipe_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('echo \'find /x\' <<< "" | sh')) is not None
+
+    def test_pipe_without_find_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("cat /etc/hosts | bash")) is None
+        assert g.check_pre(_shell("echo hi | wc -l")) is None
+
+    # --- command substitution carrying the executor ---
+    def test_cmd_subst_dollar_paren_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ls $(find /data)")) is not None
+
+    def test_backtick_subst_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo `find /data`")) is not None
+
+    # --- payload depth: quoted payload executed by an executor ---
+    def test_ssh_bare_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "find /data"')) is not None
+
+    def test_ssh_obfuscated_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ssh h \"f'i'n'd /x\"")) is not None
+
+    def test_ssh_echo_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "echo find /x"')) is None
+
+    # --- grep symmetry (absolute path / bare token after executor) ---
+    def test_grep_absolute_path_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("/usr/bin/grep -rn p /data")) is not None
+
+    def test_grep_bare_token_after_executor_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("kubectl exec pod -- grep -rn p /data")) is not None
+
+    def test_scoped_and_nonrecursive_grep_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("grep p /etc/hosts")) is None
+        assert g.check_pre(_shell("grep -rn p ./src")) is None

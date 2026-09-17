@@ -158,12 +158,19 @@ def _statement_command_word(toks: list[str]) -> str | None:
 
 
 def _cmd_base(word: str | None) -> str:
-    """Basename of a command word, quote-stripped.
+    """Basename of a command word, obfuscation-stripped.
 
     `/usr/bin/find` -> `find`; `find"` (closing quote glued to the token
-    after quote-region splitting) -> `find`.
+    after quote-region splitting) -> `find`; and the round-2 word-splitting
+    escapes — quote/backslash/backtick characters are removed from ANYWHERE
+    in the word: `f'in'd` -> `find`, `f\\ind` -> `find`, `` `find `` -> `find`.
+    `myfind` / `findutils` / `--find` still do NOT normalize to `find`.
     """
-    return word.strip("'\"").rsplit("/", 1)[-1] if word else ""
+    if not word:
+        return ""
+    # $'...' / $"..." (ANSI-C / locale quoting) — bash expands to the bare word.
+    word = word[1:] if word[:1] == "$" else word
+    return re.sub(r"['\"\\`]", "", word).rsplit("/", 1)[-1]
 
 
 def _statement_find_violation(text: str) -> GuardVerdict | None:
@@ -241,7 +248,7 @@ def _hidden_violation(cmd: str, depth: int = 0) -> GuardVerdict | None:
         return None
     blanked = _strip_heredocs(cmd)
     for stmt in _STMT_SPLIT_RE.split(blanked):
-        toks = stmt.split()
+        toks = _lex_tokens(stmt)
         v = _xargs_find_violation(toks)
         if v is not None:
             return v
@@ -265,7 +272,9 @@ def _grep_is_broad(sanitized: str) -> bool:
     guard message itself recommends scoped `grep -rn <pattern> <dir>`.
 
     `grep` must be the COMMAND word of its statement (optionally after a prefix
-    like `sudo`), so `echo grep -rn foo /` is not mistaken for a real grep.
+    like `sudo`, and with any absolute-path form via _cmd_base:
+    `/usr/bin/grep -rn p /data`), so `echo grep -rn foo /` is not mistaken
+    for a real grep.
     """
     for stmt in _STMT_SPLIT_RE.split(sanitized):
         toks = stmt.split()
@@ -277,7 +286,7 @@ def _grep_is_broad(sanitized: str) -> bool:
             "=" in toks[idx] or toks[idx] in _CMD_PREFIXES
         ):
             idx += 1
-        if idx >= len(toks) or toks[idx] != "grep":
+        if idx >= len(toks) or _cmd_base(toks[idx]) != "grep":
             continue
 
         recursive = False
@@ -294,14 +303,16 @@ def _grep_is_broad(sanitized: str) -> bool:
     return False
 
 
-def _strip_heredocs(cmd: str) -> str:
-    """Blank out heredoc bodies so `find` inside them is not seen as a command.
+def _blank_heredocs(cmd: str) -> tuple[str, list[str]]:
+    """Core heredoc pass: blank bodies, return them for re-scanning.
 
-    A heredoc body is data fed to a program's stdin, not a shell command, so any
-    `find` token there is not an invocation. Only blank lines up to a matching
-    terminator; if no terminator is found, leave the text untouched (avoids
-    mangling a line that merely contains `<<`).
+    Returns `(blanked_text, bodies)` where `bodies` are the raw heredoc body
+    texts (in order). A heredoc body is DATA for most readers (cat, python),
+    but a SCRIPT for a shell/executor reading stdin (`bash <<EOF`,
+    `ssh host <<EOF`) — callers re-scan bodies when such a consumer is
+    present.
     """
+    bodies: list[str] = []
     lines = cmd.split("\n")
     n = len(lines)
     i = 0
@@ -321,12 +332,24 @@ def _strip_heredocs(cmd: str) -> str:
                     end = j
             j += 1
         if end is not None:
+            bodies.append("\n".join(lines[i + 1 : end]))
             for k in range(i + 1, end + 1):
                 lines[k] = ""
             i = end + 1
         else:
             i += 1
-    return "\n".join(lines)
+    return "\n".join(lines), bodies
+
+
+def _strip_heredocs(cmd: str) -> str:
+    """Blank out heredoc bodies so `find` inside them is not seen as a command.
+
+    A heredoc body is data fed to a program's stdin, not a shell command, so any
+    `find` token there is not an invocation. Only blank lines up to a matching
+    terminator; if no terminator is found, leave the text untouched (avoids
+    mangling a line that merely contains `<<`).
+    """
+    return _blank_heredocs(cmd)[0]
 
 
 def _strip_quoted(cmd: str) -> str:
@@ -373,6 +396,327 @@ def _strip_quoted(cmd: str) -> str:
 def _sanitize(cmd: str) -> str:
     """Remove heredoc bodies and quoted regions, leaving only executable text."""
     return _strip_quoted(_strip_heredocs(cmd))
+
+
+# ── Round-2 hardening: systematic escape-family coverage ──
+#
+# The layers above (sanitize + anchored regex + payload recursion) miss
+# shell-semantics obfuscations. This block adds a lexical scanner over the
+# RAW command (quotes preserved) that models how the shell actually splits
+# and executes words. Families closed, one rule each:
+#
+#   word-splitting  f'in'd / f"i"nd / f\ind   -> _lex_tokens drops quote and
+#                                                backslash chars INSIDE a word
+#   line continuation  fi\<newline>nd         -> _join_continuations upstream
+#   subshell/brace/proc-subst                 -> ( ) { } < > are separators
+#   variable indirection  X=find; $X ...      -> assignment taint + $VAR use
+#   wrapper executors                         -> a bare find/grep token after
+#                                                ANY execution wrapper
+#                                                (timeout 10 find /, eval $X,
+#                                                stdbuf -oL find, kubectl
+#                                                exec pod -- grep ...)
+#   pipe-to-shell  echo 'find /' | sh         -> tail-shell pipeline scan
+#   nested substitution  $(ssh h "find /x")   -> paren separators + payload
+#                                                recursion; backtick spans
+#                                                extracted and re-scanned
+#   heredoc fed to a shell  bash <<EOF        -> bodies re-scanned when any
+#                                                stage is a shell/executor
+#
+# Data-only contexts stay legal (echo / python -c payloads, `cat find`,
+# `ls find`, `man find`, scoped greps) — each rule fires only when the
+# executed text actually contains a find / broad-recursive-grep invocation,
+# and the negative tests pin every data path.
+
+# Execution wrappers: a bare find/grep token after any of these words IS the
+# executed program. Scoped to real executors so `cat find`, `ls find`,
+# `echo find` (data / file names) stay legal.
+_EXEC_WRAPPERS = _EXECUTORS | _SHELL_WRAPPERS | _CMD_PREFIXES | {
+    "timeout", "eval", "watch", "strace", "ltrace", "ionice", "taskset",
+    "setpriv", "chroot", "unshare", "bwrap", "busybox", "screen", "tmux",
+    "script", "expect", "mpirun", "mpiexec", "torchrun", "srun", "deepspeed",
+}
+
+# Shell keywords that may precede the real command word (`if ..; then find ..`,
+# `for x in ..; do find ..`).
+_KEYWORDS = {"then", "do", "else", "elif"}
+
+# `NAME=value` assignment (leading identifier; `--opt=val` does NOT match).
+_ASSIGN_RE = re.compile(r"^([A-Za-z_]\w*)=(.*)$", re.DOTALL)
+
+# A bare `$VAR` / `${VAR}` use.
+_VAR_USE_RE = re.compile(r"^\$\{?(\w+)\}?$")
+
+# Pipeline separators: statement breaks AND grouping/redirect chars. Splitting
+# on ( ) { } < > makes `(find /)`, `{ find /; }`, `cat <(find /)`,
+# `X=$(find /)` all start a sub-statement with `find` as its command word.
+_PIPELINE_SEPS = ";&\n(){}"
+
+_BACKTICK_RE = re.compile(r"`([^`]*)`")
+
+
+def _join_continuations(cmd: str) -> str:
+    """Join backslash line continuations: `fi\\<newline>nd` -> `find`."""
+    return cmd.replace("\\\n", "")
+
+
+def _split_outside_quotes(text: str, seps: str) -> list[str]:
+    """Split on every char in `seps` that sits OUTSIDE quotes.
+
+    Backslash escapes are carried through untouched (the lexer resolves
+    them), so `echo 'a | find b' | wc` keeps its quoted pipe intact.
+    """
+    parts: list[str] = []
+    cur: list[str] = []
+    quote: str | None = None
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            cur.append(c)
+            if c == "\\" and quote == '"' and i + 1 < n:
+                cur.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            cur.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            cur.append(c)
+            cur.append(text[i + 1])
+            i += 2
+            continue
+        if c in seps:
+            parts.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return parts
+
+
+def _lex_tokens(text: str) -> list[str]:
+    """Shell word lexer: quote-aware, escape-resolving, quote-merging.
+
+    Quoted spans merge into their token (`'find /x'` stays ONE token — quoted
+    payloads are handled by payload extraction, not bare-token matching), and
+    quote/backslash chars are dropped from the word, so `f'in'd` -> `find`.
+    """
+    toks: list[str] = []
+    cur: list[str] = []
+    quote: str | None = None
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                cur.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+                i += 1
+                continue
+            cur.append(c)
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            cur.append(text[i + 1])
+            i += 2
+            continue
+        if c.isspace():
+            if cur:
+                toks.append("".join(cur))
+                cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    if cur:
+        toks.append("".join(cur))
+    return toks
+
+
+def _resolve_var(tok: str, tainted: dict[str, str]) -> str:
+    """`$VAR` / `${VAR}` -> the tainted assignment value, else the token."""
+    m = _VAR_USE_RE.match(tok)
+    if m and m.group(1) in tainted:
+        return tainted[m.group(1)]
+    return tok
+
+
+def _toks_recursive_broad(toks: list[str]) -> bool:
+    """Recursive flag + broad root present in a token tail (grep checks)."""
+    recursive = False
+    broad = False
+    for t in toks:
+        if t in _GREP_RECURSIVE_LONG:
+            recursive = True
+        elif t.startswith("-") and not t.startswith("--") and re.search(r"[rR]", t[1:]):
+            recursive = True
+        elif (t.rstrip("/") or "/") in _GREP_BROAD_ROOTS:
+            broad = True
+    return recursive and broad
+
+
+def _shell_tail_reads_stdin(toks: list[str]) -> bool:
+    """True for a bare/flag-only shell tail (`| sh`, `| bash -s`) — its stdin
+    script executes. A `-c` payload shell runs its own script instead, which
+    the executor payload path already scans."""
+    for t in toks[1:]:
+        b = _cmd_base(t)
+        if b in ("--command", "--c") or re.fullmatch(r"-[a-zA-Z]*c", b):
+            return False
+    return True
+
+
+def _stage_violation(
+    st_text: str, toks: list[str], tainted: dict[str, str], depth: int,
+) -> GuardVerdict | None:
+    """One pipeline segment: taint, head find/grep, executor bare tokens,
+    quoted payload recursion."""
+    if not toks:
+        return None
+    i = 0
+    # VAR=val assignments: record taint; a $()/backtick value EXECUTES now.
+    while i < len(toks):
+        m = _ASSIGN_RE.match(toks[i])
+        if not m:
+            break
+        val = m.group(2)
+        if val and ("$(" in val or "`" in val):
+            v = _violation_in_shell_text(val) or _scan(val, tainted, depth + 1)
+            if v is not None:
+                return v
+        tainted[m.group(1)] = val
+        i += 1
+    # Shell keywords before the command word (`; do find $x`).
+    while i < len(toks) and _cmd_base(toks[i]) in _KEYWORDS:
+        i += 1
+    if i >= len(toks):
+        return None
+    head_tok = toks[i]
+    resolved = _resolve_var(head_tok, tainted)
+    if resolved != head_tok:
+        # The head IS a tainted value: `X=find; $X /x` executes it.
+        v = _violation_in_shell_text(resolved) or _scan(resolved, tainted, depth + 1)
+        if v is not None:
+            return v
+    head = _cmd_base(resolved)
+    if head == "find":
+        return GuardVerdict.block(
+            _FIND_MESSAGE, reason="find_invocation", category="find_guard",
+        )
+    if head == "grep" and _toks_recursive_broad(toks[i + 1 :]):
+        return GuardVerdict.block(
+            _GREP_MESSAGE, reason="broad_recursive_grep", category="find_guard",
+        )
+    if head in _EXEC_WRAPPERS:
+        # A bare find/grep token after the wrapper IS the executed program:
+        # `timeout 10 find /`, `kubectl exec pod -- grep -rn p /data`.
+        for j in range(i + 1, len(toks)):
+            rtok = _resolve_var(toks[j], tainted)
+            if rtok != toks[j]:
+                v = _violation_in_shell_text(rtok) or _scan(rtok, tainted, depth + 1)
+                if v is not None:
+                    return v
+            rbase = _cmd_base(rtok)
+            if rbase == "find":
+                return GuardVerdict.block(
+                    _FIND_MESSAGE, reason="find_invocation",
+                    category="find_guard",
+                )
+            if rbase == "grep" and _toks_recursive_broad(toks[j + 1 :]):
+                return GuardVerdict.block(
+                    _GREP_MESSAGE, reason="broad_recursive_grep",
+                    category="find_guard",
+                )
+        # Quoted payloads the wrapper will execute (ssh / docker / bash -c).
+        for payload in _extract_payloads(st_text):
+            v = _violation_in_shell_text(payload) or _scan(payload, tainted, depth + 1)
+            if v is not None:
+                return v
+    # Prefix-skipped statement find/grep: `sudo find /x`, `nohup grep -rn p /`.
+    k = i
+    while k < len(toks) and _cmd_base(toks[k]) in _CMD_PREFIXES:
+        k += 1
+    if k < len(toks):
+        rtok = _resolve_var(toks[k], tainted)
+        if _cmd_base(rtok) == "find":
+            return GuardVerdict.block(
+                _FIND_MESSAGE, reason="find_invocation", category="find_guard",
+            )
+        if _cmd_base(toks[k]) == "grep" and _toks_recursive_broad(toks[k + 1 :]):
+            return GuardVerdict.block(
+                _GREP_MESSAGE, reason="broad_recursive_grep", category="find_guard",
+            )
+    return None
+
+
+def _scan(text: str, tainted: dict[str, str] | None = None, depth: int = 0) -> GuardVerdict | None:
+    """Lexical scanner over the raw command (quotes preserved) — the round-2
+    escape-family net. See the block comment above `_EXEC_WRAPPERS` for the
+    family -> rule map. Recurses into payloads/backticks with depth bound;
+    `tainted` threads assignment values across statements and into payloads.
+    """
+    if depth >= _MAX_PAYLOAD_DEPTH:
+        return None
+    if tainted is None:
+        tainted = {}
+    joined = _join_continuations(text)
+    blanked, bodies = _blank_heredocs(joined)
+
+    any_executor_stage = False
+    for pipeline in _split_outside_quotes(blanked, _PIPELINE_SEPS):
+        stage_texts = _split_outside_quotes(pipeline, "|")
+        stage_pairs = [(st, _lex_tokens(st)) for st in stage_texts]
+        for st_text, toks in stage_pairs:
+            v = _stage_violation(st_text, toks, tainted, depth)
+            if v is not None:
+                return v
+            if toks and _cmd_base(toks[0]) in _EXEC_WRAPPERS:
+                any_executor_stage = True
+        # Pipe-to-shell: `echo 'find / -name y' | sh` — the tail shell runs
+        # the piped text as a script, so earlier stages' quoted payloads are
+        # code. Tails with their own -c payload are scanned by that path.
+        if len(stage_pairs) > 1:
+            tail_toks = stage_pairs[-1][1]
+            if (
+                tail_toks
+                and _cmd_base(tail_toks[0]) in _SHELL_WRAPPERS
+                and _shell_tail_reads_stdin(tail_toks)
+            ):
+                for st_text, _ in stage_pairs[:-1]:
+                    for payload in _extract_payloads(st_text):
+                        v = _violation_in_shell_text(payload) or _scan(
+                            payload, tainted, depth + 1,
+                        )
+                        if v is not None:
+                            return v
+    # Backtick command substitution executes its inner text.
+    for m in _BACKTICK_RE.finditer(blanked):
+        v = _violation_in_shell_text(m.group(1)) or _scan(m.group(1), tainted, depth + 1)
+        if v is not None:
+            return v
+    # Heredoc bodies are SCRIPTS when a shell/executor consumes them
+    # (`bash <<EOF`, `ssh host <<EOF`) — data otherwise (cat/python).
+    if any_executor_stage:
+        for body in bodies:
+            v = _violation_in_shell_text(body) or _scan(body, tainted, depth + 1)
+            if v is not None:
+                return v
+    return None
 
 
 _FIND_MESSAGE = (
@@ -460,6 +804,14 @@ class FindGuard(Guard):
         hidden = _hidden_violation(command)
         if hidden is not None:
             return hidden
+
+        # Round-2 lexical scanner: shell-semantics escape families the
+        # string-regex layers above cannot see (word-splitting, line
+        # continuations, subshells, variable indirection, wrapper executors,
+        # pipe-to-shell, nested substitution, shell-fed heredocs).
+        scanned = _scan(command)
+        if scanned is not None:
+            return scanned
 
         return None
 
