@@ -642,3 +642,64 @@ class TestRefreshSessionDir:
         assert "/fake/session/xyz" in prompt
         assert "conversation_full.json" in prompt
         assert "conversation.json" in prompt
+
+
+# ── Analyze-don't-just-use principle (20260918) ──────────────────────────
+
+class TestAnalyzeDontJustUse:
+    """The 'ANALYZE, DON'T JUST USE' principle must not be silently removed.
+
+    Guards the two landing sites: the dedicated paragraph in PRINCIPLE 1
+    (after FIRST-ACTION RESEARCH REFLEX) and the depth extension on the
+    'Read existing code before writing new code' bullet in Rules/DO.
+    """
+
+    def _prompt(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        return SYSTEM_PROMPT_STATIC
+
+    def test_analyze_principle_present(self):
+        # The dedicated P1 paragraph and its mechanism-level demand.
+        p = self._prompt()
+        assert "ANALYZE, DON'T JUST USE" in p
+        assert "SUBJECT of study, not a tool to consume" in p
+        assert "MECHANISM level" in p
+
+    def test_analyze_resolves_standard_method_tension(self):
+        # Dissolves the mis-reading of P1: standard method != current code.
+        p = self._prompt()
+        assert "standard APPROACH, not whatever the code currently does" in p
+
+    def test_read_existing_code_has_mechanism_depth(self):
+        # The Rules/DO bullet must carry the optimization-depth extension.
+        p = self._prompt()
+        assert "Read existing code before writing new code" in p
+        assert "read at the *mechanism* level" in p
+
+
+    # ── Information Retrieval: check memory for the location before searching ──
+
+    def test_pre_search_memory_location_check_present(self):
+        # The retrieval checklist must lead with: consult memory for the named
+        # file BEFORE scanning any tree. Regression for the "looked up a symbol
+        # that was already recorded" waste.
+        p = self._prompt()
+        assert "check whether memory already knows the location" in p
+
+    def test_pre_search_memory_uses_memory_list_and_named_file(self):
+        p = self._prompt()
+        i = p.index("## Information Retrieval")
+        j = p.index("## Pitfall Recall")
+        blk = p[i:j]
+        assert "memory_list(keyword='<term>')" in blk
+        assert "read that\nfile directly, instead of scanning a tree" in blk
+
+    def test_pre_search_memory_names_heavy_subtrees(self):
+        # Names the concrete heavy-tree markers so the guidance is operational,
+        # not abstract ("avoid broad search").
+        p = self._prompt()
+        i = p.index("## Information Retrieval")
+        j = p.index("## Pitfall Recall")
+        blk = p[i:j]
+        for marker in ("site-packages", "node_modules", "logs", "checkpoints"):
+            assert marker in blk, marker
