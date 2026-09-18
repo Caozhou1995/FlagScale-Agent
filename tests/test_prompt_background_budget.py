@@ -246,3 +246,45 @@ class TestTimeBudgetGuidance:
         # generic, no task leaking
         assert "caffe" not in low
         assert "cifar" not in low
+
+
+class TestExpectationViolationAttribution:
+    """User doctrine (202609, aligned with GLM RSI blog): an action agent must
+    ANALYZE results, not just take them — a result that violates expectation
+    obliges the agent to name a mechanism + a controlled comparison, never to
+    stop at 'worse' / 'inaccurate'."""
+
+    OBS_LINE = None  # filled in classmethod below
+
+    @classmethod
+    def obs_line(cls):
+        if cls.OBS_LINE is None:
+            lines = [ln for ln in SYSTEM_PROMPT_STATIC.splitlines()
+                     if ln.startswith("OBSERVATION SEMANTICS")]
+            assert len(lines) == 1, "OBSERVATION SEMANTICS must stay a single line"
+            cls.OBS_LINE = lines[0]
+        return cls.OBS_LINE
+
+    def test_rule_present_in_observation_semantics_paragraph(self):
+        line = self.obs_line()
+        assert "treat it as a question, not a verdict" in line
+        assert "state the mechanism you propose" in line
+        assert "controlled comparison that would test it" in line
+
+    def test_rules_out_verdict_only_language(self):
+        line = self.obs_line()
+        assert '"worse" or "inaccurate" stand in for a named cause' in line
+
+    def test_no_new_braces_introduced(self):
+        # SYSTEM_PROMPT_STATIC is .format()-rendered by the builder with the
+        # fixed kwargs cwd/knowledge/skills/tools. Any literal { or } added by
+        # an edit raises KeyError/IndexError at prompt-build time (the {N}
+        # regression, 20260914).
+        import re
+        line = self.obs_line()
+        assert not re.search(r"[{}]", line), line[:80]
+        # and the builder-level invariant: the full static prompt still has
+        # exactly the four pre-existing placeholders.
+        import re as _re
+        assert set(_re.findall(r"{([a-z_]+)}", SYSTEM_PROMPT_STATIC)) == {
+            "cwd", "knowledge", "skills", "tools"}
