@@ -42,6 +42,14 @@ dev = [
     "pytest-mock>=3.14.0",
     "ruff>=0.4.0",
 ]
+# Optional: inspect_checkpoint tool. torch/safetensors are lazy imports inside
+# the tool (flagscale_agent/react/tools/inspect_checkpoint.py); without this
+# extra the tool degrades to an ERROR string and the rest of the agent and the
+# test suite (importorskip) work untouched.
+checkpoint = [
+    "torch>=1.13",
+    "safetensors>=0.3.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/flagos-ai/FlagScale-Agent"
