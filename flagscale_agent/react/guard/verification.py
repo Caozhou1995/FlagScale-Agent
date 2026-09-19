@@ -680,9 +680,22 @@ clean):
               name the doc; if it cannot be written now, mark the insight
               promote-to-knowledge
           Keep each proposal one line. Skip a container when nothing fits it.
+          REGISTER every proposal you raise with the proposal tool
+          (action='add') so it gets a persistent id and status — a proposal that
+          lives only in this message is forgotten the moment the session ends.
        2. CAPTURE — memory_write() an insight/agent/<topic> entry (finding /
           digest direction / target artifact) so the proposal survives the
           session even if the human never sees the message.
+       RECONCILE THE REGISTRY — proposals persist ACROSS sessions and carry a
+       status (proposed → approved → done, or rejected/superseded), so this is a
+       running ledger, not a one-shot. Call the proposal tool (action='list') to
+       pull every OPEN proposal — yours AND ones raised in EARLIER sessions the
+       human never answered — and include them in your wrap-up so an unanswered
+       proposal is never silently dropped (this is why they must be registered in
+       step 1). Then, for any proposal the human has since reacted to (agreed,
+       carried out, or declined), update its status NOW with (action='update'):
+       agreed-and-implemented → 'done', declined → 'rejected'. Keeping the status
+       current is what stops the next wrap-up re-reporting settled items.
        CONTROL STAYS WITH THE HUMAN: at wrap-up you do NOT edit guards, tools,
        prompts, skills, or knowledge — a proposal is an output, not a license.
      If genuinely none, answer "none" explicitly — but a session that edited
@@ -690,7 +703,7 @@ clean):
      deserves a real look before claiming that.
 
 Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced,
-harness gap captured or "none", or "none apply">. This gate fires once."""
+harness gap captured (registered + open ones re-reported) or "none", or "none apply">. This gate fires once."""
 
 
 # Pre-mortem, delivered AFTER a step_done goes through (check_post). The pre-side
@@ -742,8 +755,9 @@ class VerificationGuard(Guard):
     name = "verification"
     priority = 55
     
-    def __init__(self, plan=None):
+    def __init__(self, plan=None, proposals=None):
         self._plan = plan
+        self._proposals = proposals
         self._post_recovery = False
         self._recovery_reminded = False
         self._acceptance_guidance_given = False
@@ -776,6 +790,35 @@ class VerificationGuard(Guard):
         self._text_complete_hygiene_demanded = False
         self._step_done_recheck_reminded = False
         self._premortem_pending = False
+
+    def _text_complete_hygiene_message(self) -> str:
+        """The wrap-up hygiene message, with the live open-proposal list injected.
+
+        The registry is global/cross-session, so a proposal raised in an earlier
+        session and never reviewed appears here — that is the whole point of the
+        registry. We only ADD the list; the static template (minus its trailing
+        instruction) is unchanged when there is nothing open.
+        """
+        base = _TEXT_COMPLETE_HYGIENE
+        if self._proposals is None:
+            return base
+        open_list = self._proposals.render_open()
+        if not open_list:
+            return base
+        block = (
+            "\n\n[Open proposals already on file — raised in THIS or an EARLIER "
+            "session and still awaiting the human's review. Re-report these in "
+            "your wrap-up (do NOT re-propose them as new), and if the human has "
+            "since said 'approved'/'done'/'no' about any, first update its status "
+            "with the proposal tool (action='update'), then report the new "
+            "status.]\n" + open_list
+        )
+        # Insert right before the final re-issue instruction, so the added block
+        # stays part of the wrap-up guidance rather than dangling after it.
+        marker = "\nRe-issue [TASK_COMPLETE] with _override_reason:"
+        if marker in base:
+            return base.replace(marker, block + marker, 1)
+        return base + block
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # Pre-mortem: fires immediately AFTER a step_done that passed the pre-side
@@ -840,7 +883,7 @@ class VerificationGuard(Guard):
                 if not ctx.override_reason.strip():
                     self._text_complete_hygiene_demanded = True
                     return GuardVerdict.block(
-                        message=_TEXT_COMPLETE_HYGIENE,
+                        message=self._text_complete_hygiene_message(),
                         reason="text_complete_hygiene",
                         category="verification_required",
                     )

@@ -67,6 +67,8 @@ from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
 from flagscale_agent.react.tools.memory_list import MemoryListTool
+from flagscale_agent.react.proposals import ProposalRegistry
+from flagscale_agent.react.tools.proposal import ProposalTool
 from flagscale_agent.react.plan import TaskPlan
 from flagscale_agent.react.tools.monitor import FlagScaleTrainMonitorTool
 from flagscale_agent.react.tools.plan_create import PlanCreateTool
@@ -137,7 +139,7 @@ class WorkerAgent:
         self._knowledge_manager = KnowledgeManager()
 
         self._session_id = uuid.uuid4().hex[:8]
-        from flagscale_agent.react.paths import get_sessions_root, get_memory_dir
+        from flagscale_agent.react.paths import get_sessions_root, get_memory_dir, get_proposals_dir
         sessions_root = config.session_dir or get_sessions_root()
         session_dir = os.path.join(sessions_root, self._session_id)
         os.makedirs(session_dir, exist_ok=True)
@@ -184,6 +186,12 @@ class WorkerAgent:
 
         plan_dir = os.path.join(session_dir, "plans")
         self.task_plan = _task_plan or TaskPlan(plan_dir)
+
+        # Global, cross-session improvement-proposal registry. Lives outside the
+        # per-session dir on purpose: an unreviewed proposal raised in one
+        # session must resurface at a later session's wrap-up. This is what the
+        # wrap-up HARNESS GAP item reads to re-report unanswered proposals.
+        self.proposals = ProposalRegistry(get_proposals_dir())
 
         if not _tool_registry:
             self._register_tools()
@@ -325,7 +333,7 @@ class WorkerAgent:
         self._knowledge_guard = KnowledgeSkillGuard()
         guard_registry.register(self._knowledge_guard)
         # Verification discipline guard (always active, block on step_done without evidence)
-        guard_registry.register(VerificationGuard(plan=self.task_plan))
+        guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals))
 
         deps = KernelDeps(
             provider=self.provider,
@@ -390,6 +398,7 @@ class WorkerAgent:
         self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(MemoryReadTool(self.memory))
         self.tool_registry.register(MemoryListTool(self.memory))
+        self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
         self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
@@ -1147,6 +1156,9 @@ class WorkerAgent:
         self.tool_registry.register(MemoryWriteTool(
             self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
+        # Re-register the proposal tool under the restored session id (same
+        # capture-at-registration issue as memory_write/plan_create above).
+        self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
 
         # Clean up the empty new session dir if it's different. The emptiness
         # predicate must ignore dotfiles (the lock file lives there) AND empty
