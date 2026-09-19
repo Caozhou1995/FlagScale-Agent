@@ -53,6 +53,11 @@ VALID_STATUSES = ("proposed", "approved", "done", "rejected", "superseded")
 OPEN_STATUSES = ("proposed", "approved")
 TERMINAL_STATUSES = ("done", "rejected", "superseded")
 
+# A still-'proposed' proposal older than this many days is surfaced as STALE at
+# wrap-up, so a long-pending one (never answered by the human) stands out instead
+# of blurring into the pile of freshly-raised ones.
+STALE_AFTER_DAYS = 7
+
 # Proposal id must be safe for use as a filename (no path traversal).
 _ID_RE = re.compile(r"^prop_[a-z0-9]{4,12}$")
 
@@ -186,6 +191,36 @@ class ProposalRegistry:
     def list_status(self, status: str) -> List[dict]:
         return [e for e in self.list_all() if e.get("status") == status]
 
+    # ── staleness ────────────────────────────────────────────────────────────
+    @staticmethod
+    def _age_days(entry: dict, now: Optional[datetime] = None) -> Optional[float]:
+        """Days since the proposal was raised (created_at), or None if unknown."""
+        raw = entry.get("created_at")
+        if not raw:
+            return None
+        try:
+            created = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        now = now or datetime.now(timezone.utc)
+        return (now - created).total_seconds() / 86400.0
+
+    @classmethod
+    def is_stale(cls, entry: dict, now: Optional[datetime] = None,
+                 max_days: float = STALE_AFTER_DAYS) -> bool:
+        """True iff this is still 'proposed' and older than max_days.
+
+        Only un-answered ('proposed') proposals go stale: once the human has
+        reacted ('approved'/'done'/'rejected'/...) the ages-out rule no longer
+        applies, so an approved-but-not-yet-built item is never mislabelled stale.
+        """
+        if entry.get("status") != "proposed":
+            return False
+        age = cls._age_days(entry, now=now)
+        return age is not None and age > max_days
+
     # ── rendering ────────────────────────────────────────────────────────────
     @staticmethod
     def _fmt(e: dict) -> str:
@@ -193,11 +228,24 @@ class ProposalRegistry:
         return f"{e['id']} ({e.get('status','?')}): {c}{e.get('description','')}"
 
     def render_open(self) -> str:
-        """Human/LLM-readable list of still-open proposals, or '' if none."""
+        """Human/LLM-readable list of still-open proposals, or '' if none.
+
+        Proposals still 'proposed' after STALE_AFTER_DAYS days are tagged
+        ``[STALE N d]`` so a long-unanswered one stands out from fresh ones.
+        """
         open_ = self.list_open()
         if not open_:
             return ""
         lines = ["Open improvement proposals still awaiting review:"]
         for e in sorted(open_, key=lambda x: x.get("created_at", "")):
-            lines.append("  • " + self._fmt(e))
+            tag = ""
+            if self.is_stale(e):
+                age = self._age_days(e)
+                tag = f" [STALE {age:.0f}d]" if age is not None else " [STALE]"
+            lines.append("  • " + self._fmt(e) + tag)
         return "\n".join(lines)
+
+    def open_count(self) -> int:
+        """Number of still-open (proposed/approved) proposals — for a startup hint."""
+        return len(self.list_open())
+

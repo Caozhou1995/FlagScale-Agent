@@ -38,7 +38,9 @@ class ProposalTool(Tool):
         "container is the routing: 'agent-code' | 'skill' | 'knowledge'.\n"
         "- list: show open (unreviewed) proposals. Call this at wrap-up to find "
         "proposals raised earlier that still need the human's decision.\n"
-        "- update: change a proposal's status (proposal_id, status[, note]).\n\n"
+        "- update: change a proposal's status (proposal_id, status[, note]) — OR "
+        "resolve several at once by passing 'updates': a list of "
+        "{proposal_id, status[, note]} objects.\n\n"
         f"Valid statuses: {', '.join(VALID_STATUSES)}. "
         f"'proposed'/'approved' are OPEN (resurface at wrap-up); "
         "'done'/'rejected'/'superseded' are terminal (closed)."
@@ -83,6 +85,24 @@ class ProposalTool(Tool):
                 "type": "string",
                 "description": "update: optional short note recorded with the transition.",
             },
+            "updates": {
+                "type": "array",
+                "description": (
+                    "update: batch form — a list of "
+                    "{proposal_id, status[, note]} objects to resolve several "
+                    "proposals in one call. Use instead of the single "
+                    "proposal_id/status pair."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "proposal_id": {"type": "string"},
+                        "status": {"type": "string", "enum": list(VALID_STATUSES)},
+                        "note": {"type": "string"},
+                    },
+                    "required": ["proposal_id", "status"],
+                },
+            },
         },
         "required": ["action"],
     }
@@ -91,9 +111,45 @@ class ProposalTool(Tool):
         self._registry = registry
         self._session_id = session_id
 
+    def _update_batch(self, updates: list) -> str:
+        """Apply several status transitions in one call.
+
+        Accepts a list of {proposal_id, status[, note]} dicts. Each item is
+        resolved independently (one bad item does not abort the rest), and the
+        result line reports ok/error per proposal.
+        """
+        lines = []
+        ok = 0
+        for i, item in enumerate(updates):
+            if not isinstance(item, dict):
+                lines.append(f"  ✗ item {i}: not an object")
+                continue
+            pid = (item.get("proposal_id") or "").strip()
+            st = (item.get("status") or "").strip()
+            nt = item.get("note") or ""
+            if not pid:
+                lines.append(f"  ✗ item {i}: missing 'proposal_id'")
+                continue
+            if st not in VALID_STATUSES:
+                lines.append(
+                    f"  ✗ {pid}: 'status' must be one of {VALID_STATUSES} (got {st!r})"
+                )
+                continue
+            try:
+                entry = self._registry.set_status(
+                    pid, st, session_id=self._session_id, note=nt,
+                )
+            except ValueError as e:
+                lines.append(f"  ✗ {pid}: {e}")
+                continue
+            ok += 1
+            lines.append(f"  ✓ {entry['id']} → {entry.get('status')}")
+        header = f"Batch update: {ok}/{len(updates)} applied."
+        return "\n".join([header] + lines)
+
     def execute(self, action: str = "", description: str = "", container: str = "",
                 topic: str = "", proposal_id: str = "", status: str = "",
-                note: str = "", **kwargs) -> str:
+                note: str = "", updates: list = None, **kwargs) -> str:
         action = (action or "").strip()
         if action == "add":
             if not (description or "").strip():
@@ -125,6 +181,8 @@ class ProposalTool(Tool):
             return "\n".join(lines)
 
         if action == "update":
+            if updates:
+                return self._update_batch(updates)
             if not proposal_id:
                 return "ERROR: action='update' requires 'proposal_id'."
             if status not in VALID_STATUSES:

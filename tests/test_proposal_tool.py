@@ -74,6 +74,48 @@ class TestProposalTool:
         assert tool.execute(action="frobnicate").startswith("ERROR")
 
 
+class TestBatchUpdate:
+    def test_batch_updates_multiple(self, env):
+        reg, tool = env
+        tool.execute(action="add", description="A")
+        tool.execute(action="add", description="B")
+        tool.execute(action="add", description="C")
+        ids = [e["id"] for e in reg.list_open()]
+        out = tool.execute(action="update", updates=[
+            {"proposal_id": ids[0], "status": "done", "note": "shipped"},
+            {"proposal_id": ids[1], "status": "rejected"},
+            {"proposal_id": ids[2], "status": "approved"},
+        ])
+        assert "3/3 applied" in out
+        assert reg.list_open() == [] or all(
+            e["status"] == "approved" for e in reg.list_open()
+        )
+        assert reg.get(ids[0])["status"] == "done"
+        assert reg.get(ids[1])["status"] == "rejected"
+
+    def test_batch_partial_bad_item_does_not_abort(self, env):
+        reg, tool = env
+        tool.execute(action="add", description="A")
+        good = reg.list_open()[0]["id"]
+        out = tool.execute(action="update", updates=[
+            {"proposal_id": good, "status": "done"},
+            {"proposal_id": "prop_nope", "status": "done"},
+            {"proposal_id": good, "status": "bogus"},
+        ])
+        assert "1/3 applied" in out
+        assert reg.get(good)["status"] == "done"
+
+    def test_batch_empty_or_none_falls_through_to_single(self, env):
+        reg, tool = env
+        tool.execute(action="add", description="A")
+        pid = reg.list_open()[0]["id"]
+        # updates=None/empty => single-id path (which still requires proposal_id)
+        assert tool.execute(action="update").startswith("ERROR")
+        assert "done" in tool.execute(
+            action="update", proposal_id=pid, status="done"
+        )
+
+
 class TestWrapupInjection:
     def test_no_registry_is_unchanged(self):
         g = VerificationGuard(plan=None, proposals=None)

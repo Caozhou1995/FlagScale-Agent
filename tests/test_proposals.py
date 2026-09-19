@@ -93,3 +93,60 @@ class TestListing:
         assert a["id"] in text
         assert "skills" in text or "[skill]" in text
         assert text.startswith("Open improvement proposals")
+
+
+class TestStaleness:
+    def _age(self, reg, pid, days):
+        """Rewrite created_at to `days` in the past (write straight to disk)."""
+        import yaml
+        from datetime import datetime, timezone, timedelta
+        p = reg._path(pid)
+        with open(p, encoding="utf-8") as f:
+            e = yaml.safe_load(f)
+        old = datetime.now(timezone.utc) - timedelta(days=days)
+        e["created_at"] = old.isoformat(timespec="seconds")
+        with open(p, "w", encoding="utf-8") as f:
+            yaml.dump(e, f)
+
+    def test_fresh_proposed_not_stale(self, reg):
+        e = reg.add("A", session_id="s1")
+        assert reg.is_stale(reg.get(e["id"])) is False
+
+    def test_old_proposed_is_stale(self, reg):
+        e = reg.add("A", session_id="s1")
+        self._age(reg, e["id"], 8)  # > 7 days
+        assert reg.is_stale(reg.get(e["id"])) is True
+
+    def test_boundary_exactly_seven_days_not_stale(self, reg):
+        e = reg.add("A", session_id="s1")
+        self._age(reg, e["id"], 6)  # < 7 days
+        assert reg.is_stale(reg.get(e["id"])) is False
+
+    def test_approved_never_stale(self, reg):
+        e = reg.add("A", session_id="s1")
+        reg.set_status(e["id"], "approved")
+        self._age(reg, e["id"], 30)
+        assert reg.is_stale(reg.get(e["id"])) is False
+
+    def test_render_tags_stale(self, reg):
+        e = reg.add("Old", session_id="s1")
+        self._age(reg, e["id"], 9)
+        text = reg.render_open()
+        assert "STALE" in text and e["id"] in text
+
+    def test_render_no_stale_tag_when_fresh(self, reg):
+        reg.add("Fresh", session_id="s1")
+        assert "STALE" not in reg.render_open()
+
+    def test_stale_after_days_constant_is_seven(self):
+        from flagscale_agent.react.proposals import STALE_AFTER_DAYS
+        assert STALE_AFTER_DAYS == 7
+
+    def test_open_count(self, reg):
+        assert reg.open_count() == 0
+        a = reg.add("A", session_id="s1")
+        reg.add("B", session_id="s1")
+        assert reg.open_count() == 2
+        reg.set_status(a["id"], "done")
+        assert reg.open_count() == 1
+

@@ -1429,6 +1429,17 @@ class WorkerAgent:
         sessions = find_resumable_sessions(self._sessions_root)
         if sessions:
             hints.append(f"{len(sessions)} resumable session(s) - use /resume to restore")
+        # Surface unreviewed harness-improvement proposals at startup (not in the
+        # dashboard) so a long-pending one is visible before the next wrap-up.
+        try:
+            n_open = self.proposals.open_count()
+        except Exception:
+            n_open = 0
+        if n_open:
+            hints.append(
+                f"{n_open} open improvement proposal(s) awaiting review - "
+                "use the proposal tool (action='list')"
+            )
         return hints
 
     def _check_proxy(self):
