@@ -1015,9 +1015,30 @@ class WorkerAgent:
         def _on_watchdog_sigint():
             watchdog_state["tripped"] = True
 
+        def _pending_input_backlog() -> bool:
+            """Keys read off the tty but not yet dispatched by prompt_toolkit.
+
+            The classic wedge leaves bytes unread in the kernel (caught by
+            ``select``). A second wedge class has the reader *consume* the
+            keystroke and then stall before dispatching it, so ``select`` on the
+            fd sees nothing while the key sits in prompt_toolkit's userspace
+            queues. Consult both ``KeyProcessor.input_queue`` (fed but not
+            processed) and ``Vt100Input._buffer`` (parsed but not fed).
+            """
+            app = getattr(session, "app", None)
+            if app is None:
+                return False
+            kp = getattr(app, "key_processor", None)
+            if kp is not None and getattr(kp, "input_queue", None):
+                return True
+            inp = getattr(app, "input", None)
+            buf = getattr(inp, "_buffer", None) if inp is not None else None
+            return bool(buf)
+
         watchdog = PromptWatchdog(
             is_at_prompt=lambda: guard_state["at_prompt"],
             on_sigint=_on_watchdog_sigint,
+            pending_probe=_pending_input_backlog,
             logger=display.warn,
         )
         watchdog.start()

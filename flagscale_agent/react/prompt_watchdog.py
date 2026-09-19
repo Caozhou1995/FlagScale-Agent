@@ -23,12 +23,16 @@ main thread parked in ``ep_poll`` with bytes available on the tty that were
 never read).
 
 This watchdog runs on a daemon thread and watches for exactly that condition:
-bytes are available on stdin, a prompt is supposed to be showing, and those
-bytes remain unconsumed for ``threshold`` seconds. On detection it first
-nudges the terminal with ``SIGWINCH`` (a cheap, harmless re-arm); if the bytes
-are *still* unconsumed after ``winch_grace`` more seconds it escalates to
-``SIGINT``, which breaks the wedged ``prompt()`` so the REPL can rebuild a
-fresh :class:`PromptSession` and accept input again.
+input is waiting but unconsumed while a prompt is supposed to be showing, and
+that state persists for ``threshold`` seconds. "Waiting" is detected two ways,
+OR-ed: bytes still readable on stdin (the kernel-buffer wedge), and a
+non-empty userspace backlog via an injected ``pending_probe`` (the second wedge
+class, where prompt_toolkit's reader thread already consumed the keystroke — so
+``select`` on the fd is blind to it — yet the loop stalled before dispatching
+it). On detection it first nudges the terminal with ``SIGWINCH`` (a cheap,
+harmless re-arm); if the input is *still* unconsumed after ``winch_grace`` more
+seconds it escalates to ``SIGINT``, which breaks the wedged ``prompt()`` so the
+REPL can rebuild a fresh :class:`PromptSession` and accept input again.
 
 Properties that make this safe:
   * It never fires during a turn (guarded by ``is_at_prompt``), so a long
@@ -58,6 +62,7 @@ class PromptWatchdog:
         on_sigint=None,
         fd=None,
         *,
+        pending_probe=None,
         interval=2.0,
         threshold=60.0,
         winch_grace=15.0,
@@ -69,6 +74,7 @@ class PromptWatchdog:
     ):
         self._is_at_prompt = is_at_prompt
         self._on_sigint = on_sigint
+        self._pending_probe = pending_probe
         self._fd = fd if fd is not None else self._default_fd()
         self._interval = interval
         self._threshold = threshold
@@ -94,14 +100,34 @@ class PromptWatchdog:
             return None
 
     def _input_pending(self) -> bool:
-        """True iff bytes are available to read on the watched fd."""
-        if self._fd is None:
-            return False
-        try:
-            r, _, _ = self._select([self._fd], [], [], 0)
-            return bool(r)
-        except Exception:
-            return False
+        """True iff input is known to be waiting but not consumed.
+
+        Two independent signals, OR-ed:
+
+        * **Kernel bytes** — ``select([fd])`` reports the tty readable. Covers
+          the classic wedge where bytes sit in the kernel buffer and the loop
+          never reads them.
+        * **Userspace backlog** — ``pending_probe()`` reports keys that were
+          *already read off the fd* but not yet processed (prompt_toolkit's
+          ``KeyProcessor.input_queue`` / ``Vt100Input._buffer``). Covers the
+          second wedge class where the reader thread consumed the keystroke, so
+          the fd is no longer readable, yet the application stalled before
+          dispatching it — the exact case ``select`` alone is blind to.
+        """
+        if self._fd is not None:
+            try:
+                r, _, _ = self._select([self._fd], [], [], 0)
+                if r:
+                    return True
+            except Exception:
+                pass
+        if self._pending_probe is not None:
+            try:
+                if self._pending_probe():
+                    return True
+            except Exception:
+                pass
+        return False
 
     def tick(self):
         """Run one evaluation.
@@ -176,7 +202,7 @@ class PromptWatchdog:
 
     def start(self):
         """Start the background watcher (idempotent)."""
-        if self._fd is None or self._thread is not None:
+        if (self._fd is None and self._pending_probe is None) or self._thread is not None:
             return
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name="prompt-watchdog"

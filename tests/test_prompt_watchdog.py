@@ -172,3 +172,85 @@ class TestPromptWatchdog:
         )
         wd._fd = None
         assert wd.tick() is None
+
+    def test_backlog_probe_fires_when_fd_clean(self):
+        # Second wedge class: the reader consumed the keystroke (fd no longer
+        # readable -> select sees nothing) but the key never got dispatched, so
+        # the userspace backlog is non-empty. The watchdog must still fire.
+        dead = lambda *a: ([], [], [])  # fd permanently clean
+        backlog = {"n": 1}
+        kills = []
+        wd = PromptWatchdog(
+            is_at_prompt=lambda: True,
+            fd=0,
+            pending_probe=lambda: backlog["n"] > 0,
+            threshold=60.0,
+            winch_grace=15.0,
+            select_fn=dead,
+            monotonic=(clk := FakeClock()),
+            kill_fn=lambda pid, sig: kills.append(sig),
+            getpid=lambda: 1,
+        )
+        clk.advance(1)
+        wd.tick()  # arm
+        clk.advance(60)
+        assert wd.tick() == "winch"
+        clk.advance(15)
+        assert wd.tick() == "sigint"
+        assert kills == [signal.SIGWINCH, signal.SIGINT]
+
+    def test_backlog_probe_cleared_resets(self):
+        # If the backlog drains (loop recovered), the window resets — no fire.
+        dead = lambda *a: ([], [], [])
+        backlog = {"n": 1}
+        kills = []
+        wd = PromptWatchdog(
+            is_at_prompt=lambda: True,
+            fd=0,
+            pending_probe=lambda: backlog["n"] > 0,
+            threshold=60.0,
+            winch_grace=15.0,
+            select_fn=dead,
+            monotonic=(clk := FakeClock()),
+            kill_fn=lambda pid, sig: kills.append(sig),
+            getpid=lambda: 1,
+        )
+        clk.advance(1)
+        wd.tick()
+        clk.advance(30)
+        backlog["n"] = 0  # consumed -> healthy again
+        assert wd.tick() is None
+        clk.advance(60)
+        assert wd.tick() is None
+        assert kills == []
+
+    def test_backlog_probe_exception_is_ignored(self):
+        # A probe that raises must not crash the watchdog; it degrades to
+        # fd-only detection.
+        def boom():
+            raise RuntimeError("unexpected")
+
+        wd = PromptWatchdog(
+            is_at_prompt=lambda: True,
+            fd=0,
+            pending_probe=boom,
+            select_fn=(lambda *a: ([], [], [])),
+            monotonic=FakeClock(),
+            kill_fn=lambda *a: None,
+            getpid=lambda: 1,
+        )
+        assert wd.tick() is None
+
+    def test_start_runs_with_only_probe(self):
+        # fd is None but a probe exists -> the watcher must still start.
+        wd = PromptWatchdog(
+            is_at_prompt=lambda: True,
+            fd=None,
+            pending_probe=lambda: False,
+            interval=100.0,
+            kill_fn=lambda *a: None,
+            getpid=lambda: 1,
+        )
+        wd._fd = None
+        wd.start()
+        assert wd._thread is not None and wd._thread.daemon
