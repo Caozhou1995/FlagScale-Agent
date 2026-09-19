@@ -976,23 +976,65 @@ class WorkerAgent:
             """Enter always submits (even in multiline mode)."""
             event.current_buffer.validate_and_handle()
 
-        session = PromptSession(
-            history=FileHistory(history_file),
-            completer=completer,
-            multiline=True,
-            key_bindings=kb,
-            style=PromptStyle.from_dict({
-                "prompt": "#87d787 bold",
-                "": "#e4e4e4",
-            }),
+        def _build_session():
+            return PromptSession(
+                history=FileHistory(history_file),
+                completer=completer,
+                multiline=True,
+                key_bindings=kb,
+                style=PromptStyle.from_dict({
+                    "prompt": "#87d787 bold",
+                    "": "#e4e4e4",
+                }),
+            )
+
+        session = _build_session()
+
+        # ── Interactive input watchdog ──
+        # prompt_toolkit can occasionally wedge on its input fd: the process
+        # stays alive and the pane keeps rendering, but keystrokes are never
+        # consumed (observed as a main thread parked in ep_poll while stdin
+        # has pending, unread bytes). guard_state["at_prompt"] is True only
+        # while blocked in session.prompt(), so a long model/tool turn can
+        # never trip the watchdog. On a confirmed wedge it escalates to
+        # SIGINT; watchdog_state["tripped"] then tells the except below to
+        # rebuild the prompt session instead of treating it as a user exit.
+        from flagscale_agent.react.prompt_watchdog import PromptWatchdog
+        guard_state = {"at_prompt": False}
+        watchdog_state = {"tripped": False}
+
+        def _on_watchdog_sigint():
+            watchdog_state["tripped"] = True
+
+        watchdog = PromptWatchdog(
+            is_at_prompt=lambda: guard_state["at_prompt"],
+            on_sigint=_on_watchdog_sigint,
+            logger=display.warn,
         )
+        watchdog.start()
 
         while True:
+            guard_state["at_prompt"] = True
             try:
                 user_input = session.prompt([("class:prompt", "> ")]).strip()
             except (EOFError, KeyboardInterrupt):
+                guard_state["at_prompt"] = False
+                if watchdog_state["tripped"]:
+                    # A wedged input loop was broken by the watchdog: rebuild a
+                    # fresh prompt session and keep going rather than exiting.
+                    watchdog_state["tripped"] = False
+                    display.warn("input loop was stuck — prompt session rebuilt")
+                    try:
+                        session = _build_session()
+                    except Exception:
+                        pass
+                    continue
                 self._exit()
                 break
+            except BaseException:
+                guard_state["at_prompt"] = False
+                raise
+            guard_state["at_prompt"] = False
 
             if not user_input:
                 continue
