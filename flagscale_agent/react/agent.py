@@ -1438,7 +1438,7 @@ class WorkerAgent:
         if n_open:
             hints.append(
                 f"{n_open} open improvement proposal(s) awaiting review - "
-                "use the proposal tool (action='list')"
+                "will be re-reported at wrap-up"
             )
         return hints
 
