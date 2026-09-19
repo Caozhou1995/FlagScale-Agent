@@ -1739,6 +1739,31 @@ class TestTextCompleteHygieneGate:
         # fresh run is the gated fallback
         assert "only when your trace has no such evidence" in low
 
+    def test_wrap_up_harness_gap_proposes_for_human_approval(self):
+        """Item-5 is proposal-mode: the agent routes each gap to a container
+        (agent code / skill / knowledge) as an explicit one-line proposal for the
+        human to approve and prioritize. Capture still happens (insight), but the
+        agent must NOT edit harness files at wrap-up — control stays with the
+        human."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # routing taxonomy: three containers named
+        assert "agent code" in low
+        assert "a skill" in low and "multi-step procedure" in low
+        assert "knowledge" in low and "promote-to-knowledge" in low
+        # proposal-first ordering, then capture
+        assert "propose first, implement never" in low
+        assert "propose —" in low
+        assert "capture —" in low
+        assert "one line" in low
+        # control stays with the human: no self-editing at wrap-up
+        assert "control stays with the human" in low
+        assert "an output, not a license" in low
+        # capture channel intact (survives session even if message unseen)
+        assert "memory_write()" in low
+        # legacy escape hatch intact
+        assert "none apply" in low
+
     def test_observation_demand_prefers_existing_trace(self):
         """The observation-demand gate must first point at the trace: the observation
         may already exist (a command run, an output read); only a genuine absence

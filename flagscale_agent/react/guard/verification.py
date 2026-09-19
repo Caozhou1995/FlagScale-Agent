@@ -653,9 +653,22 @@ clean):
        • a retrieval or discipline gap (needed knowledge/memory existed but was
          not consulted before acting)
        • a verification that leaned on self-report where an observation was cheap
-     If YES, do not just note it in prose — CAPTURE it durably so it survives this
-     session: memory_write() an insight/agent/<topic> entry (finding / digest
-     direction / target artifact) that names the mechanism to build or change.
+     If YES, do BOTH, in this order — propose first, implement never:
+       1. PROPOSE — list each gap as an explicit improvement proposal, routed to
+          the container that fits it, so the human can approve and prioritize:
+          (a) agent code — guards/tools/prompt machinery; name the file and the
+              mechanism to build or change
+          (b) a skill — the gap is a multi-step procedure that recurred 2+ times;
+              name the skill and say create-new or extend-existing
+          (c) knowledge — the gap is missing mechanism/context documentation;
+              name the doc; if it cannot be written now, mark the insight
+              promote-to-knowledge
+          Keep each proposal one line. Skip a container when nothing fits it.
+       2. CAPTURE — memory_write() an insight/agent/<topic> entry (finding /
+          digest direction / target artifact) so the proposal survives the
+          session even if the human never sees the message.
+       CONTROL STAYS WITH THE HUMAN: at wrap-up you do NOT edit guards, tools,
+       prompts, skills, or knowledge — a proposal is an output, not a license.
      If genuinely none, answer "none" explicitly — but a session that edited
      configs or repo code, debugged tooling, or repeated the same manual check
      deserves a real look before claiming that.
