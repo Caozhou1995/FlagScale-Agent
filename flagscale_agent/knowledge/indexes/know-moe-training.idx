@@ -4,7 +4,7 @@
 # To read a section: load_knowledge(name='know-moe-training', doc='<path below>', start_line=<L>, end_line=<L>)
 # Do NOT pass these doc paths to read_file — they are knowledge-internal.
 
-## moe_training/01_moe_pretrain_perf_survey.md (209 lines)
+## moe_training/01_moe_pretrain_perf_survey.md (214 lines)
 L1: MoE 预训练性能优化调研
   L7: 1. 背景与动机
   L20: 2. 架构层优化：让专家"该细的细、该共享的共享"
@@ -27,11 +27,11 @@ L1: MoE 预训练性能优化调研
     L111: 5.3 通信-计算 overlap（最大收益点）
     L124: 5.4 层级两跳与新通信库
   L129: 6. 内核与显存：GroupedGEMM、稀疏计算与 FP8
-  L137: 7. 训练稳定性：MoE 特有的问题与对策
-  L144: 8. 评测与成本：怎么衡量"优化得好"
-  L152: 9. FlagScale / Megatron-LM-FL 配置实践（映射速查）
-  L189: 10. 开放问题与研究前沿
-  L198: 主要参考文献（arXiv ID）
+  L142: 7. 训练稳定性：MoE 特有的问题与对策
+  L149: 8. 评测与成本：怎么衡量"优化得好"
+  L157: 9. FlagScale / Megatron-LM-FL 配置实践（映射速查）
+  L194: 10. 开放问题与研究前沿
+  L203: 主要参考文献（arXiv ID）
 
 ## moe_training/02_kimi_k3_k25_training_infra.md (86 lines)
 L1: Kimi K3 / K2.5 训练基础设施与配方走读（技术报告一手提取）

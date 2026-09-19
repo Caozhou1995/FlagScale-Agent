@@ -91,6 +91,7 @@ from flagscale_agent.react.guard.find_guard import FindGuard
 from flagscale_agent.react.guard.shell_jobs_wait import ShellJobsWaitGuard
 
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
+from flagscale_agent.react.guard.knowledge_index import KnowledgeIndexGuard
 from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
@@ -311,6 +312,11 @@ class WorkerAgent:
         guard_registry.register(ShellJobsWaitGuard())
 
         guard_registry.register(UnitTestGuard())
+        # KnowledgeIndexGuard (always active, inject-only): editing a knowledge
+        # doc shifts the line numbers cached in indexes/<group>.idx, so
+        # load_knowledge would read the wrong lines. Reminds to regenerate the
+        # index after such an edit. Mirrors UnitTestGuard. Never blocks.
+        guard_registry.register(KnowledgeIndexGuard())
         # PostEditFarEndGuard (always active, inject-only): after EVERY successful
         # write_file/edit_file, remind the agent to verify the FAR end — valid-for-
         # type on the edited file, the consumer's read path, and (for agent source)

@@ -132,6 +132,11 @@ Megatron/FlagScale 侧的对应开关：`moe_fb_overlap`、`overlap_moe_expert_p
 - **permute/unpermute 融合**：token 重排与 prob 加权融合，减少访存；topk 加权可直接融进 FC2 输出（Megatron `moe_permute_fusion: true`）。
 - **MTP（多 token 预测）**：DSv3 的 MTP 模块让同一前向多学一个预测步，等效提升每 FLOP 的学习信号（`mtp_loss` 系列）；与 MoE 主干协同做 spec decode 推理加速。2026 系列实践：DeepSeek-V4 的 MTP 层用 mHC 式双归一化+双投影融合；GLM-5 配置保留 `mtp_loss_scaling_factor=0.3` 但注明发布 checkpoint 无 MTP 层（`mtp_num_layers=0`）——MTP 在"训练期辅助信号"与"发布形态解耦"上是可选件（Kimi 系则两代均保留 1 层 MTP）。（K3 TR 另录：Qwen3.5 式多模态联合预训练中，视觉编码器**从头训练**反而比 SigLIP 初始化更稳——后者梯度范数持续偏高且频繁尖峰；27 层 0.4B ViT、RMSNorm、去全部 bias，视觉 token 2×2 像素混洗后 3584² 输入仍可承受。）
 - **FP8 GEMM**：核心 MoE 计算走 FP8（TE），路由打分保持 FP32（`moe_router_dtype: fp32`）；显存侧激活重计算 + SP 已是标配。
+- **⚠️ 低精度（FP8）的显存收益是"净额"，可能为负——量化工作区债务**：低精度省下的是**权重/激活的静态存储**（每参数 2B→1B），但量化路径自身新增**临时工作区**（rowwise+columnwise 双份 scale、permute/unpermute 对齐填充、按 token 数一次性分配的重排缓冲），且这些缓冲在激活重计算下**翻倍并驻留**至下一 forward。因此：
+  **FP8 净显存 = 权重/激活节省 − 量化工作区债务**，其符号由模型形态与前沿性质决定：
+  - **稠密大权重、compute-bound**：节省占主导 → FP8 净省显存并提速（常规收益场景）。
+  - **MoE（单专家小、激活/工作区占比高）、memory-bound**：工作区债务可超过节省 → FP8 在同 MBS 下反而 OOM（净负）。
+  **决策规则**：投入低精度杠杆前，先判定前沿是 compute-bound 还是 memory-bound；memory-bound 下低精度很少有用，除非**激活工作区本身能缩小**。切勿假定"开 FP8 必省显存"——是否净省取决于"权重/激活节省"与"量化工作区债务"两者的权衡，需结合模型形态（专家粒度、激活占比）与并行配置（MBS/PP/seqlen）综合评估。
 - **低比特前沿**：FP8 之外，MXFP4 激活+通信（671B 规模验证不伤收敛）与"activation memory 压缩"是当前活跃方向。
 
 ## 7. 训练稳定性：MoE 特有的问题与对策
