@@ -489,6 +489,33 @@ class TestConstraintGuidanceBlockedComputation:
         assert "not a content check" not in low  # delivery_hygiene doesn't say this
         assert "_override_reason" in _TASK_COMPLETE_DELIVERY_HYGIENE
 
+    def test_text_complete_hygiene_leads_with_final_answer(self):
+        """The wrap-up hygiene prompt must FIRST demand the turn's real final output
+        (not a checklist-only reply), because the user reads the end of the
+        conversation, not the intermediate steps."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = _TEXT_COMPLETE_HYGIENE.lower()
+        # leads with the final answer before the hygiene items
+        assert "final answer" in low
+        assert "deliver" in low
+        # an addition, not a replacement for the real output
+        assert "replacement" in low or "addition" in low
+        # the framing: user does not read the middle, reads the end
+        assert "end of the conversation" in low or "end" in low
+        assert "intermediate steps" in low or "intermediate" in low
+        # the final-answer directive must come BEFORE the first hygiene item
+        assert low.index("final answer") < low.index("near vs far")
+
+    def test_text_complete_hygiene_requires_user_language(self):
+        """The wrap-up prompt must instruct responding in the USER'S OWN language,
+        so a Chinese task does not get an English template answer."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = _TEXT_COMPLETE_HYGIENE.lower()
+        assert "user's own language" in low or "user's language" in low
+        assert "language" in low
+        # the rationale: this is the message the user actually reads
+        assert "actually read" in low or "they will actually" in low
+
 
 
 class TestTaskCompleteRecheck:

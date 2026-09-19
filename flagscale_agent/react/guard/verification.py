@@ -553,9 +553,25 @@ This gate fires once."""
 # into tool_args for the tool_name=="" completion ctx).
 _TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — a short wrap-up to close cleanly.
 
+FIRST, AND MOST IMPORTANT — before any of the hygiene items below: your response
+must still DELIVER THIS TURN'S FINAL ANSWER. The wrap-up routine is an ADDITION
+to your final output, never a REPLACEMENT for it. The user generally does NOT
+read the intermediate steps; the END of the conversation is the one place they
+are guaranteed to look, so it is where the real result must live. Lead with the
+conclusion/deliverable — what was produced, where it is, whether it worked, and
+the key evidence — and only THEN append the hygiene notes. Writing a reply that
+answers the checklist while omitting the actual result is the failure this
+paragraph exists to prevent.
+
+ALSO — respond in the USER'S OWN LANGUAGE. The user's language is the language
+their messages are written in (Chinese task → Chinese answer); do not drift into
+English, and do not let this English-language template pull your reply's language
+away from the user's. This final message is the one they will actually read, so
+it must be in the language they wrote to you in.
+
+Then, and only after the final answer above, do these five light hygiene items.
 This is an always-do finish-line routine (whether or not a plan_update(complete)
-cascade also ran). It covers five light hygiene items that are easy to forget but
-apply to every completion — NOT a re-run of deep delivery checks. Do them IN ORDER;
+cascade also ran) — NOT a re-run of deep delivery checks. Do them IN ORDER;
 the order is load-bearing (verify before you clean, re-confirm delivery after you
 clean):
 
