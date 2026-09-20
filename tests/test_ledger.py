@@ -215,3 +215,37 @@ class TestConcurrency:
             st = _json.load(f)
         # 1 created + 1 RUNNING + 4*20 PING = 82 (no lost updates)
         assert len(st["history"]) == 1 + 1 + 80
+
+    def test_concurrent_reader_never_sees_partial_state(self, led, tmp_path):
+        """A reader must never hit the truncate->write window.
+
+        Regression: get() originally read state.json with no lock while
+        transition() rewrote it in place under LOCK_EX, so a concurrent reader
+        could catch an empty file -> JSONDecodeError. get() now takes LOCK_SH.
+        """
+        import threading
+
+        c = _contract(tmp_path)
+        led.create(c)
+        errors = []
+        stop = {"v": False}
+
+        def reader():
+            while not stop["v"]:
+                try:
+                    led.get(c.id)
+                except Exception as e:  # noqa: BLE001
+                    errors.append(repr(e))
+                    return
+
+        def writer():
+            for i in range(2000):
+                try:
+                    led.transition(c.id, RUNNING if i % 2 == 0 else DEADLINE_MISSED)
+                except LedgerError:
+                    pass
+
+        t = threading.Thread(target=reader)
+        w = threading.Thread(target=writer)
+        t.start(); w.start(); w.join(); stop["v"] = True; t.join()
+        assert errors == [], f"reader observed partial state: {errors[:3]}"

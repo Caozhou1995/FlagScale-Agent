@@ -180,12 +180,23 @@ class TaskLedger:
 
     # ── read ─────────────────────────────────────────────────────────────────
     def get(self, task_id: str) -> Optional[TaskRecord]:
-        """Read a task record. Returns None if it does not exist."""
+        """Read a task record. Returns None if it does not exist.
+
+        Reads under a SHARED flock (LOCK_SH) so a cross-process reader (the
+        parent watchdog/reunite) can never observe state.json mid-rewrite —
+        transition() holds LOCK_EX and rewrites the file in place, and without
+        this a reader would occasionally catch the truncate→write window and
+        see an empty/partial file (JSONDecodeError).
+        """
         state_path = self._state_path(task_id)
         if not state_path.exists():
             return None
         with open(state_path, "r", encoding="utf-8") as f:
-            st = json.load(f)
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                st = json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         contract = None
         cpath = self.task_dir(task_id) / "contract.json"
         if cpath.exists():
