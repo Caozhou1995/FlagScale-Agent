@@ -434,7 +434,9 @@ class PlanUpdateGuard(Guard):
                     "jobs, that is legitimate — record it in a note and continue. "
                     "Otherwise, more deliberation in place will not move you; convert "
                     "the next thought into an OBSERVATION — run the smallest experiment "
-                    "that returns a REAL output and read it."
+                    "that returns a REAL output and read it. Every further action without a new "
+                    "hypothesis has expected information gain ~= 0 — you are paying the same "
+                    "price to re-learn what you already know."
                 )
 
                 body = (

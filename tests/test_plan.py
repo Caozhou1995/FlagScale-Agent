@@ -362,6 +362,6 @@ class TestThinking:
 
     def test_empty_thinking_not_shown(self, tp):
         tp.create("Test", ["A"])
-        # No 🧠 marker when thinking slot is empty.
-        assert "🧠" not in tp.context_for_prompt()
-        assert "🧠" not in tp.summary()
+        # No thinking-model header when thinking slot is empty.
+        assert "当前问题模型" not in tp.context_for_prompt()
+        assert "当前问题模型" not in tp.summary()

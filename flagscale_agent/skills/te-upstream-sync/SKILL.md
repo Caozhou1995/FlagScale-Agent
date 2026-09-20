@@ -350,6 +350,7 @@ tree grows):
 | touched path signal              | required test file            |
 |----------------------------------|-------------------------------|
 | `*fused_router*`, `router.py`    | `tests/pytorch/test_fused_router.py` |
+| `*comm_gemm_overlap*`, `*comm_overlap*`, overlap factory | `tests/plugin/plugin/test_cuda_comm_overlap_contract.py`, `tests/plugin/plugin/test_vendor_comm_overlap_contract.py` (PR#115) |
 | `*fused_attn*`, `attention.py`   | `tests/pytorch/test_fused_attn.py`   |
 | `*gemm*`, `*quantize*`, `cublaslt*` | `test_fusible_ops.py`, `test_float8_blockwise_gemm_exact.py` |
 | any transformer layer / norm     | `tests/pytorch/test_numerics.py`     |

@@ -66,8 +66,11 @@ class MemoryDisciplineGuard(Guard):
             # Do NOT reset counter here — only reset in accept_override if override succeeds
             return GuardVerdict.block(
                 f"[MemoryDiscipline] {self.BLOCK_THRESHOLD} tool calls without any memory operation. "
-                "You likely have findings worth saving (facts, pitfalls, insights) or existing "
-                "memories that could help. Run memory_list() or memory_write() before continuing.",
+                "Before continuing, run ONE concrete recall action: "
+                "memory_read(key='pitfall/<domain>/') for the domain you are working in "
+                "(whole-domain pitfall read), or memory_list(keyword='...') if you only have "
+                "a symptom keyword. If you have findings worth saving, memory_write() them — "
+                "a finding not written is a finding lost at the next eviction.",
                 reason=f"no_memory_ops_{self.BLOCK_THRESHOLD}_calls",
                 category="memory_discipline",
             )
@@ -75,10 +78,11 @@ class MemoryDisciplineGuard(Guard):
         if self._calls_since_memory % self.INJECT_THRESHOLD == 0:
             return GuardVerdict.inject(
                 f"[MemoryDiscipline] {self._calls_since_memory} tool calls without "
-                "reading or writing memory. Consider: saving key findings as fact/pitfall/insight, "
-                "or checking existing memories to avoid repeating past work. "
-                "If a pitfall recurs, elevate to insight; "
-                "if an insight has enough evidence, digest into skill/knowledge/agent code.",
+                "reading or writing memory. Pick ONE: "
+                "(1) RECALL — memory_read(key='pitfall/<current-domain>/') before your next "
+                "risky action (launch/build/deploy/new host); "
+                "(2) WRITE — memory_write() a finding from this stretch (path/config/error fix); "
+                "(3) DIGEST — recurring pitfall → insight, evidenced insight → skill/knowledge.",
                 reason="no_memory_ops_recently",
                 category="memory_discipline",
             )

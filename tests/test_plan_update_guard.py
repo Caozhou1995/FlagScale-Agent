@@ -193,6 +193,12 @@ class TestReminderMessageContent:
         guard, _ = _doing_guard(tmpdir, clock)
         return _fire(guard, clock)
 
+    def test_reminder_carries_gain_pricing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            msg = self._first_fire(tmpdir).message
+            assert "expected information gain" in msg
+            assert "re-learn what you already know" in msg
+
     def test_opens_with_answer_first_selfcheck(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             msg = self._first_fire(tmpdir).message.lower()

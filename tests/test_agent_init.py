@@ -21,6 +21,7 @@ def test_guard_registry_complete():
     from flagscale_agent.react.guard.package_search import PackageSearchGuard
     from flagscale_agent.react.guard.unit_test import UnitTestGuard
     from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
+    from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
     from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
     from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
     from flagscale_agent.react.guard.arg_type import ArgTypeGuard
@@ -33,6 +34,7 @@ def test_guard_registry_complete():
     PackageSearchGuard()
     UnitTestGuard()
     MemoryDisciplineGuard()
+    MemoryPostCheckGuard()
     PostEvictRecoveryGuard()
     KnowledgeSkillGuard()
 
@@ -55,6 +57,7 @@ def test_tool_registry_complete():
     from flagscale_agent.react.tools.memory_list import MemoryListTool
     from flagscale_agent.react.tools.plan_create import PlanCreateTool
     from flagscale_agent.react.tools.plan_status import PlanStatusTool
+    from flagscale_agent.react.tools.recall_search import RecallSearchTool
 
     # Verify imports resolve (some tools need constructor args, so just check class exists)
     assert ShellTool is not None
@@ -73,6 +76,7 @@ def test_tool_registry_complete():
     assert MemoryListTool is not None
     assert PlanCreateTool is not None
     assert PlanStatusTool is not None
+    assert RecallSearchTool is not None
 
 
 def test_guard_registry_no_shared_state():
@@ -136,6 +140,36 @@ def test_agent_construction_smoke(tmp_path, monkeypatch):
     
     # Verify context_manager has access to its dependencies
     assert agent.context_manager.history is agent.history
+
+
+def test_startup_hints_surface_open_proposals(tmp_path, monkeypatch):
+    """Startup hints must surface unreviewed proposals (not in the dashboard)."""
+    from unittest.mock import Mock
+    from flagscale_agent.react.agent import WorkerAgent
+    from flagscale_agent.react.config import AgentConfig
+    from flagscale_agent.react.memory import Memory
+    from flagscale_agent.react.plan import TaskPlan
+    from flagscale_agent.react.proposals import ProposalRegistry
+
+    mock_provider = Mock()
+    mock_provider.count_tokens.return_value = 100
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-12345")
+    config = AgentConfig(
+        session_dir=str(tmp_path / "s"),
+        api_key="test-key-12345",
+        provider="anthropic",
+        max_context_tokens=50000,
+    )
+    agent = WorkerAgent(
+        config, _provider=mock_provider,
+        _memory=Mock(spec=Memory), _task_plan=Mock(spec=TaskPlan),
+    )
+    # Point the agent at a temp registry with one open proposal.
+    reg = ProposalRegistry(str(tmp_path / "props"))
+    reg.add("Widen a guard", container="agent-code", session_id="prev")
+    agent.proposals = reg
+    hints = agent._startup_hints()
+    assert any("open improvement proposal" in h for h in hints), hints
 
 
 

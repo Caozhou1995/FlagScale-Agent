@@ -58,7 +58,9 @@ class TestKnowledgeManager:
         from flagscale_agent.knowledge import KnowledgeManager
         km = KnowledgeManager()
         assert km.root.exists()
-        assert len(km.available_groups) == 17
+        # 17 base groups + know-moe-training (MoE pretraining perf survey)
+        # + know-linear-attention (FLA source analysis)
+        assert len(km.available_groups) == 19
 
     def test_init_custom_dir(self, knowledge_dir):
         """Test initialization with custom directory."""

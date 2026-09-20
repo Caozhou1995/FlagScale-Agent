@@ -546,15 +546,32 @@ This gate fires once."""
 # the plan_update(action="complete") gate chain above. Single-shot runs routinely
 # end with a bare [TASK_COMPLETE] and never call plan_update(complete), so the full
 # delivery-hygiene chain never fires for them. This is a focused last check on the
-# three things most easily left wrong at a text completion: path/constraint, exact
-# contents, and temp/backup cleanup. Fires once; overridable via the completion
+# things most easily left wrong at a text completion: path/constraint, exact
+# contents, temp/backup cleanup, and the harness-gap meta-question. Fires once;
+# overridable via the completion
 # path's text override channel (kernel._extract_text_override feeds _override_reason
 # into tool_args for the tool_name=="" completion ctx).
 _TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — a short wrap-up to close cleanly.
 
+FIRST, AND MOST IMPORTANT — before any of the hygiene items below: your response
+must still DELIVER THIS TURN'S FINAL ANSWER. The wrap-up routine is an ADDITION
+to your final output, never a REPLACEMENT for it. The user generally does NOT
+read the intermediate steps; the END of the conversation is the one place they
+are guaranteed to look, so it is where the real result must live. Lead with the
+conclusion/deliverable — what was produced, where it is, whether it worked, and
+the key evidence — and only THEN append the hygiene notes. Writing a reply that
+answers the checklist while omitting the actual result is the failure this
+paragraph exists to prevent.
+
+ALSO — respond in the USER'S OWN LANGUAGE. The user's language is the language
+their messages are written in (Chinese task → Chinese answer); do not drift into
+English, and do not let this English-language template pull your reply's language
+away from the user's. This final message is the one they will actually read, so
+it must be in the language they wrote to you in.
+
+Then, and only after the final answer above, do these five light hygiene items.
 This is an always-do finish-line routine (whether or not a plan_update(complete)
-cascade also ran). It covers four light hygiene items that are easy to forget but
-apply to every completion — NOT a re-run of deep delivery checks. Do them IN ORDER;
+cascade also ran) — NOT a re-run of deep delivery checks. Do them IN ORDER;
 the order is load-bearing (verify before you clean, re-confirm delivery after you
 clean):
 
@@ -641,8 +658,52 @@ clean):
               already shipped, left unupdated, sends the next session to re-design what
               already exists.
 
-Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced, or
-"none apply">. This gate fires once."""
+  5. **HARNESS GAP & CAPTURE** — the meta-question items 1-4 cannot ask. Did THIS
+     session expose a gap in the agent harness itself — a failure the existing
+     guards, gates, prompts, tools, or memory machinery let happen (or caused),
+     worth codifying so the NEXT session cannot repeat it? Scan for the tell-tale
+     shapes:
+       • a mistake you made twice with no guard or gate catching it
+       • a pre-block that annoyed without preventing (a post-check/inject would
+         have served better), or a check that fired too late to help
+       • a retrieval or discipline gap (needed knowledge/memory existed but was
+         not consulted before acting)
+       • a verification that leaned on self-report where an observation was cheap
+     If YES, do BOTH, in this order — propose first, implement never:
+       1. PROPOSE — list each gap as an explicit improvement proposal, routed to
+          the container that fits it, so the human can approve and prioritize:
+          (a) agent code — guards/tools/prompt machinery; name the file and the
+              mechanism to build or change
+          (b) a skill — the gap is a multi-step procedure that recurred 2+ times;
+              name the skill and say create-new or extend-existing
+          (c) knowledge — the gap is missing mechanism/context documentation;
+              name the doc; if it cannot be written now, mark the insight
+              promote-to-knowledge
+          Keep each proposal one line. Skip a container when nothing fits it.
+          REGISTER every proposal you raise with the proposal tool
+          (action='add') so it gets a persistent id and status — a proposal that
+          lives only in this message is forgotten the moment the session ends.
+       2. CAPTURE — memory_write() an insight/agent/<topic> entry (finding /
+          digest direction / target artifact) so the proposal survives the
+          session even if the human never sees the message.
+       RECONCILE THE REGISTRY — proposals persist ACROSS sessions and carry a
+       status (proposed → approved → done, or rejected/superseded), so this is a
+       running ledger, not a one-shot. Call the proposal tool (action='list') to
+       pull every OPEN proposal — yours AND ones raised in EARLIER sessions the
+       human never answered — and include them in your wrap-up so an unanswered
+       proposal is never silently dropped (this is why they must be registered in
+       step 1). Then, for any proposal the human has since reacted to (agreed,
+       carried out, or declined), update its status NOW with (action='update'):
+       agreed-and-implemented → 'done', declined → 'rejected'. Keeping the status
+       current is what stops the next wrap-up re-reporting settled items.
+       CONTROL STAYS WITH THE HUMAN: at wrap-up you do NOT edit guards, tools,
+       prompts, skills, or knowledge — a proposal is an output, not a license.
+     If genuinely none, answer "none" explicitly — but a session that edited
+     configs or repo code, debugged tooling, or repeated the same manual check
+     deserves a real look before claiming that.
+
+Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced,
+harness gap captured (registered + open ones re-reported) or "none", or "none apply">. This gate fires once."""
 
 
 # Pre-mortem, delivered AFTER a step_done goes through (check_post). The pre-side
@@ -694,8 +755,9 @@ class VerificationGuard(Guard):
     name = "verification"
     priority = 55
     
-    def __init__(self, plan=None):
+    def __init__(self, plan=None, proposals=None):
         self._plan = plan
+        self._proposals = proposals
         self._post_recovery = False
         self._recovery_reminded = False
         self._acceptance_guidance_given = False
@@ -728,6 +790,35 @@ class VerificationGuard(Guard):
         self._text_complete_hygiene_demanded = False
         self._step_done_recheck_reminded = False
         self._premortem_pending = False
+
+    def _text_complete_hygiene_message(self) -> str:
+        """The wrap-up hygiene message, with the live open-proposal list injected.
+
+        The registry is global/cross-session, so a proposal raised in an earlier
+        session and never reviewed appears here — that is the whole point of the
+        registry. We only ADD the list; the static template (minus its trailing
+        instruction) is unchanged when there is nothing open.
+        """
+        base = _TEXT_COMPLETE_HYGIENE
+        if self._proposals is None:
+            return base
+        open_list = self._proposals.render_open()
+        if not open_list:
+            return base
+        block = (
+            "\n\n[Open proposals already on file — raised in THIS or an EARLIER "
+            "session and still awaiting the human's review. Re-report these in "
+            "your wrap-up (do NOT re-propose them as new), and if the human has "
+            "since said 'approved'/'done'/'no' about any, first update its status "
+            "with the proposal tool (action='update'), then report the new "
+            "status.]\n" + open_list
+        )
+        # Insert right before the final re-issue instruction, so the added block
+        # stays part of the wrap-up guidance rather than dangling after it.
+        marker = "\nRe-issue [TASK_COMPLETE] with _override_reason:"
+        if marker in base:
+            return base.replace(marker, block + marker, 1)
+        return base + block
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # Pre-mortem: fires immediately AFTER a step_done that passed the pre-side
@@ -775,7 +866,8 @@ class VerificationGuard(Guard):
         if ctx.tool_name == "" and _is_completion and ctx.llm_responded:
             # Wrap-up check fired at every task completion. It is a light,
             # always-applicable finish-line routine — near/far observation-vs-
-            # argument check, temp/.bak cleanup, memory review — NOT a re-run of
+            # argument check, temp/.bak cleanup, memory review, harness-gap
+            # capture — NOT a re-run of
             # the plan_update(complete) cascade's deep delivery verification.
             #
             # No overlap with the cascade: the cascade owns deep delivery checks
@@ -791,7 +883,7 @@ class VerificationGuard(Guard):
                 if not ctx.override_reason.strip():
                     self._text_complete_hygiene_demanded = True
                     return GuardVerdict.block(
-                        message=_TEXT_COMPLETE_HYGIENE,
+                        message=self._text_complete_hygiene_message(),
                         reason="text_complete_hygiene",
                         category="verification_required",
                     )

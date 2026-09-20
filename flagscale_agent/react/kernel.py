@@ -236,67 +236,90 @@ class AgentKernel:
                         thinking_text = response.get("thinking") or ""
                         was_reasoning_only = bool(thinking_text.strip())
                         was_thinking_capped = bool(response.get("thinking_capped"))
+                        # SEPARATE BUDGETS: a cap-trip is a PACING event, not a
+                        # failure — the model still produced (thinking) output
+                        # and each retry is already bounded by the cap itself
+                        # (~cap_budget thinking tokens per call). Budgeting it
+                        # like a genuine empty output killed real runs: e.g.
+                        # fibsqrt 2026-09-08 09:36 — cap fired 4x in one turn,
+                        # retries 1/3..3/3 exhausted the shared budget, and the
+                        # 4th cap-trip stopped the trial (reward 0) with the
+                        # full solution design sitting in the discarded
+                        # reasoning. Cap-retries get their own generous counter
+                        # (per turn) instead of the 3-strike empty budget.
+                        cap_retries = getattr(self, "_cap_retries", 0)
                         empty_retries = getattr(self, "_empty_output_retries", 0)
-                        if empty_retries < 3:
+                        if was_thinking_capped:
+                            if cap_retries >= 50:
+                                self._cap_retries = 0
+                                result.stop_reason = "thinking_cap_max_retries"
+                                break
+                            self._cap_retries = cap_retries + 1
+                            d.display.warn(f"Thinking reached runtime cap (cap-retry {self._cap_retries}), forcing convergence...")
+                        elif empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
-                            if was_thinking_capped:
-                                d.display.warn(f"Thinking reached runtime cap (retry {empty_retries + 1}/3), forcing convergence...")
-                            elif was_reasoning_only:
+                            if was_reasoning_only:
                                 d.display.warn(f"Reasoning produced content but no visible output (retry {empty_retries + 1}/3), continuing...")
                             else:
                                 d.display.warn(f"Empty LLM output (retry {empty_retries + 1}/3), auto-continuing...")
-                            # Remove the empty assistant message we just appended.
-                            # NOTE: get_messages() returns a shallow copy — popping
-                            # that copy is a no-op on the real history (the
-                            # thinking block would stay in the LLM prompt). Use
-                            # pop_last_assistant() which mutates _messages for real.
-                            d.history.pop_last_assistant()
-                            # Inject a targeted nudge
-                            if was_thinking_capped:
-                                # The runtime cap aborted a monolithic thinking
-                                # stream. Same re-injection as the resume path
-                                # (assistant thinking blocks are dropped by the
-                                # GLM endpoint and the aborted stream has no
-                                # valid signature), but the directive is
-                                # CONVERGENCE, not resume: the model must land
-                                # its next concrete step now — segmented
-                                # reasoning beats one 20-minute thought.
-                                nudge = (
-                                    "[system: your reasoning reached its runtime length cap and was stopped. "
-                                    "Your reasoning so far is reproduced below — do NOT continue it. "
-                                    "Land the next concrete step NOW: either call a tool to test your "
-                                    "next hypothesis, or output your answer. Deep problems are solved "
-                                    "stepwise; experiments beat more thinking.]\n\n"
-                                    "<previous_reasoning>\n"
-                                    f"{thinking_text}\n"
-                                    "</previous_reasoning>"
-                                )
-                            elif was_reasoning_only:
-                                # Many providers (e.g. GLM Anthropic-compat endpoint)
-                                # DROP assistant thinking blocks from the input, so
-                                # the model cannot see its own reasoning on retry.
-                                # Re-inject the FULL thinking content as a user
-                                # message so the model resumes from its prior
-                                # reasoning instead of starting over.
-                                nudge = (
-                                    "[system: your previous response generated reasoning but no visible output, "
-                                    "and the reasoning was not preserved in the conversation. Your full reasoning "
-                                    "is reproduced below — resume from where it left off and output your answer "
-                                    "or next action directly. Do NOT repeat the reasoning.]\n\n"
-                                    "<previous_reasoning>\n"
-                                    f"{thinking_text}\n"
-                                    "</previous_reasoning>"
-                                )
-                            else:
-                                nudge = "[system: empty response detected, please continue your work]"
-                            d.history.append({"role": "user", "content": nudge})
-                            continue
                         else:
+                            # Exhausted empty-output budget (genuine empty /
+                            # reasoning-only response, nothing to re-inject
+                            # into a working retry loop).
                             self._empty_output_retries = 0
                             result.stop_reason = "empty_output_max_retries"
                             break
+
+                        # ── Retry budget passed: remove the dead assistant
+                        # message, re-inject reasoning, continue the turn ──
+                        # NOTE: get_messages() returns a shallow copy — popping
+                        # that copy is a no-op on the real history (the
+                        # thinking block would stay in the LLM prompt). Use
+                        # pop_last_assistant() which mutates _messages for real.
+                        d.history.pop_last_assistant()
+                        # Inject a targeted nudge
+                        if was_thinking_capped:
+                            # The runtime cap aborted a monolithic thinking
+                            # stream. Same re-injection as the resume path
+                            # (assistant thinking blocks are dropped by the
+                            # GLM endpoint and the aborted stream has no
+                            # valid signature), but the directive is
+                            # CONVERGENCE, not resume: the model must land
+                            # its next concrete step now — segmented
+                            # reasoning beats one 20-minute thought.
+                            nudge = (
+                                "[system: your reasoning reached its runtime length cap and was stopped. "
+                                "Your reasoning so far is reproduced below — do NOT continue it. "
+                                "Land the next concrete step NOW: either call a tool to test your "
+                                "next hypothesis, or output your answer. Deep problems are solved "
+                                "stepwise; experiments beat more thinking.]\n\n"
+                                "<previous_reasoning>\n"
+                                f"{thinking_text}\n"
+                                "</previous_reasoning>"
+                            )
+                        elif was_reasoning_only:
+                            # Many providers (e.g. GLM Anthropic-compat endpoint)
+                            # DROP assistant thinking blocks from the input, so
+                            # the model cannot see its own reasoning on retry.
+                            # Re-inject the FULL thinking content as a user
+                            # message so the model resumes from its prior
+                            # reasoning instead of starting over.
+                            nudge = (
+                                "[system: your previous response generated reasoning but no visible output, "
+                                "and the reasoning was not preserved in the conversation. Your full reasoning "
+                                "is reproduced below — resume from where it left off and output your answer "
+                                "or next action directly. Do NOT repeat the reasoning.]\n\n"
+                                "<previous_reasoning>\n"
+                                f"{thinking_text}\n"
+                                "</previous_reasoning>"
+                            )
+                        else:
+                            nudge = "[system: empty response detected, please continue your work]"
+                        d.history.append({"role": "user", "content": nudge})
+                        continue
                     else:
                         self._empty_output_retries = 0
+                        self._cap_retries = 0
 
                     # Detect completion signals. Use end-anchored matching to
                     # distinguish a real sentinel (trailing the text) from a

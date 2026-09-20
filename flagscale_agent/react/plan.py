@@ -486,7 +486,7 @@ class TaskPlan:
         lines = []
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
-            lines.append("🧠 当前问题模型 (thinking):")
+            lines.append("当前问题模型 (thinking):")
             for t_line in thinking.split("\n"):
                 lines.append(f"   {t_line}")
             lines.append("")
@@ -523,7 +523,7 @@ class TaskPlan:
         lines = [f"Plan: {plan['title']} [{plan['status']}]"]
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
-            lines.append("  🧠 当前问题模型 (thinking):")
+            lines.append("  当前问题模型 (thinking):")
             for t_line in thinking.split("\n"):
                 lines.append(f"     {t_line}")
         for s in plan["steps"]:

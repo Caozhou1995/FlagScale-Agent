@@ -30,6 +30,34 @@ def plan_dir():
     shutil.rmtree(d)
 
 
+class TestSetThinkingEcho:
+    """set_thinking records a model; the tool echoes the falsifiability challenge."""
+
+    def test_set_thinking_action_echoes_challenge(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        PlanCreateTool(tp).execute(title="T", steps=["A"])
+        tool = PlanUpdateTool(tp)
+        result = tool.execute(action="set_thinking", thinking="bottleneck is IO")
+        assert "Model recorded" in result
+        assert "cheapest observation" in result
+
+    def test_step_done_with_thinking_echoes(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        PlanCreateTool(tp).execute(title="T", steps=["A"])
+        tool = PlanUpdateTool(tp)
+        sid = tp.get_active()["steps"][0]["id"]
+        result = tool.execute(action="step_done", step_id=sid, thinking="new model")
+        assert "Model recorded" in result
+
+    def test_step_done_without_thinking_no_echo(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        PlanCreateTool(tp).execute(title="T", steps=["A"])
+        tool = PlanUpdateTool(tp)
+        sid = tp.get_active()["steps"][0]["id"]
+        result = tool.execute(action="step_done", step_id=sid, notes="progress")
+        assert "Model recorded" not in result
+
+
 class TestPlanCreateToolStructuredSteps:
     def test_dict_steps_with_acceptance(self, plan_dir):
         tp = TaskPlan(plan_dir)

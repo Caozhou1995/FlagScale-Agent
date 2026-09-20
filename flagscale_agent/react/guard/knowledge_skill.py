@@ -88,7 +88,7 @@ class KnowledgeSkillGuard(Guard):
             return GuardVerdict.block(
                 f"[KnowledgeSkill] {self.BLOCK_THRESHOLD} tool calls without loading "
                 "domain knowledge, skills, or external references. Consider whether "
-                "load_knowledge()/load_skill() (INTERNAL FlagScale domains), web_fetch() "
+                "load_knowledge()/load_skill() (INTERNAL domains), web_fetch() "
                 "(EXTERNAL domains, for any field where your prior knowledge may not "
                 "reflect standard methods), or networked shell operations (git clone, "
                 "pip/apt install, wget, curl downloads — substantive external dependency "
@@ -113,8 +113,8 @@ class KnowledgeSkillGuard(Guard):
             return GuardVerdict.inject(
                 f"[KnowledgeSkill] {calls_since} tool calls without "
                 "loading domain knowledge, skills, or external references. Two channels: "
-                "(1) INTERNAL domain → load_knowledge()/load_skill() for FlagScale areas "
-                "(parallelism, training config, NCCL, data pipeline, model porting). "
+                "(1) INTERNAL domain → load_knowledge()/load_skill() (e.g. parallelism, "
+                "training config, NCCL, data pipeline, model porting). "
                 "(2) EXTERNAL domain → web_fetch() for any field where your prior knowledge "
                 "may not reflect standard methods. The trigger is a "
                 "KNOWLEDGE GAP, not a syntax error — and note you often will NOT feel the "

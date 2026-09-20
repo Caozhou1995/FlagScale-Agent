@@ -167,6 +167,10 @@ class TestTimeBudgetGuard90Block:
         assert v.overridable is True
         assert "CRITICAL CHECKPOINT" in v.message
         assert "deliverable" in v.message.lower()
+        # Regression: 90% block must also guide pre-timeout memory extraction
+        assert "memory_write()" in v.message
+        assert "survival-range test" in v.message
+        assert "cross-session truth" in v.message
 
     def test_90_block_fires_once_per_turn(self):
         s = _Stats()

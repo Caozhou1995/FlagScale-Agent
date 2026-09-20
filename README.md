@@ -43,6 +43,13 @@ cd FlagScale-Agent
 pip install -e .
 ```
 
+Optional extras:
+
+```bash
+pip install -e ".[checkpoint]"   # enables the inspect_checkpoint tool (pulls torch + safetensors)
+pip install -e ".[dev]"          # test/lint tooling (pytest, ruff)
+```
+
 ### Configuration
 
 Set your API key:

@@ -165,6 +165,31 @@ class TestMemoryList:
         assert len(entries) == 1
         assert entries[0]["key"] == "fact/cluster/ssh_port"
 
+    def test_keyword_multi_token_and(self, memory):
+        """Multi-token keyword = AND semantics across key+content."""
+        memory.put("fact/cluster/ssh_port", "fact", "port 2222", "s1")
+        memory.put("fact/cluster/timeout", "fact", "ssh port issue with 2222", "s1")
+        memory.put("fact/env/cuda", "fact", "portable CUDA", "s1")
+        # Both tokens must appear (in key or content, either order)
+        entries = memory.list_entries(keyword="ssh 2222")
+        assert len(entries) == 2
+        keys = {e["key"] for e in entries}
+        assert keys == {"fact/cluster/ssh_port", "fact/cluster/timeout"}
+        # Order-insensitive: "2222 ssh" matches the same set
+        assert len(memory.list_entries(keyword="2222 ssh")) == 2
+        # AND is strict: a token present in only one entry excludes it
+        assert len(memory.list_entries(keyword="cuda 2222")) == 0
+
+    def test_keyword_multi_token_case_insensitive(self, memory):
+        memory.put("fact/cluster/ssh_port", "fact", "Port 2222", "s1")
+        entries = memory.list_entries(keyword="SSH 2222")
+        assert len(entries) == 1
+
+    def test_keyword_multi_token_extra_whitespace(self, memory):
+        memory.put("fact/cluster/ssh_port", "fact", "port 2222", "s1")
+        # Leading/trailing/double spaces collapse to the same token set
+        assert len(memory.list_entries(keyword="  ssh   2222  ")) == 1
+
 
 class TestMemoryPrefix:
     """Prefix-based listing."""

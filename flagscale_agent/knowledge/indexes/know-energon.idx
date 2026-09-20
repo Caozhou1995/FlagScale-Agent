@@ -37,7 +37,7 @@ L1: 第1章：Megatron-Energon 架构总览与数据管道设计
   L313: 9. 完整 get_batch 流程（Energon + Megatron 并行集成）
 L318: 伪代码：Megatron get_batch() 的并行感知逻辑
     L335: 9.1 DP 数据切分（Energon 直接处理）
-    L339: 9.2 TP broadcast_data（Megatron megatron/training/utils.py）
+    L339: 9.2 TP broadcast_data（Megatron megatron/core/tensor_parallel/data.py）
     L343: 9.3 PP pre_process/post_process 守卫（Megatron pipeline schedule）
   L347: 10. 设计决策对比
   L363: 11. 配置建议与调优指南

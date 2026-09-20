@@ -298,6 +298,52 @@ class TestToolRegistry:
         assert all(s["type"] == "function" for s in schemas)
 
 
+class TestRequiredArgPrevalidation:
+    """Registry catches missing required args BEFORE dispatch (schema-driven)."""
+
+    def test_missing_required_friendly_error_no_traceback(self):
+        reg = ToolRegistry()
+        reg.register(ReadFileTool())
+        result = reg.execute("read_file")
+        assert result.startswith("ERROR: required argument(s) missing")
+        assert "path" in result
+        assert "KeyError" not in result
+
+    def test_missing_reports_all_names(self, tmp_path):
+        reg = ToolRegistry()
+        reg.register(EditFileTool())
+        result = reg.execute("edit_file", path=str(tmp_path / "f.txt"))
+        assert "old_string" in result and "new_string" in result
+
+    def test_empty_value_counts_as_missing(self, tmp_path):
+        reg = ToolRegistry()
+        reg.register(WriteFileTool())
+        result = reg.execute("write_file", path=str(tmp_path / "f.txt"), content="")
+        assert "content" in result
+
+    def test_memory_write_missing_key_blocked_before_dispatch(self):
+        from flagscale_agent.react.tools.memory_write import MemoryWriteTool
+        reg = ToolRegistry()
+        reg.register(MemoryWriteTool(None))  # execute() never reached on this path
+        result = reg.execute("memory_write", type="fact", content="x")
+        assert "key" in result
+
+    def test_plan_update_missing_action_blocked_before_dispatch(self):
+        from flagscale_agent.react.tools.plan_update import PlanUpdateTool
+        reg = ToolRegistry()
+        reg.register(PlanUpdateTool(None))  # execute() never reached on this path
+        result = reg.execute("plan_update")
+        assert "action" in result
+
+    def test_valid_call_unaffected(self, tmp_path):
+        f = tmp_path / "ok.txt"
+        reg = ToolRegistry()
+        reg.register(WriteFileTool())
+        result = reg.execute("write_file", path=str(f), content="hello")
+        assert "ERROR" not in result
+        assert f.read_text() == "hello"
+
+
 class TestEditFileReplaceAll:
     def test_replace_first_only(self, tmp_path):
         f = tmp_path / "code.py"

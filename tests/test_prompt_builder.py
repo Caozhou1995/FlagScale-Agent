@@ -83,19 +83,19 @@ class TestBuildDashboard:
         assert "conversation.json" not in result
         assert "Session:" not in result
 
-    def test_memory_keys_present(self):
+    def test_memory_domains_present(self):
         b = make_builder()
         b._turn_count = 1
-        with patch.object(b, "_build_memory_keys_summary", return_value="fact/a, pitfall/b"):
+        with patch.object(b, "_build_memory_keys_summary", return_value="fact/a(2) pitfall/b(1) (3 keys total; memory_list(keyword=...) to search)"):
             result = b._build_dashboard("", session_dir="")
-        assert "Memory keys: fact/a, pitfall/b" in result
+        assert "Memory domains: fact/a(2) pitfall/b(1)" in result
 
-    def test_empty_memory_keys_omitted(self):
+    def test_memory_keys_omitted_when_empty(self):
         b = make_builder()
         b._turn_count = 1
         with patch.object(b, "_build_memory_keys_summary", return_value=""):
             result = b._build_dashboard("", session_dir="")
-        assert "Memory keys" not in result
+        assert "Memory domains" not in result
 
     def test_full_dashboard_all_parts(self):
         """All parts present when plan + session + memory all provided."""
@@ -108,27 +108,128 @@ class TestBuildDashboard:
         assert "Step: 1/2" in result
         assert "Turn: 5" in result
         assert "Session: /home/user/.flagscale/sessions/abc" in result
-        assert "Memory keys: fact/x" in result
+        assert "Memory domains: fact/x" in result
+
+# ── Runtime gauges (Ctx / Time / BG) ────────────────────────────────────
+
+class TestDashboardRuntimeGauges:
+    """Dashboard gauges: Ctx pressure/evictable/evicted, Time budget, BG jobs."""
+
+    def test_ctx_from_history(self):
+        b = make_builder()
+        b._turn_count = 1
+        hist = MagicMock()
+        hist.get_context_pressure.return_value = 0.83
+        hist.get_evictable_indexes.return_value = [1, 2, 3, 4, 5]
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="", history=hist)
+        assert "Ctx: 83% evictable=5" in result
+
+    def test_ctx_from_runtime_stats_snapshot(self):
+        """When no history passed, gauge falls back to runtime_stats snapshot."""
+        b = make_builder()
+        b._turn_count = 1
+        b.runtime_stats = {"ctx_pressure": 0.5, "evictable": 12, "evict_count": 30}
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Ctx: 50% evictable=12 evicted=30" in result
+
+    def test_ctx_absent_when_no_data(self):
+        """No history, no snapshot → no Ctx gauge (never a fabricated 0%)."""
+        b = make_builder()
+        b._turn_count = 1
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Ctx:" not in result
+
+    def test_time_budget_rendered(self):
+        b = make_builder()
+        b._turn_count = 1
+        b.runtime_stats = {"budget": {"elapsed": 600, "budget": 3600,
+                                      "remaining": 3000, "pct": 16.7}}
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Time: 17% used, 50m left" in result
+
+    def test_time_absent_when_no_budget(self):
+        """No external deadline → _task_budget_stats()=None → no Time gauge."""
+        b = make_builder()
+        b._turn_count = 1
+        b.runtime_stats = {"budget": None}
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Time:" not in result
+
+    def test_bg_jobs_listed(self):
+        b = make_builder()
+        b._turn_count = 1
+        job = MagicMock()
+        job.job_id = "job3"
+        job.status_str.return_value = "running"
+        job.start = 0.0  # elapsed = time.time() - 0 → large but formatted
+        from flagscale_agent.react.tools import shell as shell_mod
+        saved = shell_mod._JOB_REGISTRY
+        shell_mod._JOB_REGISTRY = MagicMock()
+        shell_mod._JOB_REGISTRY.all.return_value = [job]
+        try:
+            with patch.object(b, "_build_memory_keys_summary", return_value=""):
+                result = b._build_dashboard("", session_dir="")
+        finally:
+            shell_mod._JOB_REGISTRY = saved
+        assert "BG: job3:running(" in result
+
+    def test_bg_absent_when_no_jobs(self):
+        b = make_builder()
+        b._turn_count = 1
+        from flagscale_agent.react.tools import shell as shell_mod
+        saved = shell_mod._JOB_REGISTRY
+        shell_mod._JOB_REGISTRY = MagicMock()
+        shell_mod._JOB_REGISTRY.all.return_value = []
+        try:
+            with patch.object(b, "_build_memory_keys_summary", return_value=""):
+                result = b._build_dashboard("", session_dir="")
+        finally:
+            shell_mod._JOB_REGISTRY = saved
+        assert "BG:" not in result
 
 # ── _build_memory_keys_summary ───────────────────────────────────────────
 
 class TestBuildMemoryKeysSummary:
-    def test_returns_keys_only(self, tmp_path):
-        """Keys listed, values not included."""
+    def test_domain_counts_no_values(self, tmp_path):
+        """Second-level groups with counts; values never leak into the summary."""
         from flagscale_agent.react.memory import Memory
         mem = Memory(str(tmp_path))
-        mem.put("fact/cluster/port", "fact", "值: 22")
-        mem.put("pitfall/nccl/hang", "pitfall", "现象: hang")
+        mem.put("fact/cluster/port", "fact", "value: 22")
+        mem.put("fact/cluster/ip", "fact", "value: 10.0.0.1")
+        mem.put("pitfall/nccl/hang", "pitfall", "symptom: hang")
 
         b = make_builder()
         with patch("flagscale_agent.react.prompt_builder.get_memory_dir", return_value=str(tmp_path)), \
              patch("flagscale_agent.react.prompt_builder.Memory", return_value=mem):
             result = b._build_memory_keys_summary()
 
-        assert "fact/cluster/port" in result
-        assert "pitfall/nccl/hang" in result
-        assert "值: 22" not in result
-        assert "现象: hang" not in result
+        assert "fact/cluster(2)" in result
+        assert "pitfall/nccl(1)" in result
+        # full keys and values must NOT appear
+        assert "fact/cluster/port" not in result
+        assert "value: 22" not in result
+        assert "symptom: hang" not in result
+        # total count suffix
+        assert "(3 keys total" in result
+
+    def test_malformed_key_falls_back_to_type(self, tmp_path):
+        from flagscale_agent.react.memory import Memory
+        mem = Memory(str(tmp_path))
+        mem.put("fact/cluster/ok", "fact", "x")
+        mem.put("weird", "fact", "y")  # no second segment
+
+        b = make_builder()
+        with patch("flagscale_agent.react.prompt_builder.get_memory_dir", return_value=str(tmp_path)), \
+             patch("flagscale_agent.react.prompt_builder.Memory", return_value=mem):
+            result = b._build_memory_keys_summary()
+
+        assert "fact/cluster(1)" in result
+        assert "weird(1)" in result
 
     def test_empty_memory_returns_empty_string(self, tmp_path):
         from flagscale_agent.react.memory import Memory
@@ -146,22 +247,27 @@ class TestBuildMemoryKeysSummary:
             result = b._build_memory_keys_summary()
         assert result == ""
 
-    def test_multiple_keys_comma_separated(self, tmp_path):
+    def test_multiple_domains_sorted_with_counts(self, tmp_path):
         from flagscale_agent.react.memory import Memory
         mem = Memory(str(tmp_path))
-        mem.put("fact/a/b", "fact", "x")
-        mem.put("fact/c/d", "fact", "y")
-        mem.put("insight/agent/loop", "insight", "z")
+        mem.put("fact/agent/a", "fact", "x")
+        mem.put("fact/agent/b", "fact", "y")
+        mem.put("fact/agent/c", "fact", "z")
+        mem.put("pitfall/baseline/p1", "pitfall", "p")
+        mem.put("pitfall/baseline/p2", "pitfall", "q")
+        mem.put("insight/agent/i1", "insight", "i")
 
         b = make_builder()
         with patch("flagscale_agent.react.prompt_builder.get_memory_dir", return_value=str(tmp_path)), \
              patch("flagscale_agent.react.prompt_builder.Memory", return_value=mem):
             result = b._build_memory_keys_summary()
 
-        keys = [k.strip() for k in result.split(",")]
-        assert "fact/a/b" in keys
-        assert "fact/c/d" in keys
-        assert "insight/agent/loop" in keys
+        # sorted alphabetically, counts correct, no truncation
+        assert result.startswith("fact/agent(3) insight/agent(1) pitfall/baseline(2)")
+        assert "(6 keys total" in result
+        # no per-key truncation: every token before " (" is a full "type/domain(n)" pair
+        for tok in result.split(" (")[0].split():
+            assert tok in ("fact/agent(3)", "insight/agent(1)", "pitfall/baseline(2)")
 
 
 # ── SYSTEM_PROMPT_STATIC content (regression guards) ─────────────────────
@@ -172,6 +278,28 @@ class TestSystemPromptContent:
     def _prompt(self):
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
         return SYSTEM_PROMPT_STATIC
+
+    # ── Pitfall Recall section (proactive recall) ────────────────────────
+
+    def test_pitfall_recall_section_present(self):
+        assert "## Pitfall Recall — Check Before You Act" in self._prompt()
+
+    def test_pitfall_recall_live_risk_signal(self):
+        # Ties the dashboard domain-count line to the recall action.
+        assert "LIVE RISK SIGNAL" in self._prompt()
+
+    def test_pitfall_recall_action_chain(self):
+        # The three concrete recall commands must all be named.
+        p = self._prompt()
+        assert "memory_read(key='pitfall/<domain>/')" in p
+        assert "memory_read(key='fact/<domain>/')" in p
+        assert "memory_list(keyword='...')" in p
+
+    def test_pitfall_recall_timing_rule(self):
+        # Recall BEFORE the error, and write-back after >2 debugging rounds.
+        p = self._prompt()
+        assert "Recall BEFORE the error" in p
+        assert ">2 rounds" in p
 
     def test_stall_is_failure_mode_present(self):
         # Covers regex-chess-style loops: re-analyzing same bug / thinking without acting.
@@ -198,6 +326,16 @@ class TestSystemPromptContent:
 
     def test_classification_gate_present(self):
         assert "CLASSIFICATION GATE" in self._prompt()
+
+    def test_same_object_parallel_write_rule_present(self):
+        # DON'T rule: parallel read-write on the SAME object = lost-update race
+        # (20260908: three parallel edit_file calls to one doc — all reported
+        # success, only the last edit survived; re-hit in E29).
+        p = self._prompt()
+        assert "read-and-write the SAME object in one parallel batch" in p
+        assert "Same-file edits MUST be sequential" in p
+        assert "only the last edit survives" in p
+        assert "(Reads are safe.)" in p
 
     # ── new three-principle structure guards ─────────────────────────────
 
@@ -504,3 +642,64 @@ class TestRefreshSessionDir:
         assert "/fake/session/xyz" in prompt
         assert "conversation_full.json" in prompt
         assert "conversation.json" in prompt
+
+
+# ── Analyze-don't-just-use principle (20260918) ──────────────────────────
+
+class TestAnalyzeDontJustUse:
+    """The 'ANALYZE, DON'T JUST USE' principle must not be silently removed.
+
+    Guards the two landing sites: the dedicated paragraph in PRINCIPLE 1
+    (after FIRST-ACTION RESEARCH REFLEX) and the depth extension on the
+    'Read existing code before writing new code' bullet in Rules/DO.
+    """
+
+    def _prompt(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        return SYSTEM_PROMPT_STATIC
+
+    def test_analyze_principle_present(self):
+        # The dedicated P1 paragraph and its mechanism-level demand.
+        p = self._prompt()
+        assert "ANALYZE, DON'T JUST USE" in p
+        assert "SUBJECT of study, not a tool to consume" in p
+        assert "MECHANISM level" in p
+
+    def test_analyze_resolves_standard_method_tension(self):
+        # Dissolves the mis-reading of P1: standard method != current code.
+        p = self._prompt()
+        assert "standard APPROACH, not whatever the code currently does" in p
+
+    def test_read_existing_code_has_mechanism_depth(self):
+        # The Rules/DO bullet must carry the optimization-depth extension.
+        p = self._prompt()
+        assert "Read existing code before writing new code" in p
+        assert "read at the *mechanism* level" in p
+
+
+    # ── Information Retrieval: check memory for the location before searching ──
+
+    def test_pre_search_memory_location_check_present(self):
+        # The retrieval checklist must lead with: consult memory for the named
+        # file BEFORE scanning any tree. Regression for the "looked up a symbol
+        # that was already recorded" waste.
+        p = self._prompt()
+        assert "check whether memory already knows the location" in p
+
+    def test_pre_search_memory_uses_memory_list_and_named_file(self):
+        p = self._prompt()
+        i = p.index("## Information Retrieval")
+        j = p.index("## Pitfall Recall")
+        blk = p[i:j]
+        assert "memory_list(keyword='<term>')" in blk
+        assert "read that\nfile directly, instead of scanning a tree" in blk
+
+    def test_pre_search_memory_names_heavy_subtrees(self):
+        # Names the concrete heavy-tree markers so the guidance is operational,
+        # not abstract ("avoid broad search").
+        p = self._prompt()
+        i = p.index("## Information Retrieval")
+        j = p.index("## Pitfall Recall")
+        blk = p[i:j]
+        for marker in ("site-packages", "node_modules", "logs", "checkpoints"):
+            assert marker in blk, marker
