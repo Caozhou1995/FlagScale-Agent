@@ -59,6 +59,17 @@ def get_proposals_dir() -> str:
     return os.path.join(get_dot_flagscale_root(), "proposals")
 
 
+def get_tasks_dir() -> str:
+    """Get the multi-agent task-ledger root (~/.flagscale/tasks).
+
+    Global (not per-session) and sibling to the proposal registry: a spawned
+    worker writes its task state from a *different process* than the parent, and
+    the parent-chain (Contract.parent) must stay auditable across sessions. One
+    directory per task, named by the content-addressed task id.
+    """
+    return os.path.join(get_dot_flagscale_root(), "tasks")
+
+
 def get_input_history_file() -> str:
     """Get readline input history file (~/.flagscale/input_history)."""
     return os.path.join(get_dot_flagscale_root(), "input_history")
