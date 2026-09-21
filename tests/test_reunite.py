@@ -21,10 +21,12 @@ import pytest
 
 from flagscale_agent.react.multi_agent.contract import Contract
 from flagscale_agent.react.multi_agent.ledger import (
+    DEADLINE_MISSED,
     DONE,
     REJECTED,
     REPORTED,
     RUNNING,
+    TERMINATED,
     TaskLedger,
 )
 from flagscale_agent.react.multi_agent.reunite import (
@@ -146,6 +148,47 @@ class TestNotReady:
         assert v.passed is False
         # ledger NOT changed
         assert led.get(c.id).status == RUNNING
+
+
+class TestSettledWithoutReport:
+    """Regression for F1: DEADLINE_MISSED / TERMINATED must be settled, not
+    pending-forever. The watchdog writes DEADLINE_MISSED and the worker can
+    never reach REPORTED, so polling must terminate with passed=False."""
+
+    def test_deadline_missed_is_settled_not_pending(self, led, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        c = Contract.build(
+            goal="g", constraints={"writable": [str(work)]},
+            acceptance=[{"check": "true"}], output_ptr=str(work / "out.md"),
+        )
+        led.create(c)
+        led.transition(c.id, RUNNING, pid=1)
+        led.transition(c.id, DEADLINE_MISSED, note="watchdog deadline")
+        v = check_result(led, c.id)
+        assert v.pending is False
+        assert v.passed is False
+        assert v.status == DEADLINE_MISSED
+        assert "settled without report" in v.note
+        # idempotent: a second poll stays settled
+        v2 = check_result(led, c.id)
+        assert v2.pending is False
+        assert v2.status == DEADLINE_MISSED
+
+    def test_terminated_is_settled_not_pending(self, led, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        c = Contract.build(
+            goal="g", constraints={"writable": [str(work)]},
+            acceptance=[{"check": "true"}], output_ptr=str(work / "out.md"),
+        )
+        led.create(c)
+        led.transition(c.id, RUNNING, pid=1)
+        led.transition(c.id, TERMINATED, note="reaped")
+        v = check_result(led, c.id)
+        assert v.pending is False
+        assert v.passed is False
+        assert v.status == TERMINATED
 
 
 class TestTerminalIdempotent:

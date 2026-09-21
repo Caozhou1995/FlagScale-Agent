@@ -74,6 +74,32 @@ class TestValidate:
         with pytest.raises(ContractError):
             _mk(tmp_path, output_ptr="/etc/evil.json").validate()
 
+    def test_symlink_escape_rejected_inv4(self, tmp_path):
+        # Regression for F2: a symlink inside writable pointing OUTSIDE it must
+        # not be accepted. normpath alone passed this; realpath must reject it.
+        writable = tmp_path / "w"
+        writable.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        link = writable / "esc"
+        link.symlink_to(outside)
+        with pytest.raises(ContractError):
+            _mk(tmp_path,
+                constraints={"writable": [str(writable)]},
+                output_ptr=str(link / "evil.json")).validate()
+
+    def test_symlink_within_writable_still_accepted(self, tmp_path):
+        # A symlink that stays inside writable is fine (must not over-reject).
+        writable = tmp_path / "w"
+        writable.mkdir()
+        real = writable / "real"
+        real.mkdir()
+        link = writable / "alias"
+        link.symlink_to(real)
+        _mk(tmp_path,
+            constraints={"writable": [str(writable)]},
+            output_ptr=str(link / "out.json")).validate()  # no raise
+
     def test_input_path_must_exist(self, tmp_path):
         c = _mk(tmp_path, inputs=[
             {"kind": "path", "value": str(tmp_path / "nope.txt")}

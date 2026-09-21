@@ -248,7 +248,14 @@ class Contract:
 
 
 def _within(path: str, root: str) -> bool:
-    """True if `path` is `root` itself or a descendant of it (no .. escape)."""
-    path = os.path.normpath(path)
-    root = os.path.normpath(root)
+    """True if `path` is `root` itself or a descendant of it.
+
+    Both sides are canonicalized with `os.path.realpath` before the prefix test
+    so a symlink cannot escape the root: a path like `root/link/secret` where
+    `link -> /etc` normalizes to `root/link/secret` (normpath passes) but
+    realpaths to `/etc/secret` and is correctly rejected. `realpath` also
+    collapses any `..` segments, so it subsumes the old normpath check.
+    """
+    path = os.path.realpath(path)
+    root = os.path.realpath(root)
     return path == root or path.startswith(root.rstrip("/") + "/")

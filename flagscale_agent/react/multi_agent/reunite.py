@@ -48,14 +48,23 @@ from flagscale_agent.react.paths import get_tasks_dir
 from flagscale_agent.react.tools.base import Tool
 
 from .ledger import (
+    DEADLINE_MISSED,
     DONE,
     FAILED,
     REJECTED,
     REPORTED,
+    TERMINATED,
     TERMINAL_STATUSES,
     LedgerError,
     TaskLedger,
 )
+
+# Settled-but-not-terminal: the worker is gone and will never reach REPORTED
+# (the watchdog writes DEADLINE_MISSED when the deadline elapses; TERMINATED is
+# a post-mortem cleanup state). These are NOT in ledger.TERMINAL_STATUSES, but
+# polling them forever would hang, so check_result reports them as settled
+# (pending=False) with passed=False — acceptance can never be verified.
+_SETTLED_WITHOUT_REPORT = (DEADLINE_MISSED, TERMINATED)
 
 # Per-check subprocess timeout (120s each).
 DEFAULT_CHECK_TIMEOUT_S = 120
@@ -177,6 +186,8 @@ def check_result(ledger: TaskLedger, task_id: str,
 
       * Task missing                → Verdict(pending=False, status="?")  — error
       * status in (DONE/REJECTED/FAILED, terminal) → return as-is (idempotent)
+      * status in (DEADLINE_MISSED/TERMINATED)     → settled, passed=False,
+                                       pending=False (worker gone, never REPORTED)
       * status == REPORTED          → the parent runs every acceptance predicate
                                       itself; all pass → transition DONE,
                                       else → transition REJECTED (note carries
@@ -199,6 +210,16 @@ def check_result(ledger: TaskLedger, task_id: str,
             task_id=task_id, status=rec.status, passed=(rec.status == DONE),
             pending=False, checks=[], self_report=self_report,
             note=f"already terminal: {rec.status}",
+        )
+
+    # Settled without a report: DEADLINE_MISSED / TERMINATED. The worker is
+    # gone and can never reach REPORTED, so acceptance can never be verified and
+    # polling forever would hang. Report settled (pending=False), passed=False.
+    if rec.status in _SETTLED_WITHOUT_REPORT:
+        return Verdict(
+            task_id=task_id, status=rec.status, passed=False, pending=False,
+            checks=[], self_report=ledger.read_result(task_id),
+            note=f"settled without report: {rec.status}",
         )
 
     # Not yet ready: worker still running / not reported. Do not judge.
