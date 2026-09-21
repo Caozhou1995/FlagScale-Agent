@@ -70,7 +70,7 @@ from flagscale_agent.react.multi_agent.reunite import PollTasksTool
 from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
 from flagscale_agent.react.multi_agent.wiring import (
     resolve_worker_query, finalize_worker_if_no_report, is_worker,
-    WORKER_ROLE_PREFIX,
+    WORKER_ROLE_PREFIX, persist_worker_conversation,
 )
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
@@ -1176,6 +1176,13 @@ class WorkerAgent:
             # the process mid-run is handled separately by the SIGTERM handler
             # installed in _install_signal_handlers().
             self._auto_save()
+            # Persist this worker's full conversation trace into its own task
+            # directory, so the task dir (the one place a parent/human audits a
+            # worker) holds the complete ReAct trace next to worker.log/result.
+            try:
+                persist_worker_conversation(self._session_dir)
+            except Exception:
+                pass
             # Worker that exits without calling report_result would leave the
             # ledger stuck in RUNNING; close it now (design §2.6).
             try:
