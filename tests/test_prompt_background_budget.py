@@ -248,6 +248,48 @@ class TestTimeBudgetGuidance:
         assert "cifar" not in low
 
 
+class TestMultiAgentGuidance:
+    """The multi-agent mechanism (spawn_worker / dispatch_many / poll_tasks /
+    report_result) existed in code but was never documented in the prompt, so
+    the agent-driven fan-out loop could not run. This locks the contract in."""
+
+    def test_has_multi_agent_section_and_tool_names(self):
+        assert "## Multi-Agent" in SYSTEM_PROMPT_STATIC
+        for tool in ("spawn_worker", "dispatch_many", "poll_tasks", "report_result"):
+            assert tool in SYSTEM_PROMPT_STATIC, tool
+
+    def test_parent_worker_role_split(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "parent" in low and "worker" in low
+        # worker cannot fan out; a worker must report
+        assert "cannot fan out" in low or "worker cannot fan out" in low
+        assert "report_result" in low
+
+    def test_acceptance_is_parent_run_not_self_report(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "acceptance is parent-run" in low
+        assert "self-report" in low or "self report" in low
+
+    def test_documents_independence_and_distinct_output(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "independent" in low
+        assert "distinct output" in low or "distinct output_ptr" in low or "clobber" in low
+
+    def test_documents_bounded_concurrency_degree(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        # degree minimizes total wall-clock, not the max that fits
+        assert "degree" in low
+        assert "total wall-clock" in low
+        # bounded reunite: pointers, not worker text
+        assert "pointer" in low
+
+    def test_no_new_placeholders_introduced(self):
+        # The section must not add a new .format placeholder.
+        import re
+        assert set(re.findall(r"{([a-z_]+)}", SYSTEM_PROMPT_STATIC)) == {
+            "cwd", "knowledge", "skills", "tools"}
+
+
 class TestExpectationViolationAttribution:
     """User doctrine (202609, aligned with GLM RSI blog): an action agent must
     ANALYZE results, not just take them — a result that violates expectation
