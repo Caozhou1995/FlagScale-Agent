@@ -10,7 +10,9 @@ Two things the dispatcher must prove:
 
 These unit tests use a FAKE spawn (no real subprocess) so scheduling and the
 pointer/handoff contract are deterministic. The real-subprocess wall-clock
-speedup is proven separately by scripts/e2e_m4.py (design §14.4 smoke).
+speedup is verified separately by an external harness that drives this module
+through real worker subprocesses; that harness is intentionally not shipped in
+this repo, so these tests stay the in-repo source of truth for the contract.
 """
 
 import os
