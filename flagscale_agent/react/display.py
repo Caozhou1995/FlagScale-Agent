@@ -260,7 +260,11 @@ _TOOL_ICONS = {
     "evict": "🗑️",
     "recall": "↩️",
     "shell_jobs": "🧵",
-
+    # Multi-agent / subagent delegation
+    "spawn_worker": "🤖",
+    "dispatch_many": "🚀",
+    "poll_tasks": "📡",
+    "report_result": "📤",
 }
 
 

@@ -35,6 +35,25 @@ def test_shell_jobs_has_dedicated_icon():
     assert icon  # non-empty
 
 
+# ── Multi-agent tool icons ──────────────────────────────────────────────
+
+def test_multi_agent_tools_have_dedicated_icons():
+    """Each subagent-delegation tool must be visually distinct from the
+    generic fallback, so a reader can tell a spawn/dispatch/report-back
+    happened just by glancing at the terminal."""
+    fallback = _tool_icon("some_unknown_tool")
+    for name in ("spawn_worker", "dispatch_many", "poll_tasks", "report_result"):
+        icon = _tool_icon(name)
+        assert icon != fallback, f"{name} fell back to the generic icon"
+        assert icon  # non-empty
+
+
+def test_multi_agent_icons_are_distinct_from_each_other():
+    icons = [_tool_icon(n) for n in
+             ("spawn_worker", "dispatch_many", "poll_tasks", "report_result")]
+    assert len(set(icons)) == len(icons)  # no two share an icon
+
+
 # ── Arg summary ─────────────────────────────────────────────────────────
 
 def test_summary_wait_shows_action_job_timeout():
