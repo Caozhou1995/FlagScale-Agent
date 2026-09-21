@@ -20,17 +20,17 @@ players. Freezing the contract (its Python form for in-process use + its JSON
 wire form for cross-machine use) makes every upper layer a fill-in-the-blank.
 
 Two representations of the SAME contract:
-  - Python dataclass `Contract` (§2 single-machine layer, in-process)
+  - Python dataclass `Contract` (single-machine layer, in-process)
   - JSON wire `TaskContract` (contract.to_wire() / Contract.from_wire(),
-    §3+ cross-machine layer)
+    cross-machine layer)
 
 The id is CONTENT-ADDRESSED: sha256(goal|constraints|acceptance)[:12]. This is
-what makes idempotent acceptance (INV6) work — the same task text always maps
+what makes idempotent acceptance work — the same task text always maps
 to the same id, so a duplicate delivery is detectable without a registry lookup.
 
-Invariants enforced here (see design doc §0.3):
-  - INV4: output_ptr must live inside constraints["writable"]
-  - INV7: the contract is self-contained (no host-private jargon references)
+Invariants enforced here:
+  - output_ptr must live inside constraints["writable"]
+  - the contract is self-contained (no host-private jargon references)
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# goal length cap (design §1.1: "<=200 chars, single sentence, decidable")
+# goal length cap ("<=200 chars, single sentence, decidable")
 GOAL_MAX_LEN = 200
 
 
@@ -59,7 +59,7 @@ def compute_id(goal: str, constraints: Dict[str, Any], acceptance: List[Dict[str
 
     Canonical form (sorted keys, no whitespace drift) so the SAME logical
     contract always yields the SAME id across processes and machines — the
-    precondition for idempotent acceptance (INV6).
+    precondition for idempotent acceptance.
     """
     payload = "|".join([
         goal or "",
@@ -71,7 +71,7 @@ def compute_id(goal: str, constraints: Dict[str, Any], acceptance: List[Dict[str
 
 @dataclass(frozen=True)
 class Contract:
-    """An immutable task contract (design §1.1).
+    """An immutable task contract.
 
     Frozen because a contract is a promise: once handed to a worker it must not
     mutate under it. A changed scope is a NEW contract (new id), not an edit.
@@ -89,7 +89,7 @@ class Contract:
 
     # ── validation ───────────────────────────────────────────────────────────
     def validate(self, check_inputs_exist: bool = True) -> None:
-        """Validate per design §1.1, in order. Raises ContractError on any fail.
+        """Validate in order. Raises ContractError on any fail.
 
         Args:
             check_inputs_exist: when True (parent-side pre-spawn check) every
@@ -122,11 +122,11 @@ class Contract:
             if check_inputs_exist and inp.get("kind") == "path" and not os.path.exists(val):
                 raise ContractError(f"inputs[{i}] path does not exist: {val!r}")
 
-        # 3. output_ptr ∈ writable (INV4)
+        # 3. output_ptr ∈ writable
         writable = (self.constraints or {}).get("writable") or []
         if not any(_is_abs(w) and _within(self.output_ptr, w) for w in writable):
             raise ContractError(
-                f"output_ptr {self.output_ptr!r} not inside any constraints.writable {writable!r} (INV4)"
+                f"output_ptr {self.output_ptr!r} not inside any constraints.writable {writable!r}"
             )
 
         # 4. deadline in the future; depth >= 1
@@ -144,9 +144,9 @@ class Contract:
                 f"id mismatch: carried {self.id!r} != recomputed {expect!r} (tampered?)"
             )
 
-    # ── wire (cross-machine, design §1.3) ────────────────────────────────────
+    # ── wire (cross-machine) ────────────────────────────────────
     def to_wire(self) -> Dict[str, Any]:
-        """Serialize to the language-neutral JSON wire form (§1.3).
+        """Serialize to the language-neutral JSON wire form.
 
         Note the wire uses `deadline_sec` (a duration) while the dataclass uses
         `deadline_epoch` (an instant) — the wire carries a relative deadline so

@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Parent-side spawn: fork a worker subprocess + watchdog (M2, design §2.2/§2.3).
+"""Parent-side spawn: fork a worker subprocess + watchdog.
 
 This is the only place that creates a worker process. Two hard rules govern it:
 
-  * INV1 — a worker must NEVER spawn another worker. Enforced two ways: the
+  * A worker must NEVER spawn another worker. Enforced two ways: the
     parent's env never carries FLAGSCALE_TASK_ID for itself (so the check can
     tell parent from worker), and every spawned child DOES carry it, so any
     spawn_worker call inside a worker is refused.
@@ -52,9 +52,9 @@ from .ledger import (
     TaskLedger,
 )
 
-# D9 — concurrency cap: constant to start, config-driven at M6.
+# Concurrency cap (constant for now).
 MAX_CONCURRENT = 2
-# D10 — depth cap: M2 forbids workers from spawning, so depth is always 1.
+# Depth cap: workers may not spawn, so depth is always 1.
 MAX_DEPTH = 1
 # Watchdog poll cadence (seconds).
 WATCH_INTERVAL = 5.0
@@ -195,7 +195,7 @@ class _Watchdog(threading.Thread):
 
 
 class SpawnWorkerTool(Tool):
-    """Spawn one worker subprocess against a freshly-minted contract (M2)."""
+    """Spawn one worker subprocess against a freshly-minted contract."""
 
     name = "spawn_worker"
     description = (
@@ -328,7 +328,7 @@ class SpawnWorkerTool(Tool):
             want_depth = int(os.environ.get("FLAGSCALE_TASK_DEPTH", "1") or "1") + 1
         except ValueError:
             want_depth = 2
-        # In M2 the parent is depth 0; the child it spawns is depth 1. If the
+        # The parent is depth 0; the child it spawns is depth 1. If the
         # caller env already advertises a depth >= MAX_DEPTH we refuse.
         try:
             cur_depth = int(os.environ.get("FLAGSCALE_TASK_DEPTH", "0") or "0")

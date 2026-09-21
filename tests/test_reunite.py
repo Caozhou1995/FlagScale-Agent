@@ -1,9 +1,9 @@
 # Copyright 2026 FlagOS Contributors
 # Licensed under the Apache License, Version 2.0
 
-"""Tests for parent-side reunite: check_result + PollTasksTool (design §2.4, M3).
+"""Tests for parent-side reunite: check_result + PollTasksTool.
 
-Covers the four M3 acceptance cases plus the adversarial one:
+Covers the four acceptance cases plus the adversarial one:
   * check passes  → REPORTED → DONE
   * check fails   → REPORTED → REJECTED, note carries stdout_tail
   * not ready     → pending, NO ledger mutation

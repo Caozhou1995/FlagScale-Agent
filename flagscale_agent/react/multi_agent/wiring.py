@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Worker-side wiring helpers (M2, design §2.6).
+"""Worker-side wiring helpers.
 
 Keeps the changes to agent.py minimal and testable: three small functions that
 the agent calls, plus the fixed role prefix (D7). Nothing here spawns; nothing

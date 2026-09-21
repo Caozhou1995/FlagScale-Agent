@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Parent-side reunite: acceptance verification + poll tool (M3, design §2.4).
+"""Parent-side reunite: acceptance verification + poll tool.
 
-The single most important rule in the whole design lives here (INV3 / §1.4
-rule 5 + D6): **the parent NEVER trusts the worker's self-report**. When a
+The single most important rule lives here: **the parent NEVER trusts the
+worker's self-report**. When a
 task reaches REPORTED the parent independently runs every `acceptance` check
 itself, inside its OWN process, and only the exit codes of those checks decide
 DONE vs REJECTED. `result.json` is surfaced to the model as *reference only*
@@ -57,7 +57,7 @@ from .ledger import (
     TaskLedger,
 )
 
-# Per-check subprocess timeout (design §2.4: 120s each).
+# Per-check subprocess timeout (120s each).
 DEFAULT_CHECK_TIMEOUT_S = 120
 # How much of a check's output to keep in the verdict / REJECTED note.
 STDOUT_TAIL_CHARS = 2000
@@ -65,7 +65,7 @@ STDOUT_TAIL_CHARS = 2000
 
 @dataclass
 class CheckEvidence:
-    """One acceptance check's result (design §2.4 evidence shape)."""
+    """One acceptance check's result."""
     check: str
     kind: str
     cwd: str
@@ -88,7 +88,7 @@ class CheckEvidence:
 
 @dataclass
 class Verdict:
-    """The parent's independent judgement of one task (design §2.4)."""
+    """The parent's independent judgement of one task."""
     task_id: str
     status: str            # ledger status after judging (or current, if pending)
     passed: bool           # True only when ALL checks passed AND status == DONE
@@ -124,7 +124,7 @@ def _run_one_check(item: Dict[str, Any], default_cwd: str,
     """
     kind = str(item.get("kind", "check_command") or "check_command")
     cmd = str(item.get("check", "") or "")
-    # D5: the check's cwd defaults to the parent's current cwd. An absolute
+    # The check's cwd defaults to the parent's current cwd. An absolute
     # per-item cwd wins; a relative/empty one falls back to the parent cwd.
     item_cwd = str(item.get("cwd", "") or "")
     cwd = item_cwd if os.path.isabs(item_cwd) else default_cwd
@@ -171,9 +171,9 @@ def _run_one_check(item: Dict[str, Any], default_cwd: str,
 def check_result(ledger: TaskLedger, task_id: str,
                  timeout_s: int = DEFAULT_CHECK_TIMEOUT_S,
                  default_cwd: Optional[str] = None) -> Verdict:
-    """Independently run a task's acceptance predicates and judge it (§2.4).
+    """Independently run a task's acceptance predicates and judge it.
 
-    Semantics (this is the whole M3 contract):
+    Semantics (this is the whole verdict contract):
 
       * Task missing                → Verdict(pending=False, status="?")  — error
       * status in (DONE/REJECTED/FAILED, terminal) → return as-is (idempotent)
@@ -185,7 +185,7 @@ def check_result(ledger: TaskLedger, task_id: str,
 
     The parent runs the PREDICATES (verification), never the task itself. The
     worker's result.json is attached as `self_report` for reference and is
-    NEVER consulted for the verdict (INV3).
+    NEVER consulted for the verdict.
     """
     rec = ledger.get(task_id)
     if rec is None:
@@ -220,7 +220,7 @@ def check_result(ledger: TaskLedger, task_id: str,
 
     if all_pass:
         try:
-            ledger.transition(task_id, DONE, note="acceptance verified by parent (INV3)")
+            ledger.transition(task_id, DONE, note="acceptance verified by parent")
             status = DONE
         except LedgerError:
             status = ledger.get(task_id).status
@@ -247,7 +247,7 @@ def check_result(ledger: TaskLedger, task_id: str,
 
 
 class PollTasksTool(Tool):
-    """Parent-side poll/reunite tool (M3, design §2.4).
+    """Parent-side poll/reunite tool.
 
     actions:
       * list               — show all tasks + current status
@@ -263,7 +263,7 @@ class PollTasksTool(Tool):
         "result <task_id> (show the worker's self-reported result.json — "
         "reference only, never the basis for acceptance). "
         "Acceptance is decided solely by the parent running the checks; the "
-        "worker's self-report never counts (INV3)."
+        "worker's self-report never counts."
     )
     parameters = {
         "type": "object",

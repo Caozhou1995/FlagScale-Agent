@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Task ledger — the per-task directory store + status state machine (§1.2).
+"""Task ledger — the per-task directory store + status state machine.
 
 Every task is one directory named by its content-addressed id:
 
@@ -20,7 +20,7 @@ Every task is one directory named by its content-addressed id:
       contract.json   # immutable, atomic write before spawn (tmp + os.replace)
       state.json      # {"status", "history", "pid", "output_ptr"}
       result.json     # worker self-report (reference only; NEVER trusted for
-                      # acceptance — INV3)
+                      # acceptance)
       worker.log      # spawn redirects stdout/stderr here
 
 All reads/writes go through TaskLedger — never hand-edit the files. state.json
@@ -28,7 +28,7 @@ is guarded by an exclusive fcntl.flock (the lock file IS state.json), because
 the parent side (watchdog / reunite) and the worker side (report_result) are
 DIFFERENT processes and both mutate the same state.
 
-Status machine (design §1.2, illegal transitions raise LedgerError):
+Status machine (illegal transitions raise LedgerError):
 
     SPAWNING      → RUNNING | FAILED
     RUNNING       → REPORTED | DONE | REJECTED | DEADLINE_MISSED | TERMINATED | FAILED
@@ -70,7 +70,7 @@ ALL_STATUSES = (
 TERMINAL_STATUSES = (DONE, REJECTED, FAILED)
 ACTIVE_STATUSES = (SPAWNING, RUNNING, REPORTED)
 
-# Legal transition table (design §1.2). A state maps to its allowed next states.
+# Legal transition table. A state maps to its allowed next states.
 _TRANSITIONS: Dict[str, set] = {
     SPAWNING: {RUNNING, FAILED},
     RUNNING: {REPORTED, DONE, REJECTED, DEADLINE_MISSED, TERMINATED, FAILED},
@@ -276,7 +276,7 @@ class TaskLedger:
     def write_result(self, task_id: str, payload: Dict[str, Any]) -> Path:
         """Write result.json (worker self-report) and move state to REPORTED.
 
-        Called ONLY by the worker-side ReportResultTool. Per INV3 the payload's
+        Called ONLY by the worker-side ReportResultTool. The payload's
         `self_report` is reference material — the parent independently VERIFIES
         the deliverable by running the acceptance predicate itself (it never
         redoes the task).
@@ -304,7 +304,7 @@ class TaskLedger:
     def prune(self, older_than_days: int) -> List[str]:
         """Remove terminal task dirs whose state.json mtime is older than N days.
 
-        Manual cleanup entry (M2 does not wire an automatic timer). Refuses to
+        Manual cleanup entry (no automatic timer is wired). Refuses to
         touch any task still in an active status.
         """
         removed = []

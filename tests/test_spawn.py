@@ -1,7 +1,7 @@
 # Copyright 2026 FlagOS Contributors
 # Licensed under the Apache License, Version 2.0
 
-"""Tests for parent-side spawn (design §2.2/§2.3, M2)."""
+"""Tests for parent-side spawn."""
 
 import os
 import signal

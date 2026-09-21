@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Worker-side self-report (M2, design §2.5).
+"""Worker-side self-report.
 
 The worker's ONLY added tool. It writes result.json and moves the task to
-REPORTED — a *self-report*, not a verdict. Per INV3 the parent NEVER trusts
+REPORTED — a *self-report*, not a verdict. The parent NEVER trusts
 result.json for acceptance; the parent instead runs the acceptance checks
-itself (§1.4 rule 5). This tool exists so the parent's reunite has something
+itself. This tool exists so the parent's reunite has something
 to compare against and so a task cannot silently hang in RUNNING after the
 worker exits.
 
@@ -92,7 +92,7 @@ class ReportResultTool(Tool):
         if not summary or not summary.strip():
             return "ERROR: summary must not be empty."
 
-        # ── 2. INV4: files_written ∪ output_ptr ⊆ constraints.writable ───────
+        # ── 2. files_written ∪ output_ptr ⊆ constraints.writable ───────
         rec = self._ledger.get(task_id)
         if rec is None:
             return f"ERROR: task {task_id} not found in the ledger (contract missing?)."
@@ -107,7 +107,7 @@ class ReportResultTool(Tool):
             if not any(_within(p, w) for w in writable):
                 return (
                     f"ERROR: file {p!r} is not inside the contract's "
-                    f"constraints.writable {writable!r} (INV4). Only write to "
+                    f"constraints.writable {writable!r}. Only write to "
                     "the allowed directories."
                 )
 
@@ -127,5 +127,5 @@ class ReportResultTool(Tool):
         return (
             f"reported task {task_id} (status={status}). "
             "The parent will independently run the acceptance checks; this is "
-            "a self-report, not a pass (INV3)."
+            "a self-report, not a pass."
         )

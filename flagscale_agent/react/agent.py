@@ -64,6 +64,7 @@ from flagscale_agent.react.tools.web_fetch import WebFetchTool
 # find_log removed - merged into monitor
 
 from flagscale_agent.react.memory import Memory
+from flagscale_agent.react.multi_agent.dispatch import DispatchManyTool
 from flagscale_agent.react.multi_agent.report_result import ReportResultTool
 from flagscale_agent.react.multi_agent.reunite import PollTasksTool
 from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
@@ -430,7 +431,7 @@ class WorkerAgent:
         from flagscale_agent.react.tools.hard_reset import HardResetTool
         self.tool_registry.register(HardResetTool(self))
 
-        # ── Multi-agent (M2) ────────────────────────────────────────────────
+        # ── Multi-agent: spawn a worker ──────────────────────────────────────
         # spawn_worker is always registered: its OWN execute() refuses when the
         # env carries FLAGSCALE_TASK_ID (INV1), so a worker holding the tool can
         # never use it — the refusal is the invariant, not the registry.
@@ -439,11 +440,17 @@ class WorkerAgent:
         # are a worker, so the parent's tool surface does not grow.
         if is_worker():
             self.tool_registry.register(ReportResultTool())
-        # ── Multi-agent (M3) ────────────────────────────────────────────────
+        # ── Multi-agent: reunite / poll ─────────────────────────────────────
         # poll_tasks is the PARENT-side reunite tool (acceptance re-run). Only
         # the parent judges workers, so a worker never gets it.
         if not is_worker():
             self.tool_registry.register(PollTasksTool())
+        # ── Multi-agent: parent fan-out ─────────────────────────────────────
+        # dispatch_many is the PARENT-side fan-out dispatcher: N workers,
+        # bounded concurrency, reunite by POINTER records (never worker text).
+        # Parent-only — a worker cannot fan out (INV1/D10).
+        if not is_worker():
+            self.tool_registry.register(DispatchManyTool())
 
     def _build_proxies(self) -> dict[str, str]:
         proxies = {}
