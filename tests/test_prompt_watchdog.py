@@ -403,6 +403,7 @@ class TestForeignTtyReadersModule:
         monkeypatch.setattr(pw.os, "readlink", fake_readlink)
         # 300 is an ancestor of 999.
         monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: pid == 300)
+        monkeypatch.setattr(pw, "_blocked_in_tty_read", lambda pid: True)
 
         got = pw.foreign_tty_readers("/dev/pts/3", getpid=lambda: 999)
         assert got == [100]
@@ -418,6 +419,7 @@ class TestForeignTtyReadersModule:
             pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
         )
         monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        monkeypatch.setattr(pw, "_blocked_in_tty_read", lambda pid: True)
         assert pw.foreign_tty_readers("/dev/pts/3", getpid=lambda: 999) == [100]
 
     def test_default_derives_our_own_tty(self, monkeypatch):
@@ -430,6 +432,7 @@ class TestForeignTtyReadersModule:
             pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
         )
         monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        monkeypatch.setattr(pw, "_blocked_in_tty_read", lambda pid: True)
         # No tty_path: derives /dev/pts/5 and matches only pid 100.
         assert pw.foreign_tty_readers(getpid=lambda: 999) == [100]
 
@@ -449,6 +452,7 @@ class TestForeignTtyReadersModule:
             pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
         )
         monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        monkeypatch.setattr(pw, "_blocked_in_tty_read", lambda pid: True)
         assert pw.foreign_tty_readers("/dev/pts/7", getpid=lambda: 999) == [101]
 
     def test_reap_kills_every_reader(self, monkeypatch):
@@ -487,4 +491,115 @@ class TestForeignTtyReadersModule:
 
         monkeypatch.setattr(pw.os, "listdir", boom)
         assert pw.foreign_tty_readers(getpid=lambda: 1) == []
+
+    def test_shares_tty_but_not_reading_is_not_a_reader(self, monkeypatch):
+        # LOAD-BEARING false-positive guard: a process whose stdin is the SAME
+        # tty device but which is NOT blocked in the tty read path (tmux/ssh/
+        # sibling shell/sleep) must never be reported. Matching the device
+        # alone reaped innocent processes on an idle terminal.
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        victims = {"100": "/dev/pts/3", "101": "/dev/pts/3"}
+        monkeypatch.setattr(pw.os, "listdir", lambda p: list(victims))
+        monkeypatch.setattr(
+            pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
+        )
+        monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        # 100 really reads the tty; 101 merely shares the device (not reading).
+        monkeypatch.setattr(pw, "_blocked_in_tty_read", lambda pid: pid == 100)
+        assert pw.foreign_tty_readers("/dev/pts/3", getpid=lambda: 999) == [100]
+
+    def test_unreadable_stack_keeps_candidate(self, monkeypatch):
+        # Conservative fallback: when the kernel stack is unavailable (no
+        # CAP_SYS_ADMIN on a hardened host) we cannot prove the process is NOT
+        # reading, so keep it. Detection must not silently disappear.
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        victims = {"100": "/dev/pts/3"}
+        monkeypatch.setattr(pw.os, "listdir", lambda p: list(victims))
+        monkeypatch.setattr(
+            pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
+        )
+        monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        monkeypatch.setattr(pw, "_blocked_in_tty_read", lambda pid: None)
+        assert pw.foreign_tty_readers("/dev/pts/3", getpid=lambda: 999) == [100]
+
+    def test_blocked_in_tty_read_classifies_stack(self, monkeypatch):
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        class _Fh:
+            def __init__(self, body): self._body = body
+            def read(self): return self._body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        real_open = open
+
+        def fake_open(path, *a, **k):
+            if path == "/proc/4242/stack":
+                return _Fh("[<0>] wait_woken\n[<0>] n_tty_read+0x5d3\n")
+            if path == "/proc/4243/stack":
+                return _Fh("[<0>] hrtimer_nanosleep+0x99\n")
+            if path == "/proc/4244/stack":
+                return _Fh("")
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr(pw, "open", fake_open, raising=False)
+        import builtins
+        monkeypatch.setattr(builtins, "open", fake_open)
+        assert pw._blocked_in_tty_read(4242) is True
+        assert pw._blocked_in_tty_read(4243) is False
+        assert pw._blocked_in_tty_read(4244) is None
+        assert pw._blocked_in_tty_read(9999) is None
+
+    def test_fallback_syscall_when_stack_unreadable(self, monkeypatch):
+        # Non-root host: /proc/<pid>/stack is blank. Must NOT lose the fix —
+        # fall back to /proc/<pid>/syscall (same-uid readable).
+        import flagscale_agent.react.prompt_watchdog as pw
+        import builtins
+
+        bodies = {
+            "/proc/10/syscall": "0 0x0 0x7ff 0x2000 0x1 0x2 0x3 0x4 0x5",  # read(fd0)
+            "/proc/11/syscall": "230 0x0 0x0 0x7ff 0x1 0x2 0x3 0x4 0x5",   # nanosleep
+            "/proc/12/syscall": "0 0x3 0x7ff 0x2000 0x1 0x2 0x3 0x4 0x5",   # read(other fd)
+        }
+
+        class _Fh:
+            def __init__(self, b): self._b = b
+            def read(self): return self._b
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake_open(path, *a, **k):
+            if path.startswith("/proc/") and path.endswith("/stack"):
+                return _Fh("")  # blank stack -> permission-denied simulation
+            if path in bodies:
+                return _Fh(bodies[path])
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+        monkeypatch.setattr(pw.platform, "machine", lambda: "x86_64")
+        assert pw._blocked_in_tty_read(10) is True   # read on fd0 -> reading
+        assert pw._blocked_in_tty_read(11) is False  # nanosleep -> not reading
+        assert pw._blocked_in_tty_read(12) is False  # read on fd3 -> not fd0
+
+    def test_fallback_unknown_on_exotic_arch(self, monkeypatch):
+        # Syscall numbers are arch-specific; on an unknown arch stay conservative.
+        import flagscale_agent.react.prompt_watchdog as pw
+        import builtins
+
+        class _Fh:
+            def __init__(self, b): self._b = b
+            def read(self): return self._b
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake_open(path, *a, **k):
+            if path.endswith("/stack"):
+                return _Fh("")
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+        monkeypatch.setattr(pw.platform, "machine", lambda: "riscv64")
+        assert pw._blocked_in_tty_read(10) is None
 

@@ -46,6 +46,7 @@ Properties that make this safe:
 """
 
 import os
+import platform
 import select
 import signal
 import threading
@@ -290,6 +291,59 @@ def _our_tty_path(fd=0):
         return None
 
 
+def _blocked_in_tty_read(pid):
+    """Return whether ``pid`` is *actually* blocked reading its terminal.
+
+    Holding fd 0 equal to our tty device is **not** the same as reading it:
+    ``tmux attach``, an ``ssh`` client, a sibling shell, ``docker-init`` or a
+    mere ``sleep`` can all keep our device open on stdin while never calling
+    ``read(2)`` — they share the device but compete for nothing. Treating a
+    shared device as a thief is what reaped innocent processes on an idle
+    terminal.
+
+    The kernel stack is the honest signal: only a task sitting inside the tty
+    line discipline's read path shows ``n_tty_read`` in ``/proc/<pid>/stack``.
+    (``/proc/<pid>/wchan`` is unreliable here — a blocked ``head`` reports
+    ``wait_woken``, not ``n_tty_read``.)
+
+    Returns ``True`` (reading), ``False`` (not reading), or ``None`` when the
+    signal is UNAVAILABLE — ``/proc/<pid>/stack`` needs CAP_SYS_ADMIN and is
+    blank in some containers. Callers must treat ``None`` conservatively, i.e.
+    as "cannot prove it is *not* reading".
+
+    When the stack is unavailable we fall back to ``/proc/<pid>/syscall``
+    (world-readable for a same-uid process): a task blocked in ``read(2)`` on
+    fd 0 is reported as syscall nr ``0`` with first arg ``0x0``. The fd-0 test
+    is what keeps this honest — a ``head`` blocked reading a *pipe* also shows
+    ``read``, but on a different fd. Syscall numbers are architecture-specific,
+    so this leg only applies on x86_64/aarch64 (whose ``read`` == 0); on any
+    other arch we stay ``None`` rather than guess. If ``syscall`` still says
+    nothing conclusive we return ``None``.
+    """
+    try:
+        with open(f"/proc/{pid}/stack") as fh:
+            stack = fh.read()
+        if stack:
+            return "n_tty_read" in stack
+    except Exception:
+        pass
+    # Stack unavailable (no CAP_SYS_ADMIN) — try the same-uid syscall view.
+    machine = platform.machine()
+    if machine in ("x86_64", "amd64", "aarch64", "arm64"):
+        try:
+            with open(f"/proc/{pid}/syscall") as fh:
+                fields = fh.read().split()
+        except Exception:
+            return None
+        if not fields:
+            return None
+        # fields = [nr, arg0, arg1, ...]; read(2)==0, fd must be 0.
+        if fields[0] != "0":
+            return False
+        return len(fields) > 1 and fields[1] == "0x0"
+    return None
+
+
 def foreign_tty_readers(tty_path=None, *, getpid=os.getpid, our_fd=0):
     """Return PIDs of foreign processes draining **our** terminal's stdin.
 
@@ -331,6 +385,14 @@ def foreign_tty_readers(tty_path=None, *, getpid=os.getpid, our_fd=0):
         # Skip our own ancestors (shell, tmux, init) — they legitimately share
         # the tty but are not competing thieves.
         if _is_ancestor(pid, me):
+            continue
+        # Sharing our tty device (fd0 == tty_path) is necessary but NOT
+        # sufficient: tmux/ssh/sibling shells/docker-init keep the same device
+        # open on stdin while never reading it. Only flag a process the kernel
+        # proves is blocked in the tty read path. ``None`` (stack unreadable,
+        # e.g. no CAP_SYS_ADMIN) is treated leniently — keep the candidate so a
+        # hardened host does not lose detection.
+        if _blocked_in_tty_read(pid) is False:
             continue
         found.append(pid)
     return found
