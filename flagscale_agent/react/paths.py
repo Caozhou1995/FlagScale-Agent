@@ -66,7 +66,17 @@ def get_tasks_dir() -> str:
     worker writes its task state from a *different process* than the parent, and
     the parent-chain (Contract.parent) must stay auditable across sessions. One
     directory per task, named by the content-addressed task id.
+
+    Resolution order:
+        1. FLAGSCALE_TASKS_DIR env var — the parent spawns the worker with this
+           set so BOTH processes resolve the SAME ledger even when the parent
+           used a custom (e.g. test/tmp) dir. Without this the child would
+           default to ~/.flagscale/tasks and fail to find its own task.
+        2. ~/.flagscale/tasks (default).
     """
+    override = os.environ.get("FLAGSCALE_TASKS_DIR")
+    if override:
+        return os.path.abspath(override)
     return os.path.join(get_dot_flagscale_root(), "tasks")
 
 

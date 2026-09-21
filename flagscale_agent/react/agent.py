@@ -64,6 +64,12 @@ from flagscale_agent.react.tools.web_fetch import WebFetchTool
 # find_log removed - merged into monitor
 
 from flagscale_agent.react.memory import Memory
+from flagscale_agent.react.multi_agent.report_result import ReportResultTool
+from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+from flagscale_agent.react.multi_agent.wiring import (
+    resolve_worker_query, finalize_worker_if_no_report, is_worker,
+    WORKER_ROLE_PREFIX,
+)
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
 from flagscale_agent.react.tools.memory_list import MemoryListTool
@@ -422,6 +428,16 @@ class WorkerAgent:
         # Hard reset - LLM-initiated full context reset
         from flagscale_agent.react.tools.hard_reset import HardResetTool
         self.tool_registry.register(HardResetTool(self))
+
+        # ── Multi-agent (M2) ────────────────────────────────────────────────
+        # spawn_worker is always registered: its OWN execute() refuses when the
+        # env carries FLAGSCALE_TASK_ID (INV1), so a worker holding the tool can
+        # never use it — the refusal is the invariant, not the registry.
+        self.tool_registry.register(SpawnWorkerTool())
+        # report_result is the worker-side ONLY added tool; register it iff we
+        # are a worker, so the parent's tool surface does not grow.
+        if is_worker():
+            self.tool_registry.register(ReportResultTool())
 
     def _build_proxies(self) -> dict[str, str]:
         proxies = {}
@@ -1132,6 +1148,9 @@ class WorkerAgent:
         if getattr(self, "_startup_guard", None) is not None:
             self._startup_guard.set_single_shot(True)
         self._inject_context()
+        # Worker mode: the CLI positional arg is a contract PATH (R1); resolve
+        # to the full contract text + role prefix before the loop sees it.
+        query = resolve_worker_query(query)
         self.history.append({"role": "user", "content": query})
         try:
             self._react_loop()
@@ -1144,6 +1163,12 @@ class WorkerAgent:
             # the process mid-run is handled separately by the SIGTERM handler
             # installed in _install_signal_handlers().
             self._auto_save()
+            # Worker that exits without calling report_result would leave the
+            # ledger stuck in RUNNING; close it now (design §2.6).
+            try:
+                finalize_worker_if_no_report()
+            except Exception:
+                pass
             try:
                 from flagscale_agent.react.tools.shell import _JOB_REGISTRY
                 _JOB_REGISTRY.cleanup_all()
