@@ -355,3 +355,42 @@ def _contract_from_json(d: Dict[str, Any]) -> Contract:
         depth=d.get("depth", 1),
         parent=d.get("parent", {}),
     )
+
+
+# ── derivation-tree audit ────────────────────────────────────────────────────
+def render_forest(ledger: "TaskLedger") -> List[Dict[str, Any]]:
+    """Reconstruct the audit tree of every task's derivation, from contracts.
+
+    Walks every task dir under the ledger, reads its immutable contract.json,
+    and returns a flat, sorted list of nodes:
+
+        {task_id, goal, depth, status, parent_id, parent_trace}
+
+    `parent_trace` is the full ancestry chain (root-first, EXCLUDING the task
+    itself); `parent_id` is the immediate parent (last element, or None for the
+    orchestrator's direct children). Because each contract is immutable and
+    content-addressed, this is a faithful record of "who spawned whom" — the
+    auditable-derivation-tree requirement — and needs no extra bookkeeping at spawn
+    time beyond the parent field the spawn already writes.
+    """
+    nodes: List[Dict[str, Any]] = []
+    root = Path(ledger._dir)
+    if not root.exists():
+        return nodes
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        rec = ledger.get(child.name)
+        if rec is None or rec.contract is None:
+            continue
+        c = rec.contract
+        trace = list((c.parent or {}).get("parent_trace", []))
+        nodes.append({
+            "task_id": c.id,
+            "goal": c.goal,
+            "depth": c.depth,
+            "status": rec.status,
+            "parent_id": (c.parent or {}).get("task_id") or (trace[-1] if trace else None),
+            "parent_trace": trace,
+        })
+    return nodes

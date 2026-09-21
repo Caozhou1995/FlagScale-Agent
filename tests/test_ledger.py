@@ -177,6 +177,40 @@ class TestPrune:
         assert led.get(c.id) is not None
 
 
+class TestRenderForest:
+    def test_render_forest_reconstructs_chain(self, led, tmp_path):
+        from flagscale_agent.react.multi_agent.ledger import render_forest
+        # root (depth1) -> child (depth2): the child records root as its parent.
+        root = Contract.build(
+            goal="root task", constraints={"writable": [str(tmp_path)]},
+            acceptance=[{"check": "true"}],
+            output_ptr=os.path.join(str(tmp_path), "r.json"),
+            depth=1, parent={"task_id": None, "depth": 0, "parent_trace": []},
+        )
+        led.create(root)
+        child = Contract.build(
+            goal="child task", constraints={"writable": [str(tmp_path)]},
+            acceptance=[{"check": "true"}],
+            output_ptr=os.path.join(str(tmp_path), "c.json"),
+            depth=2, parent={"task_id": root.id, "depth": 1,
+                             "parent_trace": [root.id]},
+        )
+        led.create(child)
+        nodes = {n["task_id"]: n for n in render_forest(led)}
+        assert set(nodes) == {root.id, child.id}
+        assert nodes[root.id]["parent_id"] is None
+        assert nodes[root.id]["parent_trace"] == []
+        assert nodes[root.id]["depth"] == 1
+        assert nodes[root.id]["status"] == SPAWNING
+        assert nodes[child.id]["parent_id"] == root.id
+        assert nodes[child.id]["parent_trace"] == [root.id]
+        assert nodes[child.id]["depth"] == 2
+
+    def test_render_forest_empty(self, led):
+        from flagscale_agent.react.multi_agent.ledger import render_forest
+        assert render_forest(led) == []
+
+
 class TestConcurrency:
     def test_flock_serializes_multiprocess_writes(self, led, tmp_path):
         """Two processes transitioning the same task must not lose a history entry.

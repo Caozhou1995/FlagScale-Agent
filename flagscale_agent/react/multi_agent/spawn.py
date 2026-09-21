@@ -16,10 +16,13 @@
 
 This is the only place that creates a worker process. Two hard rules govern it:
 
-  * A worker must NEVER spawn another worker. Enforced two ways: the
-    parent's env never carries FLAGSCALE_TASK_ID for itself (so the check can
-    tell parent from worker), and every spawned child DOES carry it, so any
-    spawn_worker call inside a worker is refused.
+  * A worker may spawn another worker only while UNDER the depth cap. The cap
+    is a table-driven constant (env FLAGSCALE_MAX_DEPTH, default
+    DEFAULT_MAX_DEPTH) that the agent has no tool to raise. Every spawn
+    computes child_depth = own_depth + 1 and refuses EXPLICITLY (with the depth
+    and the parent trace in the message) once own_depth >= the cap. The
+    parent's env never carries FLAGSCALE_TASK_ID for itself; every spawned
+    child DOES carry it, which is how a process knows it is a worker.
   * The child must NEVER inherit the agent's tty. `stdin=DEVNULL` +
     `start_new_session=True` keeps the worker's fd0 off the REPL's tty (the
     exact class of bug fixed by commits 5c15d3b / 8620cb0). start_new_session
@@ -29,6 +32,7 @@ This is the only place that creates a worker process. Two hard rules govern it:
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -54,10 +58,24 @@ from .ledger import (
 
 # Concurrency cap (constant for now).
 MAX_CONCURRENT = 2
-# Depth cap: workers may not spawn, so depth is always 1.
-MAX_DEPTH = 1
+# Depth cap default. The EFFECTIVE cap is read per spawn from the env key
+# FLAGSCALE_MAX_DEPTH (default DEFAULT_MAX_DEPTH) — a table-driven constant the
+# agent has no tool to raise. It is clamped into [MIN_MAX_DEPTH, HARD_MAX_DEPTH]
+# so a corrupt env value cannot disable the invariant.
+DEFAULT_MAX_DEPTH = 2
+MIN_MAX_DEPTH = 1
+HARD_MAX_DEPTH = 8
 # Watchdog poll cadence (seconds).
 WATCH_INTERVAL = 5.0
+
+
+def _effective_max_depth() -> int:
+    """The effective depth cap: env FLAGSCALE_MAX_DEPTH, clamped to safe range."""
+    try:
+        v = int(os.environ.get("FLAGSCALE_MAX_DEPTH", "") or DEFAULT_MAX_DEPTH)
+    except ValueError:
+        v = DEFAULT_MAX_DEPTH
+    return max(MIN_MAX_DEPTH, min(v, HARD_MAX_DEPTH))
 
 
 def _render_contract(c: Contract) -> str:
@@ -103,8 +121,10 @@ def _render_contract(c: Contract) -> str:
     lines.append(f"## deadline (UTC): {dl}  (epoch={c.deadline_epoch})")
     lines.append("")
     lines.append(
-        "When done you MUST call the report_result tool to report a summary; "
-        "you MUST NOT call spawn_worker (a worker cannot spawn another worker)."
+        "When done you MUST call the report_result tool to report a summary. "
+        "You MAY call spawn_worker to delegate part of the work, but ONLY while "
+        "under the infrastructure depth cap; a spawn beyond the cap is refused "
+        "with an explicit error. You cannot raise the cap."
     )
     return "\n".join(lines)
 
@@ -280,6 +300,8 @@ class SpawnWorkerTool(Tool):
         env = dict(os.environ)
         env["FLAGSCALE_TASK_ID"] = c.id
         env["FLAGSCALE_TASK_DEPTH"] = str(c.depth)
+        env["FLAGSCALE_PARENT_TRACE"] = json.dumps(
+            (c.parent or {}).get("parent_trace", []))
         env["FLAGSCALE_CONTRACT_PATH"] = str(self._ledger.task_dir(c.id) / "contract.prompt")
         env["FLAGSCALE_OUTPUT_DIR"] = str(Path(c.output_ptr).parent)
         # The worker resolves its ledger from FLAGSCALE_TASKS_DIR (paths.get_tasks_dir).
@@ -312,35 +334,39 @@ class SpawnWorkerTool(Tool):
                 output_ptr: str = "", deadline_minutes: float = 0,
                 task_plan: Any = None, _env: Optional[Dict[str, str]] = None,
                 **kwargs) -> str:
-        # ── 1. role check (INV1) ─────────────────────────────────────────────
-        # A worker's env carries FLAGSCALE_TASK_ID; a worker must never spawn.
-        if os.environ.get("FLAGSCALE_TASK_ID"):
-            return (
-                "ERROR: spawn_worker is forbidden inside a worker (INV1). "
-                f"This process is already a worker "
-                f"(task_id={os.environ['FLAGSCALE_TASK_ID']}); a worker cannot "
-                "spawn another worker. Finish the task yourself and call "
-                "report_result."
-            )
+        # ── 1. role probe (INV1) ─────────────────────────────────────────────
+        # A worker's env carries FLAGSCALE_TASK_ID; the parent's does not. This
+        # is a PROBE, not a refusal: being a worker no longer forbids spawning —
+        # the depth cap below does. We read the id to build the parent chain and
+        # the inherited ancestry so the derivation tree stays auditable.
+        own_task_id = os.environ.get("FLAGSCALE_TASK_ID") or None
+        try:
+            own_trace = json.loads(os.environ.get("FLAGSCALE_PARENT_TRACE", "[]") or "[]")
+            if not isinstance(own_trace, list):
+                own_trace = []
+        except (ValueError, TypeError):
+            own_trace = []
 
         # ── 2. depth check (D10) ─────────────────────────────────────────────
-        try:
-            want_depth = int(os.environ.get("FLAGSCALE_TASK_DEPTH", "1") or "1") + 1
-        except ValueError:
-            want_depth = 2
-        # The parent is depth 0; the child it spawns is depth 1. If the
-        # caller env already advertises a depth >= MAX_DEPTH we refuse.
+        # The orchestrator is depth 0; the child it spawns is depth 1. A worker
+        # at depth d may spawn a child at depth d+1 only while d < max_depth.
+        max_depth = _effective_max_depth()
         try:
             cur_depth = int(os.environ.get("FLAGSCALE_TASK_DEPTH", "0") or "0")
         except ValueError:
             cur_depth = 0
-        if cur_depth >= MAX_DEPTH:
+        if cur_depth >= max_depth:
             return (
                 f"ERROR: depth limit exceeded (D10). current depth={cur_depth}, "
-                f"MAX_DEPTH={MAX_DEPTH}; this milestone forbids a worker from "
-                "spawning another worker."
+                f"MAX_DEPTH={max_depth}; a process at depth {cur_depth} cannot "
+                "spawn (the cap is infrastructure-enforced and cannot be raised "
+                f"from here). parent_trace={own_trace}."
             )
         child_depth = cur_depth + 1
+        # The child's ancestry = this process's ancestry + this process's own id
+        # (present only when this process is itself a worker). The immediate
+        # parent is the last element; the whole chain makes the tree auditable.
+        child_trace = own_trace + ([own_task_id] if own_task_id else [])
 
         # ── 3. concurrency check (D9) ────────────────────────────────────────
         try:
@@ -374,7 +400,11 @@ class SpawnWorkerTool(Tool):
                 inputs=list(inputs or []),
                 deadline_epoch=deadline_epoch,
                 depth=child_depth,
-                parent={},
+                parent={
+                    "task_id": own_task_id,  # None for the orchestrator
+                    "depth": cur_depth,
+                    "parent_trace": child_trace,
+                },
             )
             c.validate(check_inputs_exist=True)
         except ContractError as e:

@@ -33,8 +33,9 @@ from .ledger import FAILED, RUNNING, TaskLedger
 WORKER_ROLE_PREFIX = (
     "[worker role] You are a worker dispatched by a parent Agent. The contract "
     "has been injected. When done you MUST call report_result to report a "
-    "summary; you MUST NOT call spawn_worker (a worker cannot spawn another "
-    "worker).\n"
+    "summary. You MAY call spawn_worker to delegate part of the work, but only "
+    "while under the infrastructure depth cap; a spawn beyond the cap is "
+    "refused with an explicit error and you cannot raise the cap.\n"
 )
 
 # Env keys injected by SpawnWorkerTool.

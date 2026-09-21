@@ -3,6 +3,7 @@
 
 """Tests for parent-side spawn."""
 
+import json
 import os
 import signal
 import subprocess
@@ -35,6 +36,7 @@ def led(tmp_path):
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for k in ("FLAGSCALE_TASK_ID", "FLAGSCALE_TASK_DEPTH",
+              "FLAGSCALE_MAX_DEPTH", "FLAGSCALE_PARENT_TRACE",
               "FLAGSCALE_CONTRACT_PATH", "FLAGSCALE_OUTPUT_DIR"):
         monkeypatch.delenv(k, raising=False)
 
@@ -52,19 +54,24 @@ def _args(tmp_path, goal="write a 3-line report"):
 
 
 class TestRefusals:
-    def test_worker_cannot_spawn(self, tmp_path, led, monkeypatch):
+    def test_worker_can_spawn_under_cap(self, tmp_path, led, monkeypatch):
+        # A worker (env carries a task id) is NO LONGER refused outright; the
+        # depth cap governs. At depth 0 (< cap) the spawn is allowed.
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
         monkeypatch.setenv("FLAGSCALE_TASK_ID", "deadbeef")
         tool = SpawnWorkerTool(ledger=led)
         out = tool.execute(**_args(tmp_path))
-        assert out.startswith("ERROR")
-        assert "INV1" in out
+        assert out.startswith("spawned")
 
     def test_depth_limit(self, tmp_path, led, monkeypatch):
+        # With the cap at 1, a depth-1 process is AT the cap -> explicit refusal.
         monkeypatch.setenv("FLAGSCALE_TASK_DEPTH", "1")
+        monkeypatch.setenv("FLAGSCALE_MAX_DEPTH", "1")
         tool = SpawnWorkerTool(ledger=led)
         out = tool.execute(**_args(tmp_path))
         assert out.startswith("ERROR")
         assert "depth" in out.lower()
+        assert "D10" in out
 
     def test_concurrency_cap(self, tmp_path, led):
         # Fill the slots with active tasks.
@@ -105,6 +112,65 @@ class TestRefusals:
         assert out.startswith("ERROR")
 
 
+class TestRecursion:
+    def test_default_cap_allows_depth1_spawn(self, tmp_path, led, monkeypatch):
+        # Default cap is 2: a depth-1 worker may spawn a depth-2 child.
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        monkeypatch.setenv("FLAGSCALE_TASK_DEPTH", "1")
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        assert out.startswith("spawned")
+        assert "depth=2" in out
+
+    def test_default_cap_refuses_depth2_spawn(self, tmp_path, led, monkeypatch):
+        # A depth-2 worker is AT the default cap and must be refused EXPLICITLY.
+        monkeypatch.setenv("FLAGSCALE_TASK_DEPTH", "2")
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        assert out.startswith("ERROR")
+        assert "depth" in out.lower()
+        assert "D10" in out
+
+    def test_env_cap_override_permits_deeper(self, tmp_path, led, monkeypatch):
+        # FLAGSCALE_MAX_DEPTH=3 permits a depth-2 worker to spawn a depth-3 child.
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        monkeypatch.setenv("FLAGSCALE_TASK_DEPTH", "2")
+        monkeypatch.setenv("FLAGSCALE_MAX_DEPTH", "3")
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        assert out.startswith("spawned")
+        assert "depth=3" in out
+
+    def test_env_cap_clamped(self, monkeypatch):
+        # A corrupt/absurd env value cannot disable the invariant: it is clamped.
+        from flagscale_agent.react.multi_agent.spawn import (
+            _effective_max_depth, DEFAULT_MAX_DEPTH, MIN_MAX_DEPTH, HARD_MAX_DEPTH,
+        )
+        monkeypatch.setenv("FLAGSCALE_MAX_DEPTH", "9999")
+        assert _effective_max_depth() == HARD_MAX_DEPTH
+        monkeypatch.setenv("FLAGSCALE_MAX_DEPTH", "0")
+        assert _effective_max_depth() == MIN_MAX_DEPTH
+        monkeypatch.setenv("FLAGSCALE_MAX_DEPTH", "not-a-number")
+        assert _effective_max_depth() == DEFAULT_MAX_DEPTH
+        monkeypatch.delenv("FLAGSCALE_MAX_DEPTH", raising=False)
+        assert _effective_max_depth() == DEFAULT_MAX_DEPTH
+
+    def test_parent_trace_recorded_in_contract(self, tmp_path, led, monkeypatch):
+        # The child's contract carries the full ancestry chain (auditable tree).
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        monkeypatch.setenv("FLAGSCALE_TASK_ID", "worker1")
+        monkeypatch.setenv("FLAGSCALE_TASK_DEPTH", "1")
+        monkeypatch.setenv("FLAGSCALE_PARENT_TRACE", json.dumps(["root"]))
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        tid = out.split()[2]
+        rec = led.get(tid)
+        assert rec.contract.depth == 2
+        assert rec.contract.parent["task_id"] == "worker1"
+        assert rec.contract.parent["depth"] == 1
+        assert rec.contract.parent["parent_trace"] == ["root", "worker1"]
+
+
 class TestSpawnEnvAndTty:
     def test_env_injection_and_tty_safety(self, tmp_path, led, monkeypatch):
         captured = {}
@@ -127,6 +193,8 @@ class TestSpawnEnvAndTty:
         # The child must resolve the SAME ledger dir as the parent, else
         # report_result in the worker cannot find its own task.
         assert env["FLAGSCALE_TASKS_DIR"] == str(led._dir)
+        # Orchestrator has no ancestry -> the child inherits an empty trace.
+        assert env["FLAGSCALE_PARENT_TRACE"] == "[]"
 
         # THE load-bearing constraint: child must not inherit the parent tty.
         assert captured["kwargs"]["stdin"] == subprocess.DEVNULL
