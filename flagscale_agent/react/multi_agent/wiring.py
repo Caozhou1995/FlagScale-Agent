@@ -31,9 +31,10 @@ from .ledger import FAILED, RUNNING, TaskLedger
 
 # D7 — fixed role prefix. The contract body is already the query; terse.
 WORKER_ROLE_PREFIX = (
-    "[worker 角色] 你是一个被父 Agent 派出的 worker。契约已注入。"
-    "完成后【必须】调用 report_result 上报 summary；"
-    "严禁调用 spawn_worker（worker 不能再派 worker）。\n"
+    "[worker role] You are a worker dispatched by a parent Agent. The contract "
+    "has been injected. When done you MUST call report_result to report a "
+    "summary; you MUST NOT call spawn_worker (a worker cannot spawn another "
+    "worker).\n"
 )
 
 # Env keys injected by SpawnWorkerTool.

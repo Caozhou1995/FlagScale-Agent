@@ -42,7 +42,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# goal length cap (design §1.1: "≤200 字符、单句、可判定")
+# goal length cap (design §1.1: "<=200 chars, single sentence, decidable")
 GOAL_MAX_LEN = 200
 
 

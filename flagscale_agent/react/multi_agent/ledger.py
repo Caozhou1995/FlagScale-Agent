@@ -277,7 +277,9 @@ class TaskLedger:
         """Write result.json (worker self-report) and move state to REPORTED.
 
         Called ONLY by the worker-side ReportResultTool. Per INV3 the payload's
-        `self_report` is reference material — acceptance re-runs the check.
+        `self_report` is reference material — the parent independently VERIFIES
+        the deliverable by running the acceptance predicate itself (it never
+        redoes the task).
         """
         tdir = self.task_dir(task_id)
         if not tdir.exists():

@@ -65,6 +65,7 @@ from flagscale_agent.react.tools.web_fetch import WebFetchTool
 
 from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.multi_agent.report_result import ReportResultTool
+from flagscale_agent.react.multi_agent.reunite import PollTasksTool
 from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
 from flagscale_agent.react.multi_agent.wiring import (
     resolve_worker_query, finalize_worker_if_no_report, is_worker,
@@ -438,6 +439,11 @@ class WorkerAgent:
         # are a worker, so the parent's tool surface does not grow.
         if is_worker():
             self.tool_registry.register(ReportResultTool())
+        # ── Multi-agent (M3) ────────────────────────────────────────────────
+        # poll_tasks is the PARENT-side reunite tool (acceptance re-run). Only
+        # the parent judges workers, so a worker never gets it.
+        if not is_worker():
+            self.tool_registry.register(PollTasksTool())
 
     def _build_proxies(self) -> dict[str, str]:
         proxies = {}

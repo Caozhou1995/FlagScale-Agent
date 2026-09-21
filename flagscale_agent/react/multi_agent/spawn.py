@@ -68,42 +68,43 @@ def _render_contract(c: Contract) -> str:
     """
     cons = c.constraints or {}
     lines: List[str] = []
-    lines.append(f"# 任务契约 task_id={c.id}")
+    lines.append(f"# Task contract task_id={c.id}")
     lines.append("")
-    lines.append("## 目标 goal")
+    lines.append("## Goal")
     lines.append(c.goal)
     lines.append("")
-    lines.append("## 约束 constraints")
+    lines.append("## Constraints")
     writable = cons.get("writable") or []
     forbidden = cons.get("forbidden") or []
-    lines.append(f"- writable(可写目录): {', '.join(map(str, writable)) or '(none)'}")
-    lines.append(f"- forbidden(禁止): {', '.join(map(str, forbidden)) or '(none)'}")
+    lines.append(f"- writable (writable dirs): {', '.join(map(str, writable)) or '(none)'}")
+    lines.append(f"- forbidden: {', '.join(map(str, forbidden)) or '(none)'}")
     if cons.get("max_minutes") is not None:
-        lines.append(f"- max_minutes(时限): {cons['max_minutes']}")
+        lines.append(f"- max_minutes (time budget): {cons['max_minutes']}")
     lines.append("")
-    lines.append("## 验收标准 acceptance (父端会逐条重跑，自报不算数)")
+    lines.append("## Acceptance (the parent runs each check independently; "
+                 "the self-report does not count)")
     for i, a in enumerate(c.acceptance, 1):
         kind = a.get("kind", "check_command")
         cwd = a.get("cwd", "")
         extra = f" cwd={cwd}" if cwd else ""
         lines.append(f"{i}. [{kind}{extra}] {a.get('check', '')}")
     lines.append("")
-    lines.append("## 输入 inputs")
+    lines.append("## Inputs")
     if c.inputs:
         for inp in c.inputs:
             lines.append(f"- {inp.get('kind', 'value')}: {inp.get('value', '')}")
     else:
         lines.append("- (none)")
     lines.append("")
-    lines.append("## 产物 output_ptr (必须写到这个路径)")
+    lines.append("## Output output_ptr (you must write to this path)")
     lines.append(c.output_ptr)
     lines.append("")
     dl = datetime.fromtimestamp(c.deadline_epoch, tz=timezone.utc).isoformat()
     lines.append(f"## deadline (UTC): {dl}  (epoch={c.deadline_epoch})")
     lines.append("")
     lines.append(
-        "完成后【必须】调用 report_result 工具上报 summary；"
-        "严禁调用 spawn_worker（worker 不能再派 worker）。"
+        "When done you MUST call the report_result tool to report a summary; "
+        "you MUST NOT call spawn_worker (a worker cannot spawn another worker)."
     )
     return "\n".join(lines)
 
@@ -198,31 +199,35 @@ class SpawnWorkerTool(Tool):
 
     name = "spawn_worker"
     description = (
-        "派生一个 worker 子进程执行一个自足的任务契约，返回 task_id。"
-        "契约必须包含 goal/constraints/acceptance/output_ptr/deadline_minutes。"
-        "worker 独立进程运行、不继承父 REPL 的 tty；父端 watchdog 负责超时回收。"
-        "worker 完成后由父端重跑 acceptance 验收。"
+        "Spawn a worker subprocess to execute a self-contained task contract; "
+        "returns a task_id. The contract must contain goal/constraints/"
+        "acceptance/output_ptr/deadline_minutes. The worker runs as an "
+        "independent process and does not inherit the parent REPL's tty; a "
+        "parent-side watchdog reaps it on timeout. After the worker reports, "
+        "the parent runs the acceptance checks independently."
     )
     parameters = {
         "type": "object",
         "properties": {
             "goal": {
                 "type": "string",
-                "description": f"任务目标，一句话（<=200 字符）",
+                "description": "Task goal, one sentence (<=200 chars).",
             },
             "constraints": {
                 "type": "object",
                 "description": (
-                    "约束。约定键: writable(list[绝对目录]，output_ptr 必须落在其中之一), "
-                    "forbidden(list[str]), max_minutes(number)"
+                    "Constraints. Conventional keys: writable (list of absolute "
+                    "dirs; output_ptr must be inside one of them), forbidden "
+                    "(list[str]), max_minutes (number)."
                 ),
             },
             "acceptance": {
                 "type": "array",
                 "description": (
-                    "验收条目列表，父端会逐条重跑。每项: "
-                    "{kind:'check_command', check:'<shell 命令>', cwd:'<可选>'}。"
-                    "check 以退出码 0 视为通过。"
+                    "List of acceptance items; the parent runs each one "
+                    "independently. Each item: "
+                    "{kind:'check_command', check:'<shell command>', "
+                    "cwd:'<optional>'}. Exit code 0 means pass."
                 ),
                 "items": {
                     "type": "object",
@@ -236,7 +241,7 @@ class SpawnWorkerTool(Tool):
             },
             "inputs": {
                 "type": "array",
-                "description": "输入列表。每项: {kind:'path'|'value', value:'...'}",
+                "description": "Input list. Each item: {kind:'path'|'value', value:'...'}",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -247,11 +252,17 @@ class SpawnWorkerTool(Tool):
             },
             "output_ptr": {
                 "type": "string",
-                "description": "产物必须写到的绝对路径（必须在 constraints.writable 内）。",
+                "description": (
+                    "Absolute path the artifact must be written to (must be "
+                    "inside constraints.writable)."
+                ),
             },
             "deadline_minutes": {
                 "type": "number",
-                "description": "任务时限（分钟），到点 watchdog 会 killpg 回收。",
+                "description": (
+                    "Task deadline in minutes; on expiry the watchdog kills the "
+                    "worker's process group."
+                ),
             },
         },
         "required": ["goal", "constraints", "acceptance", "output_ptr", "deadline_minutes"],
@@ -305,9 +316,11 @@ class SpawnWorkerTool(Tool):
         # A worker's env carries FLAGSCALE_TASK_ID; a worker must never spawn.
         if os.environ.get("FLAGSCALE_TASK_ID"):
             return (
-                "ERROR: spawn_worker 在 worker 内被禁止 (INV1)。"
-                f"当前进程已是 worker (task_id={os.environ['FLAGSCALE_TASK_ID']})，"
-                "worker 不能再派 worker。请自行完成任务并调用 report_result。"
+                "ERROR: spawn_worker is forbidden inside a worker (INV1). "
+                f"This process is already a worker "
+                f"(task_id={os.environ['FLAGSCALE_TASK_ID']}); a worker cannot "
+                "spawn another worker. Finish the task yourself and call "
+                "report_result."
             )
 
         # ── 2. depth check (D10) ─────────────────────────────────────────────
@@ -323,8 +336,9 @@ class SpawnWorkerTool(Tool):
             cur_depth = 0
         if cur_depth >= MAX_DEPTH:
             return (
-                f"ERROR: depth 超限 (D10)。当前 depth={cur_depth}, MAX_DEPTH={MAX_DEPTH}; "
-                "本里程碑禁止 worker 再派 worker。"
+                f"ERROR: depth limit exceeded (D10). current depth={cur_depth}, "
+                f"MAX_DEPTH={MAX_DEPTH}; this milestone forbids a worker from "
+                "spawning another worker."
             )
         child_depth = cur_depth + 1
 
@@ -332,12 +346,12 @@ class SpawnWorkerTool(Tool):
         try:
             active = self._ledger.active_ids()
         except Exception as e:  # ledger unreadable
-            return f"ERROR: 读取账本失败: {e}"
+            return f"ERROR: failed to read the ledger: {e}"
         if len(active) >= MAX_CONCURRENT:
             return (
-                f"ERROR: 并发槽位已满 (D9)。active={len(active)} >= MAX_CONCURRENT="
-                f"{MAX_CONCURRENT}; 现有任务: {', '.join(active)}。"
-                "请先用 poll_tasks 回收已完成的任务。"
+                f"ERROR: concurrency slots full (D9). active={len(active)} >= "
+                f"MAX_CONCURRENT={MAX_CONCURRENT}; current tasks: "
+                f"{', '.join(active)}. Reclaim finished tasks with poll_tasks first."
             )
 
         # ── 4. build + validate the contract (INV2: content-addressed id) ────
@@ -345,9 +359,9 @@ class SpawnWorkerTool(Tool):
         try:
             dm = float(deadline_minutes)
         except (TypeError, ValueError):
-            return f"ERROR: deadline_minutes 非法: {deadline_minutes!r}"
+            return f"ERROR: invalid deadline_minutes: {deadline_minutes!r}"
         if dm <= 0:
-            return "ERROR: deadline_minutes 必须为正数（分钟）。"
+            return "ERROR: deadline_minutes must be a positive number of minutes."
         cons.setdefault("max_minutes", dm)
         deadline_epoch = int(time.time()) + int(dm * 60)
 
@@ -364,26 +378,27 @@ class SpawnWorkerTool(Tool):
             )
             c.validate(check_inputs_exist=True)
         except ContractError as e:
-            return f"ERROR: 契约校验失败: {e}"
+            return f"ERROR: contract validation failed: {e}"
 
         # ── 5. create the ledger entry (INV2 dedup) ──────────────────────────
         try:
             tdir = self._ledger.create(c, check_inputs_exist=True)
         except DuplicateTask as e:
             return (
-                f"ERROR: 重复任务（相同 goal/constraints/acceptance 已有活跃实例）: {e}。"
-                "如需重跑请修改契约（内容寻址会生成新 id）。"
+                f"ERROR: duplicate task (an active instance with the same "
+                f"goal/constraints/acceptance already exists): {e}. To re-run, "
+                "change the contract (content-addressing mints a new id)."
             )
         except ContractError as e:
-            return f"ERROR: 契约校验失败: {e}"
+            return f"ERROR: contract validation failed: {e}"
 
         # ── 6. R1: long contract goes to a FILE; argv carries only the path ──
         contract_path = Path(tdir) / "contract.prompt"
         try:
             contract_path.write_text(_render_contract(c), encoding="utf-8")
         except Exception as e:
-            self._safe_fail(c.id, f"写契约文件失败: {e}")
-            return f"ERROR: 写契约文件失败: {e}"
+            self._safe_fail(c.id, f"failed to write contract file: {e}")
+            return f"ERROR: failed to write contract file: {e}"
 
         # ── 7. spawn (tty-safe) ──────────────────────────────────────────────
         env = self._build_env(c)
@@ -394,20 +409,20 @@ class SpawnWorkerTool(Tool):
         try:
             log_fh = open(log_path, "w", encoding="utf-8")
         except Exception as e:
-            self._safe_fail(c.id, f"打开 worker.log 失败: {e}")
-            return f"ERROR: 打开 worker.log 失败: {e}"
+            self._safe_fail(c.id, f"failed to open worker.log: {e}")
+            return f"ERROR: failed to open worker.log: {e}"
 
         # NOTE: typer requires OPTIONS before the positional `query` arg —
         # `flagscale-agent <path> --time-budget-sec N` fails with
-        # "No such command '--time-budget-sec'". Flag MUST come first.
+        # "No such command '--time-budget-sec'". The flag MUST come first.
         argv = [self._agent_bin, "--time-budget-sec", str(int(dm * 60)),
                 str(contract_path)]
         try:
             proc = subprocess.Popen(argv, **self._popen_kwargs(env, log_fh))
         except Exception as e:
             log_fh.close()
-            self._safe_fail(c.id, f"Popen 失败: {e}")
-            return f"ERROR: 派生子进程失败: {e}"
+            self._safe_fail(c.id, f"Popen failed: {e}")
+            return f"ERROR: failed to spawn subprocess: {e}"
 
         # ── 8. SPAWNING → RUNNING, record pid ────────────────────────────────
         try:
@@ -419,7 +434,7 @@ class SpawnWorkerTool(Tool):
             except OSError:
                 pass
             log_fh.close()
-            return f"ERROR: 状态迁移失败: {e}"
+            return f"ERROR: state transition failed: {e}"
 
         # ── 9. start the parent-side watchdog (daemon; never blocks exit) ────
         wd = _Watchdog(self._ledger, c.id, proc.pid, c.deadline_epoch)

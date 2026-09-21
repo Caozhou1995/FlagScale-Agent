@@ -80,7 +80,7 @@ class TestRefusals:
         tool = SpawnWorkerTool(ledger=led)
         out = tool.execute(**_args(tmp_path))
         assert out.startswith("ERROR")
-        assert "并发" in out or "MAX_CONCURRENT" in out
+        assert "MAX_CONCURRENT" in out
 
     def test_duplicate_contract_rejected(self, tmp_path, led, monkeypatch):
         monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
@@ -89,7 +89,7 @@ class TestRefusals:
         assert first.startswith("spawned")
         second = tool.execute(**_args(tmp_path))
         assert second.startswith("ERROR")
-        assert "重复任务" in second or "duplicate" in second.lower()
+        assert "duplicate" in second.lower()
 
     def test_bad_deadline(self, tmp_path, led):
         tool = SpawnWorkerTool(ledger=led)

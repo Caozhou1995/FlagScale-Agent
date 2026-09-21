@@ -16,9 +16,16 @@
 
 The worker's ONLY added tool. It writes result.json and moves the task to
 REPORTED — a *self-report*, not a verdict. Per INV3 the parent NEVER trusts
-result.json for acceptance; it re-runs the acceptance checks itself (§1.4
-rule 5). This tool exists so the parent's reunite has something to compare
-against and so a task cannot silently hang in RUNNING after the worker exits.
+result.json for acceptance; the parent instead runs the acceptance checks
+itself (§1.4 rule 5). This tool exists so the parent's reunite has something
+to compare against and so a task cannot silently hang in RUNNING after the
+worker exits.
+
+Note on "re-run": the acceptance step is the parent running the acceptance
+*predicates* (e.g. `test -f out.md`) against the worker's deliverable. This is
+VERIFICATION of the product, not re-execution of the task. The parent never
+redoes the task itself — the labor stays with the worker; if the parent had to
+redo the work, delegating to a worker would be pointless.
 """
 
 from __future__ import annotations
@@ -39,22 +46,28 @@ class ReportResultTool(Tool):
 
     name = "report_result"
     description = (
-        "worker 完成任务后【必须】调用本工具上报。写入 result.json 并把任务状态"
-        "置为 REPORTED。注意：这只是自报，父端会重跑 acceptance 独立验收（自报不算数）。"
-        "summary 必填；files_written 列出你实际写出的文件绝对路径。"
+        "A worker MUST call this tool after finishing the task. It writes "
+        "result.json and sets the task state to REPORTED. NOTE: this is only a "
+        "self-report; the parent independently runs the acceptance checks and "
+        "never trusts the self-report. `summary` is required; `files_written` "
+        "lists the absolute paths of the files you actually wrote."
     )
     parameters = {
         "type": "object",
         "properties": {
             "summary": {
                 "type": "string",
-                "description": "对完成情况的简述（做了什么、产物在哪、是否达成目标）。",
+                "description": (
+                    "Brief description of what was done, where the outputs are, "
+                    "and whether the goal was met."
+                ),
             },
             "files_written": {
                 "type": "array",
                 "description": (
-                    "实际写出的文件绝对路径列表（必须落在契约 constraints.writable 内）。"
-                    "不传则仅按契约 output_ptr 校验。"
+                    "Absolute paths of the files you actually wrote (must be "
+                    "inside the contract's constraints.writable). If omitted, "
+                    "only the contract's output_ptr is checked."
                 ),
                 "items": {"type": "string"},
             },
@@ -72,16 +85,17 @@ class ReportResultTool(Tool):
         task_id = os.environ.get("FLAGSCALE_TASK_ID")
         if not task_id:
             return (
-                "ERROR: report_result 只能在 worker 进程内调用（未检测到 "
-                "FLAGSCALE_TASK_ID）。这是父端/父Agent 的内部工具，父端验收走 poll/reunite。"
+                "ERROR: report_result can only be called inside a worker process "
+                "(FLAGSCALE_TASK_ID not found). This is a parent-side internal "
+                "tool; the parent verifies via poll/reunite."
             )
         if not summary or not summary.strip():
-            return "ERROR: summary 不能为空。"
+            return "ERROR: summary must not be empty."
 
         # ── 2. INV4: files_written ∪ output_ptr ⊆ constraints.writable ───────
         rec = self._ledger.get(task_id)
         if rec is None:
-            return f"ERROR: 账本中找不到任务 {task_id}（契约丢失？）。"
+            return f"ERROR: task {task_id} not found in the ledger (contract missing?)."
         c = rec.contract
         writable = (c.constraints or {}).get("writable") or [] if c else []
         checks: List[str] = []
@@ -92,8 +106,9 @@ class ReportResultTool(Tool):
         for p in checks:
             if not any(_within(p, w) for w in writable):
                 return (
-                    f"ERROR: 文件 {p!r} 不在契约 constraints.writable 内 "
-                    f"{writable!r} (INV4)。请只写到允许目录。"
+                    f"ERROR: file {p!r} is not inside the contract's "
+                    f"constraints.writable {writable!r} (INV4). Only write to "
+                    "the allowed directories."
                 )
 
         # ── 3. write result.json + RUNNING → REPORTED ────────────────────────
@@ -105,11 +120,12 @@ class ReportResultTool(Tool):
         try:
             self._ledger.write_result(task_id, payload)
         except LedgerError as e:
-            return f"ERROR: 写入 result 失败: {e}"
+            return f"ERROR: failed to write result: {e}"
 
         rec2 = self._ledger.get(task_id)
         status = rec2.status if rec2 else "?"
         return (
-            f"reported task {task_id} (status={status})。"
-            "父端将重跑 acceptance 验收；这是自报，不代表已通过 (INV3)。"
+            f"reported task {task_id} (status={status}). "
+            "The parent will independently run the acceptance checks; this is "
+            "a self-report, not a pass (INV3)."
         )

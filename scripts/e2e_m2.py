@@ -4,13 +4,15 @@
 """M2 end-to-end driver: real subprocess spawn + parent-side acceptance.
 
 Runs one of three variants against REAL worker processes:
-  normal   — worker writes output_ptr + report_result  → parent re-runs
-             acceptance → DONE
+  normal   — worker writes output_ptr + report_result  → parent runs the
+             acceptance predicate → DONE
   missing  — worker reports but never writes the file   → REJECTED
   deadline — worker sleeps past its deadline            → DEADLINE_MISSED
 
-The parent NEVER trusts result.json (INV3) — it re-runs the acceptance command
-itself and only then transitions REPORTED → DONE/REJECTED.
+The parent NEVER trusts result.json (INV3) — it independently VERIFIES the
+deliverable by running the acceptance predicate itself, then transitions
+REPORTED → DONE/REJECTED. It never redoes the task (the labor stays with the
+worker); "verification" is the parent's job, not "re-execution".
 
 Usage: python3 scripts/e2e_m2.py <normal|missing|deadline>
 """
@@ -60,7 +62,7 @@ def main(variant: str):
 
     variants = {
         "normal": {
-            "goal": "写一个包含 3 行内容的 markdown 文件到 output_ptr",
+            "goal": "write a markdown file with 3 lines of content to output_ptr",
             "acceptance": [{"kind": "check_command",
                             "check": f"test -f {work/'out.md'} && "
                                      f"test $(wc -l < {work/'out.md'}) -ge 3"}],
@@ -69,12 +71,10 @@ def main(variant: str):
         "missing": {
             # Worker does its job and reports, but the parent's acceptance is
             # deterministically unsatisfiable by the worker — this exercises
-            # the parent's INDEPENDENT re-run (INV3): even a truthful self-report
-            # cannot fake a pass. (An earlier "write a different file" design was
-            # nondeterministic: the LLM worker wrote output_ptr anyway and the
-            # real file existed, so acceptance legitimately passed.)
-            "goal": (f"把 'hello world' 写入 {work/'out.md'}，然后调用 "
-                     f"report_result 上报完成。"),
+            # the parent's INDEPENDENT verification (INV3): even a truthful
+            # self-report cannot fake a pass.
+            "goal": (f"write 'hello world' to {work/'out.md'}, then call "
+                     f"report_result to report completion."),
             "acceptance": [{"kind": "check_command",
                             # out.md will exist, but the extra `exit 1` makes the
                             # check fail regardless — parent must REJECT.
@@ -82,8 +82,8 @@ def main(variant: str):
             "deadline_minutes": 4,
         },
         "deadline": {
-            "goal": (f"先 sleep 600 秒，然后再写文件 {work/'out.md'}。"
-                     f"不要提前结束。"),
+            "goal": (f"first sleep 600 seconds, then write the file {work/'out.md'}. "
+                     f"do not finish early."),
             "acceptance": [{"kind": "check_command",
                             "check": f"test -f {work/'out.md'}"}],
             "deadline_minutes": 1,   # 60s → watchdog must kill it
@@ -126,7 +126,7 @@ def main(variant: str):
         for e in evidence:
             print(f"[e2e]   check={e['check']!r} exit={e['exit_code']}")
         final = DONE if ok else REJECTED
-        ledger.transition(tid, final, note=f"parent re-ran acceptance ok={ok}")
+        ledger.transition(tid, final, note=f"parent verified acceptance ok={ok}")
         print(f"[e2e] parent verdict: {final}")
 
     rec = ledger.get(tid)
@@ -139,3 +139,4 @@ def main(variant: str):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "normal"))
+
