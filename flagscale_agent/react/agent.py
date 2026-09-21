@@ -67,10 +67,11 @@ from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.multi_agent.dispatch import DispatchManyTool
 from flagscale_agent.react.multi_agent.report_result import ReportResultTool
 from flagscale_agent.react.multi_agent.reunite import PollTasksTool
+from flagscale_agent.react.multi_agent.resume import ResumeChildTool
 from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
 from flagscale_agent.react.multi_agent.wiring import (
-    resolve_worker_query, finalize_worker_if_no_report, is_worker,
-    WORKER_ROLE_PREFIX, persist_worker_conversation,
+    resolve_worker_query, resolve_resume_query, finalize_worker_if_no_report,
+    is_worker, WORKER_ROLE_PREFIX, persist_worker_conversation,
 )
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
@@ -147,9 +148,17 @@ class WorkerAgent:
         from flagscale_agent.knowledge import KnowledgeManager
         self._knowledge_manager = KnowledgeManager()
 
-        self._session_id = uuid.uuid4().hex[:8]
+        # Nested session home: a worker's own session dir is a CHILD of its
+        # parent's — <parent>/subagents/<task_id> — passed down through the spawn
+        # env. Precedence: an explicit config.session_dir wins, then the
+        # inherited env, then the global default root. Only the session dir
+        # nests; memory/proposals stay global (they key on FLAGSCALE_HOME).
         from flagscale_agent.react.paths import get_sessions_root, get_memory_dir, get_proposals_dir
-        sessions_root = config.session_dir or get_sessions_root()
+        self._session_id = (os.environ.get("FLAGSCALE_SESSION_ID")
+                            or uuid.uuid4().hex[:8])
+        sessions_root = (config.session_dir
+                         or os.environ.get("FLAGSCALE_SESSION_ROOT")
+                         or get_sessions_root())
         session_dir = os.path.join(sessions_root, self._session_id)
         os.makedirs(session_dir, exist_ok=True)
         self._session_dir = session_dir
@@ -435,7 +444,14 @@ class WorkerAgent:
         # spawn_worker is always registered: its OWN execute() refuses when the
         # env carries FLAGSCALE_TASK_ID (INV1), so a worker holding the tool can
         # never use it — the refusal is the invariant, not the registry.
-        self.tool_registry.register(SpawnWorkerTool())
+        self.tool_registry.register(SpawnWorkerTool(session_dir=self._session_dir))
+        # resume_child is the parent<->child dialogue channel: continue a
+        # REJECTED/FAILED child (or, by adopting a dead-parent orphan, a
+        # descendant) WITH A MESSAGE. Registered unconditionally like spawn —
+        # a worker at depth>=1 IS a parent of its own children and must resume
+        # them; authorization (caller task id, adoption-when-parent-dead) is the
+        # gate, not the registry.
+        self.tool_registry.register(ResumeChildTool(session_dir=self._session_dir))
         # report_result is the worker-side ONLY added tool; register it iff we
         # are a worker, so the parent's tool surface does not grow.
         if is_worker():
@@ -450,7 +466,8 @@ class WorkerAgent:
         # bounded concurrency, reunite by POINTER records (never worker text).
         # Parent-only — a worker cannot fan out (INV1/D10).
         if not is_worker():
-            self.tool_registry.register(DispatchManyTool())
+            self.tool_registry.register(
+                DispatchManyTool(session_dir=self._session_dir))
 
     def _build_proxies(self) -> dict[str, str]:
         proxies = {}
@@ -1149,6 +1166,28 @@ class WorkerAgent:
 
 
     def _run_single_shot(self, query: str):
+        # Resume mode (multi-agent dialogue channel): the parent is continuing
+        # THIS worker WITH A MESSAGE. We re-entered the worker's EXISTING session
+        # dir (same id, inherited via env — so this whole object already loaded
+        # that history) and the parent's message is the next user turn. The child
+        # keeps its history/state and carries on in-context.
+        resume_msg = resolve_resume_query()
+        if resume_msg is not None:
+            if getattr(self, "_plan_guard", None) is not None:
+                self._plan_guard.set_single_shot(True)
+            if getattr(self, "_startup_guard", None) is not None:
+                self._startup_guard.set_single_shot(True)
+            self._restore_for_resume()
+            self._inject_context()
+            self.history.append({"role": "user", "content": resume_msg})
+            try:
+                self._react_loop()
+            except Exception:
+                display.warn("WorkerAgent._run_single_shot() react loop failed")
+            finally:
+                self._finalize_single_shot()
+            return
+
         # Unsupervised run: the plan (with acceptance/verification) stands in
         # for the absent human supervisor, so PlanGuard enforces it (block
         # after an observation budget) rather than merely reminding.
@@ -1170,30 +1209,106 @@ class WorkerAgent:
         except Exception:
             display.warn("WorkerAgent._run_single_shot() react loop failed")
         finally:
-            # Headless single-shot has no per-turn REPL save (unlike the
-            # interactive loop), so persist explicitly here to guarantee a
-            # normally-completed run is durable. A harness timeout that kills
-            # the process mid-run is handled separately by the SIGTERM handler
-            # installed in _install_signal_handlers().
-            self._auto_save()
-            # Persist this worker's full conversation trace into its own task
-            # directory, so the task dir (the one place a parent/human audits a
-            # worker) holds the complete ReAct trace next to worker.log/result.
+            self._finalize_single_shot()
+
+    def _finalize_single_shot(self):
+        # Headless single-shot has no per-turn REPL save (unlike the
+        # interactive loop), so persist explicitly here to guarantee a
+        # normally-completed run is durable. A harness timeout that kills
+        # the process mid-run is handled separately by the SIGTERM handler
+        # installed in _install_signal_handlers().
+        self._auto_save()
+        # Persist this worker's full conversation trace into its own task
+        # directory, so the task dir (the one place a parent/human audits a
+        # worker) holds the complete ReAct trace next to worker.log/result.
+        try:
+            persist_worker_conversation(self._session_dir)
+        except Exception:
+            pass
+        # Worker that exits without calling report_result would leave the
+        # ledger stuck in RUNNING; close it now.
+        try:
+            finalize_worker_if_no_report()
+        except Exception:
+            pass
+        try:
+            from flagscale_agent.react.tools.shell import _JOB_REGISTRY
+            _JOB_REGISTRY.cleanup_all()
+        except Exception:
+            pass
+
+    def _restore_for_resume(self):
+        """Re-enter THIS worker's existing nested session in-context.
+
+        Called at the top of a resumed single-shot run. The session id/dir came
+        in via env (FLAGSCALE_SESSION_ROOT/ID), so __init__ already bound and
+        locked the existing dir; here we load the persisted conversation into
+        history so the resumed turn continues the SAME context, not a fresh one.
+        """
+        conv_path = os.path.join(self._session_dir, "conversation.json")
+        if not os.path.isfile(conv_path):
+            return  # nothing to restore — first touch of this dir
+        try:
+            with open(conv_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            display.warn(f"[resume] could not load prior session: {e}")
+            return
+        # Reuse the same loader the interactive /reload path uses, minus the
+        # directory rebinding (we are already bound to the right dir).
+        self._load_session_data(data)
+        # The resumed run's node is already bound; keep the inherited id.
+        self._session_id = data.get("session_id", self._session_id)
+
+    def _load_session_data(self, data: dict):
+        """Load persisted conversation messages + counters into this agent.
+
+        Extracted from _restore_session so both interactive resume/reload and
+        the worker's resume path share one loader. The caller is responsible for
+        having bound self._session_dir correctly before calling.
+        """
+        # Restore _full_log from conversation_full.json if it exists (preserves
+        # the complete audit trail across /reload and hard resets).
+        session_dir = self._session_dir
+        full_log_path = os.path.join(session_dir, "conversation_full.json")
+        full_log_seeded = False
+        if os.path.isfile(full_log_path):
             try:
-                persist_worker_conversation(self._session_dir)
+                with open(full_log_path, "r", encoding="utf-8") as f:
+                    full_data_on_disk = json.load(f)
+                full_msgs = full_data_on_disk.get("messages", [])
+                if full_msgs:
+                    import copy
+                    self.history._full_log = [copy.deepcopy(m) for m in full_msgs]
+                    self.history._index_offset = full_data_on_disk.get("index_offset", 0)
+                    self.history._reset_count = full_data_on_disk.get("reset_count", 0)
+                    full_log_seeded = True
             except Exception:
                 pass
-            # Worker that exits without calling report_result would leave the
-            # ledger stuck in RUNNING; close it now (design §2.6).
+
+        messages = data.get("messages", [])
+        # Skip the old system prompt - we already have a fresh one from __init__
+        for msg in messages:
+            if msg.get("role") == "system":
+                continue
+            if full_log_seeded:
+                self.history._messages.append(msg)
+                msg["_ext_idx"] = msg.get("_ext_idx", len(self.history._full_log))
+            else:
+                self.history.append(msg)
+        self._session_input_history = data.get("session_input_history", [])
+        self.turn_count = data.get("turn_count", len(self._session_input_history))
+        loaded = data.get("loaded_skills", [])
+        self._session_input_tokens = data.get("session_input_tokens", 0)
+        self._session_output_tokens = data.get("session_output_tokens", 0)
+        for skill_name in loaded:
             try:
-                finalize_worker_if_no_report()
+                content = self.skill_manager.load(skill_name)
+                if content:
+                    self._loaded_skills.add(skill_name)
             except Exception:
                 pass
-            try:
-                from flagscale_agent.react.tools.shell import _JOB_REGISTRY
-                _JOB_REGISTRY.cleanup_all()
-            except Exception:
-                pass
+        self._refresh_system_prompt()
 
     def _restore_session(self, data: dict, session_dir: str):
         """Restore a previous session - take over its session_id and dir."""
@@ -1275,53 +1390,9 @@ class WorkerAgent:
         except Exception:
             pass
 
-        # Restore _full_log from conversation_full.json if it exists.
-        # This preserves the complete audit trail across /reload and hard resets.
-        full_log_path = os.path.join(session_dir, "conversation_full.json")
-        full_log_seeded = False
-        if os.path.isfile(full_log_path):
-            try:
-                with open(full_log_path, "r", encoding="utf-8") as f:
-                    full_data_on_disk = json.load(f)
-                full_msgs = full_data_on_disk.get("messages", [])
-                if full_msgs:
-                    import copy
-                    self.history._full_log = [copy.deepcopy(m) for m in full_msgs]
-                    # Restore hard reset state
-                    self.history._index_offset = full_data_on_disk.get("index_offset", 0)
-                    self.history._reset_count = full_data_on_disk.get("reset_count", 0)
-                    full_log_seeded = True
-            except Exception:
-                pass
-
-        messages = data.get("messages", [])
-        # Skip the old system prompt - we already have a fresh one from __init__
-        for msg in messages:
-            if msg.get("role") == "system":
-                continue
-            if full_log_seeded:
-                # Only append to _messages; _full_log already has the complete history
-                self.history._messages.append(msg)
-                # Tag with ext_idx from full_log length (messages were already recorded there)
-                msg["_ext_idx"] = msg.get("_ext_idx", len(self.history._full_log))
-            else:
-                self.history.append(msg)
-        # Restore turn count and session input history
-        self._session_input_history = data.get("session_input_history", [])
-        self.turn_count = data.get("turn_count", len(self._session_input_history))
-        loaded = data.get("loaded_skills", [])
-        # Restore session token counts for cumulative tracking across resume/reload
-        self._session_input_tokens = data.get("session_input_tokens", 0)
-        self._session_output_tokens = data.get("session_output_tokens", 0)
-        for skill_name in loaded:
-            try:
-                content = self.skill_manager.load(skill_name)
-                if content:
-                    self._loaded_skills.add(skill_name)
-            except Exception:
-                pass
-        # Refresh system prompt with restored context
-        self._refresh_system_prompt()
+        # Load persisted conversation + counters via the shared loader (the
+        # worker resume path uses the same loader so the two can't diverge).
+        self._load_session_data(data)
 
     def _check_resume(self):
         sessions = find_resumable_sessions(self._sessions_root)

@@ -282,9 +282,16 @@ class DispatchManyTool(Tool):
 
     def __init__(self, ledger: Optional[TaskLedger] = None,
                  tasks_dir: Optional[str] = None,
-                 spawn: Optional[SpawnWorkerTool] = None):
+                 spawn: Optional[SpawnWorkerTool] = None,
+                 session_dir: Optional[str] = None):
         self._ledger = ledger or TaskLedger(tasks_dir or get_tasks_dir())
         self._spawn = spawn
+        # Thread the parent's session dir into the fan-out so every worker
+        # dispatched here nests under <session_dir>/subagents/<task_id>, exactly
+        # as a directly-spawned worker does.
+        if self._spawn is None and session_dir:
+            self._spawn = SpawnWorkerTool(ledger=self._ledger,
+                                          session_dir=session_dir)
 
     def execute(self, specs: Optional[List[Dict[str, Any]]] = None,
                 degree: int = MAX_CONCURRENT, **kwargs) -> str:

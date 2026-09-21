@@ -78,8 +78,11 @@ _TRANSITIONS: Dict[str, set] = {
     TERMINATED: {FAILED},
     DEADLINE_MISSED: {TERMINATED},
     DONE: set(),
-    REJECTED: set(),
-    FAILED: set(),
+    # Resume-with-message reopens a REJECTED or FAILED child so the parent can
+    # hand it feedback and it reports a corrected result. DONE is accepted and
+    # is NOT resumable.
+    REJECTED: {RUNNING},
+    FAILED: {RUNNING},
 }
 
 

@@ -43,11 +43,34 @@ WORKER_ROLE_PREFIX = (
 TASK_ID_ENV = "FLAGSCALE_TASK_ID"
 CONTRACT_PATH_ENV = "FLAGSCALE_CONTRACT_PATH"
 OUTPUT_DIR_ENV = "FLAGSCALE_OUTPUT_DIR"
+# Env key injected by ResumeChildTool: a file holding the parent's resume message.
+# When present, the worker RE-ENTERS its existing session and treats this text as
+# the next user turn instead of the original contract.
+RESUME_PATH_ENV = "FLAGSCALE_RESUME_PATH"
 
 
 def is_worker() -> bool:
     """True when this process is a spawned worker (env carries a task id)."""
     return bool(os.environ.get(TASK_ID_ENV))
+
+
+def resolve_resume_query() -> Optional[str]:
+    """Return the resume message when this worker is being resumed, else None.
+
+    A resumed worker re-enters its EXISTING session dir (same id, inherited via
+    env) and must continue in-context with the parent's new message — not start
+    over from the original contract. The parent wrote that message to the path
+    in FLAGSCALE_RESUME_PATH. Returns the text (stripped) or None when this is
+    an ordinary first run.
+    """
+    rpath = os.environ.get(RESUME_PATH_ENV)
+    if not rpath:
+        return None
+    try:
+        text = Path(rpath).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
 
 
 def resolve_worker_query(query: Optional[str]) -> Optional[str]:

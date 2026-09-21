@@ -19,6 +19,7 @@ def session_dir():
 def _make_agent_mock(session_dir):
     """Create a minimal agent-like object with real history."""
     from flagscale_agent.react.history import HistoryManager
+    from flagscale_agent.react.agent import WorkerAgent
 
     agent = MagicMock()
     agent.history = HistoryManager(max_context_tokens=200000)
@@ -32,6 +33,12 @@ def _make_agent_mock(session_dir):
     agent._session_input_history = []
     agent.task_plan = MagicMock()
     agent.skill_manager = MagicMock()
+    # _restore_session now delegates the history/counter loading to the shared
+    # _load_session_data method (the worker resume path uses the same loader).
+    # A bare MagicMock would auto-stub that call to a no-op, so bind the REAL
+    # method to the mock — this test exists precisely to exercise that loader.
+    agent._load_session_data = WorkerAgent._load_session_data.__get__(
+        agent, type(agent))
     return agent
 
 

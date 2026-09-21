@@ -290,10 +290,15 @@ class SpawnWorkerTool(Tool):
 
     def __init__(self, agent_bin: Optional[str] = None,
                  ledger: Optional[TaskLedger] = None,
-                 tasks_dir: Optional[str] = None):
+                 tasks_dir: Optional[str] = None,
+                 session_dir: Optional[str] = None):
         self._agent_bin = (agent_bin or os.environ.get("FLAGSCALE_AGENT_BIN")
                            or "flagscale-agent")
         self._ledger = ledger or TaskLedger(tasks_dir or get_tasks_dir())
+        # The caller's OWN session dir. When set, each spawned worker nests its
+        # session under <session_dir>/subagents/<task_id> (see _build_env); when
+        # None the child falls back to the global default sessions root.
+        self._session_dir = session_dir
 
     # ── helpers exposed for testability ──────────────────────────────────────
     def _build_env(self, c: Contract) -> Dict[str, str]:
@@ -309,6 +314,15 @@ class SpawnWorkerTool(Tool):
         # when the parent used a custom/non-default tasks_dir (otherwise report_result
         # in the child cannot find its own task).
         env["FLAGSCALE_TASKS_DIR"] = str(self._ledger._dir)
+        # Nested session home: the worker's own session dir becomes a CHILD of
+        # the parent's — <parent_session_dir>/subagents/<task_id>. The child
+        # agent reads FLAGSCALE_SESSION_ROOT/FLAGSCALE_SESSION_ID when its config
+        # has no explicit session_dir. memory/proposals are NOT touched (they key
+        # on FLAGSCALE_HOME): only the session dir nests.
+        if self._session_dir:
+            env["FLAGSCALE_SESSION_ROOT"] = str(
+                Path(self._session_dir) / "subagents")
+            env["FLAGSCALE_SESSION_ID"] = c.id
         return env
 
     def _popen_kwargs(self, env: Dict[str, str], log_fh) -> Dict[str, Any]:
