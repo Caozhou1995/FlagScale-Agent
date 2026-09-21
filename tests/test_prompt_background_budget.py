@@ -290,6 +290,40 @@ class TestMultiAgentGuidance:
             "cwd", "knowledge", "skills", "tools"}
 
 
+class TestCodeReviewSubagentGuidance:
+    """The code-review subagent is a built-in capability: the agent may delegate
+    a read-only review of a change to a worker. It applies to the user's task
+    code AND to FlagScale-Agent's own source; triggering is the LLM's judgment."""
+
+    def test_has_code_review_subsection(self):
+        assert "### Code-Review Subagent" in SYSTEM_PROMPT_STATIC
+
+    def test_trigger_is_llm_judgment_not_fixed(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "your judgment" in low
+        # explicitly NOT for trivial mechanical edits
+        assert "trivial mechanical" in low
+
+    def test_generic_beyond_own_source(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        # applies equally to the user's task code and the agent's own source
+        assert "user's task code" in low
+        assert "own source" in low or "agent's own" in low or "own agent code" in low
+
+    def test_read_only_contract(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "read-only" in low
+        # reviewer must not modify what it reviews
+        assert "modify any file" in low or "must not be able to alter" in low
+
+    def test_findings_are_claims_not_verdicts(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "claim" in low
+        # parent independently reproduces-or-refutes each finding
+        assert "reproduce" in low
+        assert "refute" in low
+
+
 class TestExpectationViolationAttribution:
     """User doctrine (202609, aligned with GLM RSI blog): an action agent must
     ANALYZE results, not just take them — a result that violates expectation
