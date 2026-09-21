@@ -254,3 +254,237 @@ class TestPromptWatchdog:
         wd._fd = None
         wd.start()
         assert wd._thread is not None and wd._thread.daemon
+
+
+class TestForeignTtyReader:
+    """Third wedge class: a foreign process drains our terminal's input.
+
+    Detection must fire even though ``select`` sees nothing and the userspace
+    backlog is empty (the thief consumed the keys before us). Recovery must
+    remove the thief, not SIGINT ourselves.
+    """
+
+    @staticmethod
+    def _wd(reader, clock, fd_dead=True, backlog=None, **kw):
+        fired = {"n": 0, "kills": []}
+        wd = PromptWatchdog(
+            is_at_prompt=lambda: True,
+            fd=0,
+            pending_probe=backlog,
+            tty_reader_probe=(lambda: reader["present"]),
+            on_tty_reader=lambda: fired.__setitem__("n", fired["n"] + 1),
+            threshold=60.0,
+            winch_grace=15.0,
+            select_fn=(lambda *a: ([], [], []) if fd_dead else ([a[0][0]], [], [])),
+            monotonic=clock,
+            kill_fn=lambda pid, sig: fired["kills"].append(sig),
+            getpid=lambda: 1,
+        )
+        return wd, fired
+
+    def test_reader_fires_and_recovers_after_threshold(self):
+        # Foreign reader + fd clean + backlog empty: the exact blind spot.
+        clock = FakeClock()
+        reader = {"present": True}
+        wd, fired = self._wd(reader, clock)
+        clock.advance(1)
+        assert wd.tick() is None  # arm reader_since
+        clock.advance(60)
+        assert wd.tick() == "tty_reader"
+        assert fired["n"] == 1
+        assert fired["kills"] == []  # we do NOT signal ourselves
+
+    def test_reader_fires_only_once(self):
+        clock = FakeClock()
+        reader = {"present": True}
+        wd, fired = self._wd(reader, clock)
+        clock.advance(1)
+        wd.tick()
+        clock.advance(60)
+        wd.tick()
+        clock.advance(60)
+        assert wd.tick() is None
+        assert fired["n"] == 1
+
+    def test_no_reader_never_fires(self):
+        clock = FakeClock()
+        reader = {"present": False}
+        wd, fired = self._wd(reader, clock)
+        for _ in range(100):
+            clock.advance(10)
+            assert wd.tick() is None
+        assert fired["n"] == 0
+
+    def test_reader_gone_before_threshold_resets(self):
+        clock = FakeClock()
+        reader = {"present": True}
+        wd, fired = self._wd(reader, clock)
+        clock.advance(1)
+        wd.tick()
+        clock.advance(30)
+        reader["present"] = False  # thief died / never existed
+        assert wd.tick() is None
+        reader["present"] = True
+        clock.advance(30)  # reset -> only 30s, below threshold
+        assert wd.tick() is None
+        assert fired["n"] == 0
+
+    def test_reader_takes_precedence_over_input_signals(self):
+        # Reader present AND input pending: root-cause recovery wins; we must
+        # not send SIGWINCH/SIGINT to ourselves while a thief is active.
+        clock = FakeClock()
+        reader = {"present": True}
+        wd, fired = self._wd(reader, clock, fd_dead=False)
+        clock.advance(1)
+        wd.tick()
+        clock.advance(120)  # well past winch + grace
+        assert wd.tick() == "tty_reader"
+        assert fired["kills"] == []
+        assert fired["n"] == 1
+
+    def test_reader_probe_exception_is_ignored(self):
+        def boom():
+            raise RuntimeError("unexpected")
+
+        wd = PromptWatchdog(
+            is_at_prompt=lambda: True,
+            fd=0,
+            tty_reader_probe=boom,
+            select_fn=(lambda *a: ([], [], [])),
+            monotonic=FakeClock(),
+            kill_fn=lambda *a: None,
+            getpid=lambda: 1,
+        )
+        assert wd.tick() is None
+
+    def test_not_at_prompt_resets_reader_window(self):
+        clock = FakeClock()
+        reader = {"present": True}
+        at = {"v": True}
+        fired = {"n": 0}
+        wd = PromptWatchdog(
+            is_at_prompt=lambda: at["v"],
+            fd=0,
+            tty_reader_probe=lambda: reader["present"],
+            on_tty_reader=lambda: fired.__setitem__("n", fired["n"] + 1),
+            threshold=60.0,
+            select_fn=lambda *a: ([], [], []),
+            monotonic=clock,
+            kill_fn=lambda *a: None,
+            getpid=lambda: 1,
+        )
+        clock.advance(1)
+        at["v"] = False
+        wd.tick()  # not at prompt -> reset
+        at["v"] = True
+        clock.advance(30)
+        assert wd.tick() is None  # window was reset
+        assert fired["n"] == 0
+
+
+class TestForeignTtyReadersModule:
+    """The /proc scanner that feeds the probe and the reaper."""
+
+    def test_scans_only_tty_stdin_and_excludes_ancestors_and_self(self, monkeypatch):
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        victims = {
+            "100": "/dev/pts/3",      # foreign tty reader (the thief)
+            "200": "/dev/null",       # healthy background job -> skip
+            "300": "/dev/pts/3",      # ancestor (our shell) -> skip
+            "999": "/dev/pts/3",      # ourselves -> skip
+        }
+        monkeypatch.setattr(pw.os, "listdir", lambda p: list(victims))
+
+        def fake_readlink(path):
+            pid = path.split("/")[2]
+            return victims.get(pid, "")
+
+        monkeypatch.setattr(pw.os, "readlink", fake_readlink)
+        # 300 is an ancestor of 999.
+        monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: pid == 300)
+
+        got = pw.foreign_tty_readers("/dev/pts/3", getpid=lambda: 999)
+        assert got == [100]
+
+    def test_only_same_device_matches_not_any_tty(self, monkeypatch):
+        # LOAD-BEARING safety: a process on a DIFFERENT tty (another user's
+        # shell on a shared host) must never be reported for our device.
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        victims = {"100": "/dev/pts/3", "101": "/dev/pts/99"}
+        monkeypatch.setattr(pw.os, "listdir", lambda p: list(victims))
+        monkeypatch.setattr(
+            pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
+        )
+        monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        assert pw.foreign_tty_readers("/dev/pts/3", getpid=lambda: 999) == [100]
+
+    def test_default_derives_our_own_tty(self, monkeypatch):
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        monkeypatch.setattr(pw, "_our_tty_path", lambda fd=0: "/dev/pts/5")
+        victims = {"100": "/dev/pts/5", "101": "/dev/pts/6"}
+        monkeypatch.setattr(pw.os, "listdir", lambda p: list(victims))
+        monkeypatch.setattr(
+            pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
+        )
+        monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        # No tty_path: derives /dev/pts/5 and matches only pid 100.
+        assert pw.foreign_tty_readers(getpid=lambda: 999) == [100]
+
+    def test_no_tty_returns_empty(self, monkeypatch):
+        # If our own stdin is not a tty, there is nothing to protect.
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        monkeypatch.setattr(pw, "_our_tty_path", lambda fd=0: None)
+        assert pw.foreign_tty_readers(getpid=lambda: 999) == []
+
+    def test_tty_path_filter(self, monkeypatch):
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        victims = {"100": "/dev/pts/3", "101": "/dev/pts/7"}
+        monkeypatch.setattr(pw.os, "listdir", lambda p: list(victims))
+        monkeypatch.setattr(
+            pw.os, "readlink", lambda path: victims.get(path.split("/")[2], "")
+        )
+        monkeypatch.setattr(pw, "_is_ancestor", lambda pid, me: False)
+        assert pw.foreign_tty_readers("/dev/pts/7", getpid=lambda: 999) == [101]
+
+    def test_reap_kills_every_reader(self, monkeypatch):
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        monkeypatch.setattr(pw, "foreign_tty_readers", lambda *a, **k: [10, 11])
+        killed = []
+
+        def kill_fn(pid, sig):
+            killed.append((pid, sig))
+
+        out = pw.reap_tty_readers(kill_fn=kill_fn, getpid=lambda: 1)
+        assert out == [10, 11]
+        assert killed == [(10, signal.SIGKILL), (11, signal.SIGKILL)]
+
+    def test_reap_tolerates_kill_failure(self, monkeypatch):
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        monkeypatch.setattr(pw, "foreign_tty_readers", lambda *a, **k: [10, 11])
+        killed = []
+
+        def kill_fn(pid, sig):
+            if pid == 10:
+                raise ProcessLookupError()
+            killed.append(pid)
+
+        out = pw.reap_tty_readers(kill_fn=kill_fn, getpid=lambda: 1)
+        assert out == [11]  # only the successful kill is reported
+        assert killed == [11]
+
+    def test_listdir_failure_returns_empty(self, monkeypatch):
+        import flagscale_agent.react.prompt_watchdog as pw
+
+        def boom(p):
+            raise OSError("no /proc")
+
+        monkeypatch.setattr(pw.os, "listdir", boom)
+        assert pw.foreign_tty_readers(getpid=lambda: 1) == []
+

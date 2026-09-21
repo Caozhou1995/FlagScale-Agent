@@ -1014,12 +1014,32 @@ class WorkerAgent:
         # never trip the watchdog. On a confirmed wedge it escalates to
         # SIGINT; watchdog_state["tripped"] then tells the except below to
         # rebuild the prompt session instead of treating it as a user exit.
-        from flagscale_agent.react.prompt_watchdog import PromptWatchdog
+        from flagscale_agent.react.prompt_watchdog import (
+            PromptWatchdog,
+            foreign_tty_readers,
+            reap_tty_readers,
+        )
         guard_state = {"at_prompt": False}
         watchdog_state = {"tripped": False}
 
         def _on_watchdog_sigint():
             watchdog_state["tripped"] = True
+
+        def _tty_reader_probe() -> bool:
+            """Third wedge class: a foreign process is draining our input.
+
+            ``shell`` launches every child with ``stdin=DEVNULL``, so a healthy
+            background job never holds the tty. A process still reading our
+            terminal (e.g. a leaked ``head -1``) steals keystrokes before
+            prompt_toolkit sees them — invisible to both ``select`` and the
+            userspace backlog. Report it so the watchdog can reap it.
+            """
+            return bool(foreign_tty_readers())
+
+        def _on_tty_reader():
+            # Remove the cause, not the symptom: a SIGINT to *us* leaves the
+            # thief alive and still eating keys. Kill the thief instead.
+            reap_tty_readers(logger=display.warn)
 
         def _pending_input_backlog() -> bool:
             """Keys read off the tty but not yet dispatched by prompt_toolkit.
@@ -1045,6 +1065,8 @@ class WorkerAgent:
             is_at_prompt=lambda: guard_state["at_prompt"],
             on_sigint=_on_watchdog_sigint,
             pending_probe=_pending_input_backlog,
+            tty_reader_probe=_tty_reader_probe,
+            on_tty_reader=_on_tty_reader,
             logger=display.warn,
         )
         watchdog.start()
