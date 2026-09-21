@@ -723,6 +723,19 @@ class ShellTool(Tool):
 
             proc = subprocess.Popen(
                 popen_args,
+                # CRITICAL: the agent runs interactively on a tty. Without an
+                # explicit stdin, the child inherits the agent's tty as fd0.
+                # Any command that reads stdin (head/tail/grep -m1/read/cat
+                # with no file/...) then blocks in n_tty_read on the SAME tty
+                # the agent's prompt_toolkit reader polls. A tty has ONE input
+                # queue, so the child drains every keystroke before the agent's
+                # epoll selector sees it -> the prompt goes permanently deaf
+                # (keys echoed nowhere, main loop spinning in epoll_wait). This
+                # is what a `cmd | head -1` with a stdin-plus pipeline, or any
+                # stray stdin read, does to the live session. DEVNULL keeps the
+                # child's fd0 off the tty entirely; pipelines still work because
+                # a piped consumer takes its stdin from the pipe, not fd0.
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
