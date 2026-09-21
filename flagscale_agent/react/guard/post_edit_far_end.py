@@ -47,6 +47,21 @@ class PostEditFarEndGuard(Guard):
     # Only these tools modify files
     WRITE_TOOLS = ("write_file", "edit_file")
 
+    # Signals that a Python source touches a PROCESS BOUNDARY — subprocess launch
+    # or environment propagation. Mock-based unit tests systematically miss the
+    # real contract bugs here (argv order, env/fd/cwd passing), because mocking
+    # Popen replaces the very boundary under test. When detected, nudge toward a
+    # real (non-mocked) subprocess E2E. Evidence: M2's 27 mocked tests all passed
+    # while two real integration bugs (typer argv order, tasks-dir propagation)
+    # were only caught by the real-subprocess E2E.
+    _BOUNDARY_SIGNALS = (
+        "subprocess", "os.environ", "Popen", "start_new_session",
+        "os.exec", "os.fork", "os.posix_spawn",
+    )
+    # Cap the read so a huge generated file cannot make every edit expensive;
+    # real source keeps these signals within the first chunk.
+    _BOUNDARY_READ_LIMIT = 512 * 1024
+
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         return None  # Inject-only: never blocks or escalates
 
@@ -95,8 +110,30 @@ class PostEditFarEndGuard(Guard):
                 "  · flagscale_agent/ source: the LIVE process still runs the OLD "
                 "code until /reload."
             )
+        if cls._touches_process_boundary(path):
+            lines.append(
+                "  · PROCESS BOUNDARY (subprocess/env): mock-based unit tests cannot "
+                "catch argv order, env/fd/cwd passing — run at least one REAL "
+                "(non-mocked) subprocess E2E before declaring done."
+            )
         return "\n".join(lines)
 
     @staticmethod
     def _is_agent_source(path: str) -> bool:
         return "flagscale_agent/" in path and path.endswith(".py")
+
+    @classmethod
+    def _touches_process_boundary(cls, path: str) -> bool:
+        """True if the edited .py source launches processes or sets env vars.
+
+        Reads the file at the exact edited path; silent on any read failure
+        (inject-only guard must never raise).
+        """
+        if not path.endswith(".py"):
+            return False
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                text = fh.read(cls._BOUNDARY_READ_LIMIT)
+        except OSError:
+            return False
+        return any(sig in text for sig in cls._BOUNDARY_SIGNALS)

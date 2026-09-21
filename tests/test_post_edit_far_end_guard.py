@@ -144,3 +144,41 @@ class TestRegistryWiring:
         assert v is not None
         assert "FAR end" in v.message
 
+
+class TestProcessBoundaryHint:
+    """A .py that launches processes / sets env must nudge toward a REAL E2E."""
+
+    def _write(self, tmp_path, name, body):
+        p = tmp_path / name
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_subprocess_source_gets_boundary_nudge(self, guard, tmp_path):
+        p = self._write(tmp_path, "spawner.py",
+                        "import subprocess\nsubprocess.Popen(['ls'])\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "PROCESS BOUNDARY" in v.message
+        assert "REAL" in v.message and "subprocess E2E" in v.message
+
+    def test_os_environ_source_gets_boundary_nudge(self, guard, tmp_path):
+        p = self._write(tmp_path, "envset.py", "import os\nos.environ['X'] = '1'\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "PROCESS BOUNDARY" in v.message
+
+    def test_plain_source_has_no_boundary_nudge(self, guard, tmp_path):
+        p = self._write(tmp_path, "plain.py", "def add(a, b):\n    return a + b\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "PROCESS BOUNDARY" not in v.message
+
+    def test_non_py_never_reads_for_boundary(self, guard, tmp_path):
+        p = self._write(tmp_path, "note.md", "subprocess.Popen and os.environ\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "PROCESS BOUNDARY" not in v.message
+
+    def test_missing_file_is_silent_not_crash(self, guard):
+        # idempotent path that does not exist → no boundary hint, no exception
+        v = guard.check_post(_ctx(path="/no/such/dir/x.py",
+                                  result="Successfully edited /no/such/dir/x.py"))
+        assert v is not None and "PROCESS BOUNDARY" not in v.message
+
