@@ -237,6 +237,131 @@ class TestAdversarial:
         assert led.get(c.id).status == REJECTED
 
 
+class TestClaimDivergence:
+    """M5 acceptance closure: the parent surfaces a worker claim that disagrees
+    with the parent's own measured result — the lie is named, not silent."""
+
+    def test_claim_says_pass_but_checks_fail_flags_divergence(
+            self, led, tmp_path):
+        """The M5 exit smoke: a fake worker returns a false conclusion WITH
+        evidence; the parent rejects on evidence and flags the divergence."""
+        c, work = _make_reported(
+            led, tmp_path,
+            [{"check": "test -f out.md"}],
+            products=[],  # worker produced nothing
+        )
+        # Worker asserts success, and attaches "evidence" (a self-run check
+        # that it claims exited 0) — but the product is absent.
+        led.write_result(c.id, {
+            "summary": "DONE — wrote out.md",
+            "claim": {"goal_met": True,
+                      "checks_self_run": [{"check": "test -f out.md",
+                                           "exit_code": 0}]},
+            "files_written": [str(work / "out.md")],
+            "output_ptr": str(work / "out.md"),
+        })
+        v = check_result(led, c.id, default_cwd=str(work))
+        assert v.passed is False
+        assert v.status == REJECTED
+        assert v.claim is not None
+        assert v.claim["goal_met"] is True
+        assert v.claim_divergence is True          # mismatch made explicit
+        assert "DIVERGENCE" in v.note
+        assert led.get(c.id).status == REJECTED
+
+    def test_claim_says_fail_but_checks_pass_flags_divergence(
+            self, led, tmp_path):
+        """The reverse lie: a worker under-claims while the product is fine."""
+        c, work = _make_reported(
+            led, tmp_path,
+            [{"check": "test -f out.md"}],
+            products=["out.md"],  # product IS present
+        )
+        led.write_result(c.id, {
+            "summary": "I could not finish",
+            "claim": {"goal_met": False},
+            "output_ptr": str(work / "out.md"),
+        })
+        v = check_result(led, c.id, default_cwd=str(work))
+        assert v.passed is True
+        assert v.status == DONE
+        assert v.claim_divergence is True
+        assert "DIVERGENCE" in v.note
+
+    def test_agreeing_claim_no_divergence(self, led, tmp_path):
+        """When the claim agrees with the measured result, no flag is raised."""
+        c, work = _make_reported(
+            led, tmp_path,
+            [{"check": "test -f out.md"}],
+            products=["out.md"],
+        )
+        led.write_result(c.id, {
+            "summary": "done",
+            "claim": {"goal_met": True},
+            "output_ptr": str(work / "out.md"),
+        })
+        v = check_result(led, c.id, default_cwd=str(work))
+        assert v.passed is True
+        assert v.claim_divergence is False
+        assert "DIVERGENCE" not in v.note
+
+    def test_absent_claim_no_divergence(self, led, tmp_path):
+        """A worker that reported no claim cannot diverge (nothing asserted)."""
+        c, work = _make_reported(
+            led, tmp_path, [{"check": "test -f out.md"}], products=[])
+        led.write_result(c.id, {"summary": "done without a claim"})
+        v = check_result(led, c.id, default_cwd=str(work))
+        assert v.claim is None
+        assert v.claim_divergence is False
+
+    def test_claim_bool_none_not_a_divergence(self, led, tmp_path):
+        """goal_met=None asserts nothing definite → not a divergence."""
+        c, work = _make_reported(
+            led, tmp_path, [{"check": "test -f out.md"}], products=[])
+        led.write_result(c.id, {
+            "summary": "not sure",
+            "claim": {"goal_met": None, "checks_self_run": []},
+        })
+        v = check_result(led, c.id, default_cwd=str(work))
+        assert v.status == REJECTED
+        assert v.claim_divergence is False
+
+    def test_divergence_surfaced_in_poll_tool_output(self, led, tmp_path):
+        """The model-visible poll output names the divergence."""
+        c, work = _make_reported(
+            led, tmp_path, [{"check": "test -f out.md"}], products=[])
+        led.write_result(c.id, {
+            "summary": "DONE",
+            "claim": {"goal_met": True},
+        })
+        out = PollTasksTool(ledger=led).execute(action="check", task_id=c.id)
+        assert "DIVERGENCE" in out
+        assert "goal_met=True" in out
+
+    def test_divergence_flagged_on_settled_without_report(self, led, tmp_path):
+        """A reported-then-terminated task that left a false claim is flagged.
+
+        REPORTED → TERMINATED is legal, so a stale claim can coexist with a
+        settled-without-report status; the parent still surfaces the mismatch."""
+        work = tmp_path / "work"
+        work.mkdir(exist_ok=True)
+        c = Contract.build(
+            goal="produce out.md",
+            constraints={"writable": [str(work)]},
+            acceptance=[{"check": "test -f out.md"}],
+            output_ptr=str(work / "out.md"),
+        )
+        led.create(c)
+        led.transition(c.id, RUNNING, pid=333)
+        led.write_result(c.id, {
+            "summary": "DONE!", "claim": {"goal_met": True}})
+        led.transition(c.id, TERMINATED, note="cancelled by parent")
+        v = check_result(led, c.id, default_cwd=str(work))
+        assert v.status == TERMINATED
+        assert v.passed is False
+        assert v.claim_divergence is True
+
+
 class TestPollTasksTool:
     def test_list(self, led, tmp_path):
         _make_reported(led, tmp_path, [{"check": "true"}])

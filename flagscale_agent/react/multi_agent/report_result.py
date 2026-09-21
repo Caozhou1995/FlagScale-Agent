@@ -21,11 +21,18 @@ itself. This tool exists so the parent's reunite has something
 to compare against and so a task cannot silently hang in RUNNING after the
 worker exits.
 
-Note on "re-run": the acceptance step is the parent running the acceptance
-*predicates* (e.g. `test -f out.md`) against the worker's deliverable. This is
-VERIFICATION of the product, not re-execution of the task. The parent never
-redoes the task itself — the labor stays with the worker; if the parent had to
-redo the work, delegating to a worker would be pointless.
+The report is split into two parts, kept deliberately distinct:
+  * claim    — the worker's structured ASSERTION (did I meet the goal? what
+               checks did I run myself, and what did they return?). This is
+               UNTRUSTED by construction: it is the worker's own judgement,
+               the part of an agent most prone to drift.
+  * evidence — pointers to the artifacts the worker actually produced (the
+               contract's output_ptr plus any extra files_written). These are
+               checkable by the parent.
+The parent re-derives the verdict from the EVIDENCE (it re-runs the
+acceptance checks in its own process); it never accepts the claim. The claim
+is carried alongside so a divergence between what the worker asserted and
+what the parent measured is explicit and auditable.
 """
 
 from __future__ import annotations
@@ -62,6 +69,32 @@ class ReportResultTool(Tool):
                     "and whether the goal was met."
                 ),
             },
+            "claim": {
+                "type": "object",
+                "description": (
+                    "Your structured ASSERTION — untrusted by construction. "
+                    "Fields: goal_met (bool; whether you believe the goal was "
+                    "met) and checks_self_run (list of {check, exit_code} for "
+                    "any acceptance checks you ran yourself). The parent does "
+                    "NOT trust this; it re-runs the acceptance checks and "
+                    "compares. A claim that says goal_met=true while the "
+                    "parent's re-run fails is surfaced as an explicit "
+                    "divergence."
+                ),
+                "properties": {
+                    "goal_met": {"type": "boolean"},
+                    "checks_self_run": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "check": {"type": "string"},
+                                "exit_code": {"type": "integer"},
+                            },
+                        },
+                    },
+                },
+            },
             "files_written": {
                 "type": "array",
                 "description": (
@@ -79,8 +112,39 @@ class ReportResultTool(Tool):
                  tasks_dir: Optional[str] = None):
         self._ledger = ledger or TaskLedger(tasks_dir or get_tasks_dir())
 
-    def execute(self, summary: str = "", files_written: Optional[List[str]] = None,
-                **kwargs) -> str:
+    @staticmethod
+    def _normalize_claim(claim: Any) -> Optional[Dict[str, Any]]:
+        """Normalize and sanity-check the worker's structured claim.
+
+        Returns a dict {goal_met, checks_self_run} on success, or None if the
+        shape is invalid (caller turns None into an ERROR). A claim is
+        UNTRUSTED data — this only enforces shape, never validity of content.
+        """
+        if claim is None:
+            return {"goal_met": None, "checks_self_run": []}
+        if not isinstance(claim, dict):
+            return None
+        goal_met = claim.get("goal_met")
+        if goal_met is not None and not isinstance(goal_met, bool):
+            return None
+        raw_checks = claim.get("checks_self_run") or []
+        if not isinstance(raw_checks, list):
+            return None
+        checks: List[Dict[str, Any]] = []
+        for item in raw_checks:
+            if not isinstance(item, dict):
+                return None
+            chk = str(item.get("check", "") or "")
+            if not chk.strip():
+                return None
+            ec = item.get("exit_code")
+            if not isinstance(ec, int):
+                return None
+            checks.append({"check": chk, "exit_code": ec})
+        return {"goal_met": goal_met, "checks_self_run": checks}
+
+    def execute(self, summary: str = "", claim: Optional[Dict[str, Any]] = None,
+                files_written: Optional[List[str]] = None, **kwargs) -> str:
         # ── 1. must be running INSIDE a worker (env carries the task id) ─────
         task_id = os.environ.get("FLAGSCALE_TASK_ID")
         if not task_id:
@@ -91,6 +155,15 @@ class ReportResultTool(Tool):
             )
         if not summary or not summary.strip():
             return "ERROR: summary must not be empty."
+
+        # ── 1b. normalize the claim (structured, but UNTRUSTED) ──────────────
+        norm_claim = self._normalize_claim(claim)
+        if norm_claim is None:
+            return (
+                "ERROR: claim must be an object with optional fields "
+                "`goal_met` (bool) and `checks_self_run` (list of "
+                "{check, exit_code})."
+            )
 
         # ── 2. files_written ∪ output_ptr ⊆ constraints.writable ───────
         rec = self._ledger.get(task_id)
@@ -114,6 +187,7 @@ class ReportResultTool(Tool):
         # ── 3. write result.json + RUNNING → REPORTED ────────────────────────
         payload: Dict[str, Any] = {
             "summary": summary.strip(),
+            "claim": norm_claim,
             "files_written": list(files_written or []),
             "output_ptr": c.output_ptr if c else "",
         }

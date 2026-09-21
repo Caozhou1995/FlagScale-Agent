@@ -106,6 +106,16 @@ class Verdict:
     note: str = ""
     # result.json is carried for REFERENCE only — never as acceptance evidence.
     self_report: Optional[Dict[str, Any]] = None
+    # The worker's structured claim (extracted from result.json), shown side by
+    # side with the parent's own checks. UNTRUSTED — carried so a divergence
+    # between what the worker asserted and what the parent measured is explicit.
+    claim: Optional[Dict[str, Any]] = None
+    # True when the claim's goal_met disagrees with the parent's measured result
+    # (claim says success but checks failed, or claim says failure but checks
+    # passed). This is the M5 acceptance-closure signal: a lying worker cannot
+    # hide, because the parent's own re-run is the verdict and the mismatch is
+    # named.
+    claim_divergence: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -116,7 +126,31 @@ class Verdict:
             "note": self.note,
             "checks": [c.to_dict() for c in self.checks],
             "self_report": self.self_report,
+            "claim": self.claim,
+            "claim_divergence": self.claim_divergence,
         }
+
+
+def _extract_claim(self_report: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pull the worker's structured claim out of result.json (or None)."""
+    if not isinstance(self_report, dict):
+        return None
+    claim = self_report.get("claim")
+    return claim if isinstance(claim, dict) else None
+
+
+def _claim_diverges(claim: Optional[Dict[str, Any]], passed: bool) -> bool:
+    """Does the worker's assertion disagree with the parent's measurement?
+
+    Only a definite assertion (goal_met is a bool) can diverge; a claim that
+    asserts nothing is not a divergence.
+    """
+    if not isinstance(claim, dict):
+        return False
+    goal_met = claim.get("goal_met")
+    if not isinstance(goal_met, bool):
+        return False
+    return goal_met != passed
 
 
 def _tail(text: str, n: int = STDOUT_TAIL_CHARS) -> str:
@@ -196,7 +230,11 @@ def check_result(ledger: TaskLedger, task_id: str,
 
     The parent runs the PREDICATES (verification), never the task itself. The
     worker's result.json is attached as `self_report` for reference and is
-    NEVER consulted for the verdict.
+    NEVER consulted for the verdict. If the worker's result.json carries a
+    structured `claim` (goal_met + self-run checks), it is surfaced on the
+    Verdict for side-by-side display; when that claim asserts an outcome that
+    disagrees with the parent's measured result, `claim_divergence` is set and
+    the note names it explicitly. The verdict itself is still the parent's.
     """
     rec = ledger.get(task_id)
     if rec is None:
@@ -206,9 +244,12 @@ def check_result(ledger: TaskLedger, task_id: str,
     # Already judged / dead: return current state unchanged (poll is idempotent).
     if rec.status in TERMINAL_STATUSES:
         self_report = ledger.read_result(task_id)
+        claim = _extract_claim(self_report)
+        passed = (rec.status == DONE)
         return Verdict(
-            task_id=task_id, status=rec.status, passed=(rec.status == DONE),
-            pending=False, checks=[], self_report=self_report,
+            task_id=task_id, status=rec.status, passed=passed,
+            pending=False, checks=[], self_report=self_report, claim=claim,
+            claim_divergence=_claim_diverges(claim, passed),
             note=f"already terminal: {rec.status}",
         )
 
@@ -216,9 +257,12 @@ def check_result(ledger: TaskLedger, task_id: str,
     # gone and can never reach REPORTED, so acceptance can never be verified and
     # polling forever would hang. Report settled (pending=False), passed=False.
     if rec.status in _SETTLED_WITHOUT_REPORT:
+        self_report = ledger.read_result(task_id)
+        claim = _extract_claim(self_report)
         return Verdict(
             task_id=task_id, status=rec.status, passed=False, pending=False,
-            checks=[], self_report=ledger.read_result(task_id),
+            checks=[], self_report=self_report, claim=claim,
+            claim_divergence=_claim_diverges(claim, False),
             note=f"settled without report: {rec.status}",
         )
 
@@ -238,6 +282,9 @@ def check_result(ledger: TaskLedger, task_id: str,
         _run_one_check(a, cwd, timeout_s) for a in acceptance
     ]
     all_pass = bool(checks) and all(ck.passed for ck in checks)
+    self_report = ledger.read_result(task_id)
+    claim = _extract_claim(self_report)
+    diverges = _claim_diverges(claim, all_pass)
 
     if all_pass:
         try:
@@ -261,9 +308,19 @@ def check_result(ledger: TaskLedger, task_id: str,
         except LedgerError:
             status = ledger.get(task_id).status
 
+    # Acceptance closure: if the worker's own claim disagrees with the parent's
+    # measured result, say so explicitly. The verdict is the parent's (checks),
+    # never the claim — but naming the divergence makes a lying/failing worker
+    # auditable instead of silent.
+    if diverges:
+        asserted = "goal_met=true" if claim.get("goal_met") else "goal_met=false"
+        note = (f"claim/verdict DIVERGENCE (worker asserted {asserted}, "
+                f"parent measured passed={all_pass}): " + note)
+
     return Verdict(
         task_id=task_id, status=status, passed=all_pass, pending=False,
-        checks=checks, self_report=ledger.read_result(task_id), note=note,
+        checks=checks, self_report=self_report, claim=claim,
+        claim_divergence=diverges, note=note,
     )
 
 
@@ -347,6 +404,13 @@ class PollTasksTool(Tool):
                     "poll again later. No ledger changes made.")
         head = ("PASSED" if v.passed else "FAILED")
         body = [f"task {task_id}: {head} (status={v.status})", f"note: {v.note}"]
+        if v.claim is not None:
+            claimed = v.claim.get("goal_met")
+            body.append(f"worker claim: goal_met={claimed}")
+            if v.claim_divergence:
+                body.append("  !! DIVERGENCE: worker's claim disagrees with the "
+                            "parent's measured result — trust the checks, not the "
+                            "claim.")
         for ck in v.checks:
             mark = "OK" if ck.passed else "FAIL"
             why = "timeout" if ck.timed_out else f"exit={ck.exit_code}"
