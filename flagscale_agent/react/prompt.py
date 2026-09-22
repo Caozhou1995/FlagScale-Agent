@@ -310,7 +310,7 @@ Below that line sits a permanently resident hypothesis block — Hypothesis — 
 
 You can delegate SELF-CONTAINED, INDEPENDENT tasks to worker subprocesses and reunite with their results. Use it when the work genuinely parallelizes — several deliverables with no dependency between them. Never use it for a single sequential job.
 
-Role split (automatic): a normal turn is the PARENT — it may call spawn_worker / dispatch_many / poll_tasks. A spawned subprocess is a WORKER (env FLAGSCALE_TASK_ID set): it receives a contract as its query, does the work, and MUST call report_result before exiting. A worker cannot fan out (dispatch_many refuses it); a worker that exits without reporting is marked FAILED by the parent.
+Role split (automatic): a normal turn is the PARENT — it may call spawn_worker / dispatch_many / poll_tasks / resume_child. A spawned subprocess is a WORKER (env FLAGSCALE_TASK_ID set): it receives a contract as its query, does the work, and MUST call report_result before exiting. A worker is ITSELF the parent of its own children — it can call spawn_worker (bounded by the depth cap below) and resume_child, but NOT dispatch_many (bounded fan-out is parent-only). A worker that exits without reporting is marked FAILED by the parent.
 
 Tools:
 - **spawn_worker**(goal, constraints, acceptance, inputs, output_ptr, deadline_minutes) → task_id. One worker. Contract fields:
@@ -321,6 +321,7 @@ Tools:
 - **dispatch_many**(specs, degree) → bounded POINTER records (task_id/status/output_ptr + a short note), never worker text. `specs` = a list of the same contract fields as spawn_worker. `degree` = max concurrent workers (clamped to a hard cap); it never raises the cap. This is the PREFERRED call for parallelizable work.
 - **poll_tasks**(action='list'|'check'|'result', task_id=...) → judge one task. 'check' runs the acceptance predicates and returns the verdict; 'result' shows the worker's self-report (reference only).
 - **report_result**(summary, files_written) — WORKER-side only. Writes result.json and sets the task to REPORTED.
+- **resume_child**(task_id, message, deadline_minutes) → continue a REJECTED/FAILED child WITH A MESSAGE. Re-enters the child's EXISTING nested session and appends your message as its next user turn, so it keeps its full history and continues in-context — use it when a child's result was REJECTED or it reported being stuck, instead of spawning a fresh worker that lost all context. Authorization: the DIRECT parent may always resume its child; an ancestor may resume a DESCENDANT only by ADOPTION, and only while the immediate parent is DEAD (no session lock holder AND the parent task is terminal/absent) — the adoption is recorded in an audit file. A worker may resume its own children.
 
 Operational rules:
 - **ACCEPTANCE IS PARENT-RUN, NEVER SELF-REPORTED.** A worker's "done" is only a claim until the parent's acceptance commands exit 0. Trust the exit code, not the summary.
@@ -329,6 +330,12 @@ Operational rules:
 - Choose the concurrency DEGREE deliberately: N workers running together are each SLOWER (they contend for shared resources), so pick the degree that minimizes total wall-clock, not the maximum that fits. Measure a small batch before committing a large sweep.
 - Give each task a DISTINCT output path so parallel workers never clobber one another.
 - If task B needs task A's output, they are NOT parallelizable — run B after A, in sequence.
+
+Tree constraints (controlled recursion — infrastructure-enforced, no tool can raise them):
+- **Depth cap**: a worker may itself spawn children (controlled recursion), but every spawn is bounded by `MAX_DEPTH` (env `FLAGSCALE_MAX_DEPTH`, default 2, table-driven). A process at depth d may spawn a child at depth d+1 only while d < MAX_DEPTH; the orchestrator is depth 0. Over-limit spawns return an explicit `ERROR: depth limit exceeded (D10)` — not a silent truncation. The cap is a table-driven constant you have NO tool to raise.
+- **Global concurrency gate**: `MAX_CONCURRENT` (default 2) is shared across the WHOLE tree, not per-process — workers spawned by workers, and tasks REOPENED by resume_child, all occupy the same slots. When slots are full a spawn returns `ERROR: concurrency slots full (D9)`; reclaim finished tasks with poll_tasks before spawning more.
+- **Nested sessions**: each worker's conversation is persisted under its parent's session dir (`<parent_session>/subagents/<task_id>`), so a child's history survives independently of the parent and can be re-entered by resume_child.
+- **Adoption**: when a child's immediate parent has died, a living ANCESTOR may adopt that orphaned subtree by resuming its root with a message (see resume_child) — this is the only path that re-enters a subtree the direct parent can no longer drive.
 
 ### Code-Review Subagent — a fresh pair of eyes, on demand
 

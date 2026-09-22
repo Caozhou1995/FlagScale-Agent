@@ -255,14 +255,17 @@ class TestMultiAgentGuidance:
 
     def test_has_multi_agent_section_and_tool_names(self):
         assert "## Multi-Agent" in SYSTEM_PROMPT_STATIC
-        for tool in ("spawn_worker", "dispatch_many", "poll_tasks", "report_result"):
+        for tool in ("spawn_worker", "dispatch_many", "poll_tasks", "report_result",
+                     "resume_child"):
             assert tool in SYSTEM_PROMPT_STATIC, tool
 
     def test_parent_worker_role_split(self):
         low = SYSTEM_PROMPT_STATIC.lower()
         assert "parent" in low and "worker" in low
-        # worker cannot fan out; a worker must report
-        assert "cannot fan out" in low or "worker cannot fan out" in low
+        # a worker is itself a parent: it CAN spawn (depth-bounded) and resume,
+        # but dispatch_many (bounded fan-out) is parent-only.
+        assert "itself the parent" in low or "itself a parent" in low
+        assert "not dispatch_many" in low or "fan-out is parent-only" in low
         assert "report_result" in low
 
     def test_acceptance_is_parent_run_not_self_report(self):
@@ -288,6 +291,17 @@ class TestMultiAgentGuidance:
         import re
         assert set(re.findall(r"{([a-z_]+)}", SYSTEM_PROMPT_STATIC)) == {
             "cwd", "knowledge", "skills", "tools"}
+
+    def test_documents_controlled_recursion_and_tree_constraints(self):
+        # M6/M7 landed after the section was written: depth cap (controlled
+        # recursion), the GLOBAL concurrency gate, nested sessions, adoption.
+        low = SYSTEM_PROMPT_STATIC.lower()
+        assert "max_depth" in low and "depth limit exceeded" in low
+        assert "max_concurrent" in low
+        assert "nested session" in low
+        assert "adopt" in low
+        # a worker may itself spawn, bounded by the cap
+        assert "controlled recursion" in low
 
 
 class TestCodeReviewSubagentGuidance:
