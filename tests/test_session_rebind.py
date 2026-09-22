@@ -97,3 +97,25 @@ class TestRestoreRebindsTools:
         agent._restore_session(data, restored_dir)
         names = [t.name for t in agent.tool_registry.all_tools() if t.name == "recall_search"]
         assert names == ["recall_search"]
+
+    def test_restore_repoints_multiagent_tools(self, tmp_path, monkeypatch):
+        # Regression: spawn_worker/resume_child/dispatch_many captured
+        # self._session_dir at __init__ and pass it as FLAGSCALE_SESSION_ROOT to
+        # children. After restore they kept the ABANDONED fresh dir, so workers
+        # nested under a stale sibling session directory (e.g. auto-resume).
+        agent = _make_real_agent(tmp_path, monkeypatch)
+        fresh_dir = agent._session_dir
+        assert agent.tool_registry.get("spawn_worker")._session_dir == fresh_dir
+        assert agent.tool_registry.get("resume_child")._session_dir == fresh_dir
+        assert agent.tool_registry.get("dispatch_many")._spawn._session_dir == fresh_dir
+
+        restored_dir = os.path.join(agent._sessions_root, "restored3")
+        os.makedirs(restored_dir, exist_ok=True)
+        data = {"session_id": "restored3", "messages": [{"role": "user", "content": "x"}]}
+        with open(os.path.join(restored_dir, "conversation_full.json"), "w") as f:
+            json.dump(data, f)
+        agent._restore_session(data, restored_dir)
+
+        assert agent.tool_registry.get("spawn_worker")._session_dir == restored_dir
+        assert agent.tool_registry.get("resume_child")._session_dir == restored_dir
+        assert agent.tool_registry.get("dispatch_many")._spawn._session_dir == restored_dir

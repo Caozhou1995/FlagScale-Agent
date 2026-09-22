@@ -1369,6 +1369,19 @@ class WorkerAgent:
         # capture-at-registration issue as memory_write/plan_create above).
         self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
 
+        # Same capture-at-registration issue for the multi-agent tools: they
+        # captured self._session_dir at __init__ (the fresh uuid dir) and pass
+        # it as FLAGSCALE_SESSION_ROOT/FLAGSCALE_SESSION_ID through _build_env,
+        # so spawned workers nest under <captured_dir>/subagents/<task_id>.
+        # After a resume/reload the captured dir is the ABANDONED fresh dir, so
+        # workers would nest under a stale sibling session directory instead of
+        # the restored one. Re-register under the restored dir; spawn/resume are
+        # always present, dispatch_many only for a non-worker (mirrors __init__).
+        self.tool_registry.register(SpawnWorkerTool(session_dir=session_dir))
+        self.tool_registry.register(ResumeChildTool(session_dir=session_dir))
+        if not is_worker():
+            self.tool_registry.register(DispatchManyTool(session_dir=session_dir))
+
         # Clean up the empty new session dir if it's different. The emptiness
         # predicate must ignore dotfiles (the lock file lives there) AND empty
         # subdirectories (SwapStore/TaskPlan __init__ makedirs their dirs), else
