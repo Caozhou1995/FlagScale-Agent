@@ -260,11 +260,19 @@ _TOOL_ICONS = {
     "evict": "🗑️",
     "recall": "↩️",
     "shell_jobs": "🧵",
+    # Knowledge / memory / planning surface
+    "load_knowledge": "📚",
+    "memory_list": "📇",
+    "proposal": "💡",
+    "recall_search": "🔎",
+    "inspect_checkpoint": "🧪",
+    "hard_reset": "♻️",
     # Multi-agent / subagent delegation
     "spawn_worker": "🤖",
     "dispatch_many": "🚀",
     "poll_tasks": "📡",
     "report_result": "📤",
+    "resume_child": "🔁",
 }
 
 

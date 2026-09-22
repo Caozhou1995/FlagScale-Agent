@@ -138,6 +138,61 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
             timeout = arguments.get("timeout", 60)
             summary += f" (≤{timeout}s)"
         return summary
+    if tool_name == "load_knowledge":
+        doc = arguments.get("doc", "")
+        name = arguments.get("name", "")
+        return doc or name or "list"
+    if tool_name == "memory_list":
+        parts = []
+        keyword = arguments.get("keyword", "")
+        domain_filter = arguments.get("domain_filter", "")
+        type_filter = arguments.get("type_filter", "")
+        if keyword:
+            parts.append(f"kw={keyword}")
+        if domain_filter:
+            parts.append(f"domain={domain_filter}")
+        if type_filter:
+            parts.append(f"type={type_filter}")
+        return " ".join(parts) or "all"
+    if tool_name == "proposal":
+        action = arguments.get("action", "")
+        if action == "update":
+            updates = arguments.get("updates", [])
+            if isinstance(updates, list) and updates:
+                return f"update {len(updates)} proposal(s)"
+            pid = arguments.get("proposal_id", "")
+            status = arguments.get("status", "")
+            parts = [p for p in (pid, f"-> {status}" if status else "") if p]
+            return "update " + " ".join(parts) if parts else "update"
+        if action == "add":
+            return arguments.get("topic", "") or arguments.get("description", "") or "add"
+        return action or "?"
+    if tool_name == "recall_search":
+        return arguments.get("query", "") or "?"
+    if tool_name == "inspect_checkpoint":
+        return _short_path(arguments.get("path", "") or arguments.get("reference_path", ""))
+    if tool_name == "hard_reset":
+        return arguments.get("reason", "")
+    if tool_name == "spawn_worker":
+        return arguments.get("goal", "")
+    if tool_name == "dispatch_many":
+        specs = arguments.get("specs", [])
+        n = len(specs) if isinstance(specs, list) else 0
+        label = f"{n} worker(s)"
+        degree = arguments.get("degree")
+        if degree is not None:
+            label += f" (degree={degree})"
+        return label
+    if tool_name == "poll_tasks":
+        action = arguments.get("action", "")
+        task_id = arguments.get("task_id", "")
+        if task_id:
+            return f"{action} {task_id}".strip()
+        return action or "?"
+    if tool_name == "resume_child":
+        return arguments.get("task_id", "")
+    if tool_name == "report_result":
+        return arguments.get("summary", "")
     return ""
 
 
