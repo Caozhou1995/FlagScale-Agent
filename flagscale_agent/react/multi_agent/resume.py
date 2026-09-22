@@ -49,7 +49,7 @@ from .ledger import (
     LedgerError,
     TaskLedger,
 )
-from .spawn import SpawnWorkerTool
+from .spawn import SpawnWorkerTool, _Watchdog
 from .wiring import RESUME_PATH_ENV
 
 # The nesting dir under a parent's session dir holding its children.
@@ -338,10 +338,22 @@ class ResumeChildTool(Tool):
             except Exception:
                 pass
             return f"ERROR: failed to spawn resumed child: {e}"
+        # The child holds its own dup of the log fd; close the parent's copy so
+        # the descriptor does not leak in the (long-lived) parent process.
+        log_fh.close()
 
         try:
             self._ledger.transition(task_id, RUNNING, note="resumed",
                                     pid=proc.pid)
+        except Exception:
+            pass
+        # A resumed child needs the SAME parent-side watchdog a freshly spawned
+        # one gets, otherwise a hung/deadline-exceeded resumed worker is never
+        # killed and its RUNNING task (an ACTIVE status) permanently occupies a
+        # global concurrency slot and blocks adoption. Deadline is per-run.
+        try:
+            deadline_epoch = int(time.time()) + int(dm * 60)
+            _Watchdog(self._ledger, task_id, proc.pid, deadline_epoch).start()
         except Exception:
             pass
         return (f"resumed task {task_id} via {via} pid={proc.pid} "

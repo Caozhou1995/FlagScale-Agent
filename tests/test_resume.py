@@ -6,6 +6,7 @@
 import json
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -284,3 +285,107 @@ class TestAgentResumePath:
         agent._run_single_shot("a normal contract")
         contents = [str(m.get("content", "")) for m in agent.history.messages]
         assert "a normal contract" in contents
+
+
+class _RecordingWatchdog:
+    """Stand-in for _Watchdog that records construction and start()."""
+
+    instances = []
+
+    def __init__(self, ledger, task_id, pid, deadline_epoch, interval=5.0):
+        self.ledger = ledger
+        self.task_id = task_id
+        self.pid = pid
+        self.deadline_epoch = deadline_epoch
+        self.started = False
+        _RecordingWatchdog.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+
+class TestResumeStartsWatchdog:
+    """A resumed child must get the SAME parent-side watchdog a spawned child
+    gets; otherwise a hung resumed worker is never reaped and its RUNNING task
+    (an ACTIVE status) permanently occupies a global concurrency slot."""
+
+    def _tool(self, led, parent_sess):
+        return ResumeChildTool(ledger=led, session_dir=parent_sess)
+
+    def test_watchdog_started_for_resumed_child(self, led, tmp_path, monkeypatch):
+        import flagscale_agent.react.multi_agent.resume as resume_mod
+
+        parent_sess = str(tmp_path / "sess")
+        tid = _make_task(led, tmp_path, "P1", ["GP"])
+        monkeypatch.setenv("FLAGSCALE_TASK_ID", "P1")
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc(pid=4242))
+        _RecordingWatchdog.instances = []
+        monkeypatch.setattr(resume_mod, "_Watchdog", _RecordingWatchdog)
+
+        out = self._tool(led, parent_sess).execute(
+            task_id=tid, message="fix it", deadline_minutes=3)
+        assert out.startswith("resumed"), out
+        assert len(_RecordingWatchdog.instances) == 1
+        wd = _RecordingWatchdog.instances[0]
+        assert wd.started is True
+        assert wd.task_id == tid
+        assert wd.pid == 4242
+        # Deadline is per-run: now + 3 minutes (allow a little slack).
+        assert wd.deadline_epoch - time.time() > 2.5 * 60
+
+    def test_resumed_child_watchdog_kills_and_expires(self, led, tmp_path, monkeypatch):
+        """End-to-end of the watchdog itself: a live process past its deadline
+        is killed and its RUNNING task moves to DEADLINE_MISSED."""
+        from flagscale_agent.react.multi_agent.ledger import DEADLINE_MISSED
+        from flagscale_agent.react.multi_agent.spawn import _Watchdog
+
+        # A real, long-lived child so os.killpg(pid,0) reports it alive.
+        proc = subprocess.Popen(["sleep", "30"],
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True)
+        try:
+            tid = _make_task(led, tmp_path, "P1", ["GP"], status=RUNNING)
+            # Deadline already in the past -> the first poll expires it.
+            wd = _Watchdog(led, tid, proc.pid, int(time.time()) - 1, interval=0.05)
+            wd.start()
+            # Poll until the watchdog reaps + transitions (bounded wait).
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if led.get(tid).status == DEADLINE_MISSED:
+                    break
+                time.sleep(0.05)
+            assert led.get(tid).status == DEADLINE_MISSED
+            # The child process group was SIGKILLed.
+            assert proc.poll() is not None
+        finally:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def test_parent_log_fd_closed_after_success(self, led, tmp_path, monkeypatch):
+        """The parent's copy of worker.log must be closed on the success path
+        (the child holds its own dup), or the long-lived parent leaks an fd."""
+        import flagscale_agent.react.multi_agent.resume as resume_mod
+
+        parent_sess = str(tmp_path / "sess")
+        tid = _make_task(led, tmp_path, "P1", ["GP"])
+        monkeypatch.setenv("FLAGSCALE_TASK_ID", "P1")
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        monkeypatch.setattr(resume_mod, "_Watchdog", _RecordingWatchdog)
+        _RecordingWatchdog.instances = []
+
+        opened = []
+        real_open = open
+
+        def tracking_open(path, *a, **k):
+            fh = real_open(path, *a, **k)
+            opened.append(fh)
+            return fh
+
+        monkeypatch.setattr("builtins.open", tracking_open)
+        out = self._tool(led, parent_sess).execute(task_id=tid, message="fix it")
+        assert out.startswith("resumed"), out
+        log_handles = [fh for fh in opened if str(getattr(fh, "name", "")).endswith("worker.log")]
+        assert log_handles, "worker.log was never opened"
+        assert all(fh.closed for fh in log_handles), "parent leaked a worker.log fd"

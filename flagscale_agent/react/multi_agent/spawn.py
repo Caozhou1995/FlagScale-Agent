@@ -479,6 +479,9 @@ class SpawnWorkerTool(Tool):
                 pass
             log_fh.close()
             return f"ERROR: state transition failed: {e}"
+        # The child holds its own dup of the log fd; close the parent's copy so
+        # the descriptor does not leak in the (long-lived) parent process.
+        log_fh.close()
 
         # ── 9. start the parent-side watchdog (daemon; never blocks exit) ────
         wd = _Watchdog(self._ledger, c.id, proc.pid, c.deadline_epoch)
