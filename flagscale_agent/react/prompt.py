@@ -349,7 +349,7 @@ Operational rules:
 
 Tree constraints (controlled recursion — infrastructure-enforced, no tool can raise them):
 - **Depth cap**: a worker may itself spawn children (controlled recursion), but every spawn is bounded by `MAX_DEPTH` (env `FLAGSCALE_MAX_DEPTH`, default 2, table-driven). A process at depth d may spawn a child at depth d+1 only while d < MAX_DEPTH; the orchestrator is depth 0. Over-limit spawns return an explicit `ERROR: depth limit exceeded (D10)` — not a silent truncation. The cap is a table-driven constant you have NO tool to raise.
-- **Global concurrency gate**: `MAX_CONCURRENT` (default 2) is shared across the WHOLE tree, not per-process — workers spawned by workers, and tasks REOPENED by resume_child, all occupy the same slots. When slots are full a spawn returns `ERROR: concurrency slots full (D9)`; reclaim finished tasks with poll_tasks before spawning more.
+- **Global concurrency gate**: `MAX_CONCURRENT` (default 10) is shared across the WHOLE tree, not per-process — workers spawned by workers, and tasks REOPENED by resume_child, all occupy the same slots. When slots are full a spawn returns `ERROR: concurrency slots full (D9)`; reclaim finished tasks with poll_tasks before spawning more.
 - **Nested sessions**: each worker's conversation is persisted under its parent's session dir (`<parent_session>/subagents/<task_id>`), so a child's history survives independently of the parent and can be re-entered by resume_child.
 - **Adoption**: when a child's immediate parent has died, a living ANCESTOR may adopt that orphaned subtree by resuming its root with a message (see resume_child) — this is the only path that re-enters a subtree the direct parent can no longer drive.
 
@@ -371,7 +371,7 @@ A worker can also be a REVIEWER: hand a FROZEN artifact to a subagent that reaso
 - `acceptance`: a parent-runnable predicate over the findings artifact (e.g. `test -s review.md`), NOT "the reviewer says it reviewed". `output_ptr`: a review report path, DISTINCT per reviewer.
 - Pass the artifact and intent, not your reasoning: telling the reviewer what you believe hands it your blind spot and collapses this source back into "from yourself".
 
-**The scheduling constraint (do not deadlock):** reviewers are workers — they take the same globally-shared slots (`MAX_CONCURRENT` default 2, shared across the whole tree; `MAX_DEPTH` default 2). A reviewer canNOT be spawned *by each worker inside a fan-out* — that would exhaust the slots and deadlock. Schedule review at the PARENT level: fan out → reunite, THEN review; or run review alongside fan-out only while the TOTAL concurrent workers stays ≤ the cap.
+**The scheduling constraint (do not deadlock):** reviewers are workers — they take the same globally-shared slots (`MAX_CONCURRENT` default 10, shared across the whole tree; `MAX_DEPTH` default 2). A reviewer canNOT be spawned *by each worker inside a fan-out* — that would exhaust the slots and deadlock. Schedule review at the PARENT level: fan out → reunite, THEN review; or run review alongside fan-out only while the TOTAL concurrent workers stays ≤ the cap.
 
 **THE CRITICAL RULE — findings are CLAIMS, not verdicts:**
 - A subagent's report is a set of HYPOTHESES. Do NOT merge a finding into a fix, and do NOT dismiss it, on the reviewer's say-so. For EACH finding, independently reproduce-or-refute it yourself: run the failing input, read the cited lines, or construct the counterexample. You are the acceptance authority, exactly as with any worker.

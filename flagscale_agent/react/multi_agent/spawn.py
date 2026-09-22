@@ -57,7 +57,7 @@ from .ledger import (
 )
 
 # Concurrency cap (constant for now).
-MAX_CONCURRENT = 2
+MAX_CONCURRENT = 10
 
 # The nesting dir under a parent's session dir holding its children's nested
 # session dirs (and, since this commit, their worker.log traces).
