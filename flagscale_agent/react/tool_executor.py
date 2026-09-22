@@ -176,6 +176,8 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
     if tool_name == "spawn_worker":
         return arguments.get("goal", "")
     if tool_name == "dispatch_many":
+        if (arguments.get("action") or "dispatch") == "poll":
+            return f"poll {arguments.get('dispatch_id', '')}".strip()
         specs = arguments.get("specs", [])
         n = len(specs) if isinstance(specs, list) else 0
         label = f"{n} worker(s)"

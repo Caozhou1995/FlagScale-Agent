@@ -71,7 +71,7 @@ from flagscale_agent.react.multi_agent.resume import ResumeChildTool
 from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
 from flagscale_agent.react.multi_agent.wiring import (
     resolve_worker_query, resolve_resume_query, finalize_worker_if_no_report,
-    is_worker, WORKER_ROLE_PREFIX, persist_worker_conversation,
+    is_worker, WORKER_ROLE_PREFIX,
 )
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
@@ -464,6 +464,9 @@ class WorkerAgent:
         # ── Multi-agent: parent fan-out ─────────────────────────────────────
         # dispatch_many is the PARENT-side fan-out dispatcher: N workers,
         # bounded concurrency, reunite by POINTER records (never worker text).
+        # ASYNC by default: it starts the fan-out on a background thread and
+        # returns a dispatch_id at once; the parent polls with action='poll'
+        # until state='complete' (wait=true = legacy blocking mode).
         # Parent-only — a worker cannot fan out (INV1/D10).
         if not is_worker():
             self.tool_registry.register(
@@ -1218,13 +1221,6 @@ class WorkerAgent:
         # the process mid-run is handled separately by the SIGTERM handler
         # installed in _install_signal_handlers().
         self._auto_save()
-        # Persist this worker's full conversation trace into its own task
-        # directory, so the task dir (the one place a parent/human audits a
-        # worker) holds the complete ReAct trace next to worker.log/result.
-        try:
-            persist_worker_conversation(self._session_dir)
-        except Exception:
-            pass
         # Worker that exits without calling report_result would leave the
         # ledger stuck in RUNNING; close it now.
         try:

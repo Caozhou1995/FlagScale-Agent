@@ -13,8 +13,7 @@ from flagscale_agent.react.multi_agent.ledger import (
 )
 from flagscale_agent.react.multi_agent.wiring import (
     CONTRACT_PATH_ENV, TASK_ID_ENV, WORKER_ROLE_PREFIX,
-    finalize_worker_if_no_report, is_worker, persist_worker_conversation,
-    resolve_worker_query,
+    finalize_worker_if_no_report, is_worker, resolve_worker_query,
 )
 
 
@@ -83,59 +82,3 @@ class TestFinalizeNoReport:
         monkeypatch.setenv(TASK_ID_ENV, c.id)
         assert finalize_worker_if_no_report(led) is None
         assert led.get(c.id).status == REPORTED
-
-
-class TestPersistWorkerConversation:
-    def _mk(self, tmp_path):
-        led = TaskLedger(str(tmp_path / "tasks"))
-        work = tmp_path / "work"
-        work.mkdir()
-        c = Contract.build(goal="g", constraints={"writable": [str(work)]},
-                           acceptance=[{"check": "true"}],
-                           output_ptr=str(work / "o.md"))
-        led.create(c)
-        return led, c
-
-    def _mk_session(self, tmp_path, body="full log"):
-        sdir = tmp_path / "sess"
-        sdir.mkdir()
-        (sdir / "conversation_full.json").write_text(body, encoding="utf-8")
-        return sdir
-
-    def test_noop_when_not_worker(self, tmp_path, monkeypatch):
-        led, c = self._mk(tmp_path)
-        sdir = self._mk_session(tmp_path)
-        assert persist_worker_conversation(str(sdir), led) is None
-        assert not (led.task_dir(c.id) / "conversation_full.json").exists()
-
-    def test_noop_when_no_session_dir(self, tmp_path, monkeypatch):
-        led, c = self._mk(tmp_path)
-        monkeypatch.setenv(TASK_ID_ENV, c.id)
-        assert persist_worker_conversation(None, led) is None
-
-    def test_noop_when_source_missing(self, tmp_path, monkeypatch):
-        led, c = self._mk(tmp_path)
-        monkeypatch.setenv(TASK_ID_ENV, c.id)
-        empty = tmp_path / "empty"
-        empty.mkdir()
-        assert persist_worker_conversation(str(empty), led) is None
-
-    def test_copies_into_task_dir(self, tmp_path, monkeypatch):
-        led, c = self._mk(tmp_path)
-        sdir = self._mk_session(tmp_path, body='{"messages": [1, 2]}')
-        monkeypatch.setenv(TASK_ID_ENV, c.id)
-        dest = persist_worker_conversation(str(sdir), led)
-        assert dest == str(led.task_dir(c.id) / "conversation_full.json")
-        assert (led.task_dir(c.id) / "conversation_full.json").read_text(
-            encoding="utf-8") == '{"messages": [1, 2]}'
-
-    def test_noop_when_src_equals_dest(self, tmp_path, monkeypatch):
-        # Pathological: session_dir already IS the task dir — must not copy onto
-        # itself (would truncate / raise SameFileError).
-        led, c = self._mk(tmp_path)
-        tdir = led.task_dir(c.id)
-        tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / "conversation_full.json").write_text("x", encoding="utf-8")
-        monkeypatch.setenv(TASK_ID_ENV, c.id)
-        assert persist_worker_conversation(str(tdir), led) is None
-        assert (tdir / "conversation_full.json").read_text(encoding="utf-8") == "x"

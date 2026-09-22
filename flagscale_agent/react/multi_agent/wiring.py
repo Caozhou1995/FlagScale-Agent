@@ -22,7 +22,6 @@ here touches the REPL.
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -93,40 +92,6 @@ def resolve_worker_query(query: Optional[str]) -> Optional[str]:
     # Worker but no contract file: still stamp the role so the model knows the
     # rules, even if the body is whatever the caller passed.
     return (WORKER_ROLE_PREFIX + (query or "")).strip()
-
-
-def persist_worker_conversation(session_dir: Optional[str] = None,
-                                ledger: Optional[TaskLedger] = None) -> Optional[str]:
-    """Copy the worker's own conversation_full.json into its task directory.
-
-    A worker writes its full (pre-eviction) conversation to its session dir
-    (``<sessions_root>/<uuid>/conversation_full.json``). That dir is keyed by a
-    random uuid and lives apart from the task ledger, so the task directory —
-    the one place a parent or human audits a worker — has no trace of what the
-    worker actually did. This copies the file next to worker.log/result.json so
-    the worker's full ReAct trace is auditable in one place.
-
-    Returns the destination path on success, None when there is nothing to do
-    (not a worker, no task id, or the source does not exist yet).
-    """
-    task_id = os.environ.get(TASK_ID_ENV)
-    if not task_id:
-        return None
-    if not session_dir:
-        return None
-    src = Path(session_dir) / "conversation_full.json"
-    if not src.exists():
-        return None
-    lg = ledger or TaskLedger(get_tasks_dir())
-    try:
-        dest = lg.task_dir(task_id) / "conversation_full.json"
-        if dest.resolve() == src.resolve():
-            return None
-        lg.task_dir(task_id).mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dest)
-    except Exception:
-        return None
-    return str(dest)
 
 
 def finalize_worker_if_no_report(ledger: Optional[TaskLedger] = None) -> Optional[str]:

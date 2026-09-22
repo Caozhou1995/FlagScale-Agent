@@ -23,7 +23,10 @@ from flagscale_agent.react.multi_agent.dispatch import (
     DispatchManyTool,
     PointerRecord,
     dispatch_many,
+    dispatch_many_blocking,
     format_pointers,
+    poll_dispatch,
+    start_dispatch_many,
 )
 from flagscale_agent.react.multi_agent.ledger import (
     DONE,
@@ -133,8 +136,8 @@ def test_format_pointers_is_bounded_no_text_wall(tmp_path):
 def test_dispatch_many_done_and_pointer_only(led, tmp_path):
     spawn = FakeSpawn(led, report_ok=True)
     specs = [_spec(i, tmp_path) for i in range(3)]
-    recs = dispatch_many(specs, degree=2, spawn=spawn, ledger=led,
-                         poll_interval=0.01, max_wait_s=30)
+    recs = dispatch_many_blocking(specs, degree=2, spawn=spawn, ledger=led,
+                                  poll_interval=0.01, max_wait_s=30)
     assert len(recs) == 3
     for r in recs:
         assert r.passed is True
@@ -150,8 +153,8 @@ def test_dispatch_many_done_and_pointer_only(led, tmp_path):
 def test_dispatch_many_rejected_when_artifact_missing(led, tmp_path):
     spawn = FakeSpawn(led, report_ok=True)
     specs = [_spec(0, tmp_path, ok=True), _spec(1, tmp_path, ok=False)]
-    recs = dispatch_many(specs, degree=2, spawn=spawn, ledger=led,
-                         poll_interval=0.01, max_wait_s=30)
+    recs = dispatch_many_blocking(specs, degree=2, spawn=spawn, ledger=led,
+                                  poll_interval=0.01, max_wait_s=30)
     assert recs[0].passed is True and recs[0].status == DONE
     assert recs[1].passed is False and recs[1].status == REJECTED
     # The failure note is capped (bounded), not a raw dump.
@@ -162,8 +165,8 @@ def test_degree_is_clamped_to_cap(led, tmp_path):
     log = []
     spawn = FakeSpawn(led, report_ok=True, concurrency_log=log)
     specs = [_spec(i, tmp_path) for i in range(4)]
-    dispatch_many(specs, degree=99, spawn=spawn, ledger=led,
-                  poll_interval=0.01, max_wait_s=30)
+    dispatch_many_blocking(specs, degree=99, spawn=spawn, ledger=led,
+                           poll_interval=0.01, max_wait_s=30)
     # Never exceeds the D9 hard cap, even when asked for more.
     assert spawn.max_live <= MAX_CONCURRENT
 
@@ -171,8 +174,8 @@ def test_degree_is_clamped_to_cap(led, tmp_path):
 def test_no_active_tasks_left_after_dispatch(led, tmp_path):
     spawn = FakeSpawn(led, report_ok=True)
     specs = [_spec(i, tmp_path) for i in range(3)]
-    dispatch_many(specs, degree=2, spawn=spawn, ledger=led,
-                  poll_interval=0.01, max_wait_s=30)
+    dispatch_many_blocking(specs, degree=2, spawn=spawn, ledger=led,
+                           poll_interval=0.01, max_wait_s=30)
     # Judging each REPORTED task freed every D9 slot.
     assert led.active_ids() == []
 
@@ -190,7 +193,141 @@ def test_dispatch_tool_empty_specs(led):
     assert tool.execute(specs=[]).startswith("ERROR")
 
 
-def test_dispatch_tool_runs(led, tmp_path):
+def test_dispatch_tool_blocking_wait(led, tmp_path):
+    tool = DispatchManyTool(ledger=led, spawn=FakeSpawn(led))
+    out = tool.execute(specs=[_spec(0, tmp_path)], degree=1, wait=True)
+    assert "dispatched 1 task" in out and "PASS" in out
+
+
+# ── async dispatch ───────────────────────────────────────────────────────────
+def _poll_until_complete(did, led, tries=200, interval=0.01):
+    import time
+    for _ in range(tries):
+        info = poll_dispatch(did, ledger=led)
+        if info.get("state") == "complete":
+            return info
+        time.sleep(interval)
+    return poll_dispatch(did, ledger=led)
+
+
+def test_dispatch_many_default_is_async(led, tmp_path):
+    """dispatch_many returns a HANDLE at once — not a list of records."""
+    spawn = FakeSpawn(led, report_ok=True)
+    specs = [_spec(i, tmp_path) for i in range(3)]
+    handle = dispatch_many(specs, degree=2, spawn=spawn, ledger=led)
+    # The async default returns a handle dict with a dispatch_id immediately.
+    assert isinstance(handle, dict)
+    assert handle["dispatch_id"].startswith("dsp_")
+    assert handle["n_specs"] == 3
+    assert handle["state"] == "running"
+
+
+def test_async_poll_reaches_complete_with_pointers(led, tmp_path):
+    """A background fan-out still runs all N and yields bounded pointers."""
+    spawn = FakeSpawn(led, report_ok=True, concurrency_log=[])
+    specs = [_spec(i, tmp_path) for i in range(4)]
+    handle = dispatch_many(specs, degree=2, spawn=spawn, ledger=led)
+    info = _poll_until_complete(handle["dispatch_id"], led)
+    assert info["state"] == "complete"
+    recs = info["records"]
+    assert len(recs) == 4
+    for r in recs:
+        assert r["passed"] is True and r["status"] == DONE
+        assert r["output_ptr"].endswith("out.md")
+    # Bounded concurrency enforced in the background too.
+    assert spawn.max_live <= MAX_CONCURRENT
+    # Every slot freed once the thread judged all tasks.
+    assert led.active_ids() == []
+
+
+def test_async_rejected_artifact_missing(led, tmp_path):
+    spawn = FakeSpawn(led, report_ok=True)
+    specs = [_spec(0, tmp_path, ok=True), _spec(1, tmp_path, ok=False)]
+    handle = dispatch_many(specs, degree=2, spawn=spawn, ledger=led)
+    info = _poll_until_complete(handle["dispatch_id"], led)
+    recs = info["records"]
+    assert recs[0]["passed"] is True and recs[0]["status"] == DONE
+    assert recs[1]["passed"] is False and recs[1]["status"] == REJECTED
+    assert len(recs[1]["note"]) <= 200
+
+
+def test_async_poll_unknown_dispatch(led):
+    info = poll_dispatch("dsp_nope", ledger=led)
+    assert info["state"] == "unknown"
+
+
+def test_dispatch_tool_async_then_poll(led, tmp_path):
+    """The tool surface: action='dispatch' returns an id; action='poll' reunites."""
     tool = DispatchManyTool(ledger=led, spawn=FakeSpawn(led))
     out = tool.execute(specs=[_spec(0, tmp_path)], degree=1)
-    assert "dispatched 1 task" in out and "PASS" in out
+    assert "dispatched 1 task" in out and "dispatch_id" in out
+    did = out.split("dispatch_id:")[1].split("\n")[0].strip()
+    info = _poll_until_complete(did, led)
+    assert info["state"] == "complete"
+    polled = tool.execute(action="poll", dispatch_id=did)
+    assert "state=complete" in polled and "PASS" in polled
+
+
+def test_dispatch_tool_poll_requires_id(led):
+    tool = DispatchManyTool(ledger=led)
+    assert tool.execute(action="poll").startswith("ERROR")
+
+
+# ── worker.log pointer location (nested session vs ledger fallback) ──────────
+class TestWorkerLogPointer:
+    """The pointer a parent or a cross-session poll hands out must name the
+    SAME file spawn.py opened — the nested-session log when a session dir is
+    bound, else the legacy ledger-task-dir fallback."""
+
+    def test_pointer_nests_when_spawn_has_session_dir(self, tmp_path, led):
+        from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+        from flagscale_agent.react.multi_agent.dispatch import _worker_log_ptr
+        sdir = tmp_path / "sess"
+        spawn = SpawnWorkerTool(ledger=led, session_dir=str(sdir))
+        assert _worker_log_ptr(spawn, led, "abc") == str(
+            sdir / "subagents" / "abc" / "worker.log")
+
+    def test_pointer_falls_back_without_session_dir(self, tmp_path, led):
+        from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+        from flagscale_agent.react.multi_agent.dispatch import _worker_log_ptr
+        spawn = SpawnWorkerTool(ledger=led)
+        assert _worker_log_ptr(spawn, led, "abc") == str(
+            led.task_dir("abc") / "worker.log")
+
+    def test_live_records_derive_from_recorded_session_dir(self, tmp_path, led):
+        """A cross-session poll has no spawn object — it must derive the log
+        pointer from the session_dir the JOB banked at dispatch time."""
+        from flagscale_agent.react.multi_agent.dispatch import _live_records
+        from flagscale_agent.react.multi_agent.contract import Contract
+        work = tmp_path / "w"
+        work.mkdir()
+        c = Contract.build(goal="g", constraints={"writable": [str(work)]},
+                           acceptance=[{"check": "true"}],
+                           output_ptr=str(work / "o.md"))
+        led.create(c)
+        led.transition(c.id, RUNNING, pid=1)
+        led.transition(c.id, "DONE", note="judged")
+        sdir = str(tmp_path / "sess")
+        job = {"dispatch_id": "dsp_x", "session_dir": sdir,
+               "task_ids": [c.id], "state": "running"}
+        recs, ids = _live_records(job, led)
+        assert ids == [c.id]
+        assert recs[0].log_path == str(
+            tmp_path / "sess" / "subagents" / c.id / "worker.log")
+
+    def test_live_records_fall_back_without_session_dir(self, tmp_path, led):
+        from flagscale_agent.react.multi_agent.dispatch import _live_records
+        from flagscale_agent.react.multi_agent.contract import Contract
+        work = tmp_path / "w"
+        work.mkdir()
+        c = Contract.build(goal="g", constraints={"writable": [str(work)]},
+                           acceptance=[{"check": "true"}],
+                           output_ptr=str(work / "o.md"))
+        led.create(c)
+        led.transition(c.id, RUNNING, pid=1)
+        led.transition(c.id, "DONE", note="judged")
+        job = {"dispatch_id": "dsp_x", "session_dir": "",
+               "task_ids": [c.id], "state": "running"}
+        recs, _ = _live_records(job, led)
+        assert recs[0].log_path == str(led.task_dir(c.id) / "worker.log")
+

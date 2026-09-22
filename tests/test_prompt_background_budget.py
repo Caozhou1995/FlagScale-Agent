@@ -305,24 +305,42 @@ class TestMultiAgentGuidance:
 
 
 class TestCodeReviewSubagentGuidance:
-    """The code-review subagent is a built-in capability: the agent may delegate
-    a read-only review of a change to a worker. It applies to the user's task
-    code AND to FlagScale-Agent's own source; triggering is the LLM's judgment."""
+    """The blind-review subagent is a built-in capability: the agent hands a
+    FROZEN artifact to a read-only worker whose value is context independence.
+    It applies to the user's task code AND to FlagScale-Agent's own source, and
+    equally to code and non-code artifacts. It is a default (with a stated reason
+    to skip), never a fixed mandatory gate."""
 
-    def test_has_code_review_subsection(self):
-        assert "### Code-Review Subagent" in SYSTEM_PROMPT_STATIC
+    def test_has_blind_review_subsection(self):
+        assert "### Blind Review" in SYSTEM_PROMPT_STATIC
 
-    def test_trigger_is_llm_judgment_not_fixed(self):
+    def test_default_lean_but_skippable_with_reason(self):
         low = SYSTEM_PROMPT_STATIC.lower()
-        assert "your judgment" in low
+        # the philosophy: default yes, skip WITH a stated reason — not a fixed gate
+        assert "default" in low
+        assert "stated reason" in low or "state why" in low
         # explicitly NOT for trivial mechanical edits
         assert "trivial mechanical" in low
 
+    def test_explains_nonnegative_expected_value(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        # a reviewer finding right OR wrong both yield information
+        assert "expected value" in low or "expected-value" in low
+        assert "blind spot" in low
+
     def test_generic_beyond_own_source(self):
         low = SYSTEM_PROMPT_STATIC.lower()
-        # applies equally to the user's task code and the agent's own source
-        assert "user's task code" in low
-        assert "own source" in low or "agent's own" in low or "own agent code" in low
+        # applies equally to code AND non-code artifacts
+        assert "non-code" in low
+        # prose findings restricted to falsifiable ones, never style
+        assert "falsifiable" in low
+        assert "stylistic" in low or "style" in low
+
+    def test_scheduling_constraint_avoids_deadlock(self):
+        low = SYSTEM_PROMPT_STATIC.lower()
+        # reviewers take shared slots -> schedule at parent, not per-worker
+        assert "deadlock" in low
+        assert "max_concurrent" in low and "parent level" in low
 
     def test_read_only_contract(self):
         low = SYSTEM_PROMPT_STATIC.lower()

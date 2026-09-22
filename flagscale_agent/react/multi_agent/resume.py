@@ -49,11 +49,8 @@ from .ledger import (
     LedgerError,
     TaskLedger,
 )
-from .spawn import SpawnWorkerTool, _Watchdog
+from .spawn import SpawnWorkerTool, SUBAGENTS_DIRNAME, _Watchdog
 from .wiring import RESUME_PATH_ENV
-
-# The nesting dir under a parent's session dir holding its children.
-SUBAGENTS_DIRNAME = "subagents"
 
 # Statuses a child may be resumed out of (source states).
 RESUMABLE_STATUSES = (REJECTED, FAILED)
@@ -321,10 +318,15 @@ class ResumeChildTool(Tool):
         env[RESUME_PATH_ENV] = str(resume_path)
         dm = float(deadline_minutes or 0) or tgt.max_minutes or 10.0
         contract_path = self._ledger.task_dir(task_id) / "contract.prompt"
-        log_path = self._ledger.task_dir(task_id) / "worker.log"
+        # Same location the ORIGINAL spawn wrote (frozen on the task at spawn
+        # time; recomputed only for pre-existing tasks) — append, never
+        # truncate, so a resume under a different session dir continues the SAME
+        # trace rather than splitting it into a second file.
+        log_path = self._spawn.recorded_worker_log_path(task_id)
         argv = [self._spawn._agent_bin, "--time-budget-sec", str(int(dm * 60)),
                 str(contract_path)]
         try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             log_fh = open(log_path, "a", encoding="utf-8")
         except Exception as e:
             return f"ERROR: failed to open worker.log: {e}"

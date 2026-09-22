@@ -58,6 +58,10 @@ from .ledger import (
 
 # Concurrency cap (constant for now).
 MAX_CONCURRENT = 2
+
+# The nesting dir under a parent's session dir holding its children's nested
+# session dirs (and, since this commit, their worker.log traces).
+SUBAGENTS_DIRNAME = "subagents"
 # Depth cap default. The EFFECTIVE cap is read per spawn from the env key
 # FLAGSCALE_MAX_DEPTH (default DEFAULT_MAX_DEPTH) — a table-driven constant the
 # agent has no tool to raise. It is clamped into [MIN_MAX_DEPTH, HARD_MAX_DEPTH]
@@ -321,9 +325,43 @@ class SpawnWorkerTool(Tool):
         # on FLAGSCALE_HOME): only the session dir nests.
         if self._session_dir:
             env["FLAGSCALE_SESSION_ROOT"] = str(
-                Path(self._session_dir) / "subagents")
+                Path(self._session_dir) / SUBAGENTS_DIRNAME)
             env["FLAGSCALE_SESSION_ID"] = c.id
         return env
+
+    def worker_log_path(self, task_id: str) -> Path:
+        """The worker's stdout/stderr log file for `task_id`.
+
+        The log is a PER-AGENT trace (the worker's own ReAct console), so it
+        lives in the worker's NESTED SESSION dir —
+        <parent_session>/subagents/<task_id>/worker.log — next to its
+        conversation/plans, not in the global tasks/ ledger. The ledger dir
+        keeps only the cross-task audit records (contract/state/result).
+        Fallback: without a known parent session dir (direct tool use in
+        tests / legacy callers), the ledger task dir is used.
+        """
+        if self._session_dir:
+            return (Path(self._session_dir) / SUBAGENTS_DIRNAME / task_id
+                    / "worker.log")
+        return Path(self._ledger.task_dir(task_id)) / "worker.log"
+
+    def recorded_worker_log_path(self, task_id: str) -> Path:
+        """The log path FROZEN at spawn time (task-scoped), else recomputed.
+
+        A resume/adoption may run under a different session dir than the
+        original spawn; appending must continue the ORIGINAL trace, so prefer
+        the path recorded on the task and only fall back to recomputation for
+        tasks spawned before this field existed.
+        """
+        rec = Path(self._ledger.task_dir(task_id)) / "worker_log_path"
+        try:
+            if rec.exists():
+                p = rec.read_text(encoding="utf-8").strip()
+                if p:
+                    return Path(p)
+        except Exception:
+            pass
+        return self.worker_log_path(task_id)
 
     def _popen_kwargs(self, env: Dict[str, str], log_fh) -> Dict[str, Any]:
         # ── THE load-bearing constraint (see module docstring) ───────────────
@@ -449,8 +487,17 @@ class SpawnWorkerTool(Tool):
         if _env:
             env.update(_env)
         env["FLAGSCALE_CONTRACT_PATH"] = str(contract_path)
-        log_path = Path(tdir) / "worker.log"
+        log_path = self.worker_log_path(c.id)
+        # Freeze the log location on the TASK, not on the caller's session: a
+        # later resume/adoption may run under a DIFFERENT session dir, and it
+        # must append to THIS file so the audit trail is not split. Best-effort.
         try:
+            (Path(tdir) / "worker_log_path").write_text(
+                str(log_path), encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             log_fh = open(log_path, "w", encoding="utf-8")
         except Exception as e:
             self._safe_fail(c.id, f"failed to open worker.log: {e}")

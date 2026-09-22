@@ -230,6 +230,42 @@ class TestSpawnEnvAndTty:
         assert rec.pid == 555
 
 
+class TestWorkerLogPath:
+    """worker.log lives in the child's NESTED SESSION dir, not the ledger
+    task dir — so all a task's runtime traces sit together under
+    <parent_session>/subagents/<task_id>/."""
+
+    def test_without_session_dir_falls_back_to_task_dir(self, tmp_path, led):
+        tool = SpawnWorkerTool(ledger=led)
+        p = tool.worker_log_path("abc123")
+        assert str(p) == str(led.task_dir("abc123") / "worker.log")
+
+    def test_with_session_dir_nests_under_subagents(self, tmp_path, led):
+        sdir = tmp_path / "sess"
+        tool = SpawnWorkerTool(ledger=led, session_dir=str(sdir))
+        p = tool.worker_log_path("abc123")
+        assert str(p) == str(sdir / "subagents" / "abc123" / "worker.log")
+
+    def test_execute_writes_log_under_nested_session(self, tmp_path, led,
+                                                     monkeypatch):
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        sdir = tmp_path / "sess"
+        tool = SpawnWorkerTool(ledger=led, session_dir=str(sdir))
+        out = tool.execute(**_args(tmp_path))
+        tid = out.split()[2]
+        # The success string advertises the same nested path it opened.
+        assert out.rstrip().endswith(f"log={sdir / 'subagents' / tid / 'worker.log'}")
+        assert (sdir / "subagents" / tid / "worker.log").exists()
+
+    def test_execute_without_session_dir_writes_to_task_dir(self, tmp_path, led,
+                                                            monkeypatch):
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        tid = out.split()[2]
+        assert (led.task_dir(tid) / "worker.log").exists()
+
+
 class TestWatchdog:
     def test_deadline_kills_and_marks(self, led, tmp_path):
         from flagscale_agent.react.multi_agent.contract import Contract

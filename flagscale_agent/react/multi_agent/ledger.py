@@ -21,7 +21,12 @@ Every task is one directory named by its content-addressed id:
       state.json      # {"status", "history", "pid", "output_ptr"}
       result.json     # worker self-report (reference only; NEVER trusted for
                       # acceptance)
-      worker.log      # spawn redirects stdout/stderr here
+
+(NOTE: when the parent has a session dir, a spawned/resumed worker's runtime
+trace lands under the parent session tree — <parent_session>/subagents/<task_id>/
+worker.log — NOT here; the ledger dir holds only the global, session-independent
+bookkeeping files above. Without a session dir, worker.log falls back to this
+task dir.)
 
 All reads/writes go through TaskLedger — never hand-edit the files. state.json
 is guarded by an exclusive fcntl.flock (the lock file IS state.json), because
