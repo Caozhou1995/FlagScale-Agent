@@ -31,7 +31,7 @@ EVICT_THRESHOLD = 10
 _RECOVERY_TOOLS = frozenset((
     "plan_status", "plan_create", "plan_update",
     "memory_read", "memory_list",
-    "recall",
+    "recall", "recall_search",
 ))
 
 # Tools that are eviction-related (don't trigger reminder during eviction itself)
@@ -108,10 +108,10 @@ class PostEvictRecoveryGuard(Guard):
             f"1. plan_status() — check current task progress and step notes\n"
             f"2. memory_list() — scan all memory entries to find relevant facts, "
             f"pitfalls, and insights for your current domain\n"
-            f"3. If needed: recall(index=N) for specific evicted content\n"
-            f"4. For deep recovery: grep/read_file on conversation_full.json in your "
-            f"session directory to find past instructions, tool results, or code snippets "
-            f"without re-executing commands\n\n"
+            f"3. recall_search(query='...') to locate, then recall(index=N) to fetch the\n"
+            f"   original text of any evicted message — the ledger is lossless, so a\n"
+            f"   value can almost always be RECOVERED via these dedicated recall tools\n"
+            f"   rather than re-derived or re-executed\n\n"
             f"Do NOT proceed on stale assumptions. After recovery, verify these "
             f"commonly error-prone items against memory or plan notes:\n"
             f"- Exact commands and their syntax (flags, JSON formats, argument order)\n"

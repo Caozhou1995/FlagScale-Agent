@@ -49,7 +49,7 @@ class ContextPressureGuard(Guard):
     _SAVE_TOOLS = frozenset({
         "memory_write", "memory_read", "memory_list",
         "plan_update", "plan_status", "plan_create",
-        "evict", "recall",
+        "evict", "recall", "recall_search",
         "hard_reset",
     })
 
@@ -151,11 +151,20 @@ class ContextPressureGuard(Guard):
                 f"{len(evictable)} evictable messages] "
                 f"Evict aggressively until pressure drops below 50%. "
                 f"Call evict(indexes=[...]) with wide ranges.\n"
-                f"BEFORE evicting, save progress — evicting destroys context:\n"
-                f"1. memory_write() — EXTRACT NOW. You still hold the FULL message text that\n"
-                f"   is about to become a placeholder; after eviction no later session can\n"
-                f"   ever see it. This is your last and best moment to record it — one entry\n"
-                f"   now costs one call, re-discovering it later costs many turns.\n"
+                f"BEFORE evicting, decide what to SAVE vs DISCARD — eviction is LOSSLESS\n"
+                f"(placeholder + index remain; recall_search -> recall recovers any\n"
+                f"message later), so grade messages, do NOT write out a per-index list:\n"
+                f"  • IRREPRODUCIBLE (unique evidence, in-flight conclusions, exact\n"
+                f"    tool outputs you will need after the swap) -> extract to\n"
+                f"    memory_write()/plan_update() FIRST — regenerating them may be\n"
+                f"    impossible or expensive even though the text is recoverable.\n"
+                f"  • REGENERABLE (cheap-to-re-derive state, intermediate scratch,\n"
+                f"    bulky tool output you are done with) -> evict freely.\n"
+                f"Keep only what one command can re-derive out of memory; record the\n"
+                f"non-reproducible.\n"
+                f"1. memory_write() — EXTRACT NOW for the irreproducible. You still hold\n"
+                f"   the FULL message text that is about to become a placeholder — one\n"
+                f"   entry now costs one call, re-discovering it later costs many turns.\n"
                 f"   WHERE — the survival-range test decides the container:\n"
                 f"     * cross-session truth (exact commands, paths, env state, pitfalls,\n"
                 f"       configs, decisions+why) -> memory_write() — GLOBAL, the next session\n"

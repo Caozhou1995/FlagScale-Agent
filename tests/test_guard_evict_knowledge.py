@@ -63,7 +63,11 @@ class TestPostEvictRecoveryGuard:
         assert verdict is not None
         assert "evicted" in verdict.message.lower()
         assert "plan_status" in verdict.message
-        assert "conversation_full.json" in verdict.message
+        assert "recall_search" in verdict.message
+        assert "recall(index=N)" in verdict.message
+        # Axis-I ruling: the recovery chain must point at the dedicated recall
+        # tools, never at grepping the conversation_full.json ledger directly.
+        assert "conversation_full" not in verdict.message
 
     def test_no_reminder_for_recovery_tools(self):
         guard = PostEvictRecoveryGuard()
@@ -71,7 +75,8 @@ class TestPostEvictRecoveryGuard:
         guard.check_post(ctx)
         
         # Recovery tools should not trigger reminder
-        for tool in ["plan_status", "memory_read", "memory_list", "recall"]:
+        for tool in ["plan_status", "memory_read", "memory_list", "recall",
+                     "recall_search"]:
             ctx2 = _make_ctx(tool_name=tool)
             assert guard.check_pre(ctx2) is None
 

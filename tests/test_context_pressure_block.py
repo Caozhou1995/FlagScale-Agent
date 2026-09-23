@@ -255,3 +255,66 @@ class TestSaveGuidanceSurvivalRange:
             blocks.append([re.sub(r"^\s+", "", x).rstrip()
                            for x in lines[s:e + 1] if x.strip()])
         assert blocks[0] == blocks[1], "two hard_reset blocks differ"
+
+
+class TestEvictionGradingContract:
+    """Axis-I v1 (user-ruled): the evict path must be framed against the
+    LOSSLESS ledger (placeholder + index remain; recall_search -> recall
+    recovers any message), and must demand a GRADING JUDGMENT — save the
+    irreproducible, freely evict the regenerable — instead of the old
+    "evicting destroys context" framing. The hard_reset path keeps its
+    destructive framing because only memory survives a reset."""
+
+    def _evict_msg(self):
+        guard = ContextPressureGuard()
+        ctx = _make_ctx(0.85, evictable_count=100, tool_name="shell")
+        v = guard.check_pre(ctx)
+        assert v is not None and v.category == "context_pressure_evict"
+        return v.message
+
+    def _hard_reset_msg(self):
+        guard = ContextPressureGuard()
+        ctx = _make_ctx(0.90, evictable_count=10, tool_name="shell")
+        r = guard.check_pre(ctx)
+        assert r is not None and r.category == "context_pressure_hard_reset"
+        return r.message
+
+    def test_evict_block_is_lossless_framed(self):
+        msg = self._evict_msg()
+        assert "LOSSLESS" in msg
+        # Old wrong framework must be gone: eviction never destroys the text.
+        assert "destroys context" not in msg
+        assert "no later session can ever see it" not in msg
+
+    def test_evict_block_has_grading_judgment(self):
+        """Judgment, not a per-index catalogue: the two grades must be named
+        and the save-first rule attached only to the irreproducible grade."""
+        msg = self._evict_msg()
+        assert "IRREPRODUCIBLE" in msg
+        assert "REGENERABLE" in msg
+        # The recovery chain must point at the dedicated recall tools.
+        assert "recall_search" in msg
+        assert "recall" in msg
+
+    def test_recall_search_passes_through_during_evict_block(self):
+        """recall_search is a lossless recovery tool — it must be allowed
+        through the evict-path block alongside evict/recall."""
+        guard = ContextPressureGuard()
+        ctx = _make_ctx(0.85, evictable_count=100, tool_name="recall_search")
+        assert guard.check_pre(ctx) is None
+
+    def test_hard_reset_block_stays_destructive(self):
+        """hard_reset really discards: framing stays 'gone', and the grading
+        contract (which exists because eviction is lossless) must NOT appear."""
+        msg = self._hard_reset_msg()
+        assert "gone" in msg
+        assert "IRREPRODUCIBLE" not in msg
+        assert "LOSSLESS" not in msg
+
+    def test_survival_range_still_present_in_evict_block(self):
+        """The grading contract supplements — not replaces — the survival-range
+        extraction rules (regression guard for TestSaveGuidanceSurvivalRange)."""
+        msg = self._evict_msg()
+        assert "EXTRACT NOW" in msg
+        assert "survival-range test" in msg
+        assert "WHAT NOT" in msg
