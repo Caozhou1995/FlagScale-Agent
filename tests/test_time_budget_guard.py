@@ -299,3 +299,83 @@ class TestFmt:
 
     def test_minutes_format(self):
         assert _fmt(65) == "1m05s"
+
+
+class TestTimeBudgetGateCopy:
+    """Budget-gate copy rulings: 90% gate = show-not-claim + re-classification
+    (verify != refining); 75/50% = action checklists with a default answer;
+    100% = protective-only wrap-up; the 90% and 100% injection copy denies the
+    'guards give me turns' slack misreading."""
+
+    def _pre90(self, pct=92.0):
+        s = _Stats()
+        s.pct = pct
+        return TimeBudgetGuard(stats_fn=s).check_pre(make_ctx())
+
+    def _post(self, pct):
+        s = _Stats()
+        s.pct = pct
+        return TimeBudgetGuard(stats_fn=s).check_post(make_ctx())
+
+    # --- 90% gate: show-not-claim ----
+    def test_90_shown_not_claimed(self):
+        v = self._pre90()
+        assert v is not None and v.action == "block"
+        # case(1) now demands evidence, not a bare claim
+        assert "SHOWN, not claimed" in v.message
+        assert "verification action you just ran" in v.message
+        assert "ls -la" in v.message
+
+    def test_90_verify_is_not_refining(self):
+        v = self._pre90()
+        # re-classification: cheapest trust-restoring action outranks write-through
+        assert "is NOT refining" in v.message
+        assert "trust-restoring" in v.message
+        # doubts must surface: settle them or record an audited degrade
+        assert "audited degrade" in v.message
+
+    def test_90_injections_not_a_clock(self):
+        v = self._pre90()
+        assert "guard injections are NOT a clock" in v.message
+
+    def test_90_keeps_escape_and_memory_block(self):
+        v = self._pre90()
+        # the crude-but-complete escape and the memory extraction block survive
+        assert "crude-but-complete" in v.message
+        assert "memory_write()" in v.message
+        assert "survival-range test" in v.message
+
+    # --- D1: 75% checklist ----
+    def test_75_action_checklist(self):
+        v = self._post(78.0)
+        assert v is not None and v.reason == "time_budget_75pct"
+        assert "Action checklist, in priority order" in v.message
+        assert "protected write-through" in v.message
+        assert "No new lines" in v.message
+        assert "not refining" in v.message
+
+    # --- D1: 50% default actions ----
+    def test_50_default_actions(self):
+        v = self._post(55.0)
+        assert v is not None and v.reason == "time_budget_50pct"
+        assert "Default actions" in v.message
+        assert "write it there once NOW" in v.message
+        assert "Name any doubt" in v.message
+
+    # --- 100% wrap-up: protective only ----
+    def test_100_protective_only(self):
+        v = self._post(105.0)
+        assert v is not None and v.reason == "time_budget_100pct"
+        assert "PROTECTIVE actions only" in v.message
+        assert "do not recompute" in v.message
+        assert "overwrite a banked deliverable" in v.message
+        assert "come LAST" in v.message
+
+    def test_100_priority_write_through_before_verify(self):
+        v = self._post(105.0)
+        assert v.message.index("  1. Make sure") < v.message.index("  2. VERIFY")
+
+    def test_100_no_guards_give_me_turns(self):
+        v = self._post(105.0)
+        assert "not evidence of slack" in v.message
+        assert "guard injections are NOT a clock" in v.message

@@ -35,9 +35,10 @@ Key design decisions:
     works for a 20-minute wall and a 1-hour wall without any per-task tuning.
   • Two modes on the ladder:
       - 25/50/75%   → check_post inject (pacing / health-check advisories).
-      - 90%         → check_pre BLOCK (overridable) — forces the agent to state
-                      that a deliverable exists or that THIS call produces it,
-                      before spending a near-final tool call on exploration.
+      - 90%         → check_pre BLOCK (overridable) — forces the agent to SHOW
+                      (evidence, not claim) that a deliverable exists or that
+                      THIS call produces it, before spending a near-final tool
+                      call on exploration.
       - 100%        → check_post inject (WRAP-UP). The per-turn wall-clock is
                       spent: this is the agent's last stretch this turn. The
                       message tells it to finalize the current result and, if it
@@ -106,9 +107,12 @@ class TimeBudgetGuard(Guard):
         """Block at 90%+ budget to force explicit deliverable reasoning.
         
         At the CRITICAL 90% threshold, switch from advisory (check_post inject) to
-        blocking gate (check_pre block). The agent must explicitly state EITHER:
-          (1) A complete deliverable already exists at its required path, OR
-          (2) This specific tool call will produce/finalize the deliverable.
+        blocking gate (check_pre block). The agent must SHOW, not merely claim:
+          (1) A complete deliverable already exists at its required path — the
+              override_reason must cite the output of a verification action just
+              run (e.g. ls -la / cat on the delivery path), OR
+          (2) This specific tool call will produce/finalize the deliverable —
+              cite the delivery path it writes or this tool's concrete output.
         
         If neither is true, the agent should STOP optimizing and write a crude-but-
         complete answer instead. The override_reason becomes the forcing function.
@@ -142,18 +146,37 @@ class TimeBudgetGuard(Guard):
                 f"[TimeBudget] CRITICAL CHECKPOINT — {pct:.0f}% of your enforced "
                 f"wall-clock budget is spent ({elapsed} used, ~{remaining} left). "
                 f"Before executing this tool, you must satisfy ONE of these:\n\n"
-                f"  (1) A complete, valid deliverable ALREADY EXISTS at its required path.\n"
-                f"  (2) THIS specific tool call will produce or finalize the deliverable.\n\n"
-                f"If NEITHER is true — if you are exploring, optimizing, or refining — "
-                f"STOP. Write a crude-but-complete answer to the delivery path RIGHT NOW "
-                f"instead. Also, while you still hold the FULL context that is about to "
-                f"be lost at timeout: memory_write() the reusable facts that live only "
+                f"  (1) A complete, valid deliverable ALREADY EXISTS at its required "
+                f"path — SHOWN, not claimed: your _override_reason must cite the "
+                f"output of a verification action you just ran (e.g. `ls -la "
+                f"<delivery_path>` listing the file, or `cat <delivery_file>` "
+                f"matching the expected content).\n"
+                f"  (2) THIS specific tool call will produce or finalize the "
+                f"deliverable — cite the delivery path it writes or this tool's "
+                f"concrete output.\n\n"
+                f"Re-classified so it cannot be misread: verifying a claim you are "
+                f"about to bank is NOT refining. When a result you ALREADY hold is "
+                f"suspect, the CHEAPEST trust-restoring action on that same "
+                f"already-suspect value (re-run the one command that produced it, "
+                f"re-check the file, re-execute the smallest verification) outranks "
+                f"write-through of that value. Do not bank a value you hold an "
+                f"unresolved doubt about: name the doubt, run the cheapest check "
+                f"that settles it, or explicitly record why the current value is "
+                f"still your strongest anchor (an audited degrade beats a silent "
+                f"one).\n\n"
+                f"If NEITHER (1) nor (2) is true — exploring, optimizing, or "
+                f"polishing beyond the verification above — STOP. Write a "
+                f"crude-but-complete answer to the delivery path RIGHT NOW instead. "
+                f"Also, while you still hold the FULL context that is about to be "
+                f"lost at timeout: memory_write() the reusable facts that live only "
                 f"in this window (exact commands, paths, env state, pitfalls — the "
-                f"survival-range test: cross-session truth -> memory, GLOBAL; this-"
-                f"session progress -> plan notes; do not dump what one ls/grep can "
-                f"cheaply re-derive). To proceed, your _override_reason "
-                f"must explicitly state which case (1 or 2) applies and cite the "
-                f"deliverable path or the tool's output."
+                f"survival-range test: cross-session truth -> memory, GLOBAL; "
+                f"this-session progress -> plan notes; do not dump what one ls/grep "
+                f"can cheaply re-derive).\n\n"
+                f"Mechanism fact: guard injections are NOT a clock — their frequency "
+                f"or presence says nothing about remaining time (silence between "
+                f"them may just mean one long call is still running). The only "
+                f"remaining-time source is the numbers in this message."
             )
             return GuardVerdict.block(
                 message=message,
@@ -212,17 +235,27 @@ class TimeBudgetGuard(Guard):
             return (
                 f"[TimeBudget] TIME IS UP — {pct:.0f}% of your enforced wall-clock "
                 f"budget for this turn is spent ({elapsed} used). Treat this as your "
-                f"final stretch: this turn is ending. Do NOT start new work or open a "
-                f"new line of investigation. Instead:\n"
+                f"final stretch: this turn is ending. Your remaining slack buys "
+                f"PROTECTIVE actions only, in this priority order:\n"
                 f"  1. Make sure a COMPLETE, valid result is written through to its "
                 f"required delivery path RIGHT NOW — a crude-but-complete answer that "
                 f"is banked beats a perfect one that never gets saved.\n"
-                f"  2. Briefly record where things stand (state / decisions) to memory "
-                f"or plan notes so the next turn can resume cleanly.\n"
-                f"  3. Then close out. If finishing genuinely needs a human decision, "
-                f"more input, or an action you cannot take, hand control back with "
-                f"NEED_USER_INPUT stating exactly what you need and the current state — "
-                f"rather than burning the overrun on more attempts."
+                f"  2. VERIFY what is banked (`ls`/`cat` the delivery path — verify, "
+                f"do not recompute). NEVER start anything that could overwrite a "
+                f"banked deliverable: a fresh full run that writes the delivery file "
+                f"itself is NOT a wrap-up action, even if its 'payoff' looks better.\n"
+                f"  3. If a doubt about the banked value stays unresolved, record it "
+                f"explicitly next to the value (an audited degrade beats a silent "
+                f"one).\n"
+                f"  4. Only then housekeeping (proposal/memory tidy-ups come LAST, "
+                f"not first) and close out. If finishing genuinely needs a human "
+                f"decision, more input, or an action you cannot take, hand control "
+                f"back with NEED_USER_INPUT stating exactly what you need and the "
+                f"current state — rather than burning the overrun on more attempts.\n"
+                f"Mechanism fact: guard injections are NOT a clock — 'the guard is "
+                f"still giving me turns' is not evidence of slack. Silence between "
+                f"injections may just mean one long call is still running; the only "
+                f"remaining-time source is the numbers in this message."
             )
         head = (
             f"[TimeBudget] {pct:.0f}% of your enforced wall-clock budget is gone "
@@ -243,8 +276,17 @@ class TimeBudgetGuard(Guard):
                 " Most of the budget is spent. If your current approach has not "
                 "produced a passing result yet, it likely will not finish in time — "
                 "switch to a faster method-class NOW rather than turning more knobs on "
-                "the same one. And immediately write-through the best valid result you "
-                "have to the delivery path so a timeout cannot wipe it out."
+                "the same one. Action checklist, in priority order:\n"
+                "  1. Write-through the best valid result you already have to the "
+                "delivery path, so a timeout cannot wipe it out.\n"
+                "  2. List the doubts you already hold about that result. From now on "
+                "your remaining slack is ONLY for: the cheapest trust-restoring "
+                "action on a suspect result (verify/re-run the one command that "
+                "produced it) — or the protected write-through above. No new lines "
+                "of work. Verifying what you bank is not refining.\n"
+                "  2b. Any doubt you cannot resolve now: record it explicitly next "
+                "to the banked value — why the current value is still your strongest "
+                "anchor. An audited degrade beats a silent one."
             )
         elif thr >= 50:
             tail = (
@@ -252,10 +294,15 @@ class TimeBudgetGuard(Guard):
                 "Ask concretely: have the expensive steps (downloads, builds, "
                 "trainings) actually STARTED, and are they on track to FINISH before "
                 "the budget runs out? At the current rate, will a complete valid "
-                "deliverable exist at its required path in time? If the answer is not "
-                "a confident yes, treat that as the signal to change course now while "
-                "budget remains — and make sure the best valid result you already have "
-                "is written through to the delivery path."
+                "deliverable exist at its required path in time?\n"
+                "Default actions if the honest answer is not a confident yes:\n"
+                "  - Change course now while budget remains (a different, cheaper "
+                "method-class — not more knobs on the same one).\n"
+                "  - If your best result so far is not yet at its delivery path, "
+                "write it there once NOW — before anything else.\n"
+                "  - Name any doubt you already hold about your current best "
+                "result, so it can be settled or recorded before it becomes the "
+                "final answer."
             )
         else:  # 25
             tail = (
