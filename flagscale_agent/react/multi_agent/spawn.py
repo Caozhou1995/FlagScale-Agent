@@ -50,6 +50,7 @@ from .ledger import (
     ACTIVE_STATUSES,
     DEADLINE_MISSED,
     FAILED,
+    REPORTED,
     RUNNING,
     DuplicateTask,
     LedgerError,
