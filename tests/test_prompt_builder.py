@@ -703,3 +703,16 @@ class TestAnalyzeDontJustUse:
         blk = p[i:j]
         for marker in ("site-packages", "node_modules", "logs", "checkpoints"):
             assert marker in blk, marker
+
+
+class TestConstraintLoyaltyFormAxis:
+    """B-axis: CONSTRAINT LOYALTY names the FORM/contract axes as silent GIVENs."""
+
+    def test_form_axes_listed_as_givens(self):
+        import flagscale_agent.react.prompt as prompt_mod
+        p = prompt_mod.SYSTEM_PROMPT_STATIC
+        low = " ".join(p.lower().split())
+        assert "units, naming" in low
+        assert "form rules" in low
+        assert "silent" in low
+        assert "never against your paraphrase" in low

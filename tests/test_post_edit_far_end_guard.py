@@ -182,3 +182,29 @@ class TestProcessBoundaryHint:
                                   result="Successfully edited /no/such/dir/x.py"))
         assert v is not None and "PROCESS BOUNDARY" not in v.message
 
+
+
+class TestFormContractNudge:
+    """B-axis (form/contract drift) nudge: HOW + WHY + GAIN in the FORM line."""
+
+    def test_form_contract_line_present_with_anchor_phrases(self, guard):
+        v = guard.check_post(_ctx(path="cfg/exp.yaml",
+                                  result="Wrote 10 chars to cfg/exp.yaml"))
+        assert v is not None and v.action == "inject"
+        assert "FORM contract" in v.message
+        # HOW: verbatim rule list + check against written bytes
+        assert "VERBATIM" in v.message
+        assert "written bytes" in v.message
+        # WHY: silent failure with functional green
+        assert "SILENTLY" in v.message
+        assert "paraphrase" in v.message
+        # GAIN: catch at write time
+        assert "write time" in v.message
+
+    def test_existing_far_end_anchors_preserved(self, guard):
+        v = guard.check_post(_ctx(path="scripts/run.sh",
+                                  result="Successfully edited scripts/run.sh"))
+        assert v is not None
+        assert "FAR end" in v.message
+        assert "valid-for-type" in v.message
+        assert "will the consumer actually read it at this exact path?" in v.message

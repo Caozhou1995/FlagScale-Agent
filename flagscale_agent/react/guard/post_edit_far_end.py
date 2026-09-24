@@ -104,6 +104,11 @@ class PostEditFarEndGuard(Guard):
             f"[Post-edit] {path} edited. Verify the FAR end now:",
             f"  · valid-for-type: {cls._hint_for(path)}",
             "  · will the consumer actually read it at this exact path?",
+            "  · FORM contract — form drift (format/units/naming/structure/source) "
+            "fails SILENTLY while functional tests stay green: your paraphrase of "
+            "the rule can pass while the verbatim rule fails. Re-list the task's "
+            "form phrases for this file VERBATIM and check each against the "
+            "written bytes — now, at write time, while the fix is still one edit away.",
         ]
         if cls._is_agent_source(path):
             lines.append(

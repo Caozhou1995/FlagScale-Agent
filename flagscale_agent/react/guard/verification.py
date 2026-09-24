@@ -610,10 +610,17 @@ clean):
          while missing in CONTENT) — a task names a subject and usually qualifies it:
          a point in TIME ("as of <date>", "at the time of", "top entry then"), an
          exact VERSION / timestamp / commit / size, a SUBSET or region, a specific
-         METRIC definition or threshold. These are GIVENs with ZERO tolerance — a
+         METRIC definition or threshold, and a FORM / contract rule (the required
+         format, units, naming, interface, or source structure — "from X", "named Y",
+         "in Z format", "the structure of W"). These are GIVENs with ZERO tolerance — a
          successor, a newer entry, a near-equivalent is NOT the named thing. Re-list
          every qualifier as a first-class line and confirm your answer's CONTENT
-         literally honors each. A file at the right path in the right format can still
+         literally honors each. For each FORM rule use the quote-vs-value method:
+         quote the task's VERBATIM phrase in one column and the deliverable's actual
+         value in the other, then compare — checking against your PARAPHRASE is the
+         exact failure this guards against, because synonym drift (the task's "from
+         the official source" read as "a similar tarball I fetched") passes your
+         restatement while failing the grader. A file at the right path in the right format can still
          answer a NEARBY question the task did not ask (the current leader instead of
          the point-in-time leader, v3.0 instead of v2.2) — that scores zero as hard as
          a missing file, and silently. Ask: what did the task pin down that a confident

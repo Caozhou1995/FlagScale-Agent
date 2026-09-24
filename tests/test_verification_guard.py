@@ -2096,3 +2096,29 @@ class TestTextCompleteHygieneStaleCompletion:
             llm_responded=True,
         )
         assert guard.check_pre(ctx) is None
+
+
+class TestWrapUpFormContractAxis:
+    """B-axis: wrap-up item 3 must enumerate FORM/contract rules and the
+    quote-vs-value method (verbatim phrase vs deliverable value)."""
+
+    def test_form_rule_in_constraint_enumeration(self):
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "form / contract rule" in low
+        for axis in ("format", "units", "naming", "source structure"):
+            assert axis in low, f"missing FORM axis: {axis}"
+
+    def test_quote_vs_value_method_present(self):
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "quote-vs-value" in low
+        assert "paraphrase" in low
+        assert "synonym drift" in low
+
+    def test_no_task_derived_tokens(self):
+        # Same task-agnostic discipline as the near/far test: no leaked task names.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = _TEXT_COMPLETE_HYGIENE.lower()
+        assert "debian" not in low
+        assert "pmars" not in low
