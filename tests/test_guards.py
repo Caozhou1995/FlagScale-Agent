@@ -171,8 +171,13 @@ class TestPlanGuard:
         assert result is not None
         assert result.action == "inject"
         assert result.reason == "qualifier_extraction"
-        # Subsequent plan tools pass through cleanly.
-        assert g.check_pre(_ctx("plan_create", {})) is None
+        # A later plan_create is a RE-framing: BOTH demands re-inject — each
+        # framing deserves the qualification and divergence checks (user
+        # ruling 2026-09-23: a re-framing's premises are as unexamined).
+        from flagscale_agent.react.guard.plan import _DIVERGER_INJECT
+        again = g.check_pre(_ctx("plan_create", {}))
+        assert again is not None and again.action == "inject"
+        assert _DIVERGER_INJECT in again.message
         assert g.check_pre(_ctx("plan_update", {})) is None
         assert g.check_pre(_ctx("plan_status", {})) is None
 

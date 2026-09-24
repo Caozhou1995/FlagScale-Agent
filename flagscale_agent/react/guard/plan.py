@@ -71,6 +71,41 @@ _WRITE_FILE_NO_PLAN = (
 )
 
 
+# Divergence demand, delivered on EVERY plan_create — per framing
+# (the premise-inherited-unexamined half: "我想窄了"). A plan written from a
+# framing locks in that framing: every later step inherits premises that
+# were never inspected against alternatives — and a LATER framing (re-plan)
+# inherits its own unexamined premises just the same, so the demand re-arms
+# per framing. This inject does NOT judge the plan —
+# it demands a divergence check by a SEPARATE reasoning process: spawn ONE
+# diverger worker (read-only, no verdict, no agreement) that proposes alternative
+# framings of the task, then the parent issues a one-line ruling for EACH
+# alternative (adopt → revise the plan, or reject → why). Rulings are the
+# deliverable: they force the unexamined premises into the open. Fire once
+# PER FRAMING (every plan_create — a re-framing re-arms the demand) and only
+# via plan_create —
+# same folded-into-one-gate pattern as _QUALIFIER_EXTRACTION, never a separate
+# block (cross-talk rule, see verification.py Timing 0b note).
+_DIVERGER_INJECT = """
+
+Divergence check — before this plan hardens, probe what it made invisible.
+
+Spawn ONE diverger worker (spawn_worker) RIGHT AFTER framing this plan — do not
+wait for step 2. Contract:
+  - goal: "Propose 2-3 genuinely different framings of the task — different
+    method-class, different decomposition, or a different reading of an ambiguous
+    term — NOT refinements of this plan."
+  - constraints: read-only (writable: [] or a scratch path; forbidden: modify any
+    file), max_minutes: 3. Give it the task's ORIGINAL statement, not your plan.
+  - The diverger proposes IDEAS ONLY: no verdicts, no ranking, no agreeing with
+    you. It answers "what else could this problem be", not "is this plan good".
+When it returns, issue a ONE-LINE ruling for EACH alternative it proposed —
+adopt (then actually revise the plan) or reject (name WHY in one sentence, e.g.
+"incompatible with X constraint"). A ruling with no reason is not a ruling; an
+unruled alternative is an unexamined premise. This fires per framing — at
+every plan_create, where a wrong framing is cheapest to fix."""
+
+
 class PlanGuard(Guard):
     """Nudges (interactive) or requires (single-shot) an active plan.
 
@@ -109,9 +144,17 @@ class PlanGuard(Guard):
         # Whether plan_create was ever called — completion gate checks this
         # (distinct from get_active(): a plan may be created then deactivated).
         self._plan_ever_created = False
-        # Qualifier extraction delivered exactly once: rides the single-shot
-        # block or injects on first plan_create, whichever fires first.
+        # Qualifier extraction delivered once per FRAMING: set by whichever
+        # block carries it (write_file / single-shot), or injected on a
+        # plan_create; a plan_create consumes it again so re-planning re-injects.
         self._qualifier_reminded = False
+        # Divergence demand, like the qualifier, is PER FRAMING: injected on
+        # EVERY plan_create (a later re-framing's premises are as unexamined
+        # as the first's — user ruling 2026-09-23), consumed on injection,
+        # re-armed by reset_turn. Anti-ritualization lives in the contract
+        # itself (a one-line ruling for EVERY alternative), not in a
+        # once-per-run flag.
+        self._diverger_reminded = False
 
     def set_single_shot(self, enabled: bool = True):
         """Enable single-shot enforcement at runtime (set once run mode known)."""
@@ -145,18 +188,34 @@ class PlanGuard(Guard):
                 overridable=True,
             )
 
-        # Plan-related tools don't count toward the no-plan budget. The FIRST
-        # plan_create is the plan-framing moment — inject qualifier-extraction
-        # demand if not yet delivered.
+        # Plan-related tools don't count toward the no-plan budget. plan_create is
+        # the plan-framing moment — deliver the qualifier-extraction demand on
+        # every framing (re-armed by reset_turn), and fold the divergence demand
+        # into EVERY framing as well (both ride the same one-verdict-per-check_pre
+        # channel).
         if ctx.tool_name == "plan_create":
-            if not self._qualifier_reminded:
-                self._qualifier_reminded = True
-                return GuardVerdict.inject(
-                    message="[Plan] Framing the plan." + _QUALIFIER_EXTRACTION,
-                    reason="qualifier_extraction",
-                    category="plan_required",
-                )
-            return None
+            # Both demands belong to EACH framed plan (user ruling 2026-09-23:
+            # a re-framing's premises are as unexamined as the first's, so the
+            # diverger re-arms per framing exactly like the qualifier). A block
+            # earlier in THIS framing (write_file gate / single-shot) may
+            # already have carried them — consume the flags unconditionally
+            # either way, so the NEXT framing re-arms them.
+            inject_qualifier = not self._qualifier_reminded
+            inject_diverger = not self._diverger_reminded
+            self._qualifier_reminded = False
+            self._diverger_reminded = False
+            if not inject_qualifier and not inject_diverger:
+                return None
+            msg = "[Plan] Framing the plan."
+            if inject_qualifier:
+                msg += _QUALIFIER_EXTRACTION
+            if inject_diverger:
+                msg += _DIVERGER_INJECT
+            return GuardVerdict.inject(
+                message=msg,
+                reason="qualifier_extraction",
+                category="plan_required",
+            )
         if ctx.tool_name in ("plan_update", "plan_status"):
             return None
 
@@ -168,9 +227,10 @@ class PlanGuard(Guard):
 
         # Single-shot: after observation budget, require a plan (block).
         if self._single_shot and self._calls_without_plan > self.SINGLE_SHOT_BLOCK_THRESHOLD:
-            # Block carries the qualifier demand; mark delivered to prevent
-            # double-injection on the subsequent plan_create.
+            # Block carries BOTH demands (qualifier + diverger); mark both
+            # delivered to prevent double-injection on the subsequent plan_create.
             self._qualifier_reminded = True
+            self._diverger_reminded = True
             return GuardVerdict.block(
                 message=(
                     f"[Plan] Pause. {self._calls_without_plan} tool calls in this "
@@ -183,6 +243,7 @@ class PlanGuard(Guard):
                     f"understanding is worse than no plan — it locks in a shape you'll "
                     f"fight later."
                     + _QUALIFIER_EXTRACTION
+                    + _DIVERGER_INJECT
                 ),
                 reason="single_shot_plan_required",
                 category="plan_required",
@@ -215,9 +276,22 @@ class PlanGuard(Guard):
     def reset_turn(self):
         """New user message resets counter.
 
+        _qualifier_reminded and _diverger_reminded are both reset: both
+        demands are per-framing, so a new turn's plan_create must re-inject
+        them (a prior block may have carried them earlier in the same turn —
+        that is why they are not cleared at the top).
+
+        Anti-ritualization note: re-arming per turn does not ritualize the
+        checks — the qualifier's value is its framing-time questions, and the
+        diverger's is its one-line-ruling contract, both of which survive
+        repetition. What was ritual-prone was firing the SAME plan shape
+        again, which re-framing is not.
+
         Note: _plan_ever_created is intentionally NOT reset here. In single-shot
         mode there is only one turn, so it never matters; in interactive mode the
         completion gate never fires anyway. Keeping it sticky avoids a spurious
         block if reset_turn is ever called mid-single-shot-run.
         """
         self._calls_without_plan = 0
+        self._qualifier_reminded = False
+        self._diverger_reminded = False

@@ -738,6 +738,76 @@ Information gain check: what did this step teach you that you didn't already kno
 What do you still not know? If a knowledge gap exists, Research before the next step."""
 
 
+# The independent-reviewer demand, appended to the step_done pre-mortem
+# inject. The pre-mortem is same-context self-correction (Huang et al. 2024: without
+# external feedback, self-correction can DEGRADE accuracy — the same context shares
+# the same blind spot that produced the claim). The reviewer is the external
+# counterpart: a fresh subagent session that reasons ONLY from the frozen artifacts
+# and can therefore see what the main agent's reasoning hid. Injection is the only
+# lever a guard has (it cannot spawn), so this contracts the spawn and the
+# enforcement lands later, at completion (the _reviewer_findings gate) — asynchronous
+# by design: the review runs at step N and is processed at step N+1 so the main
+# agent never blocks mid-advance.
+#
+# THE HARNESS GUARANTEES three mandatory inputs — the main agent does not decide
+# whether they are included, only what ELSE to add:
+#   1. the deliverable's sanitized source (path/diff of what step N produced),
+#   2. the task's ORIGINAL requirement text (verbatim, not a summary),
+#   3. the main agent's completion claim / verification evidence for step N.
+# Findings are CLAIMS, not verdicts — each must be independently
+# reproduced-or-refuted before it changes anything.
+_REVIEWER_FINDINGS = """
+
+Independent reviewer — spawn one NOW for the step you just marked done.
+
+While you continue advancing (do NOT wait on it), spawn_worker:
+  - goal: "Adversarially review the step's deliverable against the task's original
+    requirement: find unsupported claims, internal contradictions, overreach, and
+    anything the task demands that the deliverable does not actually satisfy.
+    Report each finding with file:line / quoted evidence. If you find nothing
+    real, say so explicitly."
+  - inputs — the harness MANDATES these three; the main agent adds only extras:
+      (1) the deliverable's source as produced (sanitized: the artifact text/path,
+          not your interpretation of it),
+      (2) the task's ORIGINAL requirement text (verbatim, never your restatement),
+      (3) the completion claim + verification evidence submitted for this step.
+  - constraints: read-only reviewer (writable: [] or a report path outside the
+    reviewed tree; forbidden: modify any file), max_minutes ~3.
+  - acceptance: a parent-runnable predicate over the findings report (e.g.
+    test -s <report>), never "reviewer says it reviewed".
+Findings are CLAIMS, not verdicts — do not merge or dismiss any of them on the
+reviewer's say-so. At the NEXT step boundary (N+1), reproduce-or-refute EACH
+finding yourself (run the cited input, read the cited lines, build the
+counterexample) and report which you confirmed vs refuted with evidence."""
+
+
+# Enforcement counterpart: fires at the text completion path when the
+# reviewer was ever demanded. The demand at step_done is inject-only (a guard
+# cannot spawn) — without this gate the demand would be advisory and findings
+# would routinely die unprocessed: the agent advances past step N, the reviewer's
+# report lands, and nothing forces the reproduce-or-refute round. This gate makes
+# settlement a hard precondition of the completion claim. Any override reason
+# releases it once, for good (the honesty channel every other gate uses).
+_REVIEWER_FINDINGS_SETTLE = """[VerificationGuard] Reviewer findings not settled — close the loop before completing.
+
+An independent reviewer was demanded for a step you marked done (a fresh
+session reasons ONLY from the frozen deliverable + the original task + your claim,
+so it can see what your own context hides). Findings are CLAIMS, not verdicts —
+the loop closes only when YOU have processed them:
+
+  - For EACH finding: reproduce-or-refute it yourself — run the cited failing
+    input, read the cited file:line, or construct the counterexample — and record
+    the verdict (confirmed → fix it or justify keeping it; refuted → say why)
+    with evidence you personally ran and read. Do NOT merge or dismiss any
+    finding on the reviewer's say-so.
+  - If the reviewer ran and reported nothing real: state that explicitly.
+  - If you never ran the reviewer: say why explicitly (e.g. the step produced no
+    reviewable deliverable) — and if that excuse does not hold, run it now.
+
+Re-issue [TASK_COMPLETE] with _override_reason: the per-finding reproduce-or-refute
+outcomes (confirmed N / refuted M, with the evidence you ran)."""
+
+
 class VerificationGuard(Guard):
     """Requires verification evidence when marking steps complete.
     
@@ -768,6 +838,19 @@ class VerificationGuard(Guard):
         self._complete_substitution_demanded = False
         self._complete_delivery_hygiene_demanded = False
         self._text_complete_hygiene_demanded = False
+        # Set the first time the reviewer demand is injected on a passing
+        # step_done (check_post). The findings gate below keeps firing from that
+        # point on, across turns, until an override reason documents the
+        # reproduce-or-refute round — so the flag must NOT be reset in
+        # reset_turn (unlike the per-run gate flags).
+        self._reviewer_demanded = False
+        # Whether the reviewer-findings gate has fired at least once.
+        # The gate fires on EVERY bare completion attempt after the reviewer was
+        # demanded (the reproduce-or-refute round happens between retries), so
+        # unlike the once-per-run gate flags this one must NOT flip to True on
+        # firing — True only means "the agent has now seen the demand"; an
+        # override reason on a later attempt releases it for good.
+        self._reviewer_findings_fired = False
         # Set by check_pre when a step_done is about to pass through, so the
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
@@ -825,10 +908,22 @@ class VerificationGuard(Guard):
         # checks. The reversal ("assume you're wrong") lands hardest right when the
         # agent has just asserted the step is complete. Inject-only, fires per
         # step_done (re-armed by check_pre each time).
+        # Independent-reviewer anchor. Every step_done should
+        # get its dis-confirmation opportunity — the pre-mortem covers the
+        # same-context half (flip the question), the reviewer segment appended
+        # here covers the cross-context half (a fresh session checks the frozen
+        # deliverable). One verdict channel carries both, per step_done.
         if self._premortem_pending:
             self._premortem_pending = False
+            msg = _STEP_DONE_PREMORTEM
+            if not self._reviewer_demanded:
+                # Demand once per run (every step_done was already given its
+                # own pre-mortem; the reviewer habit establishes from the
+                # first). The completion gate keeps firing from that point on.
+                self._reviewer_demanded = True
+                msg += _REVIEWER_FINDINGS
             return GuardVerdict.inject(
-                message=_STEP_DONE_PREMORTEM,
+                message=msg,
                 reason="step_done_premortem",
                 category="verification",
             )
@@ -864,6 +959,24 @@ class VerificationGuard(Guard):
             ) is not None
         )
         if ctx.tool_name == "" and _is_completion and ctx.llm_responded:
+            # Reviewer settlement gate. The step_done reviewer demand is
+            # inject-only (a guard cannot spawn); this gate makes settling the
+            # findings a precondition of the completion claim. Fires on EVERY
+            # bare completion attempt after the demand (the reproduce-or-refute
+            # round happens between retries); an override reason documents the
+            # round and releases it for good. Ordered BEFORE the wrap-up gate so
+            # the agent sees the reviewer debt first (the wrap-up gate re-fires
+            # on the next bare attempt if the debt is paid but hygiene lags).
+            if (
+                self._reviewer_demanded
+                and not ctx.override_reason.strip()
+            ):
+                self._reviewer_findings_fired = True
+                return GuardVerdict.block(
+                    message=_REVIEWER_FINDINGS_SETTLE,
+                    reason="reviewer_findings_unaddressed",
+                    category="verification_required",
+                )
             # Wrap-up check fired at every task completion. It is a light,
             # always-applicable finish-line routine — near/far observation-vs-
             # argument check, temp/.bak cleanup, memory review, harness-gap
