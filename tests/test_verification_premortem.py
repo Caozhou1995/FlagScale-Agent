@@ -75,3 +75,75 @@ class TestStepDonePremortem:
         assert "run it" in msg or "read the result" in msg
         # explicitly calls out argument-words vs observation
         assert "argued" in msg or "principled" in msg
+
+    def test_premortem_task_level_segment(self):
+        """Task-level segment: the premortem must zoom out to TASK premises, not
+        just the step.
+
+        The task-level ask must (a) state why step checks cannot catch it
+        (downstream checks inherit the premise), (b) anchor on this step's fresh
+        observation (anti-ritual), and (c) expose template compliance.
+        """
+        msg = _STEP_DONE_PREMORTEM.lower()
+        assert "task premises" in msg or "task-level premises" in msg
+        # inheritance argument: step verification cannot falsify task premises
+        assert "inherit" in msg
+        # new-observation anchoring: ties the ask to what THIS step surfaced
+        assert "this step" in msg and ("surprise" in msg or "sits badly" in msg)
+        # anti-ritual: template "all fine" without an observation is named
+        assert "premises all fine" in msg
+
+    def test_premortem_independence_of_falsifier(self):
+        """E-3: the run-it move must demand a tool/source that does not share
+        the premise under test (tautology trap)."""
+        msg = _STEP_DONE_PREMORTEM.lower()
+        assert "does not share" in msg
+        assert "tautology" in msg
+
+
+class TestBatchDoneArmsPremortem:
+    """A batch done must arm the pre-mortem like a per-step done."""
+
+    @staticmethod
+    def _batch_ctx():
+        return GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "batch",
+                       "updates": [{"step_id": 1, "status": "done"},
+                                   {"step_id": 2, "status": "doing"}]},
+            override_reason="each step's evidence re-checked individually",
+        )
+
+    def test_batch_done_arms_premortem(self):
+        guard = VerificationGuard()
+        ctx = self._batch_ctx()
+        assert guard.check_pre(ctx) is None  # batch has override_reason -> pass
+        assert guard._premortem_pending is True
+        v = guard.check_post(ctx)
+        assert v is not None and v.action == "inject"
+        assert v.reason == "step_done_premortem"
+        assert guard._premortem_pending is False
+
+    def test_batch_without_done_does_not_arm(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "batch",
+                       "updates": [{"step_id": 1, "status": "doing"}]},
+            override_reason="",
+        )
+        assert guard.check_pre(ctx) is None
+        assert guard._premortem_pending is False
+
+    def test_batch_done_without_reason_still_blocked(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "batch",
+                       "updates": [{"step_id": 1, "status": "done"}]},
+            override_reason="",
+        )
+        v = guard.check_pre(ctx)
+        assert v is not None and v.action == "block"
+        assert guard._premortem_pending is False
+

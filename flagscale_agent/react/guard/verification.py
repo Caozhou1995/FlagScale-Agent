@@ -167,7 +167,11 @@ catches is confident competence aimed off-target: an upstream premise
 (a value parsed, a state reconstructed, an input interpreted) went unquestioned
 while effort piled downstream. Deep downstream checking builds false confidence
 because it never revisits that upstream premise. When your polished answer and
-the user's plainly stated need diverge, the need wins.
+the user's plainly stated need diverge, the need wins. So name the TASK-level
+premise your delivery rests on and ask once what the world would look like if it
+were false — every downstream check you ran inherited that premise, so none of
+them can catch it failing; a convention you assumed or an input you trusted
+without testing belongs on that list too.
 
 Now trace where your answer came from. Did I OBSERVE this — read it from a tool
 output, a command's stdout, a file I actually opened — or did I INFER it from what
@@ -737,6 +741,20 @@ Three moves, and the third is the one that counts:
   3. If you can construct an input that triggers it, RUN it and READ the result — a
      perturbation of the sample you have, not a thought about one. An answer you only
      argued is not an answer; an output you did not predict and then observed is.
+     Run it through a TOOL or SOURCE that does not share the premise under test —
+     a validator built on the same assumption can only re-confirm it (tautology trap).
+
+Now zoom out one level: TASK premises, not this step's result.
+  4. Every check above ran UNDER the task-level premises you started with — what the
+     task means, a convention you assumed, an input you trusted. Your step-level
+     verification cannot falsify them: it inherits them. So ask it here, while this
+     step's observation is fresh: did THIS step surface anything that sits badly with
+     one of those premises — a value that surprised you, a format that looked odd, a
+     reading of the instructions you never re-tested? If yes, name the premise in one
+     line and what the world would look like if it were false — then probe it cheaply
+     if you can. If nothing new surfaced, say "no new premise-relevant observation" —
+     a template "premises all fine" without naming one observation is exactly the
+     ritual this is built to make visible.
 
 This is a nudge, not a gate — it does not block and nothing checks whether you acted
 on it. But the failure you are confident is not there is exactly the one this catches.
@@ -790,6 +808,10 @@ While you continue advancing (do NOT wait on it), spawn_worker:
           not your interpretation of it),
       (2) the task's ORIGINAL requirement text (verbatim, never your restatement),
       (3) the completion claim + verification evidence submitted for this step.
+      ALSO add the TASK-LEVEL PREMISES the delivery rests on (a convention assumed,
+      an input trusted, a reading of the instructions taken as given): the reviewer
+      reasons without your context, so it can test a premise your own checks all
+      inherited — ask it what the deliverable would miss if one were false.
   - constraints: read-only reviewer (writable: [] or a report path outside the
     reviewed tree; forbidden: modify any file), max_minutes ~3.
   - acceptance: a parent-runnable predicate over the findings report (e.g.
@@ -1245,6 +1267,12 @@ class VerificationGuard(Guard):
                         reason="batch_step_done_no_verification",
                         category="verification_required",
                     )
+                if has_done:
+                    # Coverage hole: a batch done commits the same claim as a
+                    # per-step step_done and previously bypassed the pre-mortem
+                    # entirely (Timing 1b never armed it). Arm the same pending
+                    # flag so check_post injects the identical flip.
+                    self._premortem_pending = True
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:
