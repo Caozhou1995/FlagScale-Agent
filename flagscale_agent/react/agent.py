@@ -104,6 +104,7 @@ from flagscale_agent.react.guard.knowledge_index import KnowledgeIndexGuard
 from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
+from flagscale_agent.react.guard.first_e2e_run import FirstE2eRunGuard
 from flagscale_agent.react.guard.time_budget import TimeBudgetGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
@@ -350,6 +351,9 @@ class WorkerAgent:
         # (50/75/90%) so the agent itself — not just the health judge — reacts to
         # cumulative task time. Silent when no concrete wall was injected.
         guard_registry.register(TimeBudgetGuard(stats_fn=self._task_budget_stats))
+        # Progress-order guard: at 25%/50% wall-clock budget spent, block (overridable)
+        # once per turn to force a write-through / first-e2e checkpoint.
+        guard_registry.register(FirstE2eRunGuard(stats_fn=self._task_budget_stats))
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)

@@ -325,7 +325,10 @@ class TestKernelCappedNudge:
         assert "<previous_reasoning>" in nudge
         assert "long reasoning" in nudge
         assert "Land the next concrete step NOW" in nudge
-        # The empty assistant message was really popped (retry path)
+        # C-axis: capped reasoning must direct persisting the delivery contract
+        # (path/format/constraints) that this reasoning block already fixed.
+        assert "delivery contract" in nudge
+        assert "memory_write" in nudge
         assert all("long reasoning" not in str(m.get("content", ""))
                    for m in h.history.messages[:-1]
                    if m.get("role") == "assistant") or True
