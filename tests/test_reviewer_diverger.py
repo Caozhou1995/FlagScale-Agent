@@ -166,6 +166,41 @@ class TestReviewerDemand:
         assert guard._reviewer_demanded is True
         guard.reset_turn()
         assert guard._reviewer_demanded is True  # the gate outlives the turn
+class TestAdvisoryWordingWhyGain:
+    """2026-09-24 user ruling: advisory stays, but the wording must LEAD the
+    agent — HOW alone was insufficient (gcode-to-text read the demand as
+    'advisory' and explicitly skipped it, 5/10 spawn rate). Each injection now
+    carries WHY (mechanism) + GAIN (concrete benefit) + honest cost."""
+
+    def test_diverger_inject_has_why_and_gain(self):
+        assert "WHY:" in _DIVERGER_INJECT
+        assert "GAIN:" in _DIVERGER_INJECT
+        # mechanism: same-context review inherits the blind spot
+        assert "blind spot" in _DIVERGER_INJECT
+        # honest cost + non-blocking posture, so skipping stays a real choice
+        assert "3-minute" in _DIVERGER_INJECT
+        assert "never blocking" in _DIVERGER_INJECT
+        # advisory status stated, not hidden
+        assert "advisory" in _DIVERGER_INJECT
+
+    def test_reviewer_demand_has_why_and_gain(self):
+        assert "WHY:" in _REVIEWER_FINDINGS
+        assert "GAIN:" in _REVIEWER_FINDINGS
+        # mechanism: frozen-artifact review sees what own context hides
+        assert "blind spot" in _REVIEWER_FINDINGS
+        # benefit: zero wall-clock cost, findings = rework avoided
+        assert "zero wall-clock cost" in _REVIEWER_FINDINGS
+        assert "rework" in _REVIEWER_FINDINGS
+
+    def test_settle_gate_has_why_and_gain(self):
+        assert "WHY" in _REVIEWER_FINDINGS_SETTLE
+        assert "GAIN" in _REVIEWER_FINDINGS_SETTLE
+        # the gate explains why the demand alone was not enough
+        assert "advisory" in _REVIEWER_FINDINGS_SETTLE
+        # benefit: catching defects before grading, not after
+        assert "before grading" in _REVIEWER_FINDINGS_SETTLE
+
+
 class TestReviewerFindingsGate:
     """Completion gate: bare TASK_COMPLETE blocked once reviewer was demanded."""
 

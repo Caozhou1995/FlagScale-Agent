@@ -760,6 +760,18 @@ _REVIEWER_FINDINGS = """
 
 Independent reviewer — spawn one NOW for the step you just marked done.
 
+WHY: your pre-mortem asks "assume you're wrong" — but you answering that in
+your own context reuses the same blind spot that produced the claim. The
+reviewer is the only check that reasons from the frozen artifact + the
+original task WITHOUT your reasoning attached — it catches defects that are
+internally consistent and wrong, the class most likely to survive your own
+far-end verification.
+
+GAIN: zero wall-clock cost for you (async — spawn and keep advancing);
+each finding confirmed now is one rework avoided at wrap-up, and an
+explicit "nothing real found" is itself independent evidence the step is
+solid — the kind of record a completion claim needs.
+
 While you continue advancing (do NOT wait on it), spawn_worker:
   - goal: "Adversarially review the step's deliverable against the task's original
     requirement: find unsupported claims, internal contradictions, overreach, and
@@ -793,7 +805,12 @@ _REVIEWER_FINDINGS_SETTLE = """[VerificationGuard] Reviewer findings not settled
 An independent reviewer was demanded for a step you marked done (a fresh
 session reasons ONLY from the frozen deliverable + the original task + your claim,
 so it can see what your own context hides). Findings are CLAIMS, not verdicts —
-the loop closes only when YOU have processed them:
+the loop closes only when YOU have processed them. WHY this is a gate and not
+advice: the step_done demand above is advisory — without it, findings routinely
+die unprocessed (you advance, the report lands, nothing forces the round).
+The GAIN is one decision before the point of no return: each finding you
+confirm is a defect caught before grading instead of after; each you refute
+with your own run is recorded independent evidence the claim is solid.
 
   - For EACH finding: reproduce-or-refute it yourself — run the cited failing
     input, read the cited file:line, or construct the counterexample — and record

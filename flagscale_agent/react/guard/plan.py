@@ -90,6 +90,21 @@ _DIVERGER_INJECT = """
 
 Divergence check — before this plan hardens, probe what it made invisible.
 
+WHY: you framed this plan, so its premises are invisible to you — the same
+context that produced a framing cannot reliably judge it (self-review
+inherits the blind spot that produced the claim; Huang et al. 2024). A wrong
+framing is the most expensive defect class: every step, test and hour
+downstream inherits it, and it surfaces only as late-stage dead-ends
+("why is this not working") when the budget is nearly gone. The diverger
+reads the task WITHOUT your plan, so it sees framings you did not consider.
+
+GAIN: one of two concrete outcomes — (a) a genuinely better framing adopted
+while changing it costs minutes, or (b) alternatives rejected against fresh
+eyes, which upgrades "I think this framing is right" into "I checked what
+else it could be". Cost: one ~3-minute read-only worker, spawn-and-continue
+(never blocking). Skipping is legal — this is advisory — but it saves 3
+minutes against the risk that the whole plan rests on an unexamined premise.
+
 Spawn ONE diverger worker (spawn_worker) RIGHT AFTER framing this plan — do not
 wait for step 2. Contract:
   - goal: "Propose 2-3 genuinely different framings of the task — different
