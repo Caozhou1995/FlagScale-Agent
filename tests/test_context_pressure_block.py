@@ -258,7 +258,7 @@ class TestSaveGuidanceSurvivalRange:
 
 
 class TestEvictionGradingContract:
-    """Axis-I v1 (user-ruled): the evict path must be framed against the
+    """Eviction-grading contract v1 (user-ruled): the evict path must be framed against the
     LOSSLESS ledger (placeholder + index remain; recall_search -> recall
     recovers any message), and must demand a GRADING JUDGMENT — save the
     irreproducible, freely evict the regenerable — instead of the old

@@ -185,7 +185,7 @@ class TestProcessBoundaryHint:
 
 
 class TestFormContractNudge:
-    """B-axis (form/contract drift) nudge: HOW + WHY + GAIN in the FORM line."""
+    """Form/contract drift nudge: HOW + WHY + GAIN in the FORM line."""
 
     def test_form_contract_line_present_with_anchor_phrases(self, guard):
         v = guard.check_post(_ctx(path="cfg/exp.yaml",

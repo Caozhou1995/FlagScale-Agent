@@ -94,7 +94,7 @@ class TestStepDonePremortem:
         assert "premises all fine" in msg
 
     def test_premortem_independence_of_falsifier(self):
-        """E-3: the run-it move must demand a tool/source that does not share
+        """The run-it move must demand a tool/source that does not share
         the premise under test (tautology trap)."""
         msg = _STEP_DONE_PREMORTEM.lower()
         assert "does not share" in msg
@@ -147,3 +147,26 @@ class TestBatchDoneArmsPremortem:
         assert v is not None and v.action == "block"
         assert guard._premortem_pending is False
 
+
+
+class TestPremortemUnprobedAtClaimTime:
+    """Evidence discipline at claim time: an open premise/risk left unresolved at
+    step_done must ship its unprobed marker + cheapest probe IN THE STEP RECORD
+    (notes/override_reason), not be deferred to a wrap-up where only the
+    conclusion impression survives."""
+
+    def test_claim_time_attach_present(self):
+        msg = " ".join(_STEP_DONE_PREMORTEM.lower().split())
+        # attach AT claim time, explicitly against deferral to wrap-up
+        assert "unprobed" in msg
+        assert "cheapest probe" in msg
+        assert "claim time" in msg or "at claim" in msg
+        # names the decay mechanism the discipline prevents
+        assert "memory decay" in msg or "conclusion impression" in msg
+
+    def test_unprobed_channel_named(self):
+        msg = " ".join(_STEP_DONE_PREMORTEM.lower().split())
+        # the step record channels it must land in
+        assert "notes" in msg and "override_reason" in msg
+        # wrap-up deferral is named as the anti-pattern
+        assert "wrap-up" in msg or "later wrap-up" in msg

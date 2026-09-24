@@ -537,7 +537,7 @@ class TestTaskCompleteRecheck:
 
     def test_complete_released_by_override_and_fires_once(self):
         guard = VerificationGuard()
-        # first complete with override → released for good
+        # first complete with override → gate released (once-per-run gates)
         ctx1 = GuardContext(
             tool_name="plan_update",
             tool_args={
@@ -1674,12 +1674,19 @@ class TestTextCompleteHygieneGate:
         assert verdict is None
 
     def test_override_reason_releases(self):
+        """Override on the FIRST arrival must NOT silence the checklist: the
+        gate delivers its message unconditionally once per turn; one override
+        releases exactly the gate it answers, never the delivery itself."""
         guard = VerificationGuard(plan=self._active_plan())
         verdict = guard.check_pre(
             self._text_complete("checked: output.txt at /app, exact single file, no temp left")
         )
-        assert verdict is None
+        assert verdict is not None and verdict.action == "block"
+        assert verdict.reason == "text_complete_hygiene"
         assert guard._text_complete_hygiene_demanded is True
+        # after delivery, later attempts pass through (override or bare)
+        assert guard.check_pre(self._text_complete("re-issue after checklist")) is None
+        assert guard.check_pre(self._text_complete()) is None
 
     def test_need_user_input_not_triggered(self):
         # [NEED_USER_INPUT] is routed through the same kernel path but must NOT
@@ -2006,12 +2013,15 @@ class TestTextCompleteStalePlanGuard:
         v2 = guard.check_pre(self._text_complete())
         assert v2 is None
 
-    def test_override_releases_gate(self):
-        """Override reason provided → gate releases, no block."""
+    def test_override_first_arrival_still_delivers_then_releases(self):
+        """Override on FIRST arrival must not silence the checklist: the gate
+        delivers once per turn regardless of override; the NEXT attempt
+        (override or bare) passes through."""
         guard = VerificationGuard(plan=None)
         guard.reset_turn()
         verdict = guard.check_pre(self._text_complete(override="verified all outputs"))
-        assert verdict is None
+        assert verdict is not None and verdict.reason == "text_complete_hygiene"
+        assert guard.check_pre(self._text_complete(override="verified all outputs")) is None
 
 
 class TestTextCompleteHygieneStaleCompletion:
@@ -2052,8 +2062,10 @@ class TestTextCompleteHygieneStaleCompletion:
         assert verdict.action == "block"
         assert verdict.reason == "text_complete_hygiene"
 
-    def test_fresh_completion_with_override_releases(self):
-        """Fresh completion + inline _override_reason → released (no block)."""
+    def test_fresh_completion_with_override_first_arrival_delivers(self):
+        """Fresh completion + inline _override_reason: the override answers a
+        gate, but it must not also swallow THIS gate's only delivery — the
+        wrap-up checklist still blocks once (its first arrival)."""
         guard = VerificationGuard()
         ctx = GuardContext(
             tool_name="",
@@ -2063,7 +2075,9 @@ class TestTextCompleteHygieneStaleCompletion:
             llm_responded=True,
         )
         verdict = guard.check_pre(ctx)
-        assert verdict is None
+        assert verdict is not None and verdict.reason == "text_complete_hygiene"
+        # next attempt (override or bare) passes — delivered once
+        assert guard.check_pre(ctx) is None
 
     def test_stale_then_fresh_same_guard_instance(self):
         """The stale top-of-loop consultation must not consume the one-shot
@@ -2099,7 +2113,7 @@ class TestTextCompleteHygieneStaleCompletion:
 
 
 class TestWrapUpFormContractAxis:
-    """B-axis: wrap-up item 3 must enumerate FORM/contract rules and the
+    """Wrap-up item 3 must enumerate FORM/contract rules and the
     quote-vs-value method (verbatim phrase vs deliverable value)."""
 
     def test_form_rule_in_constraint_enumeration(self):
@@ -2118,6 +2132,81 @@ class TestWrapUpFormContractAxis:
 
     def test_no_task_derived_tokens(self):
         # Same task-agnostic discipline as the near/far test: no leaked task names.
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = _TEXT_COMPLETE_HYGIENE.lower()
+        assert "debian" not in low
+        assert "pmars" not in low
+
+
+class TestWrapUpRiskCompile:
+    """Wrap-up hardening: RISK COMPILE step (named risks -> falsifiable
+    discriminators), replication-form observations, and self-referential
+    evidence rejection."""
+
+    def test_risk_compile_step_exists_and_fires_first(self):
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "risk compile" in low
+        # compiles NAMED risks from the whole trace, not new ones
+        assert "named" in low and ("never closed" in low or "unfalsified" in low)
+        # falsifiable two-line discriminator, not a confirmation
+        assert "if_" in low and "actually_observed" in low
+        # unprobed risks must name their cheapest settle-probe
+        assert "unprobed" in low and "cheapest probe" in low
+        # anti-ritual: silent skip forbidden, explicit none allowed
+        assert "risk scan" in low
+
+    def test_risk_discriminator_example_present(self):
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # a worked example: risk statement, would-show value, observed value
+        assert "risk was:" in low
+        assert "if_stale_mirror_were_true_would_show:" in low
+        assert "actually_observed:" in low
+        # the tautology rule: a check that cannot state what would differ is not a check
+        assert "not a check" in low and "restatement" in low
+
+    def test_near_far_uses_replication_triple(self):
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # Framing1: cold-reader-copyable replication record
+        assert "artifact:" in low
+        assert "replication:" in low
+        assert "value:" in low
+        # replication must point at something that is not the claim itself
+        assert "not the claim itself" in low
+
+    def test_item3_rejects_self_referential_evidence(self):
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # self-referential evidence is zero new information
+        assert "self-referential" in low
+        assert "zero new information" in low
+        # cited observations need their own replication + domain coverage
+        assert "own replication command" in low
+        assert "domain" in low
+        # escape hatch: honest UNVERIFIED instead of converted restatement
+        assert "unverified" in low
+        assert "never convert a restatement into a tick" in low
+
+    def test_bare_text_path_unprobed_channel(self):
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # step 7: bare-text completion has no notes channel — unprobed risks
+        # must be marked in the SAME message
+        assert "bare-text" in low
+        assert "same message" in low
+        assert "no later turn" in low
+
+    def test_no_axis_codenames(self):
+        # task-agnostic discipline: no leaked internal axis labels
+        import re
+        from flagscale_agent.react.guard import verification as v
+        blob = v._TEXT_COMPLETE_HYGIENE + v._STEP_DONE_PREMORTEM
+        for tok in ("F-A", "F-B", "F-C", "F-D", "F-axis", "F 轴", "E-axis", "E 轴"):
+            assert not re.search(rf"\b{re.escape(tok)}\b", blob), tok
+
+    def test_no_task_derived_tokens(self):
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
         low = _TEXT_COMPLETE_HYGIENE.lower()
         assert "debian" not in low

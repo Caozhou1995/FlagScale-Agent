@@ -9,9 +9,11 @@ Mechanisms under test:
 2. Reviewer: demand injected with the step_done pre-mortem (check_post), carrying
    the three harness-mandated inputs; fires once per run (_reviewer_demanded).
 3. Findings gate: bare [TASK_COMPLETE] blocks (reason=reviewer_findings_unaddressed)
-   once the reviewer was demanded, with or without override; override releases.
-4. Flag semantics: _reviewer_demanded and _reviewer_findings_fired survive
-   reset_turn; gate fires on every bare attempt (not once-per-run).
+   once the reviewer was demanded; an override reason releases it for that
+   attempt (no latch — a later bare attempt re-blocks).
+4. Flag semantics: _reviewer_demanded survives reset_turn; the wrap-up gate
+   delivers its own checklist on ITS first arrival even on an attempt whose
+   override released the reviewer gate.
 """
 
 from flagscale_agent.react.guard.plan import PlanGuard, _DIVERGER_INJECT, _QUALIFIER_EXTRACTION
@@ -221,18 +223,27 @@ class TestReviewerFindingsGate:
         assert v.reason == "reviewer_findings_unaddressed"
         assert "reproduce-or-refute" in v.message
         assert _REVIEWER_FINDINGS_SETTLE in v.message
-        assert guard._reviewer_findings_fired is True
 
-    def test_gate_blocks_even_with_wrong_guard_override(self):
-        """An override written for the wrap-up gate must NOT release this one."""
+    def test_wrong_guard_override_releases_reviewer_but_wrapup_still_delivers(self):
+        """An override written for the wrap-up gate releases the reviewer gate
+        (any non-empty reason documents the round) — but it must NOT also
+        silence the wrap-up delivery: the wrap-up gate blocks with its full
+        checklist on THIS attempt (its first arrival), and passes on the next."""
         guard = VerificationGuard()
         _pass_step_done(guard)
         ctx = _completion_ctx(with_override=True,
                               override_text="deliverables verified, paths checked, cleanup done")
         v = guard.check_pre(ctx)
-        # the reviewer gate itself releases on ANY override reason...
-        # (owner-scoped release is the registry's job; here the guard accepts it)
-        assert v is None
+        # reviewer gate released (override) → wrap-up gate's FIRST arrival
+        # delivers the checklist unconditionally
+        assert v is not None and v.action == "block"
+        assert v.reason == "text_complete_hygiene"
+        assert guard._text_complete_hygiene_demanded is True
+        # the next override attempt passes through — checklist delivered once
+        assert guard.check_pre(_completion_ctx(with_override=True,
+                                               override_text="done")) is None
+        # ... but a later BARE attempt re-blocks (reviewer gate has no latch)
+        assert guard.check_pre(_completion_ctx()).reason == "reviewer_findings_unaddressed"
 
     def test_gate_releases_with_override_documenting_settlement(self):
         guard = VerificationGuard()
@@ -241,15 +252,17 @@ class TestReviewerFindingsGate:
             with_override=True,
             override_text="reviewer finding 1 refuted: ran cited input, output matched; finding 2 confirmed and fixed; finding 3 refuted with counterexample",
         )
-        # the override consumes the reviewer gate AND the wrap-up gate in one
-        # pass (both live in the same check_pre; the wrap-up flag now also set)
-        assert guard.check_pre(ctx) is None
-        # ... and a later bare attempt is NOT re-blocked by the reviewer gate
-        # (released for good); only the once-per-turn wrap-up gate re-arms, and
-        # it releases on any override reason
-        v2 = guard.check_pre(_completion_ctx(with_override=True,
-                                             override_text="done"))
-        assert v2 is None
+        # the override releases the reviewer gate for this attempt; the wrap-up
+        # gate still delivers its checklist on ITS first arrival
+        v1 = guard.check_pre(ctx)
+        assert v1 is not None and v1.reason == "text_complete_hygiene"
+        # ... and a later attempt is NOT re-blocked by the reviewer gate (no
+        # latch on an override retry), and the wrap-up gate — already
+        # delivered — passes through
+        assert guard.check_pre(_completion_ctx(with_override=True,
+                                               override_text="done")) is None
+        # ... but a later BARE attempt re-blocks (reviewer gate has no latch)
+        assert guard.check_pre(_completion_ctx()).reason ==             "reviewer_findings_unaddressed"
 
     def test_gate_fires_on_every_bare_attempt(self):
         """Not once-per-run: each bare attempt re-blocks (retry loop)."""
@@ -279,39 +292,31 @@ class TestReviewerFindingsGate:
         v1 = registry.check_pre(_completion_ctx())
         assert v1 is not None and v1.action == "block"
         assert v1.reason == "reviewer_findings_unaddressed"
-        # second attempt: agent supplies an override → by design ANY override
-        # releases this gate (bare attempt = not yet paid; the override
-        # documents the reproduce-or-refute round). The wrap-up gate (same
-        # check, same override channel — see verification.py Timing 0b note)
-        # also consumes the SAME override and releases too: this gate family
-        # never returns two blocks per attempt (cross-talk prevention). So the
-        # registry-level assertion is: the gate FAMILY was exercised and both
-        # internal demands are now satisfied — no free pass, but no cascade.
+        # second attempt: agent supplies an override → it releases the
+        # reviewer gate (any non-empty reason documents the round), but the
+        # wrap-up gate — same guard, later in the same check_pre — delivers
+        # its own checklist on THIS attempt (first arrival), regardless of
+        # the override. One override releases exactly the gate it answers;
+        # it never also swallows the other gate's only delivery.
         ctx_wrong = _completion_ctx(
             with_override=True,
             override_text="completed all steps and cleanup is done",
         )
         v2 = registry.check_pre(ctx_wrong)
-        # released — but only because the override reached the guard that had
-        # BOTH blocks queued; a wrong-guard reason would not (owner-scoping
-        # is registry-side, and the block WAS surfaced, so it is released).
-        assert v2 is None
-        assert guard._reviewer_findings_fired is True
+        assert v2 is not None and v2.action == "block"
+        assert v2.reason == "text_complete_hygiene"
         assert guard._text_complete_hygiene_demanded is True
 
 
 class TestFlagSemantics:
-    """Flag contract: demanded/fired survive reset_turn; other flags don't."""
+    """Flag contract: demanded survives reset_turn; other flags don't."""
 
-    def test_reviewer_flags_survive_reset_turn(self):
+    def test_reviewer_demanded_survives_reset_turn(self):
         guard = VerificationGuard()
         _pass_step_done(guard)
-        guard.check_pre(_completion_ctx())  # fire the gate → _fired True
         assert guard._reviewer_demanded is True
-        assert guard._reviewer_findings_fired is True
         guard.reset_turn()
         assert guard._reviewer_demanded is True
-        assert guard._reviewer_findings_fired is True
 
     def test_gate_flags_reset_per_turn(self):
         """Control: the once-per-run gate flags DO reset (unchanged semantics)."""

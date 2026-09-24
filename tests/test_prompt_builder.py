@@ -705,8 +705,8 @@ class TestAnalyzeDontJustUse:
             assert marker in blk, marker
 
 
-class TestConstraintLoyaltyFormAxis:
-    """B-axis: CONSTRAINT LOYALTY names the FORM/contract axes as silent GIVENs."""
+class TestConstraintLoyaltyFormContract:
+    """CONSTRAINT LOYALTY names the FORM/contract requirements as silent GIVENs."""
 
     def test_form_axes_listed_as_givens(self):
         import flagscale_agent.react.prompt as prompt_mod

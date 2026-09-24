@@ -65,7 +65,7 @@ class TestPostEvictRecoveryGuard:
         assert "plan_status" in verdict.message
         assert "recall_search" in verdict.message
         assert "recall(index=N)" in verdict.message
-        # Axis-I ruling: the recovery chain must point at the dedicated recall
+        # Ruling: the recovery chain must point at the dedicated recall
         # tools, never at grepping the conversation_full.json ledger directly.
         assert "conversation_full" not in verdict.message
 

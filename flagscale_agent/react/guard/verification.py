@@ -573,13 +573,35 @@ English, and do not let this English-language template pull your reply's languag
 away from the user's. This final message is the one they will actually read, so
 it must be in the language they wrote to you in.
 
-Then, and only after the final answer above, do these five light hygiene items.
+Then, and only after the final answer above, do the risk compilation and the
+five light hygiene items.
 This is an always-do finish-line routine (whether or not a plan_update(complete)
 cascade also ran) — NOT a re-run of deep delivery checks. Do them IN ORDER;
-the order is load-bearing (verify before you clean, re-confirm delivery after you
-clean):
+the order is load-bearing (compile risks first, verify before you clean,
+re-confirm delivery after you clean):
 
-  1. **NEAR vs FAR** (do this FIRST — it may itself create files) — the one
+  0. **RISK COMPILE** (do this FIRST — it may change what you verify) — scan the
+     WHOLE session trace for moments where you NAMED a risk but never closed it:
+     "this might not hold", "I should check X", "this could be wrong", a caveat
+     you wrote and moved past. Each such named risk is an unfalsified hypothesis
+     sitting under your result. Compile EACH into a two-line discriminating
+     reading (the falsifiable form — not a confirmation):
+       • `if_<risk>_were_true_would_show: <concrete value the world would show —
+         name the file/field/measure and its wrong value>`
+       • `actually_observed: <the real value you ran and read — or UNPROBED>` —
+         never UNPROBED-without-reason; attach the cheapest probe that would
+         settle it if you cannot run it now.
+     Example (complete, copy the shape):
+       risk was: "the mirror might serve a stale copy"
+       if_stale_mirror_were_true_would_show: artifact /data/out.json field
+         "source" == "cache"
+       actually_observed: ran `grep source /data/out.json` -> "live"
+     A check item that cannot state what would DIFFER under failure is not a
+     check — it is a restatement. If the scan finds nothing, write "risk scan:
+     none" — a bare claim of none is fine, a silent skip is not.
+
+  1. **NEAR vs FAR** (do this SECOND — after RISK COMPILE; it may itself
+      create files) — the one
      load-bearing question. You verified at the near end (your shell, your env, your
      sample). The consumer observes the far end: a fresh process, a bare non-login
      invocation, the artifact reloaded cold from disk. Ask "what will be DIFFERENT
@@ -590,7 +612,11 @@ clean):
      when your trace has no such evidence AND the gap is material; re-running to
      re-confirm what you already observed is waste. If your evidence is an ARGUMENT
      ("should work", "is fine") rather than an OBSERVATION — whether cited from the
-     trace or freshly probed — you have not verified.
+     trace or freshly probed — you have not verified. State each cited observation in
+     replication form so a cold reader could rerun it: `artifact: <path or stdout>
+     / replication: <exact command> / value: <what it showed>`. An assertion only
+     you can confirm fills no slot here — the replication must point at something
+     that is not the claim itself.
 
   2. **TEMP & BUILD CLEANUP** (do this AFTER far-end verification, not before — the
      fresh runs, reloads, and re-builds in step 1 often generate new byproducts, so
@@ -640,6 +666,17 @@ clean):
      Placing this AFTER cleanup is deliberate: cleanup can over-reach (a glob that
      swept temp files may also take a required output or leave a service half-stopped),
      so the final delivery contract must be re-confirmed on the post-cleanup state.
+     Evidence standard for every item above: an observation that is NOT
+     self-referential. Quoting the guard text itself, your own earlier assertion,
+     or an "observation" whose only source is this prompt is zero new information
+     — it confirms that you said it, nothing about the world. Cited existing
+     observations are allowed ONLY when they carry their own replication command
+     and output AND the domain that output measured actually covers the claim
+     being checked (a grep of the config does not verify a served behavior). When
+     your only evidence for an item is self-referential or out-of-domain, the item
+     is UNVERIFIED — say so in one line and either run the cheap probe or say
+     explicitly you are leaving it unverified. Never convert a restatement into a
+     tick.
 
   4. **MEMORY REVIEW & UPDATE** — memory is not write-once; stale entries cost
      future sessions repeated dead ends. Run memory_list() (filter by this task's
@@ -714,7 +751,13 @@ clean):
      deserves a real look before claiming that.
 
 Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced,
-harness gap captured (registered + open ones re-reported) or "none", or "none apply">. This gate fires once."""
+harness gap captured (registered + open ones re-reported) or "none", or "none apply".
+This is a BARE-TEXT completion path: there is no later turn and no notes channel
+beyond this message. Any risk your RISK COMPILE left UNPROBED must be marked HERE,
+in this same message — `unprobed: <reason> + cheapest probe: <command or method>` —
+so the gap ships visibly instead of silently. Claim-time anchors cannot be
+preregistered on this path; citing your run's real commands and real outputs inline
+is the only evidence channel it has. This gate fires once."""
 
 
 # Pre-mortem, delivered AFTER a step_done goes through (check_post). The pre-side
@@ -752,9 +795,16 @@ Now zoom out one level: TASK premises, not this step's result.
      one of those premises — a value that surprised you, a format that looked odd, a
      reading of the instructions you never re-tested? If yes, name the premise in one
      line and what the world would look like if it were false — then probe it cheaply
-     if you can. If nothing new surfaced, say "no new premise-relevant observation" —
-     a template "premises all fine" without naming one observation is exactly the
-     ritual this is built to make visible.
+     if you can, and ATTACH the probe or its absence AT CLAIM TIME: each open
+     premise/risk you leave unresolved must ship as `unprobed: <reason> + cheapest
+     probe: <command or method>` in this step's notes right after the message
+     (the claim's own override_reason was already consumed by check_pre, so
+     plan_update notes are the channel) — not deferred to a later wrap-up,
+     where memory decay leaves only the conclusion
+     impression and no anchor to check it against. If nothing new surfaced, say
+     "no new premise-relevant observation" — a template "premises all fine"
+     without naming one observation is exactly the ritual this is built to make
+     visible.
 
 This is a nudge, not a gate — it does not block and nothing checks whether you acted
 on it. But the failure you are confident is not there is exactly the one this catches.
@@ -827,8 +877,9 @@ counterexample) and report which you confirmed vs refuted with evidence."""
 # cannot spawn) — without this gate the demand would be advisory and findings
 # would routinely die unprocessed: the agent advances past step N, the reviewer's
 # report lands, and nothing forces the reproduce-or-refute round. This gate makes
-# settlement a hard precondition of the completion claim. Any override reason
-# releases it once, for good (the honesty channel every other gate uses).
+# settlement a hard precondition of the completion claim. Any non-empty override
+# reason releases it for that attempt (the honesty channel every other gate uses);
+# a bare attempt re-blocks — there is no latch.
 _REVIEWER_FINDINGS_SETTLE = """[VerificationGuard] Reviewer findings not settled — close the loop before completing.
 
 An independent reviewer was demanded for a step you marked done (a fresh
@@ -890,13 +941,6 @@ class VerificationGuard(Guard):
         # reproduce-or-refute round — so the flag must NOT be reset in
         # reset_turn (unlike the per-run gate flags).
         self._reviewer_demanded = False
-        # Whether the reviewer-findings gate has fired at least once.
-        # The gate fires on EVERY bare completion attempt after the reviewer was
-        # demanded (the reproduce-or-refute round happens between retries), so
-        # unlike the once-per-run gate flags this one must NOT flip to True on
-        # firing — True only means "the agent has now seen the demand"; an
-        # override reason on a later attempt releases it for good.
-        self._reviewer_findings_fired = False
         # Set by check_pre when a step_done is about to pass through, so the
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
@@ -954,11 +998,10 @@ class VerificationGuard(Guard):
         # checks. The reversal ("assume you're wrong") lands hardest right when the
         # agent has just asserted the step is complete. Inject-only, fires per
         # step_done (re-armed by check_pre each time).
-        # Independent-reviewer anchor. Every step_done should
-        # get its dis-confirmation opportunity — the pre-mortem covers the
-        # same-context half (flip the question), the reviewer segment appended
-        # here covers the cross-context half (a fresh session checks the frozen
-        # deliverable). One verdict channel carries both, per step_done.
+        # Independent-reviewer anchor. The FIRST passing step_done of a run
+        # appends the reviewer demand to its pre-mortem (later step_dones keep
+        # the flip-half only); the completion gate makes settling the findings
+        # a precondition of the completion claim.
         if self._premortem_pending:
             self._premortem_pending = False
             msg = _STEP_DONE_PREMORTEM
@@ -1010,14 +1053,14 @@ class VerificationGuard(Guard):
             # findings a precondition of the completion claim. Fires on EVERY
             # bare completion attempt after the demand (the reproduce-or-refute
             # round happens between retries); an override reason documents the
-            # round and releases it for good. Ordered BEFORE the wrap-up gate so
-            # the agent sees the reviewer debt first (the wrap-up gate re-fires
-            # on the next bare attempt if the debt is paid but hygiene lags).
+            # round and releases it for that attempt — a later BARE attempt
+            # re-blocks (no latch). Ordered BEFORE the wrap-up gate so the
+            # agent sees the reviewer debt first; the wrap-up gate delivers its
+            # own message on ITS first arrival regardless of this gate.
             if (
                 self._reviewer_demanded
                 and not ctx.override_reason.strip()
             ):
-                self._reviewer_findings_fired = True
                 return GuardVerdict.block(
                     message=_REVIEWER_FINDINGS_SETTLE,
                     reason="reviewer_findings_unaddressed",
@@ -1037,17 +1080,22 @@ class VerificationGuard(Guard):
             # checks in this message, which have been removed — not about this
             # gate firing at all. So it fires whether or not a cascade ran.
             #
-            # Fires at most once per turn via _text_complete_hygiene_demanded.
+            # First arrival ALWAYS delivers the wrap-up message — override or
+            # not (_text_complete_hygiene_demanded makes it once per turn).
+            # Rationale: one override reason releases exactly the gate it
+            # answers; it must never ALSO swallow this delivery (that is how a
+            # settle-style override used to silence the wrap-up checklist
+            # entirely — the checklist would never be shown). While the
+            # reviewer debt is being paid, this gate re-blocks each bare
+            # attempt with the full checklist; once delivered, later attempts
+            # (override or bare) pass through.
             if not self._text_complete_hygiene_demanded:
-                if not ctx.override_reason.strip():
-                    self._text_complete_hygiene_demanded = True
-                    return GuardVerdict.block(
-                        message=self._text_complete_hygiene_message(),
-                        reason="text_complete_hygiene",
-                        category="verification_required",
-                    )
-                # Override provided → agent did the wrap-up. Release.
                 self._text_complete_hygiene_demanded = True
+                return GuardVerdict.block(
+                    message=self._text_complete_hygiene_message(),
+                    reason="text_complete_hygiene",
+                    category="verification_required",
+                )
             return None
 
         # NOTE: qualifier extraction at plan-framing time used to live here as a
