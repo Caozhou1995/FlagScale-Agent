@@ -47,7 +47,16 @@ DESTRUCTIVE = [
     "git reflog expire --expire=now --all",                     # destroys the recovery net
     "git reflog delete HEAD@{1}",
     "git gc --prune=now",                                       # immediate object prune
-    "git gc --prune",
+    # F1: a --analyze-looking FILE ARGUMENT must not exempt the rewrite
+    "git filter-repo --replace-text /tmp/--analyze.txt --force",
+    # F1: a read-only analyze chained AFTER a rewrite exempts nothing
+    "git filter-repo --replace-text r.txt --force; git filter-repo --analyze",
+    "git filter-repo --replace-text r.txt --force && git filter-repo --analyze",
+    # bodies that run at runtime: bash -c and command substitution
+    'bash -c "git reset --hard"',
+    "x=$(git reset --hard)",
+    # env-prefixed git is still git
+    "GIT_DIR=/x git reflog expire --all",
 ]
 
 SAFE = [
@@ -75,6 +84,17 @@ SAFE = [
     "git reflog show",
     "git gc",                                                   # default 2-week grace prune
     "git gc --auto",
+    # F2: bare/valued --prune keeps the default grace (only --prune=now is
+    # immediate) — same damage class as bare `git gc`
+    "git gc --prune",
+    "git gc --prune=2.weeks.ago",
+    # F3: a mention inside grep/echo does not RUN git
+    "grep -n 'git-filter-repo' README.md",
+    "echo 'run git gc --prune=now to compress'",
+    'echo "never run git reflog expire"',
+    'echo "git reset --hard"',
+    # longer --analyze* token = unrecognized option; git aborts harmlessly
+    "git filter-repo --analyzed file.txt",
 ]
 
 
@@ -192,3 +212,10 @@ class TestCompoundCommandHole:
                     "cd /app/x && git filter-repo --replace-text r.txt --force"):
             v = g.check_pre(_shell(cmd))
             assert v is not None and v.action == "block", cmd
+
+    def test_ritual_mention_is_not_the_ritual(self):
+        # `git stash push` inside an echo string is a MENTION, not a statement:
+        # it must not discharge a chained destruction (unit-level ritual check).
+        g = VcsBackupGuard()
+        v = g.check_pre(_shell("echo 'git stash push' && git reset --hard HEAD"))
+        assert v is not None and v.action == "block"
