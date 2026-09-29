@@ -41,6 +41,13 @@ DESTRUCTIVE = [
     "git rebase main",                                          # rebase can lose commits
     "git rebase -i HEAD~3",
     "git filter-branch --tree-filter 'rm -rf x'",
+    # Class 3 - history / object-store destruction
+    "git filter-repo --replace-text /tmp/replacements.txt --force",
+    "git-filter-repo --replace-text /tmp/replacements.txt",     # standalone script form
+    "git reflog expire --expire=now --all",                     # destroys the recovery net
+    "git reflog delete HEAD@{1}",
+    "git gc --prune=now",                                       # immediate object prune
+    "git gc --prune",
 ]
 
 SAFE = [
@@ -63,6 +70,11 @@ SAFE = [
     "git push origin main",                                     # normal push
     "ls | grep git",                                            # not a git command
     "cat README.md && git commit -m 'wip'",                     # safe git alongside
+    "git filter-repo --analyze",                                # report-only, rewrites nothing
+    "git reflog",                                               # read-only
+    "git reflog show",
+    "git gc",                                                   # default 2-week grace prune
+    "git gc --auto",
 ]
 
 
@@ -141,7 +153,8 @@ class TestOverride:
 
 
 class TestCompoundCommandHole:
-    """stash-push whitelist must not shield stash drop/clear on the same line."""
+    """The stash-push ritual must not shield destruction it cannot protect:
+    stash drop/clear on the same line, nor Class 3 history/object destruction."""
 
     def test_stash_push_plus_clear_blocks(self):
         g = VcsBackupGuard()
@@ -161,3 +174,21 @@ class TestCompoundCommandHole:
         # The taught recipe: snapshot then hard-reset is safe (stash survives).
         g = VcsBackupGuard()
         assert g.check_pre(_shell("git stash push -u -m b && git reset --hard HEAD")) is None
+
+    def test_stash_push_plus_class3_still_blocks(self):
+        # Class 3 rewrites/deletes what a stash cannot restore: the ritual
+        # does NOT discharge it (class rule, not a per-command patch).
+        g = VcsBackupGuard()
+        v = g.check_pre(_shell("git stash push -u -m b && git filter-repo --replace-text r.txt --force"))
+        assert v is not None and v.action == "block"
+        v = g.check_pre(_shell("git stash push -u -m b && git gc --prune=now"))
+        assert v is not None and v.action == "block"
+
+    def test_class3_blocks_without_ritual(self):
+        g = VcsBackupGuard()
+        for cmd in ("git filter-repo --replace-text r.txt --force",
+                    "git reflog expire --expire=now --all",
+                    "git gc --prune=now --aggressive",
+                    "cd /app/x && git filter-repo --replace-text r.txt --force"):
+            v = g.check_pre(_shell(cmd))
+            assert v is not None and v.action == "block", cmd

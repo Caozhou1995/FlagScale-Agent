@@ -512,6 +512,17 @@ class TestSystemPromptContent:
         assert "byte-for-byte" in p or "byte-for-byte" in p.lower()
         assert "FAILS" in p
         assert "GIVEN" in p and "RANGE" in p
+
+    def test_irreversibility_discipline_present(self):
+        # Principle 2 sub-discipline (c): hard-to-undo actions need a recovery
+        # path BEFORE acting, and scope ambiguity must resolve to the stricter
+        # reading with the choice declared in the final report.
+        p = self._prompt()
+        assert "IRREVERSIBILITY" in p
+        assert "how would I get it back" in p
+        assert "create one" in p
+        assert "stricter one" in p
+        assert "the alternative reading would be" in p
         assert "Never promote a GIVEN to a RANGE" in p
 
     def test_closed_exemption_list_and_unverified_attribution_present(self):

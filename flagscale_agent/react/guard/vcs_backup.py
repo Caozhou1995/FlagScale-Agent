@@ -31,22 +31,38 @@ import re
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 # Deterministic destructive-git patterns (style law 2: regex only, no LLM).
-# Each pattern matches the forms that destroy uncommitted work; safe variants
-# are excluded by construction (see tests).
-_DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Organized by DAMAGE CLASS, not by command name — new commands must be
+# classified first, then covered by their class. Safe variants are excluded
+# by construction (see tests).
+_CLASS1_PATTERNS = (
+    # Class 1 — destroy UNCOMMITTED work in the working tree / index.
     re.compile(r"\bgit\s+checkout\b[^&;|]*?--\s"),
     re.compile(r"\bgit\s+checkout\s+(?:-\S+\s+)*\.?\s*$"),
     re.compile(r"\bgit\s+reset\s+--hard\b"),
     re.compile(r"\bgit\s+clean\b(?![^&;|]*\s-[a-zA-Z]*n)"),
     re.compile(r"\bgit\s+restore\b(?!\s+--staged\b)"),
+)
+_CLASS2_PATTERNS = (
+    # Class 2 — destroy RECOVERABLE VCS state (stashes, local/remote refs).
     re.compile(r"\bgit\s+stash\s+(?:drop|clear)\b"),
     re.compile(r"\bgit\s+branch\s+-[dD]\b"),
     re.compile(r"\bgit\s+push\b[^&;|]*?(?:--force\b|--force-with-lease=|-[fF]\b)"),
+)
+_CLASS3_PATTERNS = (
+    # Class 3 — REWRITE or irreversibly DESTROY history / the object store.
+    # Commit hashes change or objects vanish; a stash does not protect these,
+    # so the backup ritual does not discharge them (see check_pre).
     re.compile(r"\bgit\s+rebase\b"),
     re.compile(r"\bgit\s+filter-branch\b"),
+    re.compile(r"\bgit(?:-|\s+)filter-repo\b(?!.*--analyze\b)"),  # subcommand + standalone script; --analyze is report-only
+    re.compile(r"\bgit\s+reflog\s+(?:expire|delete)\b"),          # destroys the recovery net itself
+    re.compile(r"\bgit\s+gc\b[^&;|]*?--prune\b"),                 # immediate prune (default keeps a 2-week grace); --prune=now matches
+)
+_DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    _CLASS1_PATTERNS + _CLASS2_PATTERNS + _CLASS3_PATTERNS
 )
 
-_DESTRUCTIVE_MESSAGE = """[VcsBackupGuard] This git command can PERMANENTLY destroy uncommitted work (lesson: a `git checkout` erased an uncommitted checkpoint patch — cost days of experiments to recover).
+_DESTRUCTIVE_MESSAGE = """[VcsBackupGuard] This git command can destroy work IRREVERSIBLY — it may wipe uncommitted changes, a recoverable state you may need (stash/branch/reflog), or rewrite history / delete objects so commit hashes and old content are gone for good (lesson: `git checkout` erased an uncommitted checkpoint patch — cost days of experiments to recover).
 
 Before running it, snapshot the dirty tree — it costs one command and keeps the working tree unchanged:
   git stash push -u -m "backup-before-destructive"   # includes untracked (-u)
@@ -75,13 +91,18 @@ class VcsBackupGuard(Guard):
         command = str(ctx.tool_args.get("command", ""))
         if not command:
             return None
-        # Skip pure backup-ritual commands so the recipe itself never blocks —
-        # but not when the same line also drops/clears stashes (that would
-        # whitelist destruction of pre-existing backups).
+        # The backup ritual (pure stash push) discharges only the damage
+        # classes a stash actually protects (Classes 1-2: uncommitted work,
+        # recoverable VCS state) — so the recipe itself never blocks. Class 3
+        # rewrites history / deletes objects a stash cannot restore: it still
+        # blocks and needs an explicit override reason. The drop/clear
+        # carve-out stays (never whitelist destruction of pre-existing
+        # backups).
         if re.search(r"\bgit\s+stash\s+push\b", command) and not re.search(
             r"\bgit\s+stash\s+(?:drop|clear)\b", command
         ):
-            return None
+            if not any(pattern.search(command) for pattern in _CLASS3_PATTERNS):
+                return None
         for idx, pattern in enumerate(_DESTRUCTIVE_PATTERNS):
             if pattern.search(command) and idx not in self._acked:
                 return GuardVerdict.block(
