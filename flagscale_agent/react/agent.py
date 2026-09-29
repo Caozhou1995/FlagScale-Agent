@@ -305,6 +305,15 @@ class WorkerAgent:
         # memory fact and on-disk hostfile instead of recall. Never blocks.
         from flagscale_agent.react.guard.ip_port import IpPortGuard
         guard_registry.register(IpPortGuard())
+        # ResourceProbeGuard: fresh inject on EVERY command that sizes
+        # parallelism (nproc/-jN/workers) or launches a background job. Host
+        # observation signals (nproc, /proc/meminfo) have repeatedly been
+        # mistaken for the slice's actual ceiling inside containers — the
+        # structured profile anchors CONSTRAINT signals (cgroup cpu.max /
+        # cpuset / memory / pids) with per-field source, and advertises the
+        # step-ladder fallback when no constraint is readable. Never blocks.
+        from flagscale_agent.react.guard.resource_probe import ResourceProbeGuard
+        guard_registry.register(ResourceProbeGuard())
         # LongTimeShellGuard: block long foreground sleep/timeout (>30s) on
         # non-background shell calls. The agent has repeatedly burned minutes
         # on `sleep 180`-style foreground waits instead of backgrounding the

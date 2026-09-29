@@ -74,6 +74,14 @@ class GuardVerdict:
     message: str
     reason: str
     category: str  # For inject deduplication
+    # Declare that this inject carries data tied to THIS invocation's trigger
+    # (e.g. a fresh execution-domain profile built for the exact command being
+    # checked). If a block surfaces in the same resolve, the registry merges
+    # this inject into the block message instead of dropping it. Generic
+    # periodic injects keep the default (False): they
+    # are suppressed by blocks to keep the override turn focused on the block's
+    # own criteria (test_block_suppresses_injects contract).
+    attach_on_block: bool = False
     # Owner guard name, stamped by the registry when a block/escalate is selected
     # for presentation. Used both to name the owner in the message and to scope
     # override: an _override_reason only releases the guard whose name matches the
@@ -97,8 +105,10 @@ class GuardVerdict:
                    category=category, overridable=overridable)
 
     @classmethod
-    def inject(cls, message: str, reason: str, category: str) -> GuardVerdict:
-        return cls(action="inject", message=message, reason=reason, category=category)
+    def inject(cls, message: str, reason: str, category: str,
+               attach_on_block: bool = False) -> GuardVerdict:
+        return cls(action="inject", message=message, reason=reason, category=category,
+                   attach_on_block=attach_on_block)
 
     @classmethod
     def escalate(cls, message: str, reason: str, category: str) -> GuardVerdict:
@@ -211,6 +221,9 @@ class GuardRegistry:
         blocks: list[tuple[Guard, GuardVerdict]] = []
         inject_messages: list[str] = []
         inject_categories_seen: set[str] = set()
+        # (guard, verdict) pairs for trigger-bound injects that must survive a
+        # concurrent block.
+        inject_pairs: list[tuple[Guard, GuardVerdict]] = []
         first_reason = ""
 
         check = (lambda g: g.check_pre(ctx)) if phase == "pre" else (lambda g: g.check_post(ctx))
@@ -230,6 +243,7 @@ class GuardRegistry:
                 if cat:
                     inject_categories_seen.add(cat)
                 inject_messages.append(verdict.message)
+                inject_pairs.append((guard, verdict))
                 if not first_reason:
                     first_reason = verdict.reason
 
@@ -308,6 +322,22 @@ class GuardRegistry:
                     # Non-overridable block: no override hint, but still name the
                     # owner so the agent addresses the right guard's required action.
                     surfaced.message += owner_tag
+                # Injects marked attach_on_block carry data built for THIS
+                # invocation (e.g. an execution-domain profile for the exact
+                # command under check). Dropping them on a concurrent block
+                # loses numbers the agent needs at the decision point. Merge
+                # those into the block message; generic periodic injects stay
+                # suppressed (see test_block_suppresses_injects contract: the
+                # override turn must focus on the block's own criteria).
+                attached = [
+                    ov.message for (og, ov) in inject_pairs
+                    if ov.attach_on_block and og.name != surfaced_guard.name
+                ]
+                if attached:
+                    surfaced.message += (
+                        "\n\n[concurrent trigger-bound guard advisory]\n"
+                        + "\n\n".join(attached)
+                    )
                 # Remember which guard (and which internal gate/reason) we surfaced.
                 # Next turn, only THIS guard's block with THIS exact reason may be
                 # released by an override reason (see loop above). Tracking the

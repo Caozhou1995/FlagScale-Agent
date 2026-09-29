@@ -468,15 +468,16 @@ class AgentKernel:
                             if verdict.action in ("block", "escalate"):
                                 blocked_indices.add(i)
                                 # Deduplicate block/escalate across tool_calls
-                                msg_key = verdict.message[:120]
+                                msg_key = verdict.message
                                 if msg_key not in _seen_injects:
                                     _seen_injects.add(msg_key)
                                     _pre_guard_verdicts.append(verdict)
                                 # Display is handled later in _apply_verdict — don't display here
                             elif verdict.action == "inject":
                                 # Soft advisory — defer until after tool_results are appended
-                                # Deduplicate: same message from same guard across tool_calls
-                                msg_key = verdict.message[:120]
+                                # Deduplicate exact repeats: full-text key (inject payloads
+                                # may share a constant prefix yet differ later)
+                                msg_key = verdict.message
                                 if msg_key not in _seen_injects:
                                     _seen_injects.add(msg_key)
                                     _pre_guard_verdicts.append(verdict)
@@ -526,8 +527,8 @@ class AgentKernel:
                     )
                     verdict = d.guard_registry.check_post(ctx)
                     if verdict is not None:
-                        # Deduplicate all verdict types across multiple tool_calls
-                        msg_key = verdict.message[:120]
+                        # Deduplicate exact repeats across tool_calls (full-text key)
+                        msg_key = verdict.message
                         if msg_key in _seen_post_injects:
                             continue
                         _seen_post_injects.add(msg_key)

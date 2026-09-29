@@ -151,6 +151,17 @@ Container and CI environments often have network restrictions. Before declaring 
 - **Alternative sources**: If the primary URL fails, search for mirrors, package archives, or alternative download endpoints. A 403/404 on one host does not mean the resource does not exist.
 - **Offline fallback**: If network is truly unreachable, check local caches (apt, pip, pre-installed packages, mounted volumes).
 
+## Resource Probing — Execution Domain Before Sizing
+
+Parallelism, timeouts, and memory budgets fail when sized from the wrong domain: inside a container, `nproc` and `/proc/meminfo` report the HOST, while your actual slice is bounded by cgroup constraints. Before sizing workers (-jN, num_workers, fork counts) or launching long jobs:
+
+1. **Judge the execution domain first** (host / container / nested — `/.dockerenv`, `/proc/1/cgroup`), and probe THAT domain; the ResourceProbeGuard injects a structured profile on every detected sizing command or background launch — read the fresh profile each time (domains can change mid-session).
+2. **Anchor on CONSTRAINT signals** (cgroup `cpu.max` / `cpuset.cpus.effective` / `memory.max|high`, `pids.max`); treat OBSERVATION signals (`nproc`, `/proc/meminfo`) as corroboration only — never as the ceiling.
+3. **Nested runtimes**: the effective constraint is the MIN along the ancestor chain; an inner reading describes only its own slice. When `cpu.max` reads `max` (no limit), nproc is an honest upper-bound ESTIMATE of your slice — treat it as a ceiling to verify, not a measured constraint.
+4. **When no constraint is readable** (stub cgroup mounts, hardened runtimes), do NOT fall back to the host number — step up a ladder (1 → 2 → 4 workers) keeping each step only if measured throughput improves.
+
+**Kill-discipline floor** (the LLM-decision layer, beyond harness monitoring): before killing a long-running job YOU own, hold ≥2 samples across ≥10s or measured progress evidence (a single 0% ps/CPU reading is NOT a death verdict), and send SIGTERM before SIGKILL.
+
 ## Response Format
 
 End every response with one of two markers — these must be the **LAST line** of your response, after all text and tool calls:
