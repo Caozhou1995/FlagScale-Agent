@@ -238,3 +238,215 @@ class TestMechanicalBlockCaps:
         real_task = "the real task"
         agent.history.append({"role": "user", "content": real_task})
         assert agent._mech_original_task() == real_task
+
+
+class TestMechanicalLastUserTurn:
+    """(1b) LAST 5 USER TURNS: the recent REAL user inputs are the current
+    directive chain and must survive a reset verbatim — not by tail-4 luck."""
+
+    def test_last_turn_in_continuation_between_1_and_2(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        _seed_task(agent, "turn-1 task")
+        agent.history.append({"role": "user", "content": "turn-2 directive"})
+        out = agent._build_continuation_message("SUMMARY")
+        assert "### (1b) LAST 5 USER TURNS" in out
+        assert "turn-2 directive" in out, "latest real user turn verbatim"
+        # Ordering: (1) < (1b) < (2)
+        i1 = out.index("### (1) ORIGINAL TASK")
+        i1b = out.index("### (1b) LAST 5 USER TURNS")
+        i2 = out.index("### (2) ACTIVE PLAN")
+        assert i1 < i1b < i2
+
+    def test_session_input_history_is_primary_source(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        _seed_task(agent, "turn-1 task")
+        agent.history.append({"role": "user", "content": "tool flood below"})
+        agent.history.append({"role": "user", "content": [
+            {"type": "tool_result", "content": "42"}]})
+        agent.history.append({"role": "assistant", "content": "done"})
+        # Primary source: only genuine user inputs enter this list.
+        agent._session_input_history = ["first directive", "latest directive"]
+        # Multi-entry -> [-N] timeline, oldest->newest, [-1] = CURRENT.
+        out = agent._mech_last_user_turn()
+        assert out == ("[-2] first directive\n"
+                       "[-1] (CURRENT directive) latest directive")
+
+    def test_fallback_scans_full_log_when_history_list_empty(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = []
+        agent.history.set_system_prompt("sys")
+        agent.history.append({"role": "user", "content": "earlier directive"})
+        agent.history.append({"role": "user", "content": [
+            {"type": "tool_result", "content": "tool output"}]})
+        agent.history.append({"role": "assistant", "content": "ok"})
+        agent.history.append({"role": "user", "content": "the real last turn"})
+        # Fallback collects newest-first then reverses: same timeline order.
+        out = agent._mech_last_user_turn()
+        assert out == ("[-2] earlier directive\n"
+                       "[-1] (CURRENT directive) the real last turn")
+
+    def test_fallback_skips_harness_continuation_header(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = []
+        agent.history.set_system_prompt("sys")
+        agent.history.append({"role": "user", "content":
+            "[Context Hard Reset #1 - conversation auto-compacted]\n"
+            "Previous conversation: 100 messages total\nstale summary"})
+        agent.history.append({"role": "user", "content": "the real last turn"})
+        assert agent._mech_last_user_turn() == "the real last turn"
+
+    def test_empty_history_degrades_to_placeholder(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = []
+        # No user turns at all -> placeholder, never a crash.
+        assert "unavailable" in agent._mech_last_user_turn()
+
+    def test_history_list_missing_degrades(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        # _make_agent never sets _session_input_history: getattr default path
+        # must fall through to the full-log scan (empty here -> placeholder).
+        assert not hasattr(agent, "_session_input_history")
+        block = agent._build_mechanical_state_block()
+        assert "(1b) LAST 5 USER TURNS" in block
+        assert "unavailable" in block
+
+    def test_oversized_last_turn_truncated(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = ["Y" * (agent._MECH_LAST_TURN_CAP + 500)]
+        out = agent._mech_last_user_turn()
+        assert "[truncated]" in out
+        assert len(out) < agent._MECH_LAST_TURN_CAP + 200
+
+    def test_helper_failure_degrades(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        _seed_task(agent, "task")
+        # Break the history collaborator: _mech_last_user_turn's internal
+        # try/except must degrade to a placeholder, not propagate.
+        agent.history = object()  # no _full_log
+        block = agent._build_mechanical_state_block()
+        assert block != ""
+        assert "(unavailable: AttributeError)" in block
+
+    def test_reset_after_tool_flood_keeps_last_directive(self, tmp_path):
+        """THE load-bearing scenario: a >4-message tool-call flood after the
+        last real user directive; the reset continuation still shows it."""
+        agent = _make_agent(tmp_path)
+        _seed_task(agent, "turn-1 task")
+        for i in range(10):
+            agent.history.append({"role": "user", "content": [
+                {"type": "tool_result", "content": f"out {i}"}]})
+            agent.history.append({"role": "assistant",
+                                  "content": f"thinking {i}"})
+        last_directive = "commit the fix now, then stop"
+        agent.history.append({"role": "user", "content": [
+            {"type": "tool_result", "content": "final output"}]})
+        agent.history.append({"role": "user", "content": last_directive})
+        for i in range(6):
+            agent.history.append({"role": "user", "content": [
+                {"type": "tool_result", "content": f"post {i}"}]})
+            agent.history.append({"role": "assistant",
+                                  "content": f"work {i}"})
+        cont = agent._build_continuation_message("SUMMARY")
+        assert last_directive in cont
+        agent.history.hard_reset(cont, preserve_last_n=4)
+        cont2 = agent._build_continuation_message("SUMMARY2")
+        assert last_directive in cont2
+
+    def test_primary_source_skips_guard_injection(self, tmp_path):
+        """Guard block injections enter _full_log as bare unmarked user
+        messages but NEVER enter _session_input_history — so on the
+        interactive path the primary source shields the last directive."""
+        agent = _make_agent(tmp_path)
+        _seed_task(agent, "turn-1 task")
+        directive = "run the precision check next"
+        agent.history.append({"role": "user", "content": directive})
+        agent._session_input_history = ["turn-1 task", directive]
+        # Simulate a guard block injection AFTER the directive (raw, unmarked).
+        agent.history.append({"role": "user",
+                              "content": "[blocked by guard] OVERRIDE REQUIRED"})
+        out = agent._mech_last_user_turn()
+        assert "[-1] (CURRENT directive) run the precision check next" in out
+        assert "[blocked by guard]" not in out
+
+    def test_fallback_known_limit_guard_injection_returned(self, tmp_path):
+        """DOCUMENTED LIMIT (not a bug to fix silently): with the primary
+        source empty (single-shot/worker paths), a guard block injection is
+        the latest unmarked user message and the fallback returns it. This
+        test PINS the behavior so a future marker mechanism flips it
+        deliberately."""
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = []
+        agent.history.set_system_prompt("sys")
+        agent.history.append({"role": "user", "content": "real directive"})
+        agent.history.append({"role": "user",
+                              "content": "[blocked by guard] OVERRIDE REQUIRED"})
+        out = agent._mech_last_user_turn()
+        assert out.endswith("[blocked by guard] OVERRIDE REQUIRED")
+        assert "[-1] (CURRENT directive) [blocked by guard]" in out
+
+    def test_depth_cap_five_entries(self, tmp_path):
+        """Only the last _MECH_LAST_TURN_DEPTH=5 turns are kept, numbered
+        [-5]..[-1], regardless of how many came before."""
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = [f"directive-{i}" for i in range(8)]
+        out = agent._mech_last_user_turn()
+        for i in range(3, 8):
+            assert f"directive-{i}" in out
+        for i in range(0, 3):
+            assert f"directive-{i}" not in out
+        assert "[-5] directive-3" in out
+        assert "[-2] directive-6" in out
+        assert "[-1] (CURRENT directive) directive-7" in out
+        lines = out.split("\n")
+        assert len(lines) == 5
+
+    def test_fewer_than_depth_still_numbered_from_minus_n(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = ["a", "b", "c"]
+        out = agent._mech_last_user_turn()
+        assert out == ("[-3] a\n"
+                       "[-2] b\n"
+                       "[-1] (CURRENT directive) c")
+
+    def test_single_entry_stays_plain_text(self, tmp_path):
+        """Backward-compat: a single last turn renders WITHOUT the [-1]
+        marker (plain text), preserving the original single-directive form."""
+        agent = _make_agent(tmp_path)
+        agent._session_input_history = ["only directive"]
+        assert agent._mech_last_user_turn() == "only directive"
+
+    def test_tool_flood_between_directives_no_gaps_in_chain(self, tmp_path):
+        """Tool-result floods between user turns do not consume depth slots:
+        the chain is the last 5 REAL turns, not the last 5 messages."""
+        agent = _make_agent(tmp_path)
+        agent.history.set_system_prompt("sys")
+        for i in range(7):
+            agent.history.append({"role": "user", "content": f"d-{i}"})
+            agent.history.append({"role": "user", "content": [
+                {"type": "tool_result", "content": f"noise-{i}"}]})
+            agent.history.append({"role": "assistant", "content": "w"})
+        agent._session_input_history = []
+        out = agent._mech_last_user_turn()
+        assert "[-5] d-2" in out
+        assert "[-1] (CURRENT directive) d-6" in out
+        assert "noise-" not in out
+
+    def test_chain_in_continuation_after_reset(self, tmp_path):
+        """The directive chain survives INTO the post-reset continuation."""
+        agent = _make_agent(tmp_path)
+        _seed_task(agent, "turn-1 task")
+        for d in ("run tests", "check the log", "commit the fix"):
+            agent.history.append({"role": "user", "content": d})
+            hist = getattr(agent, "_session_input_history", None)
+            if hist is None:
+                hist = []
+                agent._session_input_history = hist
+            hist.append(d)
+        for i in range(6):
+            agent.history.append({"role": "user", "content": [
+                {"type": "tool_result", "content": f"out {i}"}]})
+            agent.history.append({"role": "assistant", "content": "w"})
+        cont = agent._build_continuation_message("SUMMARY")
+        assert "[-3] run tests" in cont
+        assert "[-2] check the log" in cont
+        assert "[-1] (CURRENT directive) commit the fix" in cont

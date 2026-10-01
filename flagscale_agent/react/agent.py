@@ -944,16 +944,25 @@ class WorkerAgent:
     # A hard reset otherwise relies on the MODEL's own summary prose, which is
     # unverified and can silently drop the task's identity. These helpers
     # re-inject the load-bearing state VERBATIM (not a model paraphrase) so the
-    # fresh window cannot lose: (1) the original task text, (2) the active plan,
-    # (3) the memory keys touched this session. Each degrades INDEPENDENTLY —
-    # one failing never aborts the reset. Sizes are capped so the block cannot
-    # defeat the point of the reset.
+    # fresh window cannot lose: (1) the original task text, (1b) the most
+    # recent real user turn (the CURRENT working directive - a session spans
+    # many turns and each turn's instruction governs its own stretch of work),
+    # (2) the active plan, (3) the memory keys touched this session. Each
+    # degrades INDEPENDENTLY — one failing never aborts the reset. Sizes are
+    # capped so the block cannot defeat the point of the reset.
     _MECH_TASK_CAP = 4000
     _MECH_PLAN_CAP = 3000
     _MECH_MEMORY_MAX_KEYS = 40
+    _MECH_LAST_TURN_CAP = 2000
+    _MECH_LAST_TURN_DEPTH = 5
 
     def _mech_original_task(self) -> str:
-        """First user turn of the session = the original task text, verbatim."""
+        """First user turn of the session = the original task text, verbatim.
+
+        Known limit (inherent): a real FIRST task that quotes the exact
+        harness continuation header shape is indistinguishable from a prior
+        continuation and will be skipped here.
+        """
         try:
             for msg in self.history._full_log:
                 if msg.get("role") != "user":
@@ -987,6 +996,86 @@ class WorkerAgent:
                     text = text[: self._MECH_TASK_CAP] + "\n...[truncated]"
                 return text
             return "(unavailable: no user turn found in full log)"
+        except Exception as e:
+            return f"(unavailable: {type(e).__name__})"
+
+    def _mech_last_user_turn(self) -> str:
+        """Last (up to 5) REAL user turns = the CURRENT directive chain, verbatim.
+
+        A session spans many turns and each turn's instruction governs its own
+        stretch of work; the current working directive is often a SHORT CHAIN
+        of recent turns ("run the tests" -> "not right, check the log" ->
+        "commit the fix"), so only the last turn is not enough. Returns up to
+        _MECH_LAST_TURN_DEPTH=5 turns as an oldest->newest timeline with [-N]
+        markers; [-1] is the CURRENT directive. A single turn renders as plain
+        text (no [-1] marker) for backward compatibility.
+
+        Primary source: _session_input_history — only genuine user inputs enter
+        it (slash commands are filtered before append; guard/tool-result/
+        continuation messages never enter). Fallback (single-shot/worker paths
+        where that list is empty): backward scan of _full_log skipping
+        tool-result user messages and harness continuation headers. Known
+        limits, both inherent and disclosed: (a) guard block/escalate
+        injections are bare unmarked user messages and cannot be excluded
+        here; (b) a real user task that QUOTES the exact harness continuation
+        header shape is indistinguishable from a genuine prior continuation
+        and will be skipped in this fallback (the primary source does not
+        have this problem — only genuine inputs enter it).
+        """
+        try:
+            texts = []  # type: list
+            inputs = getattr(self, "_session_input_history", None)
+            if inputs:
+                for raw in inputs[-self._MECH_LAST_TURN_DEPTH:]:
+                    text = str(raw).strip()
+                    if text:
+                        texts.append(text)
+            else:
+                from flagscale_agent.react.history import _is_tool_result
+                for msg in reversed(self.history._full_log):
+                    if msg.get("role") != "user":
+                        continue
+                    content = msg.get("content", "")
+                    if content is None:
+                        continue
+                    if _is_tool_result(msg):
+                        continue
+                    if isinstance(content, list):
+                        parts = []
+                        for b in content:
+                            if isinstance(b, dict):
+                                parts.append(str(b.get("text", "") or b.get("content", "")))
+                            else:
+                                parts.append(str(b))
+                        text = "".join(parts)
+                    else:
+                        text = str(content)
+                    text = text.strip()
+                    if not text:
+                        continue
+                    if (text.startswith("[Context Hard Reset #")
+                            and " - conversation auto-compacted]" in text[:120]):
+                        continue
+                    texts.append(text)
+                    if len(texts) >= self._MECH_LAST_TURN_DEPTH:
+                        break
+                # fallback scanned newest->oldest; normalize to oldest->newest
+                # so both sources share one timeline order.
+                texts.reverse()
+            if not texts:
+                return "(unavailable: no real user turn found in full log)"
+            for i, t in enumerate(texts):
+                if len(t) > self._MECH_LAST_TURN_CAP:
+                    texts[i] = t[: self._MECH_LAST_TURN_CAP] + "\n...[truncated]"
+            if len(texts) == 1:
+                return texts[0]
+            numbered = []
+            n_total = len(texts)
+            for idx, t in enumerate(texts):
+                n = idx - n_total  # -n_total, ... -2, -1
+                marker = "[-1] (CURRENT directive)" if n == -1 else f"[{n}]"
+                numbered.append(f"{marker} {t}")
+            return "\n".join(numbered)
         except Exception as e:
             return f"(unavailable: {type(e).__name__})"
 
@@ -1043,6 +1132,9 @@ class WorkerAgent:
                 "these before acting.\n\n"
                 "### (1) ORIGINAL TASK - first user turn, verbatim\n"
                 f"{self._mech_original_task()}\n\n"
+                "### (1b) LAST 5 USER TURNS - current directive chain, oldest->newest\n"
+                "    ([-1] = CURRENT directive; older ones may be superseded by it)\n"
+                f"{self._mech_last_user_turn()}\n\n"
                 "### (2) ACTIVE PLAN - verbatim\n"
                 f"{self._mech_active_plan()}\n\n"
                 "### (3) MEMORY KEYS WRITTEN THIS SESSION - read with memory_read(key=...);\n"
