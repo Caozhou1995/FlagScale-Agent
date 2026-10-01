@@ -516,6 +516,20 @@ class TestConstraintGuidanceBlockedComputation:
         # the rationale: this is the message the user actually reads
         assert "actually read" in low or "they will actually" in low
 
+    def test_text_complete_hygiene_requires_citation_recheck(self):
+        """Kouzi B: the wrap-up checklist must carry a fixed CITATION RECHECK
+        sub-item — any file:line/symbol/hash reference in the final answer must be
+        re-opened and its verification command + read line listed, or 'citations:
+        none'. Zero regex: it is fixed text tied to the existing re-confirm step."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "citation recheck" in low
+        # the demand: re-open & state the replication command + read line
+        assert "replication:" in low
+        assert "citations: none" in low
+        # not a scan / pattern check
+        assert "not a scan" in low or "no pattern" in low
+
 
 
 class TestTaskCompleteRecheck:

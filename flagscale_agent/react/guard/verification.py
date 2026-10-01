@@ -677,6 +677,16 @@ re-confirm delivery after you clean):
      is UNVERIFIED — say so in one line and either run the cheap probe or say
      explicitly you are leaving it unverified. Never convert a restatement into a
      tick.
+        • **CITATION RECHECK** — if your final answer contains ANY
+          file:line / path:line / symbol@line reference to a file you opened (or an
+          ID / hash / number you quoted from one), re-open EACH and list the
+          verification command together with the line you actually read:
+          `artifact: <path>:<line> / replication: <exact command> / value: <the line>`.
+          Do NOT quote from memory — a reference whose cited symbol no longer exists
+          (or whose line number drifted) must be corrected or withdrawn here. If the
+          answer cites nothing, write "citations: none". This is the SAME
+          observe-don't-assert standard as the paragraph above, turned on your own
+          quotes; it is not a scan or a pattern check.
 
   4. **MEMORY REVIEW & UPDATE** — memory is not write-once; stale entries cost
      future sessions repeated dead ends. Run memory_list() (filter by this task's

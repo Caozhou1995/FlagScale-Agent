@@ -940,9 +940,127 @@ class WorkerAgent:
 
         return "\n".join(parts)
 
+    # ── Mechanical state injection for hard reset (prop_770ca778) ─────────────
+    # A hard reset otherwise relies on the MODEL's own summary prose, which is
+    # unverified and can silently drop the task's identity. These helpers
+    # re-inject the load-bearing state VERBATIM (not a model paraphrase) so the
+    # fresh window cannot lose: (1) the original task text, (2) the active plan,
+    # (3) the memory keys touched this session. Each degrades INDEPENDENTLY —
+    # one failing never aborts the reset. Sizes are capped so the block cannot
+    # defeat the point of the reset.
+    _MECH_TASK_CAP = 4000
+    _MECH_PLAN_CAP = 3000
+    _MECH_MEMORY_MAX_KEYS = 40
+
+    def _mech_original_task(self) -> str:
+        """First user turn of the session = the original task text, verbatim."""
+        try:
+            for msg in self.history._full_log:
+                if msg.get("role") != "user":
+                    continue
+                content = msg.get("content", "")
+                if content is None:
+                    continue
+                if isinstance(content, list):
+                    parts = []
+                    for b in content:
+                        if isinstance(b, dict):
+                            parts.append(str(b.get("text", "") or b.get("content", "")))
+                        else:
+                            parts.append(str(b))
+                    text = "".join(parts)
+                else:
+                    text = str(content)
+                text = text.strip()
+                if not text:
+                    continue
+                # Skip ONLY a harness-injected continuation — identified by the
+                # exact header _build_continuation_message emits:
+                #   "[Context Hard Reset #<n> - conversation auto-compacted]".
+                # A real task that merely STARTS with "[Context Hard Reset" (e.g. it
+                # quotes an earlier reset paste) must NOT be dropped, and a task that
+                # itself begins with the marker must still be returned.
+                if (text.startswith("[Context Hard Reset #")
+                        and " - conversation auto-compacted]" in text[:120]):
+                    continue
+                if len(text) > self._MECH_TASK_CAP:
+                    text = text[: self._MECH_TASK_CAP] + "\n...[truncated]"
+                return text
+            return "(unavailable: no user turn found in full log)"
+        except Exception as e:
+            return f"(unavailable: {type(e).__name__})"
+
+    def _mech_active_plan(self) -> str:
+        """The active plan rendered verbatim (statuses + acceptance + notes)."""
+        try:
+            plan = self.task_plan.get_active()
+            if not plan:
+                return "(no active plan)"
+            text = self.task_plan._format_plan(plan)
+            if len(text) > self._MECH_PLAN_CAP:
+                text = text[: self._MECH_PLAN_CAP] + "\n...[truncated]"
+            return text
+        except Exception as e:
+            return f"(unavailable: {type(e).__name__})"
+
+    def _mech_memory_keys(self) -> str:
+        """Keys of memory entries written or updated in THIS session.
+
+        Keys only (not content) — the content survives the reset on disk; the
+        agent re-reads what it needs with memory_read(key=...).
+        """
+        try:
+            entries = self.memory.list_entries()
+            sid = getattr(self, "_session_id", "")
+            keys = sorted({
+                e.get("key", "")
+                for e in entries
+                if e.get("key") and sid and (
+                    e.get("created_session") == sid
+                    or e.get("updated_session") == sid
+                )
+            })
+            if not keys:
+                return "(no memory keys written this session)"
+            shown = keys[: self._MECH_MEMORY_MAX_KEYS]
+            lines = [f"- {k}" for k in shown]
+            if len(keys) > len(shown):
+                lines.append(f"- ...and {len(keys) - len(shown)} more (memory_list())")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"(unavailable: {type(e).__name__})"
+
+    def _build_mechanical_state_block(self) -> str:
+        """Assemble the verbatim mechanical-state block for the continuation.
+
+        Returns "" on total failure — the reset must proceed regardless.
+        """
+        try:
+            return (
+                "## MECHANICAL STATE - harness-injected, VERBATIM (not a model summary)\n"
+                "Re-injected by the harness on every hard reset and authoritative: the\n"
+                "model summary below is SUPPLEMENTARY and may be stale or lossy. Re-read\n"
+                "these before acting.\n\n"
+                "### (1) ORIGINAL TASK - first user turn, verbatim\n"
+                f"{self._mech_original_task()}\n\n"
+                "### (2) ACTIVE PLAN - verbatim\n"
+                f"{self._mech_active_plan()}\n\n"
+                "### (3) MEMORY KEYS WRITTEN THIS SESSION - read with memory_read(key=...);\n"
+                "    their content survives the reset even though the conversation did not\n"
+                f"{self._mech_memory_keys()}"
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[Hard Reset] mechanical state block failed: {e}")
+            return ""
+
     def _build_continuation_message(self, summary: str) -> str:
         """Build the full continuation message to inject after hard reset."""
-        reset_count = self.history._reset_count
+        # This builder runs BEFORE history.hard_reset() increments _reset_count,
+        # so the reset being built is (#current + 1). Label it with the actual
+        # reset number so the header agrees with the persisted reset_count.
+        reset_count = self.history._reset_count + 1
         total_messages = len(self.history._full_log)
 
         header = (
@@ -961,7 +1079,11 @@ class WorkerAgent:
             "- recall(index=N) for specific messages by index"
         )
 
-        return f"{header}\n{summary}\n{footer}"
+        # Mechanical verbatim block comes FIRST (authoritative); the model
+        # summary is supplementary. Empty block degrades to the old format.
+        mech = self._build_mechanical_state_block()
+        mech_part = f"{mech}\n\n" if mech else ""
+        return f"{header}\n{mech_part}{summary}\n{footer}"
 
     def _hard_reset_context(self):
         """Execute hard reset: generate summary, clear context, rebuild.

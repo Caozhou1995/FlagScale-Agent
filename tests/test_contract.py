@@ -156,3 +156,29 @@ class TestWire:
         back = Contract.from_wire(wire)
         assert back.id == c.id
         assert back.output_ptr == c.output_ptr
+
+
+class TestRenderContractCitation:
+    """Kouzi A: the rendered contract MUST carry the fixed citation requirement."""
+
+    def test_contract_renders_citation_requirement(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _render_contract
+        text = _render_contract(_mk(tmp_path))
+        assert "## Citation requirement" in text
+
+    def test_citation_line_demands_verbatim_and_grep(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _render_contract
+        low = " ".join(_render_contract(_mk(tmp_path)).lower().split())
+        # must demand verbatim source text of the referenced line
+        assert "verbatim source text" in low
+        # must state the parent re-checks with a grep, not the line number
+        assert "grep, not" in low
+        # must state the <=1 line bound
+        assert "<=1 line" in low
+
+    def test_citation_requirement_present_for_all_goals(self, tmp_path):
+        # the clause is fixed text — independent of any contract field
+        from flagscale_agent.react.multi_agent.spawn import _render_contract
+        a = _render_contract(_mk(tmp_path, goal="review the diff"))
+        b = _render_contract(_mk(tmp_path, goal="count files"))
+        assert "## Citation requirement" in a and "## Citation requirement" in b

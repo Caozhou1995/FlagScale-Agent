@@ -525,6 +525,16 @@ class TestSystemPromptContent:
         assert "the alternative reading would be" in p
         assert "Never promote a GIVEN to a RANGE" in p
 
+    def test_citation_precision_present(self):
+        # Principle 2 sub-discipline (d): quoted identifiers must be re-verified
+        # by a command in the SAME turn, never from memory; citations of other
+        # reports anchor to the verbatim line plus its number.
+        p = self._prompt()
+        assert "CITATION PRECISION" in p
+        assert "never from memory" in p
+        assert "VERBATIM line" in p
+        assert "one-character variants" in p
+
     def test_closed_exemption_list_and_unverified_attribution_present(self):
         # Task-agnostic leak guard — no task-specific vocabulary.
         p = self._prompt()

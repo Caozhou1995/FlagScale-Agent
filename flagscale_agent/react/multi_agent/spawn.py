@@ -131,6 +131,18 @@ def _render_contract(c: Contract) -> str:
         "under the infrastructure depth cap; a spawn beyond the cap is refused "
         "with an explicit error. You cannot raise the cap."
     )
+    lines.append("")
+    lines.append(
+        "## Citation requirement"
+    )
+    lines.append(
+        "Every file:line reference in your report MUST be accompanied by the "
+        "verbatim source text of that single line (quote it, <=1 line). The "
+        "parent re-checks against the quoted source text with a grep, not "
+        "against your line number — a stale or off-by-one line number that "
+        "contradicts the quoted text is treated as unverified. If a claim "
+        "rests on a symbol that does not exist, say so explicitly."
+    )
     return "\n".join(lines)
 
 
