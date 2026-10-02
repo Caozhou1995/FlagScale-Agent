@@ -322,6 +322,14 @@ class WorkerAgent:
         # right layer (block+override), background=true passes freely.
         from flagscale_agent.react.guard.longtimeshell import LongTimeShellGuard
         guard_registry.register(LongTimeShellGuard())
+        # SleepSpacingGuard: post-inject on rapid-fire short-sleep probes.
+        # LongTimeShellGuard blocks >30s foreground sleeps, which taught the
+        # agent to chain `sleep 28; <same probe>` rounds — polling in costume,
+        # one full LLM iteration each. This guard pattern-nudges that shape
+        # (post-only, never blocks; background waits and single >=60s sleeps
+        # stay legitimate).
+        from flagscale_agent.react.guard.sleep_spacing import SleepSpacingGuard
+        guard_registry.register(SleepSpacingGuard())
 
         # Reliability guards (P7)
 
