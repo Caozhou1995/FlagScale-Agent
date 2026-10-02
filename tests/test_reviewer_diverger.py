@@ -213,10 +213,11 @@ class TestAdvisoryWordingWhyGain:
     def test_settle_gate_demands_closure_record(self):
         """Settlement record must include task_id + report path, or an explicit
         skip declaration with the blind-spot classes (prop_7e1d594a)."""
-        assert "reviewer task_id" in _REVIEWER_FINDINGS_SETTLE
-        assert "report path" in _REVIEWER_FINDINGS_SETTLE
-        assert "skip declaration" in _REVIEWER_FINDINGS_SETTLE
-        assert "oracle blind-spot classes" in _REVIEWER_FINDINGS_SETTLE
+        flat = " ".join(_REVIEWER_FINDINGS_SETTLE.split())  # survives rewrap (review F2, task 9a0776106c17)
+        assert "reviewer task_id" in flat
+        assert "report path" in flat
+        assert "skip declaration" in flat
+        assert "oracle blind-spot classes" in flat
 
 
 class TestReviewerFindingsGate:
