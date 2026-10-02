@@ -875,6 +875,13 @@ While you continue advancing (do NOT wait on it), spawn_worker:
     reviewed tree; forbidden: modify any file), max_minutes ~3.
   - acceptance: a parent-runnable predicate over the findings report (e.g.
     test -s <report>), never "reviewer says it reviewed".
+  - If you skip the spawn, the skip itself must carry an ORACLE BLIND-SPOT
+    DECLARATION: enumerate the constraint / mapping / format classes your own
+    verification could NOT independently confirm — the classes only a reader
+    who did not share your assumptions would catch (your oracle and the
+    artifact share an author). An empty declaration is precisely the
+    overconfidence this rule exists to test: if your oracle really covers
+    everything, spawning a reviewer costs nothing and proves it.
 Findings are CLAIMS, not verdicts — do not merge or dismiss any of them on the
 reviewer's say-so. At the NEXT step boundary (N+1), reproduce-or-refute EACH
 finding yourself (run the cited input, read the cited lines, build the
@@ -911,7 +918,9 @@ with your own run is recorded independent evidence the claim is solid.
     reviewable deliverable) — and if that excuse does not hold, run it now.
 
 Re-issue [TASK_COMPLETE] with _override_reason: the per-finding reproduce-or-refute
-outcomes (confirmed N / refuted M, with the evidence you ran)."""
+outcomes (confirmed N / refuted M, with the evidence you ran), the reviewer task_id
+and report path — or, if the reviewer was never spawned, the explicit skip declaration
+plus the oracle blind-spot classes your own checks could not cover."""
 
 
 class VerificationGuard(Guard):

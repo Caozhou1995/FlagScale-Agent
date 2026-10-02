@@ -202,6 +202,22 @@ class TestAdvisoryWordingWhyGain:
         # benefit: catching defects before grading, not after
         assert "before grading" in _REVIEWER_FINDINGS_SETTLE
 
+    def test_reviewer_demand_demands_skip_declaration(self):
+        """Skipping the reviewer must force an oracle blind-spot declaration —
+        not a bare 'my oracle is strongest' exemption (prop_7e1d594a)."""
+        flat = " ".join(_REVIEWER_FINDINGS.split())  # templates are line-wrapped
+        assert "ORACLE BLIND-SPOT DECLARATION" in flat
+        # the classes only a non-author reader would catch
+        assert "constraint / mapping / format classes" in flat
+
+    def test_settle_gate_demands_closure_record(self):
+        """Settlement record must include task_id + report path, or an explicit
+        skip declaration with the blind-spot classes (prop_7e1d594a)."""
+        assert "reviewer task_id" in _REVIEWER_FINDINGS_SETTLE
+        assert "report path" in _REVIEWER_FINDINGS_SETTLE
+        assert "skip declaration" in _REVIEWER_FINDINGS_SETTLE
+        assert "oracle blind-spot classes" in _REVIEWER_FINDINGS_SETTLE
+
 
 class TestReviewerFindingsGate:
     """Completion gate: bare TASK_COMPLETE blocked once reviewer was demanded."""
