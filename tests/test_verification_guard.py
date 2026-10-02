@@ -2152,33 +2152,40 @@ class TestWrapUpFormContractAxis:
         assert "pmars" not in low
 
 
-class TestWrapUpRiskCompile:
-    """Wrap-up hardening: RISK COMPILE step (named risks -> falsifiable
-    discriminators), replication-form observations, and self-referential
-    evidence rejection."""
+class TestWrapUpUnclosedDoubts:
+    """Wrap-up hardening: UNCLOSED DOUBTS LIST step (named doubts -> plain-language
+    closure with run-and-read evidence), replication-form observations, and
+    self-referential evidence rejection."""
 
-    def test_risk_compile_step_exists_and_fires_first(self):
+    def test_unclosed_doubts_step_exists_and_fires_first(self):
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
         low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
-        assert "risk compile" in low
-        # compiles NAMED risks from the whole trace, not new ones
-        assert "named" in low and ("never closed" in low or "unfalsified" in low)
-        # falsifiable two-line discriminator, not a confirmation
-        assert "if_" in low and "actually_observed" in low
-        # unprobed risks must name their cheapest settle-probe
-        assert "unprobed" in low and "cheapest probe" in low
+        assert "unclosed doubts list" in low
+        # compiles NAMED doubts from the whole trace, not new ones
+        assert "named" in low and ("never closed" in low or "unverified" in low)
+        # closure requires a run-and-read value that would look different under failure
+        assert "ran and read" in low
+        assert "look different under failure" in low
+        # open doubts must name their cheapest settle-probe and stay visible
+        assert "still open" in low and ("cheapest" in low or "one-liner" in low)
         # anti-ritual: silent skip forbidden, explicit none allowed
-        assert "risk scan" in low
+        assert "unclosed doubts: none" in low
+        # plain language mandate: no pseudo-code placeholders
+        assert "natural sentences" in low and "pseudo-code" not in low.replace(
+            "not pseudo-code", ""
+        )
 
-    def test_risk_discriminator_example_present(self):
+    def test_doubt_closure_requires_discriminator(self):
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
         low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
-        # a worked example: risk statement, would-show value, observed value
-        assert "risk was:" in low
-        assert "if_stale_mirror_were_true_would_show:" in low
-        assert "actually_observed:" in low
-        # the tautology rule: a check that cannot state what would differ is not a check
+        # the tautology rule survives the rewording: a check that cannot state
+        # what would look different under failure is not a check
         assert "not a check" in low and "restatement" in low
+        # no pseudo-code schema remains anywhere in the hygiene text
+        assert "were_true_would_show" not in low
+        assert "actually_observed" not in low
+        assert "risk compile" not in low
+        assert "risk scan" not in low
 
     def test_near_far_uses_replication_triple(self):
         from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE

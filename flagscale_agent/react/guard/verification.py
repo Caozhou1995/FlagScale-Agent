@@ -573,34 +573,32 @@ English, and do not let this English-language template pull your reply's languag
 away from the user's. This final message is the one they will actually read, so
 it must be in the language they wrote to you in.
 
-Then, and only after the final answer above, do the risk compilation and the
+Then, and only after the final answer above, do the "unclosed doubts list" and the
 five light hygiene items.
 This is an always-do finish-line routine (whether or not a plan_update(complete)
 cascade also ran) — NOT a re-run of deep delivery checks. Do them IN ORDER;
-the order is load-bearing (compile risks first, verify before you clean,
+the order is load-bearing (list unresolved doubts first, verify before you clean,
 re-confirm delivery after you clean):
 
-  0. **RISK COMPILE** (do this FIRST — it may change what you verify) — scan the
-     WHOLE session trace for moments where you NAMED a risk but never closed it:
+  0. **UNCLOSED DOUBTS LIST** (do this FIRST — it may change what you verify) — scan
+     the WHOLE session trace for moments where you NAMED a doubt but never closed it:
      "this might not hold", "I should check X", "this could be wrong", a caveat
-     you wrote and moved past. Each such named risk is an unfalsified hypothesis
-     sitting under your result. Compile EACH into a two-line discriminating
-     reading (the falsifiable form — not a confirmation):
-       • `if_<risk>_were_true_would_show: <concrete value the world would show —
-         name the file/field/measure and its wrong value>`
-       • `actually_observed: <the real value you ran and read — or UNPROBED>` —
-         never UNPROBED-without-reason; attach the cheapest probe that would
-         settle it if you cannot run it now.
-     Example (complete, copy the shape):
-       risk was: "the mirror might serve a stale copy"
-       if_stale_mirror_were_true_would_show: artifact /data/out.json field
-         "source" == "cache"
-       actually_observed: ran `grep source /data/out.json` -> "live"
-     A check item that cannot state what would DIFFER under failure is not a
-     check — it is a restatement. If the scan finds nothing, write "risk scan:
-     none" — a bare claim of none is fine, a silent skip is not.
+     you wrote and moved past. Each such doubt is an unverified hypothesis sitting
+     under your result. Close each one in plain language, three things:
+       • What the doubt IS, in one sentence.
+       • What you did about it: the exact command/probe you ran and the value you
+         actually saw — or, if you never closed it, say so plainly ("still open")
+         and attach the cheapest one-liner that WOULD settle it (run it now if it
+         is one command).
+       • If you find nothing, write "unclosed doubts: none" — a bare claim of none
+         is fine, a silent skip is not.
+     A doubt is CLOSED only by a value you ran and read: say what the world would
+     look like if the doubt were TRUE, and whether the reading you got matches that
+     or not. A check that cannot name what would LOOK DIFFERENT under failure is
+     not a check — it is a restatement. Write natural sentences, not pseudo-code
+     placeholders.
 
-  1. **NEAR vs FAR** (do this SECOND — after RISK COMPILE; it may itself
+  1. **NEAR vs FAR** (do this SECOND — after the UNCLOSED DOUBTS LIST; it may itself
       create files) — the one
      load-bearing question. You verified at the near end (your shell, your env, your
      sample). The consumer observes the far end: a fresh process, a bare non-login
@@ -763,8 +761,9 @@ re-confirm delivery after you clean):
 Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced,
 harness gap captured (registered + open ones re-reported) or "none", or "none apply".
 This is a BARE-TEXT completion path: there is no later turn and no notes channel
-beyond this message. Any risk your RISK COMPILE left UNPROBED must be marked HERE,
-in this same message — `unprobed: <reason> + cheapest probe: <command or method>` —
+beyond this message. Any doubt your UNCLOSED DOUBTS LIST left open must be marked
+HERE, in this same message — write it as a plain sentence: what the doubt is, why it
+is still open, and the cheapest one-liner that would settle it —
 so the gap ships visibly instead of silently. Claim-time anchors cannot be
 preregistered on this path; citing your run's real commands and real outputs inline
 is the only evidence channel it has. This gate fires once."""
