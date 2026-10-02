@@ -401,7 +401,9 @@ class PollTasksTool(Tool):
             return f"ERROR: check failed: {e}"
         if v.pending:
             return (f"task {task_id}: not ready (status={v.status}); "
-                    "poll again later. No ledger changes made.")
+                    "no ledger changes made. Do NOT chain bare polls — between "
+                    "looks, do real work (prep next steps, update plan/memory) "
+                    "or take ONE bounded `sleep <=30s`.")
         head = ("PASSED" if v.passed else "FAILED")
         body = [f"task {task_id}: {head} (status={v.status})", f"note: {v.note}"]
         if v.claim is not None:

@@ -102,6 +102,7 @@ from flagscale_agent.react.guard.shell_jobs_wait import ShellJobsWaitGuard
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.knowledge_index import KnowledgeIndexGuard
 from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
+from flagscale_agent.react.guard.poll_spacing import PollSpacingGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
 from flagscale_agent.react.guard.first_e2e_run import FirstE2eRunGuard
@@ -350,6 +351,12 @@ class WorkerAgent:
         # that the live process still runs old code until /reload. Generic across
         # file types, unlike UnitTestGuard. Never blocks.
         guard_registry.register(PostEditFarEndGuard())
+        # PollSpacingGuard (always active, inject-only): after consecutive
+        # poll_tasks/dispatch_many rounds that return not-ready with nothing in
+        # between, nudge toward real work between looks (or one bounded sleep)
+        # instead of back-to-back bare polling — each empty round is a full LLM
+        # iteration spent re-reading the same tokens. Never blocks.
+        guard_registry.register(PollSpacingGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
         # Memory post-check guard (always active, inject-only): reconciles the
