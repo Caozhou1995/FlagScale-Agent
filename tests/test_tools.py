@@ -371,3 +371,57 @@ class TestEditFileReplaceAll:
         assert f.read_text().count("b") == 1
 
 
+class TestWriteFileShrinkGuard:
+    """mode=write shrinking an existing file >50% must refuse softly (retry
+    after a guard block is the common cause; silent truncation was observed
+    losing a whole document section)."""
+
+    def _tool(self):
+        from flagscale_agent.react.tools.write_file import WriteFileTool
+        return WriteFileTool()
+
+    def test_shrink_write_rejected_with_both_sizes(self, tmp_path):
+        f = tmp_path / "doc.md"
+        f.write_text("A" * 1000)
+        result = self._tool().execute(path=str(f), content="B" * 300)
+        assert "ERROR" in result
+        assert "1000" in result and "300" in result
+        assert "ack_overwrite" in result  # the escape hatch is named
+        assert f.read_text() == "A" * 1000  # untouched
+
+    def test_ack_overwrite_confirms_rewrite(self, tmp_path):
+        f = tmp_path / "doc.md"
+        f.write_text("A" * 1000)
+        result = self._tool().execute(path=str(f), content="B" * 300, ack_overwrite=True)
+        assert "ERROR" not in result
+        assert f.read_text() == "B" * 300
+
+    def test_append_never_triggers(self, tmp_path):
+        f = tmp_path / "doc.md"
+        f.write_text("A" * 1000)
+        result = self._tool().execute(path=str(f), content="C" * 10, mode="append")
+        assert "ERROR" not in result
+        assert len(f.read_text()) == 1010
+
+    def test_new_file_first_write_not_triggered(self, tmp_path):
+        f = tmp_path / "new.txt"
+        result = self._tool().execute(path=str(f), content="x")
+        assert "ERROR" not in result
+        assert f.read_text() == "x"
+
+    def test_rewrite_at_or_above_threshold_allowed(self, tmp_path):
+        f = tmp_path / "edge.txt"
+        f.write_text("A" * 1000)
+        # exactly 50% -> not (< 50% drop) -> allowed
+        result = self._tool().execute(path=str(f), content="B" * 500)
+        assert "ERROR" not in result
+        assert f.read_text() == "B" * 500
+
+    def test_growth_write_not_triggered(self, tmp_path):
+        f = tmp_path / "grow.txt"
+        f.write_text("A" * 10)
+        result = self._tool().execute(path=str(f), content="B" * 20)
+        assert "ERROR" not in result
+        assert f.read_text() == "B" * 20
+
+

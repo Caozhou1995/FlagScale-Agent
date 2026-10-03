@@ -211,12 +211,38 @@ class TestBroadGrepBlocked:
 
     def test_grep_recursive_cwd_relative_targets_block(self):
         g = FindGuard()
-        # `.` / `./` / `..` / `~` resolve to the cwd/parent/home at runtime;
-        # the guard cannot prove they are bounded, so a recursive walk from
-        # them is broad.
-        for target in (".", "./", "..", "~", "~/"):
+        # `~` / `~/` resolve to HOME — never provably bounded, always blocked.
+        # A bare `.`/`..` target IS exempt when the process cwd is a deeply
+        # scoped working directory (depth >= 3, not a broad root) — the
+        # cwd-aware exemption (see test below). Under pytest's shallow CWD
+        # (repo root, depth 3: /nfs/caozhou/fa_eval — not <3? actually depth 3
+        # counts) the exemption depends on the runner's cwd, so pin the
+        # guarantee with explicit assertions instead:
+        for target in ("~", "~/"):
             v = g.check_pre(_shell(f"grep -rln pat {target}"))
             assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_grep_recursive_bare_dot_exempt_only_in_deep_cwd(self):
+        # New cwd-aware spec: a bare `.`/`..` target is ALLOWED when os.getcwd()
+        # is a deeply scoped working dir, and BLOCKED when the cwd is shallow
+        # or a broad/mount root. The pytest process runs from the repo root
+        # (depth >= 3 under /nfs/caozhou/fa_eval/FlagScale-Agent), so in-repo
+        # runs exercise the ALLOWED branch; simulate a shallow/broad cwd by
+        # chdir-free unit probes of the classifier:
+        from flagscale_agent.react.guard.find_guard import (
+            _grep_target_is_broad, _REMOTE_CWD,
+        )
+        # deep scoped cwd -> exempt
+        assert _grep_target_is_broad(".", cwd="/nfs/caozhou/fa_eval/FlagScale-Agent/tests/x/y") is False
+        assert _grep_target_is_broad("..", cwd="/nfs/caozhou/fa_eval/FlagScale-Agent/tests/x/y") is False
+        # broad root or shallow (depth < 3) -> still broad
+        assert _grep_target_is_broad(".", cwd="/nfs/caozhou") is True
+        assert _grep_target_is_broad("..", cwd="/") is True
+        # remote payload (unknown cwd) -> always broad
+        assert _grep_target_is_broad(".", cwd=_REMOTE_CWD) is True
+        assert _grep_target_is_broad("..", cwd=_REMOTE_CWD) is True
+        # multi-component chains never exempt
+        assert _grep_target_is_broad("../..", cwd="/nfs/caozhou/fa_eval/FlagScale-Agent/tests/x/y") is True
 
     def test_grep_recursive_bare_glob_blocks(self):
         g = FindGuard()
@@ -226,19 +252,36 @@ class TestBroadGrepBlocked:
 
     def test_grep_recursive_no_target_blocks(self):
         g = FindGuard()
-        # No file operand -> grep defaults to `.` (the cwd) -> unbounded.
+        # No file operand -> grep defaults to `.` (the implicit cwd anchor).
+        # Same semantics as a bare `.` target: blocked when the cwd is
+        # unknown (remote payload) or broad, EXEMPT in a deeply scoped local
+        # cwd — probe the exemption's twin to prove the block path is live.
+        v = g.check_pre(_shell('ssh host "grep -rln pat"'))
+        assert v is not None and v.reason == "broad_recursive_grep", v
+
+    def test_grep_recursive_no_target_local_deep_cwd_exempt(self):
+        g = FindGuard()
+        # Local shell, deep scoped cwd: implicit `.` == scoped retrieval.
         v = g.check_pre(_shell("grep -rln pat"))
-        assert v is not None and v.reason == "broad_recursive_grep"
+        assert v is None, v
 
     def test_user_real_command_blocks(self):
         g = FindGuard()
-        # Regression: a recursive grep piped through head, with a `.` target,
-        # was the exact command that escaped the guard before this fix.
+        # Regression (original): a recursive grep piped through head, with a
+        # `.` target, was the exact command that escaped the guard before the
+        # broad-target fix. Post cwd-aware-exemption the `.` target from the
+        # pytest cwd (deeply scoped repo dir) is allowed — the UNBOUNDED
+        # residual risk this test still pins is the `~`-style / broad-root
+        # target and the remote payload. Rewrite as the new-semantics pin:
         cmd = ('cd /workspace/caozhou/baseline_v2 && ls *.py | head -30; '
-               r'echo "==="; grep -rln "initialize_model_parallel\|' 
+               r'echo "==="; grep -rln "initialize_model_parallel\|'
                'destroy_model_parallel" --include=*.py . 2>/dev/null | '
                'grep -v site-packages | head')
-        v = g.check_pre(_shell(cmd))
+        # The `.` target now resolves against the pytest process cwd (deeply
+        # scoped) -> allowed. Assert exactly that, and keep a blocked twin by
+        # re-running the same grep with a remote payload wrapper:
+        assert g.check_pre(_shell(cmd)) is None
+        v = g.check_pre(_shell('ssh h "grep -rln pat ."'))
         assert v is not None and v.reason == "broad_recursive_grep"
 
     def test_grep_cwd_relative_in_executor_payload_blocks(self):
@@ -564,8 +607,13 @@ class TestCwdRelativeEscapeFamily:
     def test_inline_pattern_with_broad_target_blocks(self):
         g = FindGuard()
         # Inline pattern + a broad positional target must still block.
-        assert g.check_pre(_shell("grep -rn --regexp=. . ./src")).reason == "broad_recursive_grep"
-        assert g.check_pre(_shell("grep -rn -e. ./src .")).reason == "broad_recursive_grep"
+        # Post cwd-aware exemption the bare `.` targets resolve against the
+        # pytest cwd (deeply scoped) -> allowed; the REMOTE payload twin keeps
+        # the broad-target guarantee pinned:
+        assert g.check_pre(_shell("grep -rn --regexp=. . ./src")) is None
+        assert g.check_pre(_shell("grep -rn -e. ./src .")) is None
+        v = g.check_pre(_shell('ssh h "grep -rn --regexp=. . ./src"'))
+        assert v is not None and v.reason == "broad_recursive_grep"
 
     def test_bare_pattern_option_keeps_scoped_target_allowed(self):
         g = FindGuard()

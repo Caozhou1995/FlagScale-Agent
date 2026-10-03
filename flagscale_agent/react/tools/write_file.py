@@ -71,6 +71,10 @@ class WriteFileTool(Tool):
                 "enum": ["write", "append"],
                 "description": "Write mode: 'write' (default) overwrites the file, 'append' adds to the end.",
             },
+            "ack_overwrite": {
+                "type": "boolean",
+                "description": "Set true ONLY to confirm a genuine full rewrite when mode='write' would shrink the existing file by >50%. Most retried writes after a guard block should use mode='append' instead.",
+            },
         },
         "required": ["path", "content"],
     }
@@ -87,6 +91,29 @@ class WriteFileTool(Tool):
 
         if _is_protected_path(path):
             return f"ERROR: Cannot write to protected system path: {path}"
+
+        # Shrink guard (mode=write only): a silent overwrite that shrinks the
+        # existing file by >50% is the signature of a truncated retry — the
+        # earlier sections are usually already on disk. Refuse softly with both
+        # escape hatches instead of destroying them (session-observed data loss).
+        if mode == "write" and not kwargs.get("ack_overwrite"):
+            try:
+                if os.path.exists(path):
+                    old_size = os.path.getsize(path)
+                    # Compare BYTES on disk with the encoded byte length of the
+                    # new content — len(content) counts characters, which
+                    # under-blocks for multibyte (CJK/emoji) text.
+                    new_size = len(content.encode("utf-8"))
+                    if old_size > 0 and new_size < old_size * 0.5:
+                        return (
+                            f"ERROR: mode=write would shrink {path} from {old_size} "
+                            f"to {new_size} bytes (>50% drop). If this is a retry "
+                            "after a guard block, the earlier sections are on disk — "
+                            "use mode=append for the continuation, or pass "
+                            "ack_overwrite=true to confirm a genuine full rewrite."
+                        )
+            except OSError:
+                pass  # size probe failed -> fall through to the normal write path
 
         file_mode = "a" if mode == "append" else "w"
         try:

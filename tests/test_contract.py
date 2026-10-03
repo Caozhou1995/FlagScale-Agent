@@ -182,3 +182,55 @@ class TestRenderContractCitation:
         a = _render_contract(_mk(tmp_path, goal="review the diff"))
         b = _render_contract(_mk(tmp_path, goal="count files"))
         assert "## Citation requirement" in a and "## Citation requirement" in b
+
+
+class TestRenderContractReviewer:
+    """Reviewer contracts carry the discipline lines ONLY via the explicit
+    `constraints.reviewer` flag — normal contracts must stay unchanged."""
+
+    MARKERS = (
+        "## Reviewer discipline",
+        "LEADS, not evidence",
+        "revision you reviewed",
+        "FLAGSCALE_SESSION_ROOT",
+    )
+
+    def _render(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _render_contract
+        return _render_contract(
+            _mk(tmp_path, constraints={
+                "writable": [str(tmp_path)],
+                "forbidden": ["modify any file"],
+                "reviewer": True,
+            })
+        )
+
+    def test_reviewer_contract_has_discipline_lines(self, tmp_path):
+        text = self._render(tmp_path)
+        for m in self.MARKERS:
+            assert m in text, m
+
+    def test_normal_contract_has_no_discipline_lines(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _render_contract
+        text = _render_contract(_mk(tmp_path))
+        for m in self.MARKERS:
+            assert m not in text, m
+
+    def test_flag_off_contract_has_no_discipline_lines(self, tmp_path):
+        # explicit reviewer:false must behave like a normal contract
+        from flagscale_agent.react.multi_agent.spawn import _render_contract
+        text = _render_contract(
+            _mk(tmp_path, constraints={
+                "writable": [str(tmp_path)],
+                "forbidden": ["no network"],
+                "reviewer": False,
+            })
+        )
+        for m in self.MARKERS:
+            assert m not in text, m
+
+    def test_reviewer_flag_is_documented_in_schema(self):
+        import inspect
+        from flagscale_agent.react.multi_agent import spawn
+        src = inspect.getsource(spawn)
+        assert "reviewer (bool" in src

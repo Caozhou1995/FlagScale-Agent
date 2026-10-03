@@ -365,6 +365,12 @@ class WorkerAgent:
         # instead of back-to-back bare polling — each empty round is a full LLM
         # iteration spent re-reading the same tokens. Never blocks.
         guard_registry.register(PollSpacingGuard())
+        # WriteParamLossGuard (always active, inject-only): when an executed
+        # write_file returns the registry's missing-content error, explain the
+        # parallel-batch truncation cause and the solo-resend fix — the raw
+        # error names the symptom but not the cause. Never blocks.
+        from flagscale_agent.react.guard.write_param_loss import WriteParamLossGuard
+        guard_registry.register(WriteParamLossGuard())
         # Memory discipline guard (always active)
         guard_registry.register(MemoryDisciplineGuard())
         # Memory post-check guard (always active, inject-only): reconciles the

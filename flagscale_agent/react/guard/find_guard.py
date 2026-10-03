@@ -47,6 +47,7 @@ Detection is shell-aware so it does not over- or under-block:
 
 from __future__ import annotations
 
+import os
 import re
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
@@ -97,7 +98,7 @@ _GREP_CWD_RELATIVE_TARGETS = {
 }
 
 
-def _grep_target_is_broad(tok: str) -> bool:
+def _grep_target_is_broad(tok: str, cwd: str | None | object = None) -> bool:
     """True if a grep TARGET token is a broad root or a cwd-relative anchor.
 
     Broad = an explicit system/shared-mount root (see _GREP_BROAD_ROOTS) OR an
@@ -105,9 +106,34 @@ def _grep_target_is_broad(tok: str) -> bool:
     a bare `*` glob, `$HOME`-like env vars, and the whole-tree glob forms
     (`./*`, `../*`, `~/*`). A target naming a real component (`./src`, `src`,
     `/public-nvme/proj/src`) is scoped -> False.
+
+    Single-component cwd-relative anchors (a bare `.` or `..` with no extra
+    components) are EXEMPT when the process cwd (os.getcwd()) is itself a
+    deeply scoped working directory: depth >= 3 and not a broad root. The
+    guard cannot statically know the cwd; at runtime it can — a
+    `grep -rn pat .` issued from /nfs/caozhou/fa_eval/FlagScale-Agent is
+    exactly the scoped retrieval the guard message recommends, while the same
+    target from / or a mount top stays broad. Multi-component chains
+    (`../..`, `./*`, `../*`, `~/*`) and env-var anchors are NEVER exempt (they
+    can escape the scoped cwd upward).
+
+    `cwd` threading: for commands the guard parses as LOCAL shell text the
+    process cwd is the shell's cwd (same container), so `None` means "use
+    os.getcwd()". For payloads handed to REMOTE/other-root EXECUTORS
+    (ssh host "grep -rln pat .", docker exec ...) the exemption does not
+    apply — the payload's cwd is unknown and may be an NFS root — so callers
+    scanning payloads pass a non-None sentinel that disables the exemption.
     """
     t = tok.rstrip("/") or "/"
     if t in _GREP_BROAD_ROOTS or t in _GREP_CWD_RELATIVE_TARGETS:
+        if t in (".", "..") and tok == t:
+            # tok == t excludes `./`-style tokens with a real component chain
+            # (already rstripped here — only bare "."/".." land in this set).
+            if cwd is not _REMOTE_CWD:
+                probe = cwd if cwd is not None else os.getcwd()
+                parts = [p for p in probe.split("/") if p]
+                if len(parts) >= 3 and probe.rstrip("/") not in _GREP_BROAD_ROOTS:
+                    return False
         return True
     # `.`/`..`/`~` optionally followed by more `.`/`..`/`*` components, with any
     # number of slashes between them (`..//..` is the same path as `../..`):
@@ -119,6 +145,12 @@ def _grep_target_is_broad(tok: str) -> bool:
 
 # Prefix words that may precede the real command word (`sudo grep ...`).
 _CMD_PREFIXES = {"sudo", "env", "command", "nohup", "time", "nice", "stdbuf"}
+
+# Sentinel passed as `cwd` when a grep target is being classified inside a
+# payload that will NOT run in this process's cwd (ssh/docker/kubectl payload,
+# pipe-to-shell fed from a prior stage): the local-cwd exemption for bare
+# `.`/`..` must not apply because the effective cwd is unknown.
+_REMOTE_CWD = object()
 
 
 # ── Hidden-find detection: payloads handed to remote/shell EXECUTORS ──
@@ -141,6 +173,15 @@ _EXECUTORS = {
     "nohup", "xargs", "parallel", "env",
 }
 _SHELL_WRAPPERS = {"bash", "sh", "zsh", "fish", "csh", "tcsh", "ksh", "dash"}
+
+# Executors whose payload runs OUTSIDE this process's cwd (another host,
+# container, or namespace): the bare-`.`/`..` cwd exemption must NOT apply to
+# their payloads — the effective cwd there is unknown (may be an NFS root).
+# `su`/`doas` included conservatively: login forms change to the user's HOME.
+_REMOTE_EXECUTORS = {
+    "ssh", "scp", "sftp", "mosh", "kubectl", "docker", "podman", "nerdctl",
+    "ctr", "crictl", "nsenter", "su", "doas",
+}
 
 _MAX_PAYLOAD_DEPTH = 6
 
@@ -222,8 +263,14 @@ def _statement_find_violation(text: str) -> GuardVerdict | None:
     return None
 
 
-def _violation_in_shell_text(text: str) -> GuardVerdict | None:
-    """Scan an already-sanitized shell fragment for find / broad grep."""
+def _violation_in_shell_text(
+    text: str, cwd: str | None | object = None,
+) -> GuardVerdict | None:
+    """Scan an already-sanitized shell fragment for find / broad grep.
+
+    `cwd` threads the grep-target context: None = this process's cwd;
+    _REMOTE_CWD = payload of a remote/other-root executor (exemption off).
+    """
     v = _statement_find_violation(text)
     if v is not None:
         return v
@@ -231,19 +278,21 @@ def _violation_in_shell_text(text: str) -> GuardVerdict | None:
         return GuardVerdict.block(
             _FIND_MESSAGE, reason="find_invocation", category="find_guard",
         )
-    if _grep_is_broad(text):
+    if _grep_is_broad(text, cwd):
         return GuardVerdict.block(
             _GREP_MESSAGE, reason="broad_recursive_grep", category="find_guard",
         )
     return None
 
 
-def _cmd_subst_violation(sanitized: str) -> GuardVerdict | None:
+def _cmd_subst_violation(
+    sanitized: str, cwd: str | None | object = None,
+) -> GuardVerdict | None:
     """find inside `$( ... )` or backticks (command substitution executes)."""
     for m in re.finditer(r"\$\(([^()]*)\)|`([^`]*)`", sanitized):
         inner = m.group(1) or m.group(2) or ""
         # Prefix with a dummy separator so a leading find is a command word.
-        v = _violation_in_shell_text("dummy_sep; " + inner)
+        v = _violation_in_shell_text("dummy_sep; " + inner, cwd)
         if v is not None:
             return v
     return None
@@ -264,7 +313,9 @@ def _xargs_find_violation(toks: list[str]) -> GuardVerdict | None:
     return None
 
 
-def _hidden_violation(cmd: str, depth: int = 0) -> GuardVerdict | None:
+def _hidden_violation(
+    cmd: str, depth: int = 0, cwd: str | None | object = None,
+) -> GuardVerdict | None:
     """Detect find / broad grep hidden inside executor payloads.
 
     `cmd` is the RAW command; this function blanks heredoc bodies itself (a
@@ -288,16 +339,23 @@ def _hidden_violation(cmd: str, depth: int = 0) -> GuardVerdict | None:
             return v
         word = _cmd_base(_statement_command_word(toks))
         if word in _EXECUTORS or word in _SHELL_WRAPPERS:
+            # A remote/other-root executor's payload runs with an unknown cwd
+            # (and once remote, nested payloads stay remote); a local shell
+            # wrapper's payload inherits this process's cwd.
+            if cwd is _REMOTE_CWD or word in _REMOTE_EXECUTORS:
+                payload_cwd: str | None | object = _REMOTE_CWD
+            else:
+                payload_cwd = cwd
             for payload in _extract_payloads(stmt):
-                v = _violation_in_shell_text(payload)
+                v = _violation_in_shell_text(payload, payload_cwd)
                 if v is None:
-                    v = _hidden_violation(payload, depth + 1)
+                    v = _hidden_violation(payload, depth + 1, payload_cwd)
                 if v is not None:
                     return v
-    return _cmd_subst_violation(blanked)
+    return _cmd_subst_violation(blanked, cwd)
 
 
-def _grep_is_broad(sanitized: str) -> bool:
+def _grep_is_broad(sanitized: str, cwd: str | None | object = None) -> bool:
     """True if `sanitized` invokes a RECURSIVE grep over a broad root.
 
     Only recursive greps targeting a whole system tree / shared-mount root are
@@ -342,7 +400,7 @@ def _grep_is_broad(sanitized: str) -> bool:
         # positionals after it. The no-target case (grep defaults to `.`) is
         # caught by the quote-preserving lexer path `_toks_recursive_broad`.
         targets = positionals[1:] if len(positionals) >= 2 else positionals
-        if any(_grep_target_is_broad(t) for t in targets):
+        if any(_grep_target_is_broad(t, cwd) for t in targets):
             return True
     return False
 
@@ -600,7 +658,9 @@ def _resolve_var(tok: str, tainted: dict[str, str]) -> str:
     return tok
 
 
-def _toks_recursive_broad(toks: list[str]) -> bool:
+def _toks_recursive_broad(
+    toks: list[str], cwd: str | None | object = None,
+) -> bool:
     """True if a grep token tail is a RECURSIVE grep over a broad/unbounded root.
 
     The tokens come from the quote-MERGING lexer, so the pattern is intact: the
@@ -637,8 +697,12 @@ def _toks_recursive_broad(toks: list[str]) -> bool:
     # are those after it.
     targets = positionals if pattern_supplied else positionals[1:]
     if not targets:
-        return True
-    return any(_grep_target_is_broad(t) for t in targets)
+        # No positional target: grep finds files in the shell's cwd — the
+        # implicit target is `.`. Classify it the same as a bare `.` anchor:
+        # exempt ONLY in a deeply scoped local cwd, blocked when the cwd is
+        # unknown (remote payload) or broad.
+        return _grep_target_is_broad(".", cwd)
+    return any(_grep_target_is_broad(t, cwd) for t in targets)
 
 
 def _shell_tail_reads_stdin(toks: list[str]) -> bool:
@@ -654,6 +718,7 @@ def _shell_tail_reads_stdin(toks: list[str]) -> bool:
 
 def _stage_violation(
     st_text: str, toks: list[str], tainted: dict[str, str], depth: int,
+    cwd: str | None | object = None,
 ) -> GuardVerdict | None:
     """One pipeline segment: taint, head find/grep, executor bare tokens,
     quoted payload recursion."""
@@ -689,7 +754,7 @@ def _stage_violation(
         return GuardVerdict.block(
             _FIND_MESSAGE, reason="find_invocation", category="find_guard",
         )
-    if head == "grep" and _toks_recursive_broad(toks[i + 1 :]):
+    if head == "grep" and _toks_recursive_broad(toks[i + 1 :], cwd):
         return GuardVerdict.block(
             _GREP_MESSAGE, reason="broad_recursive_grep", category="find_guard",
         )
@@ -708,14 +773,35 @@ def _stage_violation(
                     _FIND_MESSAGE, reason="find_invocation",
                     category="find_guard",
                 )
-            if rbase == "grep" and _toks_recursive_broad(toks[j + 1 :]):
-                return GuardVerdict.block(
-                    _GREP_MESSAGE, reason="broad_recursive_grep",
-                    category="find_guard",
+            if rbase == "grep":
+                # Remote-executor payloads inherit _REMOTE_CWD; local wrappers
+                # inherit the threaded cwd. A grep is remote only when a REMOTE
+                # EXECUTOR appears EARLIER in the wrapper chain
+                # (`docker exec ctr grep -rn p .`) — an executor word appearing
+                # only as the grep's own TARGET arg (`timeout 10 grep -rn p .
+                # docker`) must not disable the local-cwd exemption.
+                remote = cwd is _REMOTE_CWD or any(
+                    _cmd_base(_resolve_var(toks[m], tainted)) in _REMOTE_EXECUTORS
+                    for m in range(0, j)
                 )
+                tok_cwd: str | None | object = _REMOTE_CWD if remote else cwd
+                if _toks_recursive_broad(toks[j + 1 :], tok_cwd):
+                    return GuardVerdict.block(
+                        _GREP_MESSAGE, reason="broad_recursive_grep",
+                        category="find_guard",
+                    )
         # Quoted payloads the wrapper will execute (ssh / docker / bash -c).
+        # Remote-executor payloads inherit _REMOTE_CWD; local wrappers inherit
+        # the threaded cwd.
+        head0 = _cmd_base(toks[0])
+        if cwd is _REMOTE_CWD or head0 in _REMOTE_EXECUTORS:
+            payload_cwd2: str | None | object = _REMOTE_CWD
+        else:
+            payload_cwd2 = cwd
         for payload in _extract_payloads(st_text):
-            v = _violation_in_shell_text(payload) or _scan(payload, tainted, depth + 1)
+            v = _violation_in_shell_text(payload, payload_cwd2) or _scan(
+                payload, tainted, depth + 1, payload_cwd2,
+            )
             if v is not None:
                 return v
     # Prefix-skipped statement find/grep: `sudo find /x`, `nohup grep -rn p /`.
@@ -728,18 +814,23 @@ def _stage_violation(
             return GuardVerdict.block(
                 _FIND_MESSAGE, reason="find_invocation", category="find_guard",
             )
-        if _cmd_base(toks[k]) == "grep" and _toks_recursive_broad(toks[k + 1 :]):
+        if _cmd_base(toks[k]) == "grep" and _toks_recursive_broad(toks[k + 1 :], cwd):
             return GuardVerdict.block(
                 _GREP_MESSAGE, reason="broad_recursive_grep", category="find_guard",
             )
     return None
 
 
-def _scan(text: str, tainted: dict[str, str] | None = None, depth: int = 0) -> GuardVerdict | None:
+def _scan(
+    text: str, tainted: dict[str, str] | None = None, depth: int = 0,
+    cwd: str | None | object = None,
+) -> GuardVerdict | None:
     """Lexical scanner over the raw command (quotes preserved) — the round-2
     escape-family net. See the block comment above `_EXEC_WRAPPERS` for the
     family -> rule map. Recurses into payloads/backticks with depth bound;
-    `tainted` threads assignment values across statements and into payloads.
+    `tainted` threads assignment values across statements and into payloads;
+    `cwd` threads the grep-target context (None = this process's cwd,
+    _REMOTE_CWD = remote/other-root executor payload).
     """
     if depth >= _MAX_PAYLOAD_DEPTH:
         return None
@@ -753,7 +844,7 @@ def _scan(text: str, tainted: dict[str, str] | None = None, depth: int = 0) -> G
         stage_texts = _split_outside_quotes(pipeline, "|")
         stage_pairs = [(st, _lex_tokens(st)) for st in stage_texts]
         for st_text, toks in stage_pairs:
-            v = _stage_violation(st_text, toks, tainted, depth)
+            v = _stage_violation(st_text, toks, tainted, depth, cwd)
             if v is not None:
                 return v
             if toks and _cmd_base(toks[0]) in _EXEC_WRAPPERS:
@@ -770,21 +861,25 @@ def _scan(text: str, tainted: dict[str, str] | None = None, depth: int = 0) -> G
             ):
                 for st_text, _ in stage_pairs[:-1]:
                     for payload in _extract_payloads(st_text):
-                        v = _violation_in_shell_text(payload) or _scan(
-                            payload, tainted, depth + 1,
+                        v = _violation_in_shell_text(payload, _REMOTE_CWD) or _scan(
+                            payload, tainted, depth + 1, _REMOTE_CWD,
                         )
                         if v is not None:
                             return v
     # Backtick command substitution executes its inner text.
     for m in _BACKTICK_RE.finditer(blanked):
-        v = _violation_in_shell_text(m.group(1)) or _scan(m.group(1), tainted, depth + 1)
+        v = _violation_in_shell_text(m.group(1), cwd) or _scan(
+            m.group(1), tainted, depth + 1, cwd,
+        )
         if v is not None:
             return v
     # Heredoc bodies are SCRIPTS when a shell/executor consumes them
     # (`bash <<EOF`, `ssh host <<EOF`) — data otherwise (cat/python).
     if any_executor_stage:
         for body in bodies:
-            v = _violation_in_shell_text(body) or _scan(body, tainted, depth + 1)
+            v = _violation_in_shell_text(body, _REMOTE_CWD) or _scan(
+                body, tainted, depth + 1, _REMOTE_CWD,
+            )
             if v is not None:
                 return v
     return None
@@ -874,7 +969,7 @@ class FindGuard(Guard):
         # they still execute (often on remote NFS trees, where a stray
         # recursive find is the slowest of all). Pass the RAW command —
         # _hidden_violation re-derives its own quote-preserving view.
-        hidden = _hidden_violation(command)
+        hidden = _hidden_violation(command, cwd=os.getcwd())
         if hidden is not None:
             return hidden
 
@@ -882,7 +977,7 @@ class FindGuard(Guard):
         # string-regex layers above cannot see (word-splitting, line
         # continuations, subshells, variable indirection, wrapper executors,
         # pipe-to-shell, nested substitution, shell-fed heredocs).
-        scanned = _scan(command)
+        scanned = _scan(command, cwd=os.getcwd())
         if scanned is not None:
             return scanned
 

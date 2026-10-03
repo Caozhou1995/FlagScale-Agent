@@ -871,8 +871,10 @@ While you continue advancing (do NOT wait on it), spawn_worker:
       an input trusted, a reading of the instructions taken as given): the reviewer
       reasons without your context, so it can test a premise your own checks all
       inherited — ask it what the deliverable would miss if one were false.
-  - constraints: read-only reviewer (writable: [] or a report path outside the
-    reviewed tree; forbidden: modify any file), max_minutes ~3.
+  - constraints: read-only reviewer (writable: [the report dir — must contain
+    output_ptr; an empty list is rejected by validation]; set reviewer: true so
+    the contract carries the reviewer-discipline lines; forbidden: modify any
+    file), max_minutes ~3.
   - acceptance: a parent-runnable predicate over the findings report (e.g.
     test -s <report>), never "reviewer says it reviewed".
   - If you skip the spawn, the skip itself must carry an ORACLE BLIND-SPOT

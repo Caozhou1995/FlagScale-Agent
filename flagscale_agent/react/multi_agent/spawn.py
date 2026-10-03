@@ -131,6 +131,34 @@ def _render_contract(c: Contract) -> str:
         "under the infrastructure depth cap; a spawn beyond the cap is refused "
         "with an explicit error. You cannot raise the cap."
     )
+    # Reviewer detection: an EXPLICIT `constraints.reviewer` flag. This flag —
+    # not a read-only check — is the only reliable signal: a "writable == []"
+    # predicate is UNREACHABLE here, because Contract.validate() requires
+    # output_ptr ∈ constraints.writable, so every contract that reaches this
+    # render point has at least one writable dir (a reviewer therefore carries
+    # writable=[report_dir] PLUS reviewer:true). Reviewer-only discipline lines
+    # (audit lessons 1b/1c/1d) are appended HERE, not in the generic template,
+    # so normal subtask contracts stay unchanged.
+    if cons.get("reviewer"):
+        lines.append("")
+        lines.append("## Reviewer discipline")
+        lines.append(
+            "Your file:line citations are LEADS, not evidence: the parent "
+            "re-verifies each one before acting. Cite exactly what you saw "
+            "(quote <=1 line + number), never from memory; if you could not "
+            "open the cited location, say so."
+        )
+        lines.append(
+            "If the artifact may change during your review, note the revision "
+            "you reviewed (git rev / mtime / line count) in your report; "
+            "findings against a stale revision must say so."
+        )
+        lines.append(
+            "For a follow-up review: your session env exposes "
+            "FLAGSCALE_SESSION_ROOT/ID of the parent — recall_search the "
+            "parent conversation log for prior findings and state whether "
+            "each prior finding was fixed, plus your own new findings."
+        )
     lines.append("")
     lines.append(
         "## Citation requirement"
@@ -255,7 +283,9 @@ class SpawnWorkerTool(Tool):
                 "description": (
                     "Constraints. Conventional keys: writable (list of absolute "
                     "dirs; output_ptr must be inside one of them), forbidden "
-                    "(list[str]), max_minutes (number)."
+                    "(list[str]), max_minutes (number), reviewer (bool; set "
+                    "true for a read-only review task so its contract carries "
+                    "the reviewer-discipline lines)."
                 ),
             },
             "acceptance": {
@@ -515,6 +545,14 @@ class SpawnWorkerTool(Tool):
         except Exception as e:
             self._safe_fail(c.id, f"failed to open worker.log: {e}")
             return f"ERROR: failed to open worker.log: {e}"
+
+        # Two-line header: a worker.log read in isolation (tail, artifacts
+        # export, forensic sweep) must self-identify its task. Written and
+        # flushed BEFORE Popen — the child inherits the shared
+        # open-file-description offset, so its output continues AFTER the
+        # header rather than overwriting it.
+        log_fh.write(f"# task_id: {c.id}\n# contract: {contract_path}\n")
+        log_fh.flush()
 
         # NOTE: typer requires OPTIONS before the positional `query` arg —
         # `flagscale-agent <path> --time-budget-sec N` fails with

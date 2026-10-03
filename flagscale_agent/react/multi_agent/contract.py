@@ -99,7 +99,7 @@ class Contract:
         """
         # 1. goal non-empty, <= 200 chars; acceptance non-empty, each check non-empty
         if not self.goal or not self.goal.strip():
-            raise ContractError("goal must be non-empty")
+            raise ContractError(f"goal must be non-empty (got: {self.goal!r})")
         if len(self.goal) > GOAL_MAX_LEN:
             raise ContractError(
                 f"goal exceeds {GOAL_MAX_LEN} chars (got {len(self.goal)})"

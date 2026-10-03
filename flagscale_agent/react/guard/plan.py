@@ -110,8 +110,9 @@ wait for step 2. Contract:
   - goal: "Propose 2-3 genuinely different framings of the task — different
     method-class, different decomposition, or a different reading of an ambiguous
     term — NOT refinements of this plan."
-  - constraints: read-only (writable: [] or a scratch path; forbidden: modify any
-    file), max_minutes: 3. Give it the task's ORIGINAL statement, not your plan.
+  - constraints: read-only (writable: [one scratch dir that contains output_ptr —
+    an empty list is rejected by validation]; forbidden: modify any file),
+    max_minutes: 3. Give it the task's ORIGINAL statement, not your plan.
   - The diverger proposes IDEAS ONLY: no verdicts, no ranking, no agreeing with
     you. It answers "what else could this problem be", not "is this plan good".
 When it returns, issue a ONE-LINE ruling for EACH alternative it proposed —
