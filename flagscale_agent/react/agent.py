@@ -107,6 +107,7 @@ from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
 from flagscale_agent.react.guard.first_e2e_run import FirstE2eRunGuard
 from flagscale_agent.react.guard.time_budget import TimeBudgetGuard
+from flagscale_agent.react.guard.reviewer_deadline import ReviewerDeadlineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
@@ -384,6 +385,12 @@ class WorkerAgent:
         # Progress-order guard: at 25%/50% wall-clock budget spent, block (overridable)
         # once per turn to force a write-through / first-e2e checkpoint.
         guard_registry.register(FirstE2eRunGuard(stats_fn=self._task_budget_stats))
+        # Reviewer deadline guard (always active, budget-aware): hard-stops
+        # review waiting that would otherwise eat the tail of the enforced
+        # wall-clock budget — 2 not-ready polls of the same reviewer-class task
+        # near the deadline refuse the next poll (adjudicate from evidence
+        # already held); far from the deadline it stays fully silent.
+        guard_registry.register(ReviewerDeadlineGuard(stats_fn=self._task_budget_stats))
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
