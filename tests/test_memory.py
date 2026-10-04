@@ -295,9 +295,18 @@ class TestMemoryWriteTool:
     def test_supersedes_deletes_old_keys(self, tmp_path):
         mem, tool = self._make_tool(tmp_path)
         mem.put("fact/env/old_version", "fact", "old", "s1")
+        # Two-phase confirm (proposal eb7a59cb): first call BLOCKS with a
+        # preview, nothing is deleted; confirm=true executes the deletion.
         result = tool.execute(
             key="fact/env/new_version", type="fact", content="new",
             supersedes=["fact/env/old_version"]
+        )
+        assert "BLOCKED" in result
+        assert "old" in result  # preview shows what the old key holds
+        assert mem.get("fact/env/old_version") is not None
+        result = tool.execute(
+            key="fact/env/new_version", type="fact", content="new",
+            supersedes=["fact/env/old_version"], confirm=True
         )
         assert "Superseded" in result
         assert mem.get("fact/env/old_version") is None
@@ -358,9 +367,16 @@ class TestMemoryWriteTool:
     def test_supersedes_bypasses_gate(self, tmp_path):
         mem, tool = self._make_tool(tmp_path)
         mem.put("fact/tbench/mjcf_relaunch_0824_1056", "fact", "x", "s1")
+        # Two-phase confirm: BLOCKED first (which also bypasses the
+        # semantic-uniqueness gate), then confirm=true to execute.
         result = tool.execute(
             key="fact/tbench/mjcf_relaunch_0824_1307", type="fact", content="z",
             supersedes=["fact/tbench/mjcf_relaunch_0824_1056"]
+        )
+        assert "BLOCKED" in result
+        result = tool.execute(
+            key="fact/tbench/mjcf_relaunch_0824_1307", type="fact", content="z",
+            supersedes=["fact/tbench/mjcf_relaunch_0824_1056"], confirm=True
         )
         assert "Memorized" in result
         assert "Superseded" in result

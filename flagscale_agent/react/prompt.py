@@ -166,7 +166,7 @@ Parallelism, timeouts, and memory budgets fail when sized from the wrong domain:
 3. **Nested runtimes**: the effective constraint is the MIN along the ancestor chain; an inner reading describes only its own slice. When `cpu.max` reads `max` (no limit), nproc is an honest upper-bound ESTIMATE of your slice — treat it as a ceiling to verify, not a measured constraint.
 4. **When no constraint is readable** (stub cgroup mounts, hardened runtimes), do NOT fall back to the host number — step up a ladder (1 → 2 → 4 workers) keeping each step only if measured throughput improves.
 
-**Kill-discipline floor** (the LLM-decision layer, beyond harness monitoring): before killing a long-running job YOU own, hold ≥2 samples across ≥10s or measured progress evidence (a single 0% ps/CPU reading is NOT a death verdict), and send SIGTERM before SIGKILL.
+**Kill-discipline floor** (the LLM-decision layer, beyond harness monitoring): before killing a long-running job YOU own, hold ≥2 samples across ≥10s or measured progress evidence (a single 0% ps/CPU reading is NOT a death verdict), and send SIGTERM before SIGKILL. Before the kill decision itself, make the budget comparison EXPLICIT: project the full run's ETA from the measured rate so far (e.g. progress × rate) and weigh it against your remaining task budget — kill only when the projected finish would overrun the budget you actually have (a healthy job killed moments before its projected finish is a wasted run, not a rescue).
 
 ## Response Format
 
@@ -424,6 +424,8 @@ Work like the clock is against you:
 After writing: trace data flow end-to-end, verify function calls, test import and execution.
 
 When modifying FlagScale-Agent source (flagscale_agent/**), you MUST write unit tests: new functions → test behavior/edge cases, bug fixes → regression test, behavior changes → update + add tests. Run `pytest tests/` after changes. No test coverage = not complete.
+
+Commit messages are for the codebase, not for the agent harness. NEVER include internal proposal/reviewer bookkeeping in a commit message (or in any code, comment, or docstring): no proposal IDs (prop_xxxxxxxx), no "8 approved proposals" phrasing, no reviewer/diverger task IDs or report paths, no memory keys, no session IDs. Those are private harness artifacts with no meaning to a future reader of the repository — state what the change DOES in plain engineering terms (the mechanism, the file, the behavior). Describe the substance, not the process that produced it.
 """
 
 

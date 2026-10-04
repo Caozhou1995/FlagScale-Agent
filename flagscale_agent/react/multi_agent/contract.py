@@ -54,6 +54,36 @@ def _is_abs(p: str) -> bool:
     return isinstance(p, str) and p.startswith("/") and os.path.isabs(p)
 
 
+def _check_memory_key_exists(i: int, key: str) -> None:
+    """Pre-spawn existence check for kind=="memory_key" inputs.
+
+    A contract that promises the worker a memory key must name one that
+    EXISTS at freeze time — a typo'd or stale key silently hands the worker
+    an empty dict and wastes its first turns rediscovering the miss. Fail
+    closed here, at the parent, with the nearest candidate keys so the fix
+    is one lookup away. Lazy imports keep this pure-stdlib module
+    import-cycle-free (react.memory ← react.paths only).
+    """
+    from flagscale_agent.react.memory import Memory
+    from flagscale_agent.react.paths import get_memory_dir
+
+    mem = Memory(get_memory_dir())
+    entry = mem.get(key)
+    if entry is not None:
+        return
+    candidates = [
+        e["key"] for e in mem.list_by_prefix(key.rsplit("/", 1)[0] + "/")
+    ][:8]
+    hint = (
+        "\n  candidates under this domain: " + ", ".join(candidates)
+        if candidates
+        else "\n  (no entries under this domain)"
+    )
+    raise ContractError(
+        f"inputs[{i}] memory_key does not exist: {key!r}{hint}"
+    )
+
+
 def compute_id(goal: str, constraints: Dict[str, Any], acceptance: List[Dict[str, Any]]) -> str:
     """Content-addressed id: sha256(goal|constraints_json|acceptance_json)[:12].
 
@@ -121,6 +151,11 @@ class Contract:
                 raise ContractError(f"inputs[{i}].value must be an absolute path: {val!r}")
             if check_inputs_exist and inp.get("kind") == "path" and not os.path.exists(val):
                 raise ContractError(f"inputs[{i}] path does not exist: {val!r}")
+            if inp.get("kind") == "memory_key":
+                if not isinstance(val, str) or not val.strip():
+                    raise ContractError(f"inputs[{i}].value must be a non-empty string: {val!r}")
+                if check_inputs_exist:
+                    _check_memory_key_exists(i, val.strip())
 
         # 3. output_ptr ∈ writable
         writable = (self.constraints or {}).get("writable") or []

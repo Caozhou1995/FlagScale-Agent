@@ -83,7 +83,12 @@ class PlanCreateTool(Tool):
                     "or your answer, state the concrete retry path (fix the parse, "
                     "switch method, re-read the contract). If any of the three has "
                     "no answer, that is a wrong-approach signature — change the "
-                    "approach, not the answer."
+                    "approach, not the answer. "
+                    "Bind the oracle at framing time: write its FIRST exercise "
+                    "(the exact command/check that runs it) into the acceptance "
+                    "of the FIRST load-bearing step, so the acceptance→verification "
+                    "channel forces the oracle's evidence to exist early, while the "
+                    "premises are still cheap to revise."
                 ),
             },
         },

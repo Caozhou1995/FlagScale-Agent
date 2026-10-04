@@ -46,9 +46,35 @@ Execution flow (structured):
 
 from __future__ import annotations
 
+import os
 import re
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
+
+
+def _self_is_reviewer_worker() -> bool:
+    """True when THIS process is a spawned reviewer worker.
+
+    The reviewer demand ("spawn ONE read-only reviewer per passing step_done")
+    is written for the PARENT: a reviewer worker must not nest further reviewer
+    demands — that would self-reference the demand chain and contend for the
+    shared concurrency gate. Detect via the contract file spawned into the
+    worker's env (CONTRACT_PATH_ENV): the "## Reviewer discipline" section is
+    rendered ONLY when constraints.reviewer=True (spawn.py). A diverger/normal
+    worker contract lacks the section, so the demand fires as usual. Errors
+    fail silent-False (a non-reviewer path simply demands normally).
+    """
+    try:
+        if not is_worker():
+            return False
+        path = os.environ.get(CONTRACT_PATH_ENV, "")
+        if not path:
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            return "## Reviewer discipline" in f.read()
+    except Exception:
+        return False
 
 
 _VERIFICATION_REQUIRED_WITH_ACCEPTANCE = """[VerificationGuard] Before this step is done — answer three questions per criterion.
@@ -1025,7 +1051,7 @@ class VerificationGuard(Guard):
         if self._premortem_pending:
             self._premortem_pending = False
             msg = _STEP_DONE_PREMORTEM
-            if not self._reviewer_demanded:
+            if not self._reviewer_demanded and not _self_is_reviewer_worker():
                 # Demand once per run (every step_done was already given its
                 # own pre-mortem; the reviewer habit establishes from the
                 # first). The completion gate keeps firing from that point on.

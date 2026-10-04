@@ -71,6 +71,30 @@ class PostEditFarEndGuard(Guard):
             return None
 
         result = (ctx.tool_result or "").lstrip()
+        # A guard-blocked edit NEVER landed, yet the surrounding advisory
+        # stream may still print "[Post-edit] ... edited" — the false-success
+        # header that hid a real loss (a 5-edit parallel batch where cold read
+        # showed 0 of 5 landed). When the kernel's block marker is present,
+        # swap the usual far-end hint for a MANDATORY cold re-read demand.
+        if result.startswith("[BLOCKED BY GUARD]"):
+            path = str(ctx.tool_args.get("path") or "").strip()
+            if path:
+                return GuardVerdict.inject(
+                    (
+                        "[PostEditBlocked] This edit did NOT land — a guard "
+                        f"blocked it and NOTHING changed at {path}. Do not "
+                        "trust any '[Post-edit] ... edited' advisory printed "
+                        "alongside the block. MANDATORY cold re-read NOW: "
+                        "read_file the exact path (and the line range you "
+                        "were editing) from DISK, confirm the anchor string "
+                        "is absent, then re-issue the edit sequentially."
+                    ),
+                    reason="post_edit_blocked_reverify",
+                    # Independent category — the registry deduplicates
+                    # injects by category; sharing would swallow this.
+                    category="post_edit_far_end_blocked",
+                )
+            return None
         # Fire on SUCCESS only. Failures surface as "ERROR: ..." (tool-level) or
         # "Error executing tool: ..." (kernel exception wrapper) — a failed edit
         # has nothing at the far end to verify.

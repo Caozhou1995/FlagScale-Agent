@@ -16,7 +16,35 @@
 
 from __future__ import annotations
 
+import os
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
+
+
+def _self_is_diverger_worker() -> bool:
+    """True when THIS process is a spawned diverger worker.
+
+    The diverger demand ("propose 2-3 genuinely different framings, then
+    rule") is a PARENT-side habit: a diverger worker already IS the
+    alternative-framing channel — nesting the demand inside it would ask it
+    to review its own re-framing and contend for the shared concurrency
+    gate. There is no dedicated constraints flag for the diverger role, so
+    detect via the contract text: the _DIVERGER_INJECT goal template
+    ("Propose 2-3 genuinely different framings of the task") is rendered
+    into every diverger contract, and no other contract type carries that
+    phrase. Errors fail silent-False (demand fires as usual).
+    """
+    try:
+        if not is_worker():
+            return False
+        path = os.environ.get(CONTRACT_PATH_ENV, "")
+        if not path:
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            return "framings of the task" in f.read()
+    except Exception:
+        return False
 
 
 # Folded into the plan-framing gate on purpose: qualifier extraction is a
@@ -217,7 +245,9 @@ class PlanGuard(Guard):
             # already have carried them — consume the flags unconditionally
             # either way, so the NEXT framing re-arms them.
             inject_qualifier = not self._qualifier_reminded
-            inject_diverger = not self._diverger_reminded
+            inject_diverger = (
+                not self._diverger_reminded and not _self_is_diverger_worker()
+            )
             self._qualifier_reminded = False
             self._diverger_reminded = False
             if not inject_qualifier and not inject_diverger:

@@ -19,6 +19,13 @@ import re
 from flagscale_agent.react.tools.base import Tool
 
 
+def _entry_digest(entry: dict) -> str:
+    """One-line digest of a memory entry for deletion previews/receipts."""
+    content = str(entry.get("content", ""))
+    first_line = content.splitlines()[0] if content else ""
+    return f"{len(content)} chars, first line: {first_line!r}"
+
+
 class MemoryWriteTool(Tool):
     name = "memory_write"
     description = (
@@ -71,7 +78,22 @@ class MemoryWriteTool(Tool):
             "supersedes": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of old memory keys to delete (this entry replaces them).",
+                "description": (
+                    "DESTRUCTIVE: list of old memory keys to DELETE "
+                    "(this entry replaces them). Gated by a two-phase "
+                    "confirm: the first call with supersedes returns a "
+                    "BLOCKED preview of what each old key holds; re-call "
+                    "with confirm=true to execute the deletion."
+                ),
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": (
+                    "Second-phase confirmation for a supersedes deletion. "
+                    "Read the BLOCKED preview first, verify each old key "
+                    "is truly retired by this entry, then re-call with "
+                    "confirm=true. Default false."
+                ),
             },
             "force_new": {
                 "type": "boolean",
@@ -148,6 +170,7 @@ class MemoryWriteTool(Tool):
         content = kwargs["content"]
         supersedes = kwargs.get("supersedes", [])
         force_new = kwargs.get("force_new", False)
+        confirm = kwargs.get("confirm", False)
         task = self._get_current_task()
 
         from flagscale_agent.react.memory import Memory, VALID_TYPES
@@ -195,7 +218,36 @@ class MemoryWriteTool(Tool):
                     "Read the listed entries first (memory_read) before deciding."
                 )
 
+        # Two-phase confirm for DESTRUCTIVE supersedes (proposal eb7a59cb):
+        # delete keys only after the caller has SEEN what is being deleted.
+        if supersedes and not confirm:
+            previews = []
+            for old_key in supersedes:
+                entry = self._memory.get(old_key)
+                if entry is None:
+                    previews.append(f"  - {old_key}: (not found — already gone)")
+                else:
+                    previews.append(f"  - {old_key}: {_entry_digest(entry)}")
+            return (
+                "BLOCKED: supersedes would DELETE "
+                f"{len(supersedes)} memory entr"
+                f"{'y' if len(supersedes) == 1 else 'ies'} — two-phase "
+                "confirm required. Preview of what each old key holds:\n"
+                + "\n".join(previews)
+                + "\n\nVerify each old entry is truly retired by THIS new "
+                "entry (read it with memory_read if unsure), then re-call "
+                "memory_write with the same arguments plus confirm=true."
+            )
+
         try:
+            # Capture digests BEFORE deletion — the receipt must show what
+            # each retired key held (read-back after delete returns None).
+            predelete_digests = {
+                old_key: _entry_digest(self._memory.get(old_key))
+                for old_key in supersedes
+                if self._memory.get(old_key) is not None
+            }
+
             # Delete superseded entries
             deleted = []
             for old_key in supersedes:
@@ -205,7 +257,18 @@ class MemoryWriteTool(Tool):
             # Write new entry
             self._memory.put(key, mem_type, content, self._session_id, task=task)
 
-            supersede_info = f" Superseded: {', '.join(deleted)}." if deleted else ""
+            if deleted:
+                receipts = [
+                    f"  - {old_key}: {predelete_digests.get(old_key, '(entry gone)')}"
+                    for old_key in deleted
+                ]
+                supersede_info = (
+                    f" Superseded {len(deleted)} entr"
+                    f"{'y' if len(deleted) == 1 else 'ies'}:\n"
+                    + "\n".join(receipts)
+                )
+            else:
+                supersede_info = ""
             return (
                 f"Memorized [{mem_type}] '{key}' "
                 f"({len(content)} chars).{supersede_info}"
