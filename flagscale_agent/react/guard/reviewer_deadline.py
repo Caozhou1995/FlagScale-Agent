@@ -29,12 +29,13 @@ Design (two layers, both scoped to REVIEWER targets):
   reviewer-class task gets an advisory demanding adjudication from the evidence
   already collected.
 - L2 hard block (check_pre on poll_tasks): after 2 not-ready polls of the SAME
-  reviewer-class task (the first wait is legitimate — a reviewer needs time to
-  read), the next poll of that reviewer is refused outright. The block message
-  states the contract the override must satisfy: the reviewer's report file
-  EXISTS on disk and was READ. Override with a text reason alone cannot release
-  the block? It can (overridable=True) — but the message names the only
-  defensible reason, and the run-out-of-time alternative (accept the partial
+  reviewer-class task — counted only while the budget is actually thin (the
+  streak resets whenever the budget is far from the wall) — the next poll of
+  that reviewer is refused outright. The block message states the contract the
+  override must satisfy, and accept_override ENFORCES it: the cited reviewer
+  report file must EXIST on disk and the reason must quote it (a >=5-word
+  verbatim span of the reason appears in the file). A text-only reason can
+  never release the block; the run-out-of-time alternative (accept the partial
   evidence, finish the deliverable) requires NO further poll at all.
 
 Fail-silent rules (a guard must never break tool execution or fire in
@@ -52,6 +53,7 @@ Non-reviewer polls keep their normal behavior.
 from __future__ import annotations
 
 import os
+import re
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.guard.poll_spacing import _poll_round_not_ready
@@ -113,7 +115,13 @@ def _is_reviewer_target(task_id: str) -> bool:
 
 
 def _is_reviewer_worker() -> bool:
-    """Reviewers themselves poll their own children — never police them."""
+    """Worker subprocesses have no parent budget to protect — stay silent.
+
+    Broadly keyed on FLAGSCALE_TASK_ID (any worker), not reviewers only: a
+    worker cannot poll the parent's ledger anyway (poll_tasks is registered
+    parent-side only), so the distinction is moot today — the docstring must
+    not claim narrower than the predicate.
+    """
     return os.environ.get("FLAGSCALE_TASK_ID", "") != ""
 
 
@@ -134,6 +142,43 @@ class ReviewerDeadlineGuard(Guard):
         # per-task counters (a restart of the SAME review is the same wait),
         # but nothing else is carried.
         return
+
+    def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        """Enforce the contract the L2 block message states.
+
+        The reason must point at the reviewer's report file: a path that
+        EXISTS on disk, plus a quote of what the report says (a >=5-word
+        verbatim span of the reason must appear in the file). A text-only
+        reason can never satisfy this — passively claiming the report exists
+        without reading it is exactly the poll-chaining this guard exists to
+        stop. Trailing punctuation after the cited path (`,` `.` or backticks)
+        is tolerated.
+        """
+        if not reason:
+            return False
+        # A reason may cite the path in ordinary prose: pull every path-shaped
+        # token, trim trailing punctuation/backticks/quotes, and accept if ANY
+        # of them names a real report file that the reason then quotes.
+        candidates = re.findall(r"/(?:[^\s'\"`])+", reason)
+        for raw in candidates:
+            path = raw.rstrip(".,;:!?`'\")]}")
+            try:
+                with open(path, "r", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            if not text.strip():
+                continue
+            # The reason must quote the report: some >=5-word verbatim span of
+            # the reason must appear in the file (whitespace-normalized on both
+            # sides; the path token itself is the pointer, not the evidence).
+            norm_text = " ".join(text.split())
+            tokens = re.sub(r"/(?:[^\s'\"`])+", " ", reason).split()
+            for i in range(max(0, len(tokens) - 4)):
+                window = " ".join(tokens[i : i + 5])
+                if window in norm_text:
+                    return True
+        return False
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _stats(self) -> dict | None:
@@ -179,8 +224,8 @@ class ReviewerDeadlineGuard(Guard):
             return None
         stats = self._stats()
         if not stats or not self._deadline_armed(stats):
-            # Budget far from the wall: keep counters warm for check_post, but
-            # never fire — waiting is still legitimate.
+            # Budget far from the wall: never fire. check_post also resets the
+            # streak in this state — only thin-budget polls count toward L2.
             return None
         name = ctx.tool_name or ""
         if name != "poll_tasks":
@@ -221,6 +266,13 @@ class ReviewerDeadlineGuard(Guard):
             return None
         task_id = str(ctx.tool_args.get("task_id", "") or "")
         if not task_id:
+            return None
+        stats = self._stats()
+        if not stats or not self._deadline_armed(stats):
+            # Far from the wall: a not-ready round is NOT evidence of deadline
+            # pressure. Reset the streak so "consecutive" means consecutive
+            # polls taken while the budget is actually thin.
+            self._not_ready.pop(task_id, None)
             return None
         self._bump(task_id, ctx.tool_result)
         return None

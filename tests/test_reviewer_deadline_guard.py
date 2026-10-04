@@ -83,6 +83,100 @@ def _stats(remaining, budget=1800.0):
             "remaining": remaining, "pct": 100.0 * (budget - remaining) / budget}
 
 
+# ── F1: override contract enforcement (report file + quote) ──────────────────
+
+def test_override_accepts_real_report_and_quote(ledger_env, tmp_path):
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
+    rp = tmp_path / "review.md"
+    rp.write_text("Finding: the parse loop drops the last chunk when the "
+                  "stream ends mid-token.\n")
+    reason = (f"Report {rp} states: 'the parse loop drops the last chunk "
+              "when the stream ends mid-token.'")
+    assert g.accept_override(reason, None) is True
+
+
+def test_override_rejects_missing_report(ledger_env, tmp_path):
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
+    reason = ("Report /tmp/definitely_not_here_zz9.md states: 'the parse "
+              "loop drops the last chunk when the stream ends mid-token.'")
+    assert g.accept_override(reason, None) is False
+
+
+def test_override_accepts_path_with_trailing_punctuation(ledger_env, tmp_path):
+    """A reason may cite the path in prose (`/tmp/x.md,`, `/tmp/x.md.`, or in
+    backticks) — trailing punctuation must not defeat the file lookup."""
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
+    rp = tmp_path / "review.md"
+    rp.write_text("the parse loop drops the last chunk.\n")
+    q = "the parse loop drops the last chunk"
+    assert g.accept_override(f"Report {rp}, states '{q}'", None) is True
+    assert g.accept_override(f"Report {rp}. It states '{q}'", None) is True
+    assert g.accept_override(f"Report `{rp}` states '{q}'", None) is True
+
+
+def test_override_rejects_file_without_quote(ledger_env, tmp_path):
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
+    rp = tmp_path / "review.md"
+    rp.write_text("Finding: the parse loop drops the last chunk.\n")
+    assert g.accept_override(f"Report {rp} exists and looks great, ship it",
+                             None) is False
+
+
+def test_override_rejects_text_only_reason(ledger_env):
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
+    assert g.accept_override("review matters a lot to me", None) is False
+
+
+def test_blocked_l2_poll_cannot_self_release(ledger_env, tmp_path):
+    """2 armed not-ready polls -> L2 block -> a text-only override reason is
+    refused by accept_override (the only gate accept_override guards)."""
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
+    nr = f"task {ledger_env['reviewer_id']}: not ready (still RUNNING)"
+    g.check_post(_ctx(result=nr, args={"task_id": ledger_env["reviewer_id"]}))
+    g.check_post(_ctx(result=nr, args={"task_id": ledger_env["reviewer_id"]}))
+    blk = g.check_pre(_ctx(args={"task_id": ledger_env["reviewer_id"]}))
+    assert blk is not None and blk.action == "block" and blk.overridable
+    # A bare text-only reason must NOT release it; the contract path must.
+    assert g.accept_override("review matters", None) is False
+    rp = tmp_path / "review.md"
+    rp.write_text("the wait produced real findings: 3 verified defects.\n")
+    assert g.accept_override(
+        f"Report {rp} says: 'the wait produced real findings: 3 verified defects.'",
+        None) is True
+
+
+# ── F2: streak counts only polls taken while the budget is thin ──────────────
+
+def test_unarmed_polls_do_not_accumulate_streak(ledger_env):
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(900))  # floor=300: not armed
+    nr = f"task {ledger_env['reviewer_id']}: not ready (still RUNNING)"
+    for _ in range(3):
+        g.check_post(_ctx(result=nr, args={"task_id": ledger_env["reviewer_id"]}))
+    assert g._not_ready.get(ledger_env["reviewer_id"], 0) == 0
+    # First armed poll is soft, second blocks only after armed not-ready rounds.
+    g._stats_fn = lambda: _stats(250)
+    r1 = g.check_pre(_ctx(args={"task_id": ledger_env["reviewer_id"]}))
+    assert r1.action == "inject"
+    g.check_post(_ctx(result=nr, args={"task_id": ledger_env["reviewer_id"]}))
+    r2 = g.check_pre(_ctx(args={"task_id": ledger_env["reviewer_id"]}))
+    assert r2.action == "inject"
+    g.check_post(_ctx(result=nr, args={"task_id": ledger_env["reviewer_id"]}))
+    r3 = g.check_pre(_ctx(args={"task_id": ledger_env["reviewer_id"]}))
+    assert r3.action == "block"
+
+
+def test_armed_to_unarmed_transition_resets_streak(ledger_env):
+    g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
+    tid = ledger_env["reviewer_id"]
+    nr = f"task {tid}: not ready (still RUNNING)"
+    g.check_post(_ctx(result=nr, args={"task_id": tid}))
+    g.check_post(_ctx(result=nr, args={"task_id": tid}))
+    assert g._not_ready.get(tid, 0) == 2
+    g._stats_fn = lambda: _stats(1200)  # budget refilled / not armed
+    g.check_post(_ctx(result=nr, args={"task_id": tid}))
+    assert g._not_ready.get(tid, 0) == 0
+
+
 # ── silence conditions ───────────────────────────────────────────────────────
 
 def test_no_stats_fn_silent(ledger_env):
