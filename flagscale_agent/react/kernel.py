@@ -60,6 +60,11 @@ class KernelDeps:
     task_plan: Any = None                  # TaskPlan (optional)
     on_response_fn: Callable | None = None  # (response) -> None, called after LLM response appended
     on_tool_results_fn: Callable | None = None  # (tool_calls, results) -> None, called after tool exec
+    time_budget_stats_fn: Callable | None = None  # () -> {elapsed, budget, remaining, pct} | None
+    # Hard wall-clock stop: when the injected budget stats report remaining <= 0,
+    # the loop stops BEFORE the next LLM call, prints a timeout notice and sets
+    # stop_reason="time_budget_exhausted". None (or a None return) = no hard stop,
+    # preserving the old soft-warning-only behavior.
 
 
 @dataclass
@@ -131,6 +136,35 @@ class AgentKernel:
         try:
             for iteration in range(max_iter):
                 if self._interrupted:
+                    break
+
+                # ── Hard wall-clock timeout ──
+                # Checked at the top of every iteration, BEFORE the next LLM
+                # call: when the injected per-turn budget is exhausted, print
+                # a timeout notice and leave the turn. Already-completed tool
+                # calls and their results stay in history; the wrap-up / user
+                # turn the model would have produced is simply not emitted.
+                # Note: once this fires at <=0 the soft TimeBudgetGuard's
+                # at/after-100% "clear path to wrap up" is pre-empted — the
+                # 90% block is the last chance the model gets to wrap up.
+                _tb_stats = None
+                if d.time_budget_stats_fn is not None:
+                    try:
+                        _tb_stats = d.time_budget_stats_fn()
+                    except Exception:
+                        _tb_stats = None
+                # Only a dict carrying a NUMERIC remaining counts. A non-dict
+                # return, a missing key, or a None/str/int-incompatible value
+                # must never raise here — it just means "no deadline known",
+                # so the loop runs unchanged (same as a None return / raise).
+                _tb_remaining = _tb_stats.get("remaining") if isinstance(_tb_stats, dict) else None
+                if isinstance(_tb_remaining, (int, float)) and _tb_remaining <= 0:
+                    display.warn(
+                        f"TIME BUDGET EXHAUSTED: per-turn wall-clock budget "
+                        f"({_tb_stats.get('budget', 0):.0f}s) used up "
+                        f"(elapsed {_tb_stats.get('elapsed', 0):.0f}s). "
+                        f"Stopping this turn (hard timeout).")
+                    result.stop_reason = "time_budget_exhausted"
                     break
 
                 # Guard reset happens per-turn (at line 101), not per-iteration

@@ -416,6 +416,7 @@ class WorkerAgent:
             is_context_limit_error_fn=self._is_context_limit_error,
             call_llm_fn=self._call_llm_stream,
             task_plan=self.task_plan,
+            time_budget_stats_fn=self._task_budget_stats,
             on_response_fn=self._on_kernel_response,
             on_tool_results_fn=self._on_kernel_tool_results,
         )
