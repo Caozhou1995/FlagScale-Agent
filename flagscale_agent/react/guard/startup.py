@@ -454,7 +454,11 @@ class ResearchPhase(StartupPhase):
         if not name:
             return
         result = ctx.tool_result
-        if isinstance(result, str) and "[BLOCKED BY GUARD]" in result:
+        if not isinstance(result, str):
+            return
+        # Anchor on the marker as a PREFIX (kernel.py writes it at the start of
+        # the blocked payload); a non-str payload must never count as research.
+        if result.startswith("[BLOCKED BY GUARD]"):
             return
         if name in _RESEARCH_TOOLS:
             self._researched = True
@@ -542,7 +546,14 @@ class FirstActionPhase(StartupPhase):
 
     def observe_post(self, ctx: GuardContext) -> None:
         result = ctx.tool_result
-        if isinstance(result, str) and "[BLOCKED BY GUARD]" in result:
+        # A blocked call never executed. The marker is a PREFIX of the blocked
+        # payload (kernel.py), so anchor on it: a substring test would misread
+        # a successful result that merely quotes the marker mid-text. A non-str
+        # payload (unexpected executor change) must never count as an executed
+        # first action, so anything non-str is ignored here.
+        if isinstance(result, str) and result.startswith("[BLOCKED BY GUARD]"):
+            return
+        if not isinstance(result, str):
             return
         self._first_action_seen = True
 

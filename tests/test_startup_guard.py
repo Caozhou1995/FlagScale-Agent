@@ -311,6 +311,25 @@ class TestFirstActionPhase:
         p.observe_post(ctx)
         assert not p.is_satisfied()
 
+    def test_non_string_result_never_satisfies(self):
+        # The executor is expected to return str; if a future change delivers a
+        # non-str payload, it must NOT silently count as an executed first action.
+        p = FirstActionPhase()
+        ctx = _shell("ls")
+        ctx.tool_result = {"error": "boom"}
+        p.observe_post(ctx)
+        assert not p.is_satisfied()
+
+    def test_marker_must_be_prefix_not_substring(self):
+        # The kernel writes the marker as the PREFIX of the blocked payload. A
+        # successful result that merely QUOTES the marker mid-text is an
+        # executed call and MUST satisfy the phase.
+        p = FirstActionPhase()
+        ctx = _shell("ls")
+        ctx.tool_result = "output ... [BLOCKED BY GUARD] (quoted mid-text) ... more"
+        p.observe_post(ctx)
+        assert p.is_satisfied()
+
     def test_override_does_not_release_an_inject(self):
         p = FirstActionPhase()
         assert p.accept_override("trust me", _shell("ls")) is False
@@ -429,3 +448,12 @@ class TestFirstActionRegistrySurvival:
         # The nag rode the OTHER guard's block via the cross-guard merge.
         assert "[concurrent trigger-bound guard advisory]" in v.message
         assert "[StartupGuard/FirstAction]" in v.message
+
+        # Non-vacuity enforced directly: the merge contract is
+        # attach_on_block=True on the phase's verdict. (Fresh instance — the
+        # eager one-shot flag above already fired on `startup`.)
+        fresh = StartupGuard(single_shot=True)
+        _age(_phase(fresh, "first_action"), _FIRST_ACTION_LIMIT_SECS + 20)
+        probe_v = _phase(fresh, "first_action").check(_tool("plan_update"))
+        assert probe_v is not None
+        assert probe_v.attach_on_block is True
