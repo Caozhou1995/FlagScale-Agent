@@ -49,8 +49,19 @@ class TestContentAddressing:
             _mk(tmp_path, goal="   ").validate()
 
     def test_goal_too_long_rejected(self, tmp_path):
-        with pytest.raises(ContractError):
+        with pytest.raises(ContractError, match="exceeds 200 chars"):
             _mk(tmp_path, goal="x" * (GOAL_MAX_LEN + 1)).validate()
+
+    def test_goal_too_long_error_echoes_goal_and_fix_hint(self, tmp_path):
+        long_goal = "z" * 250 + " TAILMARK99"  # 261 chars, tail beyond echo window
+        with pytest.raises(ContractError) as ei:
+            _mk(tmp_path, goal=long_goal).validate()
+        msg = str(ei.value)
+        assert "received:" in msg                    # echoes the offending goal
+        assert "zzz" in msg                          # echo present
+        assert "TAILMARK99" not in msg               # echo truncated at 120 chars
+        assert "inputs" in msg and "kind=value" in msg  # fix hint present
+        assert f"(got {len(long_goal)};" in msg      # original count kept
 
 
 class TestValidate:

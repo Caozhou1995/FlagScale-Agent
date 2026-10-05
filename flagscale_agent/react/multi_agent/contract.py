@@ -363,7 +363,10 @@ class Contract:
             raise ContractError(f"goal must be non-empty (got: {self.goal!r})")
         if len(self.goal) > GOAL_MAX_LEN:
             raise ContractError(
-                f"goal exceeds {GOAL_MAX_LEN} chars (got {len(self.goal)})"
+                f"goal exceeds {GOAL_MAX_LEN} chars (got {len(self.goal)}; "
+                f"received: {self.goal[:120]!r}) — goal must be a one-sentence "
+                f"task title; put the detailed charter/context into inputs "
+                f"as kind=value items"
             )
         if not self.acceptance:
             raise ContractError("acceptance must be non-empty")
