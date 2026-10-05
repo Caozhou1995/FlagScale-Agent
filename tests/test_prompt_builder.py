@@ -525,6 +525,25 @@ class TestSystemPromptContent:
         assert "the alternative reading would be" in p
         assert "Never promote a GIVEN to a RANGE" in p
 
+    def test_scope_ambiguity_gate_present_pre_action(self):
+        # 修点4: a task verb applied to ONE object does not license an operation
+        # on the container that HOLDS it (rewriting history vs cleaning a tree).
+        # The gate must be classified BEFORE the action, and stay task-agnostic
+        # (no sanitize/repo/clean-specific nouns).
+        p = self._prompt()
+        assert "SCOPE-AMBIGUITY GATE" in p
+        assert "classify the ACTION before you take it" in p
+        # names the widening failure in the abstract
+        assert "widen" in p.lower() or "wider reading" in p.lower()
+        assert "container" in p
+        # decision on MEANING, not a destructive side-effect a guard catches
+        assert "destructive-action guard will not catch it" in p
+        # task-agnostic: no leaked task-specific nouns
+        import re
+        for w in ("sanitize", "git-repo", "working tree", "rewrite history"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", p.lower()), (
+                f"leaked task-specific term: {w!r}")
+
     def test_citation_precision_present(self):
         # Principle 2 sub-discipline (d): quoted identifiers must be re-verified
         # by a command in the SAME turn, never from memory; citations of other

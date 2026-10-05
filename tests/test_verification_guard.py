@@ -489,6 +489,43 @@ class TestConstraintGuidanceBlockedComputation:
         assert "not a content check" not in low  # delivery_hygiene doesn't say this
         assert "_override_reason" in _TASK_COMPLETE_DELIVERY_HYGIENE
 
+    def test_delivery_hygiene_has_contract_readback_bullet(self):
+        """修点1: a quote-vs-value CONTRACT READBACK bullet forces the agent to
+        compare the task's verbatim form phrase against the deliverable's actual
+        value, not against its own paraphrase. Task-agnostic: no leaked nouns."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
+        assert "contract readback" in low
+        # two-column quote-vs-value method
+        assert "quote" in low and "value" in low
+        assert "two-column" in low or "two columns" in low or "quote-vs-value" in low
+        # the exact failure it guards against: paraphrase drift
+        assert "paraphrase" in low or "synonym drift" in low
+        # FORM/contract classes named in the abstract
+        assert "format" in low
+        assert "name" in low or "naming" in low or "signature" in low
+        # task-agnostic: no leaked task nouns
+        import re
+        for w in ("gcode", "install-windows", "adaptive", "monitor", "hmp", "qemu"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
+
+    def test_delivery_hygiene_has_numeric_limit_selfcheck_bullet(self):
+        """修点2: a NUMERIC LIMIT self-check bullet forces measuring the delivered
+        artifact against a stated byte/line/count/size bound. Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = _TASK_COMPLETE_DELIVERY_HYGIENE.lower()
+        assert "numeric limit self-check" in low or "numeric" in low
+        # the measuring step: run the command, state measured value vs threshold
+        assert "wc -c" in low or "wc -l" in low or "measuring command" in low
+        assert "measured value" in low or "measured" in low
+        assert "threshold" in low or "cap" in low
+        # task-agnostic: no leaked numeric bound or task noun
+        import re
+        for w in ("5000", "6044", "gpt2", "codegolf", "bytes."):
+            assert not re.search(r"\b" + re.escape(w), low), (
+                f"leaked task-specific term: {w!r}")
+
     def test_text_complete_hygiene_leads_with_final_answer(self):
         """The wrap-up hygiene prompt must FIRST demand the turn's real final output
         (not a checklist-only reply), because the user reads the end of the
@@ -529,6 +566,20 @@ class TestConstraintGuidanceBlockedComputation:
         assert "citations: none" in low
         # not a scan / pattern check
         assert "not a scan" in low or "no pattern" in low
+
+    def test_text_complete_hygiene_requires_numeric_limit_check(self):
+        """The text-path wrap-up checklist must carry the numeric-limit self-check
+        sub-item (measure the delivered artifact against a stated cap; do not
+        eyeball it), mirroring the tool-path delivery-hygiene gate. Zero regex:
+        fixed text tied to the existing re-confirm step."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "numeric limit" in low
+        # the demand: run the measuring command against the DELIVERED artifact
+        assert "delivered artifact" in low
+        assert "wc -c" in low and "wc -l" in low
+        # state the measured value beside the threshold
+        assert "threshold" in low
 
 
 

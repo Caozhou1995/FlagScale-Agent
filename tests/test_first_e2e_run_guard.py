@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for FirstE2eRunGuard — progress-ORDER checkpoints at 25% and
-50% of the enforced wall-clock budget (write-late / run-late inversion)."""
+"""Unit tests for FirstE2eRunGuard — progress-ORDER checkpoints at 25%, 50%
+and 75% of the enforced wall-clock budget (write-late / run-late / cold-consumer)."""
 
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.first_e2e_run import (
     FirstE2eRunGuard,
     _MSG_25,
     _MSG_50,
+    _MSG_75,
 )
 
 
@@ -111,6 +112,34 @@ class TestFirstE2eRunBlocks:
         assert v is not None and v.reason == "first_e2e_run_50pct"
         assert g.check_pre(make_ctx()) is None
 
+    def test_75_blocks_once_per_turn(self):
+        s = _Stats()
+        s.pct = 76.0
+        g = FirstE2eRunGuard(stats_fn=s)
+        v = g.check_pre(make_ctx())
+        assert v is not None and v.action == "block"
+        assert v.reason == "first_e2e_run_75pct"
+        assert v.overridable is True
+        # Same turn: silent after fired once.
+        assert g.check_pre(make_ctx()) is None
+
+    def test_75_boundary_exactly_blocks(self):
+        s = _Stats()
+        s.pct = 75.0
+        g = FirstE2eRunGuard(stats_fn=s)
+        v = g.check_pre(make_ctx())
+        assert v is not None and v.reason == "first_e2e_run_75pct"
+
+    def test_jump_past_all_fires_only_75(self):
+        s = _Stats()
+        s.pct = 80.0
+        g = FirstE2eRunGuard(stats_fn=s)
+        v = g.check_pre(make_ctx())
+        assert v is not None and v.reason == "first_e2e_run_75pct"
+        # All three thresholds marked spent; none fire on their own after a jump.
+        assert g._fired == {75, 50, 25}
+        assert g.check_pre(make_ctx()) is None
+
     def test_jump_past_both_fires_only_50(self):
         s = _Stats()
         s.pct = 70.0
@@ -154,6 +183,22 @@ class TestFirstE2eRunMessageContent:
         # Cross-contamination guard: each message carries only its own face.
         assert "WRITE-THROUGH" not in _MSG_50
         assert "FIRST-EXERCISE" not in _MSG_25
+
+    def test_msg_75_cold_consumer_evidence_binding(self):
+        assert "COLD-CONSUMER checkpoint" in _MSG_75
+        # the prediction-vs-run distinction is the whole point
+        assert "predict" in _MSG_75.lower()
+        assert "COMMAND you ran" in _MSG_75 or "output" in _MSG_75.lower()
+        # evidence binding: paste command + output, not a bare yes/no
+        assert "OUTPUT it produced" in _MSG_75
+        assert "_override_reason" in _MSG_75
+        assert "(a)" in _MSG_75 and "(b)" in _MSG_75 and "(c)" in _MSG_75
+        # Cross-contamination guard: 75% carries its own face only.
+        assert "WRITE-THROUGH" not in _MSG_75
+        assert "FIRST-EXERCISE" not in _MSG_75
+        # Task-agnostic: no named task or dataset.
+        assert "doom" not in _MSG_75.lower()
+        assert "mips" not in _MSG_75.lower()
 
     def test_verdict_message_combines_const_and_head(self):
         s = _Stats()

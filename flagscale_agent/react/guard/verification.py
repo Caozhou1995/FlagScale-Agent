@@ -640,6 +640,22 @@ configured or the best candidate you held in memory. Walk the ones that apply:
     State plainly: is what sits at the delivery path the TRUE PRODUCT of the process
     the task named, or a constructed look-alike / stub / placeholder standing in for
     work you did not actually complete?
+  • **Contract readback (quote-vs-value)**: if the task pins down a FORM or
+    CONTRACT — a required format, an exact name, a numbering/ordering rule, a
+    field/interface signature, units, or a "from X / named Y" source rule — do
+    NOT check it against your paraphrase. Build a two-column list: quote the
+    task's OWN phrase for each qualifier in one column, the deliverable's ACTUAL
+    value in the other, and confirm they match. Synonym drift (the task's exact
+    phrase read as a near-equivalent) passes your restatement while failing the
+    grader, and silently. A qualifier not literally satisfied FAILS — fix it or
+    report the mismatch.
+  • **Numeric limit self-check**: if the task states a NUMERIC threshold — a
+    maximum byte / line / element count, a size or duration bound, a "no more
+    than N" cap — do NOT eyeball it. Run the measuring command against the
+    DELIVERED artifact (e.g. `wc -c` / `wc -l` / an element count) and state the
+    MEASURED value next to the threshold, one line each, with whether it clears.
+    An otherwise-correct deliverable that exceeds the cap scores zero, and the
+    margin is invisible without the measurement.
 
 To proceed, re-issue plan_update(action="complete") with "_override_reason" that, for
 each item you checked, names the CONCRETE ANCHOR you saw on the DELIVERED artifact —
@@ -764,6 +780,13 @@ re-confirm delivery after you clean):
          the task specified (extension, schema, encoding)
        • naming & count — exactly the named set of files, nothing missing, nothing
          extra
+       • numeric limit — if the task states a NUMERIC bound (a maximum byte / line /
+         element count, a size or duration cap, a "no more than N"), do not eyeball
+         it: run the measuring command against the DELIVERED artifact (e.g. `wc -c` /
+         `wc -l` / an element count) and state the MEASURED value beside the
+         threshold, one line each, with whether it clears. An otherwise-correct
+         deliverable that exceeds the cap scores zero, and the margin is invisible
+         without the measurement
        • process / service state — any server, daemon, or runtime state the task
          requires is still in the expected condition
      Placing this AFTER cleanup is deliberate: cleanup can over-reach (a glob that

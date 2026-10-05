@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FirstE2eRunGuard — progress-ORDER checkpoints at 25% and 50% of budget.
+"""FirstE2eRunGuard — progress-ORDER checkpoints at 25%, 50% and 75% of budget.
 
 TB failure review found a progress-order inversion that pure time awareness
 never catches: runs that spend most of the budget on intermediates and only
@@ -47,9 +47,13 @@ Key design decisions:
   • 50% → run-late checkpoint: compile/build success proves an intermediate,
     not the deliverable. Exercise the simplest end-to-end path NOW; a bug
     found now costs minutes, found at 90% it costs the task.
-  • Both blocks are overridable and each fires at most once per turn; a
-    jump straight past both fires only the 50% one (the later, more urgent
-    question subsumes the earlier one).
+  • 75% → cold-consumer checkpoint: the finish line has no room for a
+    PREDICTED outcome. If a path was never run, the agent's own "this will
+    fail" is an unverified claim about to ship — run it and paste the command
+    + output (evidence binding, not a yes/no answer).
+  • All blocks are overridable and each fires at most once per turn; a
+    jump straight past several fires only the highest (most urgent) one
+    (the later question subsumes the earlier ones).
   • Silent when no external wall is enforced (stats_fn → None), exactly
     like TimeBudgetGuard.
 """
@@ -90,9 +94,26 @@ _MSG_50 = (
     "(c) the tool call you are making now RUNS that first exercise."
 )
 
+_MSG_75 = (
+    "[ProgressOrder] 75% of the enforced wall-clock budget is spent — this is "
+    "the COLD-CONSUMER checkpoint, and it is an EVIDENCE question, not a "
+    "yes/no one: for the end-to-end path of your deliverable, have you "
+    "ACTUALLY RUN it and READ the result — or are you about to finish having "
+    "only PREDICTED the outcome? A prediction is not a run: if you wrote "
+    "\"this should work\" / \"this edge case will fail\" / \"that branch is "
+    "probably wrong\" but never executed it, you are one commit away from "
+    "shipping that unverified claim. Run it NOW. Before executing this tool, "
+    "state in _override_reason, for the applicable end-to-end path, the "
+    "CONCRETE ANCHOR you observed: (a) the exact COMMAND you ran and the "
+    "OUTPUT it produced (paste both — \"I ran it\" with no output names "
+    "nothing), or (b) an explicit \"none apply\" with the reason why no "
+    "end-to-end run applies to this task, or (c) the tool call you are making "
+    "now IS that run."
+)
+
 
 class FirstE2eRunGuard(Guard):
-    """Block once each at 25% and 50% to force an explicit progress-ORDER
+    """Block once each at 25%, 50% and 75% to force an explicit progress-ORDER
     answer (deliverable written? deliverable exercised?) before the next
     tool call."""
 
@@ -101,7 +122,7 @@ class FirstE2eRunGuard(Guard):
 
     # Ordered high→low: the FIRST crossed-but-unfired threshold handled is the
     # most severe pending question.
-    _THRESHOLDS = (50, 25)
+    _THRESHOLDS = (75, 50, 25)
 
     def __init__(self, stats_fn):
         """stats_fn() -> dict|None with keys elapsed/budget/remaining/pct.
@@ -134,7 +155,13 @@ class FirstE2eRunGuard(Guard):
             f"({elapsed} used, ~{remaining} left before the harness terminates "
             f"the whole task)."
         )
-        return (_MSG_25 if thr <= 25 else _MSG_50) + " " + head
+        if thr >= 75:
+            body = _MSG_75
+        elif thr >= 50:
+            body = _MSG_50
+        else:
+            body = _MSG_25
+        return body + " " + head
 
     def _verdict_for(self, stats: dict) -> GuardVerdict | None:
         """Shared crossing logic for check_pre and check_post.
@@ -144,7 +171,7 @@ class FirstE2eRunGuard(Guard):
         fires only the later checkpoint — the earlier question is subsumed).
         """
         pct = stats.get("pct", 0.0)
-        for thr in self._THRESHOLDS:  # (50, 25): high→low
+        for thr in self._THRESHOLDS:  # (75, 50, 25): high→low
             if pct >= thr and thr not in self._fired:
                 for t in self._THRESHOLDS:
                     if pct >= t:
