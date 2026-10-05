@@ -18,9 +18,21 @@ Fires on EVERY successful write_file/edit_file, regardless of file type — unli
 UnitTestGuard, which covers only flagscale_agent/ .py sources and only after 2+
 accumulated changes. Inject-only by design: it reminds, it never blocks
 (user-approved: fire on every edit, no latch, no suppression).
+
+Measurement upgrade (user-approved): for file types with a cheap validity check
+the guard RUNS the check in a fresh subprocess and reports the measured PASS/FAIL
+in the inject — a reminder you can ignore vs a result you can read. For
+prompt-bearing files (python sources that carry .format() prompt templates) a
+bare `{` in prompt text passes py_compile and only explodes at runtime
+(prompt_builder .format -> KeyError), so the guard additionally renders the
+prompt constants the way the runtime does and reports the render result.
 """
 
 from __future__ import annotations
+
+import os
+import subprocess
+import sys
 
 from . import Guard, GuardContext, GuardVerdict
 
@@ -36,6 +48,58 @@ _TYPE_HINTS = {
     ".sh": "bash -n <path>",
 }
 _FALLBACK_HINT = "re-read the edited region and confirm it landed as intended"
+
+# Checks the guard MEASURES itself after a successful edit (same <path>
+# placeholder as _TYPE_HINTS). Plain validity checks for every known type; the
+# prompt-bearing case is handled separately by _render_probe().
+_RUN_HINTS = {
+    ".py": ["python", "-m", "py_compile", "<path>"],
+    ".json": ["python", "-c", "import json,sys; json.load(open(sys.argv[1]))", "<path>"],
+    ".yaml": ["python", "-c", "import yaml,sys; yaml.safe_load(open(sys.argv[1]))", "<path>"],
+    ".yml": ["python", "-c", "import yaml,sys; yaml.safe_load(open(sys.argv[1]))", "<path>"],
+    ".toml": ["python", "-c", "import tomllib,sys; tomllib.load(open(sys.argv[1],'rb'))", "<path>"],
+    ".sh": ["bash", "-n", "<path>"],
+}
+
+# Render probe: exec the edited prompt-carrying file, then render the prompt
+# constants exactly as the runtime does (prompt_builder.refresh: the static
+# block and the dashboard). Catches the stray-brace class py_compile cannot see.
+# NOTE: exec_module runs the edited file's module body — the same bytes the
+# runtime imports at every agent startup, so this is safe for the two trusted
+# registered prompt files below (their bodies are imports + string constants).
+# A missing/renamed constant exits 3 with a marker so _render_probe can tell
+# that real breakage apart from an environment that cannot run the probe.
+_RENDER_PROBE = (
+    "import importlib.util as _iu, sys\n"
+    "_spec = _iu.spec_from_file_location('_post_edit_probe', sys.argv[1])\n"
+    "_m = _iu.module_from_spec(_spec); _spec.loader.exec_module(_m)\n"
+    "try:\n"
+    "    _m.SYSTEM_PROMPT_STATIC.format(cwd='c', tools='t', skills='s', knowledge='k')\n"
+    "    _m.DASHBOARD_TEMPLATE.format(dashboard_content='d')\n"
+    "except AttributeError as _e:\n"
+    "    print('PROBE-CONST-MISSING', _e); sys.exit(3)\n"
+    "print('render-ok')\n"
+)
+# Files that CARRY the prompt templates. Match is anchored at a path-separator
+# boundary (see _is_prompt_file) so unrelated trees whose names merely END
+# with the anchor do not false-trigger.
+_PROMPT_FILE_SUFFIXES = (
+    "flagscale_agent/react/prompt.py",
+    "flagscale_agent/react/prompt_builder.py",
+)
+# Errors that mean the PROBE could not run in this environment (wrong cwd,
+# missing extras, an ImportError raised by the edited file's own imports)
+# rather than the FILE being broken -> stay silent and keep the inject a pure
+# reminder instead of reporting a false FAIL. A MISSING PROMPT CONSTANT is
+# NOT in this class: prompt_builder imports both constants at startup, so a
+# constant that is gone is provable runtime breakage — the probe reports it
+# via the PROBE-CONST-MISSING marker instead of this env-error swallow.
+_PROBE_ENV_ERRORS = ("ModuleNotFoundError", "ImportError", "AttributeError")
+# py_compile / json.load / yaml.safe_load / tomllib.load / bash -n are all
+# sub-second; 10s is generous headroom, not the expected cost.
+_RUN_TIMEOUT_SECONDS = 10
+# Long lines make the failure report unreadable; keep only a tail.
+_STDERR_TAIL_CHARS = 400
 
 
 class PostEditFarEndGuard(Guard):
@@ -105,8 +169,9 @@ class PostEditFarEndGuard(Guard):
         if not path:
             return None
 
+        measurement = self._measure(path)
         return GuardVerdict.inject(
-            self._message(path),
+            self._message(path, measurement),
             reason="post_edit_far_end",
             # Independent category — the registry deduplicates injects by
             # category, so a shared category would silently swallow this
@@ -123,10 +188,14 @@ class PostEditFarEndGuard(Guard):
         return _FALLBACK_HINT
 
     @classmethod
-    def _message(cls, path: str) -> str:
+    def _message(cls, path: str, measurement: str | None = None) -> str:
         lines = [
             f"[Post-edit] {path} edited. Verify the FAR end now:",
-            f"  · valid-for-type: {cls._hint_for(path)}",
+        ]
+        if measurement:
+            lines.append(f"  · {measurement}")
+        lines.append(f"  · valid-for-type: {cls._hint_for(path)}")
+        lines += [
             "  · will the consumer actually read it at this exact path?",
             "  · FORM contract — form drift (format/units/naming/structure/source) "
             "fails SILENTLY while functional tests stay green: your paraphrase of "
@@ -155,6 +224,123 @@ class PostEditFarEndGuard(Guard):
                 "(non-mocked) subprocess E2E before declaring done."
             )
         return "\n".join(lines)
+
+    @classmethod
+    def _render_probe(cls, path: str) -> str | None:
+        """Render the prompt constants the way the runtime does.
+
+        Returns a failure report string when the render breaks (the stray-brace
+        class py_compile cannot see), or None when there is nothing to report:
+        render OK, or the probe cannot run in THIS environment (wrong extras,
+        hostile cwd) — an environment that cannot check is not evidence the
+        file is broken, so stay silent instead of reporting a false FAIL.
+        """
+        # Normalize FIRST: a relative path must resolve against the agent
+        # process's cwd — never against the probe's changed cwd below.
+        path = os.path.abspath(path)
+        # Repo root from THIS guard file's fixed address
+        # <root>/flagscale_agent/react/guard/post_edit_far_end.py (four
+        # dirname hops). Do NOT use commonpath(edited_file, guard) here:
+        # that is the nearest shared ANCESTOR, which for the registered
+        # prompt files is flagscale_agent/react itself — the wrong root
+        # made the probe FileNotFoundError, misclassified as a stray-brace
+        # failure (caught live on the real repo after both the mocked tests
+        # and the /tmp E2E fixtures passed: fixtures are absolute-pathed and
+        # in a different subtree, so both bug conditions stayed dormant).
+        root = os.path.abspath(__file__)
+        for _ in range(4):
+            root = os.path.dirname(root)
+        if not os.path.isdir(os.path.join(root, "flagscale_agent")):
+            return None  # guard relocated: uncheckable environment, stay silent
+        env = dict(os.environ)
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join(
+            [p for p in (root, existing) if p]
+        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", _RENDER_PROBE, path],
+                capture_output=True,
+                text=True,
+                timeout=_RUN_TIMEOUT_SECONDS,
+                env=env,
+                cwd=root,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode != 0:
+            tail = (proc.stderr or "")[-_STDERR_TAIL_CHARS:].strip()
+            if "PROBE-CONST-MISSING" in (proc.stdout or ""):
+                # A prompt constant was removed/renamed — provable runtime
+                # breakage (prompt_builder imports both names at startup),
+                # not an environment limitation.
+                return (
+                    "measured now: RENDER FAILED — prompt constant missing "
+                    f"({tail or (proc.stdout or '').strip()[-_STDERR_TAIL_CHARS:]})"
+                )
+            if any(err in tail for err in _PROBE_ENV_ERRORS):
+                return None
+            return (
+                "measured now: RENDER FAILED (stray { } in prompt text? "
+                f"fix the brace pair) — {tail}"
+            )
+        return None
+
+    @classmethod
+    def _measure(cls, path: str) -> str | None:
+        """Run the cheap validity check for this file type in a subprocess.
+
+        Returns the measurement line for the inject ("measured now: ...") or
+        None when there is no check for the type or the check could not run —
+        in that case the inject stays the plain reminder. Never raises.
+        """
+        lower = path.lower()
+        for ext, template in _RUN_HINTS.items():
+            if not lower.endswith(ext):
+                continue
+            # sys.executable everywhere: the guard measures under the SAME
+            # interpreter it runs under, so PATH-python drift cannot make the
+            # type check and the render probe disagree.
+            argv = [
+                sys.executable if part == "python" else (
+                    path if part == "<path>" else part
+                )
+                for part in template
+            ]
+            try:
+                proc = subprocess.run(
+                    argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=_RUN_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            if proc.returncode != 0:
+                tail = (proc.stderr or "")[-_STDERR_TAIL_CHARS:].strip()
+                return f"measured now: FAILED — {tail}" if tail else (
+                    "measured now: FAILED"
+                )
+            if ext == ".py" and cls._is_prompt_file(path):
+                render_failure = cls._render_probe(path)
+                if render_failure:
+                    return render_failure
+            return "measured now: PASS"
+        return None
+
+    @staticmethod
+    def _is_prompt_file(path: str) -> bool:
+        """True for the two registered prompt-carrying files.
+
+        The anchor must sit at a path-separator boundary: a foreign tree whose
+        name merely ENDS with the anchor (/x/notflagscale_agent/react/prompt.py)
+        does not false-trigger the render probe.
+        """
+        norm = path.replace("\\", "/")
+        return any(
+            norm == anchor or norm.endswith("/" + anchor)
+            for anchor in _PROMPT_FILE_SUFFIXES
+        )
 
     @staticmethod
     def _is_agent_source(path: str) -> bool:

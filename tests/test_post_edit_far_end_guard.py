@@ -14,6 +14,8 @@
 
 """Tests for PostEditFarEndGuard — the every-successful-edit far-end reminder."""
 
+import os
+
 import pytest
 
 from flagscale_agent.react.guard import GuardContext
@@ -228,3 +230,162 @@ class TestFormContractNudge:
         assert v is not None
         assert "SIDE-EFFECT sweep" in v.message
         assert "git status --short" in v.message
+
+
+class TestMeasuredChecks:
+    """Measurement upgrade: the guard RUNS the cheap validity check itself and
+    reports the measured PASS/FAIL in the inject (user-approved design).
+
+    These tests hit REAL subprocesses (no mocking) — the boundary under test
+    is the measurement itself.
+    """
+
+    def _prompt_py(self, tmp_path, body):
+        d = tmp_path / "flagscale_agent" / "react"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "prompt.py"
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_stray_brace_prompt_reports_render_failure(self, guard, tmp_path):
+        # py_compile passes (the string literal is valid Python) but the
+        # runtime .format explodes with KeyError — the exact class the
+        # render probe exists to catch.
+        p = self._prompt_py(
+            tmp_path,
+            'SYSTEM_PROMPT_STATIC = "hdr {cwd}\\ntrailing {"\n'
+            'DASHBOARD_TEMPLATE = "x {dashboard_content}"\n',
+        )
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "RENDER FAILED" in v.message
+        assert "stray" in v.message  # names the fix: the brace pair
+
+    def test_missing_prompt_constant_reports_render_failure(self, guard, tmp_path):
+        # F1 regression (reviewer-confirmed): a removed/renamed prompt constant
+        # is PROVABLE runtime breakage (prompt_builder imports both names at
+        # startup) — it must be REPORTED, not swallowed as an env error.
+        d = tmp_path / "flagscale_agent" / "react"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "prompt.py"
+        p.write_text('SYSTEM_PROMPT_STATIC = "hdr {cwd}"\n', encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "RENDER FAILED" in v.message
+        assert "constant missing" in v.message
+
+    def test_module_import_env_error_stays_silent(self, guard, tmp_path):
+        # The HONEST uncheckable case: the edited file's own imports cannot be
+        # satisfied in the probe env (ModuleNotFoundError) — the probe cannot
+        # check the file here, which is not evidence it is broken: stay silent.
+        p = self._prompt_py(
+            tmp_path,
+            'import module_that_does_not_exist_xyz\n'
+            'SYSTEM_PROMPT_STATIC = "x"\nDASHBOARD_TEMPLATE = "y"\n',
+        )
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "RENDER FAILED" not in v.message
+        assert "measured now: PASS" in v.message
+
+    def test_foreign_prompt_path_not_probed(self, guard, tmp_path):
+        # F3 regression: the anchor must sit at a path-separator boundary —
+        # /x/notflagscale_agent/react/prompt.py is NOT a repo prompt file and
+        # must not trigger the render probe (no RENDER FAILED even with a
+        # brace that would break a prompt template).
+        d = tmp_path / "x" / "notflagscale_agent" / "react"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "prompt.py"
+        p.write_text('SYSTEM_PROMPT_STATIC = "x {"\n', encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "RENDER FAILED" not in v.message
+        assert "measured now: PASS" in v.message  # py_compile truthfully passes
+
+    def test_is_prompt_file_boundary_anchored(self):
+        from flagscale_agent.react.guard.post_edit_far_end import (
+            PostEditFarEndGuard as G,
+        )
+
+        assert G._is_prompt_file("flagscale_agent/react/prompt.py")
+        assert G._is_prompt_file("/repo/flagscale_agent/react/prompt.py")
+        assert G._is_prompt_file("/repo/flagscale_agent/react/prompt_builder.py")
+        # boundary: foreign tree whose name merely ENDS with the anchor
+        assert not G._is_prompt_file("/x/notflagscale_agent/react/prompt.py")
+        assert not G._is_prompt_file("flagscale_agent/react/sub_prompt.py")
+
+    def test_live_prompt_py_measures_pass(self, guard):
+        import flagscale_agent.react.prompt as prompt_mod
+
+        v = guard.check_post(_ctx(path=str(prompt_mod.__file__),
+                                  result="Successfully edited prompt.py"))
+        assert v is not None
+        assert "measured now: PASS" in v.message
+
+    def test_syntax_error_py_reports_failed_with_stderr_tail(self, guard, tmp_path):
+        p = tmp_path / "broken.py"
+        p.write_text("def f(:\n    pass\n", encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "measured now: FAILED" in v.message
+        assert "py_compile" in v.message  # the far-end hint line survives
+
+    def test_valid_json_reports_pass(self, guard, tmp_path):
+        p = tmp_path / "good.json"
+        p.write_text('{"a": 1}', encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Wrote 8 chars to {p}"))
+        assert v is not None and "measured now: PASS" in v.message
+
+    def test_broken_json_reports_failed(self, guard, tmp_path):
+        p = tmp_path / "bad.json"
+        p.write_text("{not json", encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Wrote 9 chars to {p}"))
+        assert v is not None and "measured now: FAILED" in v.message
+
+    def test_no_check_type_has_no_measurement_line(self, guard):
+        v = guard.check_post(_ctx(path="README.md",
+                                  result="Successfully edited README.md"))
+        assert v is not None and "measured now" not in v.message
+
+    def test_missing_file_reports_failed_not_crash(self, guard):
+        # A nonexistent path is a MEASURED failure (the check ran and failed),
+        # never an exception.
+        v = guard.check_post(_ctx(path="/no/such/dir/x.py",
+                                  result="Successfully edited /no/such/dir/x.py"))
+        assert v is not None and "measured now: FAILED" in v.message
+
+    def test_subprocess_timeout_falls_back_to_plain_reminder(self, guard, tmp_path,
+                                                             monkeypatch):
+        # Real (non-mocked) timeout: shrink the budget so py_compile cannot
+        # finish -> _measure returns None -> the inject stays the plain
+        # reminder with NO measurement line. Guard must not raise.
+        import flagscale_agent.react.guard.post_edit_far_end as pefe
+
+        monkeypatch.setattr(pefe, "_RUN_TIMEOUT_SECONDS", 0.001)
+        p = tmp_path / "slow.py"
+        p.write_text("V = 1\n", encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "measured now" not in v.message
+        assert "valid-for-type" in v.message  # reminder intact
+
+    def test_relative_path_same_subtree_prompt_probe_clean(self, guard):
+        # The EXACT conditions that exposed the commonpath-root bug live: a
+        # RELATIVE path whose tree shares the guard's subtree — commonpath
+        # derived flagscale_agent/react as "repo root", cwd switched there,
+        # and the double-prefixed path made the probe FileNotFoundError,
+        # misreported as a stray-brace RENDER FAILED (a false positive on
+        # a healthy repo: 2477 tests green + runtime fine). Root must come
+        # from the guard's own fixed address instead. "Pre-fix" evidence is
+        # the live pre-mortem observation that triggered this fix.
+        import flagscale_agent.react.guard.post_edit_far_end as pefe
+
+        root = os.path.abspath(pefe.__file__)
+        for _ in range(4):
+            root = os.path.dirname(root)
+        rel = os.path.relpath(
+            os.path.join(root, "flagscale_agent/react/prompt.py"), os.getcwd()
+        )
+        assert not os.path.isabs(rel)  # the bug-triggering condition, confirmed
+        r = guard._render_probe(rel)
+        assert r is None  # healthy file: render OK, no false RENDER FAILED
