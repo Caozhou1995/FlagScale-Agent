@@ -136,13 +136,16 @@ class TestWrapupInjection:
             e = reg.add("Add a timer guard", container="agent-code", session_id="prev")
             g = VerificationGuard(plan=None, proposals=reg)
             msg = g._text_complete_hygiene_message()
-            assert "Open proposals already on file" in msg
+            # 66b8bbc8: the block is a DELTA — only new/changed open proposals
+            # are listed (the old full-list header "Open proposals already on
+            # file" was replaced by the delta header).
+            assert "DELTA since the last wrap-up" in msg
             assert e["id"] in msg
             assert "Add a timer guard" in msg
             # The original template's re-issue instruction must remain last.
             assert msg.rstrip().endswith("This gate fires once.")
             # The injected block sits inside the message, before the final line.
-            assert msg.index("Open proposals already on file") < msg.index(
+            assert msg.index("DELTA since the last wrap-up") < msg.index(
                 "Re-issue [TASK_COMPLETE]"
             )
         finally:

@@ -53,26 +53,78 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
 
 
+def _contract_constraints() -> dict:
+    """The spawned worker's `constraints` block, read from the structured
+    contract JSON — NOT the rendered contract.prompt prose.
+
+    The rendered prompt is prose: a contract that merely QUOTES a phrase (a
+    reviewer contract quoting "## Reviewer discipline", or any body mentioning
+    "framings of the task") would falsely suppress the demand. The sibling
+    contract.json carries the authoritative `constraints` mapping, so gating on
+    constraints.reviewer is exact. Errors fail silent-{} (callers fall through
+    to the demand as usual).
+    """
+    try:
+        path = os.environ.get(CONTRACT_PATH_ENV, "")
+        if not path:
+            return {}
+        import json
+        with open(os.path.join(os.path.dirname(path), "contract.json"),
+                  "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cons = data.get("constraints") or {}
+        return cons if isinstance(cons, dict) else {}
+    except Exception:
+        return {}
+
+
+def _delta_open_block(open_list: str, reported: dict) -> str:
+    """Return only the NEW or CHANGED open-proposal lines since the last wrap-up.
+
+    `reported` maps proposal id -> the exact line last surfaced; it is mutated
+    in place so the next call sees the current lines. The full list re-surfaced
+    verbatim at every completion drowns the new signal — the point of the block
+    is "what do I need to re-report", not a static dump. Fail-open: if no ids
+    can be parsed, return the list unchanged (current behaviour).
+    """
+    lines = open_list.splitlines()
+    if not lines:
+        return open_list
+    head = lines[0]
+    items = [ln for ln in lines[1:] if ln.strip().startswith("•")]
+    parsed = {}
+    for ln in items:
+        m = re.search(r"\bprop_[0-9a-fA-F]+\b", ln)
+        if m:
+            parsed[m.group(0)] = ln
+    if not parsed:
+        return open_list
+    delta_ids = [pid for pid, ln in parsed.items() if reported.get(pid) != ln]
+    for pid in delta_ids:
+        reported[pid] = parsed[pid]
+    if not delta_ids:
+        return (
+            f"(no NEW or CHANGED open proposals since the last wrap-up — "
+            f"{len(parsed)} already reported; do NOT re-list them verbatim)"
+        )
+    return "\n".join([head] + [parsed[pid] for pid in delta_ids])
+
+
 def _self_is_reviewer_worker() -> bool:
     """True when THIS process is a spawned reviewer worker.
 
     The reviewer demand ("spawn ONE read-only reviewer per passing step_done")
     is written for the PARENT: a reviewer worker must not nest further reviewer
     demands — that would self-reference the demand chain and contend for the
-    shared concurrency gate. Detect via the contract file spawned into the
-    worker's env (CONTRACT_PATH_ENV): the "## Reviewer discipline" section is
-    rendered ONLY when constraints.reviewer=True (spawn.py). A diverger/normal
-    worker contract lacks the section, so the demand fires as usual. Errors
-    fail silent-False (a non-reviewer path simply demands normally).
+    shared concurrency gate. Detect via the spawned contract's STRUCTURED
+    `constraints.reviewer` flag (contract.json), never via prose in the rendered
+    contract.prompt. Errors fail silent-False (a non-reviewer path simply
+    demands normally).
     """
     try:
         if not is_worker():
             return False
-        path = os.environ.get(CONTRACT_PATH_ENV, "")
-        if not path:
-            return False
-        with open(path, "r", encoding="utf-8") as f:
-            return "## Reviewer discipline" in f.read()
+        return _contract_constraints().get("reviewer") is True
     except Exception:
         return False
 
@@ -987,6 +1039,10 @@ class VerificationGuard(Guard):
         # reproduce-or-refute round — so the flag must NOT be reset in
         # reset_turn (unlike the per-run gate flags).
         self._reviewer_demanded = False
+        # Wrap-up delta ledger: proposal id -> the exact line last surfaced in
+        # a completion-hygiene message. Whole-run, NOT reset per turn — its
+        # whole purpose is to suppress verbatim re-listing on the NEXT wrap-up.
+        self._reported_open_lines = {}
         # Set by check_pre when a step_done is about to pass through, so the
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
@@ -1011,12 +1067,15 @@ class VerificationGuard(Guard):
         self._premortem_pending = False
 
     def _text_complete_hygiene_message(self) -> str:
-        """The wrap-up hygiene message, with the live open-proposal list injected.
+        """The wrap-up hygiene message, with the open-proposal DELTA injected.
 
         The registry is global/cross-session, so a proposal raised in an earlier
         session and never reviewed appears here — that is the whole point of the
-        registry. We only ADD the list; the static template (minus its trailing
-        instruction) is unchanged when there is nothing open.
+        registry. But re-listing the WHOLE open set verbatim at every completion
+        drowns the new signal. We therefore surface only items NEW or CHANGED
+        since the last wrap-up (tracked in self._reported_open_lines); a stable
+        set yields a one-line "nothing new" note. When there is nothing open,
+        the static template is unchanged.
         """
         base = _TEXT_COMPLETE_HYGIENE
         if self._proposals is None:
@@ -1024,13 +1083,15 @@ class VerificationGuard(Guard):
         open_list = self._proposals.render_open()
         if not open_list:
             return base
+        delta = _delta_open_block(open_list, self._reported_open_lines)
         block = (
-            "\n\n[Open proposals already on file — raised in THIS or an EARLIER "
-            "session and still awaiting the human's review. Re-report these in "
-            "your wrap-up (do NOT re-propose them as new), and if the human has "
-            "since said 'approved'/'done'/'no' about any, first update its status "
-            "with the proposal tool (action='update'), then report the new "
-            "status.]\n" + open_list
+            "\n\n[Open proposals — DELTA since the last wrap-up: only newly "
+            "raised or status-changed items are listed below (already-reported "
+            "ones are omitted). Re-report these in your wrap-up (do NOT "
+            "re-propose them as new), and if the human has since said "
+            "'approved'/'done'/'no' about any, first update its status with the "
+            "proposal tool (action='update'), then report the new status.]\n"
+            + delta
         )
         # Insert right before the final re-issue instruction, so the added block
         # stays part of the wrap-up guidance rather than dangling after it.

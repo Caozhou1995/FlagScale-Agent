@@ -43,6 +43,8 @@ urllib+timeout, ping, dig) and BLOCKS the first heavy op until one is made.
 from __future__ import annotations
 
 import abc
+import re
+import time
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
@@ -118,8 +120,15 @@ _NETWORK_PROBE_TOKENS = (
 )
 
 # Research tools — reaching for internal or external knowledge.
+# memory_read / recall_search are included: consulting the durable memory store
+# (or the session recall ledger) IS an information-gain act — a task may be
+# answered by prior-session facts, and a resumed task often must read memory
+# first. Excluding them forced the agent to make a throwaway web_fetch to clear
+# a gate whose actual intent (retrieve what you do not already hold) memory
+# access satisfies directly.
 _RESEARCH_TOOLS = frozenset((
     "load_knowledge", "load_skill", "web_fetch",
+    "memory_read", "recall_search",
 ))
 
 # Meta tools — bookkeeping that never counts toward the research threshold.
@@ -372,6 +381,9 @@ _RESEARCH_BLOCK_MESSAGE = (
     "  • web_fetch() — EXTERNAL domains (any field where your prior knowledge may "
     "not reflect the current standard method).\n"
     "  • load_knowledge() / load_skill() — INTERNAL domains.\n"
+    "  • memory_read() / recall_search() — consult durable cross-session facts "
+    "or recover earlier session evidence (an information-gain act in its own "
+    "right, free and instant for a resuming task).\n"
     "  • A substantive networked shell op (git clone / pip / apt install / wget / "
     "curl download) — real external dependency acquisition — also counts.\n"
     "The dangerous case is when the example looks simple and you feel NO gap — "
@@ -536,3 +548,94 @@ class StartupGuard(Guard):
     def reset_turn(self):
         # START state persists across turns (setup is done once per task).
         pass
+
+
+# --- Background-job idle-kill false-positive fix (sleep-probe exemption) -----
+#
+# The background-job health monitor (ShellJobsTool._health_tick →
+# _HealthEvaluator.evaluate → should_kill_process) counts IDLE_KILL_THRESHOLD
+# consecutive idle windows as a silent stall and kills the job. A DELIBERATE
+# `sleep N; <probe>` command (a declared wait, then a connectivity/speed probe)
+# is idle the whole time and gets killed the moment N exceeds the idle budget —
+# the exact false positive that killed a real `sleep 75; probe` background job.
+#
+# The kill decision is made two layers below, where the COMMAND is no longer
+# visible, so the only seam that sees job.command is _health_tick. It is wrapped
+# here (the shell.py file itself is out of this task's writable scope) to grant
+# a quiet budget = (sum of declared sleeps) + grace; past that the normal
+# liveness kill resumes, so a genuinely hung sleep-probe is still reaped.
+
+_SLEEP_PROBE_GRACE_SECS = 120
+
+# A sleep-probe: one or more `sleep N` segments chained by ; | && ||, FOLLOWED
+# by a final non-sleep probe segment. The trailing probe is REQUIRED — a bare
+# `sleep N` alone is a normal (monitorable) command, and exempting it would
+# mask a genuinely hung sleep. "Bare" is also load-bearing: the command must
+# START with the sleep(s), excluding commands that merely contain a sleep after
+# another command (e.g. "cd /x && sleep 75"), which could hide a real stall.
+_SLEEP_PROBE_RE = re.compile(
+    r"^(?:sleep\s+\d+\s*(?:[;|]|&&|\|\|)\s*)*sleep\s+\d+\s*"
+    r"(?:[;|]|&&|\|\|)\s*(?!sleep\b)\S"
+)
+_SLEEP_DUR_RE = re.compile(r"sleep\s+(\d+)")
+
+
+def sleep_probe_quiet_budget(command: str) -> int | None:
+    """Quiet budget (seconds) for a deliberate `sleep N[; probe]` command.
+
+    Returns None when the command is not a bare sleep-probe (so the caller
+    falls through to the normal liveness kill). Otherwise returns the sum of
+    every declared sleep duration plus a grace window — enough for the probe
+    after the sleep to run and be observed before idle monitoring resumes.
+    """
+    cmd = (command or "").strip()
+    if not _SLEEP_PROBE_RE.match(cmd):
+        return None
+    total = sum(int(m.group(1)) for m in _SLEEP_DUR_RE.finditer(cmd))
+    return total + _SLEEP_PROBE_GRACE_SECS
+
+
+_SLEEP_PROBE_EXEMPTION_INSTALLED = False
+
+
+def install_background_monitor_exemption() -> None:
+    """Wrap ShellJobsTool._health_tick with the sleep-probe quiet budget.
+
+    Idempotent: the module flag and the class attribute both guard against
+    double-wrapping (re-running the test-suite, or a re-import, must not nest
+    the wrapper). The original method is captured once and delegated to for
+    every non-exempt tick.
+    """
+    global _SLEEP_PROBE_EXEMPTION_INSTALLED
+    if _SLEEP_PROBE_EXEMPTION_INSTALLED:
+        return
+    from flagscale_agent.react.tools.shell import ShellJobsTool
+
+    if getattr(ShellJobsTool, "_sleep_probe_exempt_wrapped", False):
+        _SLEEP_PROBE_EXEMPTION_INSTALLED = True
+        return
+
+    original = ShellJobsTool._health_tick
+
+    def _health_tick_with_sleep_probe_exempt(self, job):
+        budget = sleep_probe_quiet_budget(getattr(job, "command", ""))
+        if budget is not None and (time.time() - job.start) <= budget:
+            return {
+                "kill": False,
+                "reason": "",
+                "activity": (
+                    "deliberate sleep-probe command: idle monitoring "
+                    f"suppressed until ~{budget}s (declared sleep phase + "
+                    "grace), then normal liveness monitoring resumes"
+                ),
+            }
+        return original(self, job)
+
+    ShellJobsTool._health_tick = _health_tick_with_sleep_probe_exempt
+    ShellJobsTool._sleep_probe_exempt_wrapped = True
+    _SLEEP_PROBE_EXEMPTION_INSTALLED = True
+
+
+# Install at import: the exemption must be active before any background job is
+# polled, and importing this guard module is how the guard system comes up.
+install_background_monitor_exemption()

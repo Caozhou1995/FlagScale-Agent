@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -45,7 +46,15 @@ from typing import Any, Dict, List, Optional
 from flagscale_agent.react.paths import get_tasks_dir
 from flagscale_agent.react.tools.base import Tool
 
-from .contract import Contract, ContractError
+from .contract import (
+    REVIEWER_MIN_MINUTES,
+    ROLE_RE_REVIEWER,
+    Contract,
+    ContractError,
+    is_reviewer_role,
+    resolve_role,
+    role_spec,
+)
 from .ledger import (
     ACTIVE_STATUSES,
     DEADLINE_MISSED,
@@ -72,6 +81,122 @@ MIN_MAX_DEPTH = 1
 HARD_MAX_DEPTH = 8
 # Watchdog poll cadence (seconds).
 WATCH_INTERVAL = 5.0
+
+# ── RoleSpec: reviewer auto-injection + preset ───────────────────────────────
+# "the goal is a review" — word-bounded so 'preview' never matches. This
+# predicate only TRIGGERS injection when the caller supplied NO explicit role
+# tag; suppression is keyed on the explicit tag (presence of `reviewer` or
+# `role` in constraints), never on re-detecting prose.
+_REVIEW_GOAL_RE = re.compile(r"\b(re-?review|review|audit)\b", re.IGNORECASE)
+
+
+def _is_review_goal(goal: str) -> bool:
+    """True when the goal reads like a review task (word-bounded)."""
+    return bool(_REVIEW_GOAL_RE.search(goal or ""))
+
+
+def maybe_auto_inject_reviewer(goal: str, constraints: Dict[str, Any]) -> None:
+    """[b56f8276] Auto-inject `constraints.reviewer = True` for a review goal.
+
+    Injected IN PLACE, and only when the caller left no explicit role tag:
+    presence of either `reviewer` or `role` (whatever its value, including
+    False) suppresses injection — the explicit tag is the only suppression
+    signal.
+    """
+    if not isinstance(constraints, dict):
+        return
+    if "reviewer" in constraints or "role" in constraints:
+        return
+    if _is_review_goal(goal):
+        constraints["reviewer"] = True
+
+
+def _has_rev_marker(constraints: Dict[str, Any],
+                    inputs: Optional[List[Dict[str, Any]]]) -> bool:
+    """A revision marker: constraints['rev'] non-empty, or a value input
+    shaped `rev=<non-empty>`."""
+    if str(constraints.get("rev", "") or "").strip():
+        return True
+    for inp in inputs or []:
+        if not isinstance(inp, dict):
+            continue
+        if inp.get("kind") == "value":
+            val = str(inp.get("value", "") or "")
+            if re.match(r"^\s*rev\s*=\s*\S+", val, re.IGNORECASE):
+                return True
+    return False
+
+
+def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
+                          acceptance: List[Dict[str, Any]], output_ptr: str,
+                          deadline_minutes: float,
+                          inputs: Optional[List[Dict[str, Any]]] = None,
+                          ) -> tuple:
+    """[81c81515 + 91aab676] Apply the reviewer preset to a spawn request.
+
+    For a reviewer-class role:
+      * raise ContractError unless `inputs` carry the deliverable abs path
+        (a kind=path input) AND a revision marker (constraints['rev'] or a
+        `rev=...` value input);
+      * raise the deadline floor to REVIEWER_MIN_MINUTES (10);
+      * inject acceptance checks (the acceptance-suggestion half of 91aab676):
+        the report is non-empty, carries a per-finding table or an explicit
+        'no findings' line, and has no dangling '(IN PROGRESS' header.
+    Mutates `constraints` (max_minutes bump) and returns
+    (acceptance, deadline_minutes). Non-reviewer roles pass through untouched.
+    """
+    spec = role_spec(constraints)
+    if not spec.is_review:
+        return list(acceptance or []), deadline_minutes
+    acc = list(acceptance or [])
+    ins = list(inputs or [])
+
+    # inputs must carry the deliverable abs path + rev
+    path_inputs = [i for i in ins
+                   if isinstance(i, dict) and i.get("kind") == "path"
+                   and isinstance(i.get("value"), str)
+                   and i["value"].startswith("/")]
+    if not path_inputs:
+        raise ContractError(
+            "reviewer preset: inputs must carry the deliverable's absolute "
+            "path — add {\"kind\": \"path\", \"value\": \"<abs path>\"}."
+        )
+    if not _has_rev_marker(constraints, ins):
+        raise ContractError(
+            "reviewer preset: inputs must carry the revision under review — "
+            "add {\"kind\": \"value\", \"value\": \"rev=<git sha|mtime>\"} or "
+            "constraints.rev."
+        )
+
+    # deadline floor
+    if deadline_minutes < spec.min_minutes:
+        deadline_minutes = spec.min_minutes
+    try:
+        prev = float(constraints.get("max_minutes"))
+    except (TypeError, ValueError):
+        prev = None
+    if prev is None or prev < spec.min_minutes:
+        constraints["max_minutes"] = spec.min_minutes
+
+    # acceptance suggestions (91aab676): report-completeness as checks the
+    # parent actually runs. The completeness item calls the SAME helper the
+    # write-time gate uses (check_report_completeness) so the two can never
+    # drift apart; flagscale_agent is importable from any cwd in the parent
+    # environment (verified), so the python -c form is safe.
+    existing = {(a or {}).get("check") for a in acc if isinstance(a, dict)}
+    injected = [
+        {"kind": "check_command", "check": f"test -s {output_ptr}"},
+        {"kind": "check_command",
+         "check": f"python -c \"import sys; from "
+                  f"flagscale_agent.react.multi_agent.contract import "
+                  f"check_report_completeness; p = "
+                  f"check_report_completeness({output_ptr!r}); "
+                  f"sys.exit(0 if p is None else 1)\""},
+    ]
+    for item in injected:
+        if item["check"] not in existing:
+            acc.append(item)
+    return acc, deadline_minutes
 
 
 def _effective_max_depth() -> int:
@@ -131,17 +256,30 @@ def _render_contract(c: Contract) -> str:
         "under the infrastructure depth cap; a spawn beyond the cap is refused "
         "with an explicit error. You cannot raise the cap."
     )
-    # Reviewer detection: an EXPLICIT `constraints.reviewer` flag. This flag —
-    # not a read-only check — is the only reliable signal: a "writable == []"
-    # predicate is UNREACHABLE here, because Contract.validate() requires
-    # output_ptr ∈ constraints.writable, so every contract that reaches this
-    # render point has at least one writable dir (a reviewer therefore carries
-    # writable=[report_dir] PLUS reviewer:true). Reviewer-only discipline lines
-    # (audit lessons 1b/1c/1d) are appended HERE, not in the generic template,
-    # so normal subtask contracts stay unchanged.
-    if cons.get("reviewer"):
+    # Reviewer detection: EXPLICIT role tags, via resolve_role() — the same
+    # resolver the write-time gate and the preset use, so a role-tag-only
+    # contract ({"role": "re_reviewer"} with no boolean flag) gets the same
+    # discipline lines. A bare `cons.get("reviewer")` here would silently
+    # skip role-only re-reviewers even though report_result gates them.
+    if is_reviewer_role(cons):
         lines.append("")
         lines.append("## Reviewer discipline")
+        lines.append(
+            "Your report must be COMPLETE when you call report_result: a "
+            "non-empty report containing >=1 finding (one markdown table row "
+            "per finding, e.g. `| F1 | bug | fix |`) or an explicit "
+            "'no findings' line, and NO dangling '(IN PROGRESS' header. An "
+            "unfinished report is REJECTED at report_result — finalize it "
+            "before reporting."
+        )
+        if resolve_role(cons) == ROLE_RE_REVIEWER:
+            lines.append(
+                "RE-REVIEW ROLE: verify ONLY that each previously reported "
+                "finding is fixed in the diff — do not re-review the whole "
+                "artifact. State a per-finding verdict (fixed / not fixed / "
+                "partially fixed) in the table; the deadline and input preset "
+                "are the same as a full review."
+            )
         lines.append(
             "Your file:line citations are LEADS, not evidence: the parent "
             "re-verifies each one before acting. Cite exactly what you saw "
@@ -484,13 +622,26 @@ class SpawnWorkerTool(Tool):
         if dm <= 0:
             return "ERROR: deadline_minutes must be a positive number of minutes."
         cons.setdefault("max_minutes", dm)
+
+        # ── 4b. RoleSpec: auto-inject + reviewer preset (before freezing) ────
+        # [b56f8276] auto-inject the explicit reviewer tag for a review goal
+        # (an explicit `reviewer`/`role` tag suppresses injection).
+        maybe_auto_inject_reviewer(goal, cons)
+        # [81c81515 + 91aab676] apply the preset: deliverable+rev inputs,
+        # deadline floor, acceptance-completeness injection.
+        try:
+            acceptance_list, dm = apply_reviewer_preset(
+                goal, cons, list(acceptance or []), output_ptr, dm,
+                inputs=list(inputs or []))
+        except ContractError as e:
+            return f"ERROR: contract validation failed: {e}"
         deadline_epoch = int(time.time()) + int(dm * 60)
 
         try:
             c = Contract.build(
                 goal=goal,
                 constraints=cons,
-                acceptance=list(acceptance or []),
+                acceptance=list(acceptance_list or []),
                 output_ptr=output_ptr,
                 inputs=list(inputs or []),
                 deadline_epoch=deadline_epoch,

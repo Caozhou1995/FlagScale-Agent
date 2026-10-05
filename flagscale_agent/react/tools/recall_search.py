@@ -140,9 +140,44 @@ class RecallSearchTool(Tool):
         # the file on every call (cheap: existence check), so a long-lived
         # agent always searches the CURRENT log even after reload.
         self._session_dir = session_dir
+        # Parent-session fallback for worker/reviewer sessions: their dir is
+        # <parent_session>/subagents/<task_id>/ and may never hold its own
+        # conversation_full.json — the searchable log is the parent's.
+        # Bound once in __init__; a rebind to a new session dir (resume/reload)
+        # re-derives the parent because the agent registers a FRESH
+        # RecallSearchTool instance on resume (see agent.py tool registration).
+        self._parent_log_path = self._derive_parent_log_path(session_dir)
+
+    @staticmethod
+    def _derive_parent_log_path(session_dir: str) -> Optional[str]:
+        # Two levels up only matches the subagent layout; a standalone
+        # session dir (no subagents component) has no parent log.
+        parent_dir = os.path.dirname(os.path.dirname(session_dir.rstrip(os.sep)))
+        if os.path.basename(os.path.dirname(session_dir.rstrip(os.sep))) != "subagents":
+            return None
+        return os.path.join(parent_dir, "conversation_full.json")
 
     def _log_path(self) -> str:
         return os.path.join(self._session_dir, "conversation_full.json")
+
+    def _resolve_log(self) -> tuple:
+        """Return (path_to_search, description) or (None, error_message).
+
+        Primary: this session's own log. Fallback: the parent session's
+        log when the session lives under <parent>/subagents/<task_id>/
+        and has no log of its own (typical for worker/reviewer roles).
+        """
+        path = self._log_path()
+        if os.path.exists(path):
+            return path, ""
+        parent_path = self._parent_log_path
+        if parent_path and os.path.exists(parent_path):
+            return parent_path, "parent session log (fallback)"
+        msg = ("ERROR: conversation_full.json not found at %s — "
+               "session log missing or session_dir wrong." % path)
+        if parent_path:
+            msg += (" Parent session log also missing: %s" % parent_path)
+        return None, msg
 
     def execute(self, **kwargs) -> str:
         query = kwargs.get("query", "")
@@ -157,10 +192,9 @@ class RecallSearchTool(Tool):
         if order not in ("recent", "oldest"):
             order = "recent"
 
-        path = self._log_path()
-        if not os.path.exists(path):
-            return ("ERROR: conversation_full.json not found at %s — "
-                    "session log missing or session_dir wrong." % path)
+        path, fallback_desc = self._resolve_log()
+        if path is None:
+            return fallback_desc
 
         t0 = time.time()
         try:
@@ -191,24 +225,31 @@ class RecallSearchTool(Tool):
         elapsed = time.time() - t0
 
         return self._format(keywords, hits, len(messages), role_filter,
-                            elapsed, order)
+                            elapsed, order, fallback_desc)
 
     def _format(self, keywords: List[str], hits: List[Dict[str, Any]],
                 total_messages: int, role_filter: Optional[str],
-                elapsed: float, order: str) -> str:
+                elapsed: float, order: str,
+                fallback_desc: str = "") -> str:
         lines = []
         n_kw = " ".join(keywords)
         scope = "role=%s" % role_filter if role_filter else "all roles"
         lines.append(
-            "recall_search: %d hit(s) for %r [%s] in %.2fs (scanned %d messages)"
-            % (len(hits), n_kw, scope, elapsed, total_messages)
+            "recall_search: %d hit(s) for %r [%s] in %.2fs (scanned %d messages)%s"
+            % (len(hits), n_kw, scope, elapsed, total_messages,
+               " — searched %s" % fallback_desc if fallback_desc else "")
         )
         if not hits:
             lines.append("No message contains ALL keywords: %r" % keywords)
             lines.append("Tip: try fewer keywords, or memory_list(keyword=...) "
                          "for distilled knowledge.")
             return "\n".join(lines)
-        lines.append("Use recall(index=N) to get a hit's full content.")
+        if fallback_desc:
+            lines.append("Note: hits come from %s; recall(index) resolves "
+                         "against THIS session's log only — use the snippet."
+                         % fallback_desc)
+        else:
+            lines.append("Use recall(index=N) to get a hit's full content.")
         for h in hits:
             snippet = _snippet(h["text"], keywords)
             snippet = snippet.replace("\n", " ")

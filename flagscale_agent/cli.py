@@ -31,6 +31,7 @@ Environment variables:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -48,11 +49,11 @@ app = typer.Typer(
 def main(
     ctx: typer.Context,
     provider: str = typer.Option("anthropic", "--provider", "-p", help="LLM provider (anthropic, openai)"),
-    model: str | None = typer.Option(None, "--model", "-m", help="Model name (default: provider's default)"),
-    base_url: str | None = typer.Option(None, "--base-url", "-b", help="API base URL (for proxies/gateways)"),
-    config: Path | None = typer.Option(None, "--config", "-c", help="Agent config YAML path"),
-    auto_resume: str | None = typer.Option(None, "--auto-resume", help="Auto-resume session ID (internal use by /reload)"),
-    query: str | None = typer.Argument(None, help="Single-shot query (non-interactive mode)"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model name (default: provider's default)"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", "-b", help="API base URL (for proxies/gateways)"),
+    config: Optional[Path] = typer.Option(None, "--config", "-c", help="Agent config YAML path"),
+    auto_resume: Optional[str] = typer.Option(None, "--auto-resume", help="Auto-resume session ID (internal use by /reload)"),
+    query: Optional[str] = typer.Argument(None, help="Single-shot query (non-interactive mode)"),
     max_output_tokens: int = typer.Option(8192, "--max-output-tokens", help="Max output tokens per response"),
     thinking_budget: int = typer.Option(0, "--thinking-budget", help="Thinking budget tokens (0=disabled, >0=enable thinking)"),
     time_budget_sec: float = typer.Option(0.0, "--time-budget-sec", help="Per-turn wall-clock budget in seconds (0=unset). Drives time-remaining warnings and a wrap-up reminder at 100%; NOT a hard kill. Equivalent to env FLAGSCALE_AGENT_TIME_BUDGET_SEC."),

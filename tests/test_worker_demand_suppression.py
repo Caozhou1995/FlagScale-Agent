@@ -19,6 +19,8 @@ conftest.py clears the worker-identity env per test; the worker branch is
 exercised explicitly via monkeypatch.setenv (house pattern).
 """
 
+import json
+
 import pytest
 
 from flagscale_agent.react.guard import GuardContext
@@ -39,9 +41,21 @@ REVIEWER_DEMAND_MARKER = "spawn one NOW"
 DIVERGER_DEMAND_MARKER = "Propose 2-3 genuinely different framings"
 
 
-def _worker_env(monkeypatch, contract_text, tmp_path):
+def _worker_env(monkeypatch, contract_text, tmp_path, reviewer=None):
+    """Mimic a spawned worker env: rendered prompt + structured contract.json.
+
+    Production suppression reads the STRUCTURED constraints from the sibling
+    contract.json (written by the ledger at spawn time, L179) — never the
+    rendered prose. The fixture must write both files with the same shape.
+    """
     contract = tmp_path / "contract.md"
     contract.write_text(contract_text)
+    constraints = {}
+    if reviewer is not None:
+        constraints["reviewer"] = reviewer
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"constraints": constraints})
+    )
     monkeypatch.setenv("FLAGSCALE_TASK_ID", "t-suppress")
     monkeypatch.setenv("FLAGSCALE_CONTRACT_PATH", str(contract))
 
@@ -58,7 +72,7 @@ def _step_done_ctx():
 class TestReviewerDemandSuppression:
     def test_reviewer_worker_gets_no_nested_demand(self, tmp_path, monkeypatch):
         """A reviewer worker's passing step_done carries the pre-mortem only."""
-        _worker_env(monkeypatch, REVIEWER_CONTRACT, tmp_path)
+        _worker_env(monkeypatch, REVIEWER_CONTRACT, tmp_path, reviewer=True)
         guard = VerificationGuard()
         guard._step_done_recheck_reminded = True  # let the step_done pass
         assert guard.check_pre(_step_done_ctx()) is None
@@ -80,7 +94,7 @@ class TestReviewerDemandSuppression:
 class TestDivergerDemandSuppression:
     def test_diverger_worker_gets_no_nested_demand(self, tmp_path, monkeypatch):
         """A diverger worker's plan_create inject omits the framing demand."""
-        _worker_env(monkeypatch, DIVERGER_CONTRACT, tmp_path)
+        _worker_env(monkeypatch, DIVERGER_CONTRACT, tmp_path, reviewer=True)
         guard = PlanGuard()
         v = guard.check_pre(GuardContext(tool_name="plan_create",
                                          tool_args={"title": "x",

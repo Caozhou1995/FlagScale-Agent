@@ -535,6 +535,24 @@ class TestSystemPromptContent:
         assert "VERBATIM line" in p
         assert "one-character variants" in p
 
+    def test_write_time_anchor_verification_present(self):
+        # Principle 2 (d) write-time extension: file:line anchors written into a
+        # deliverable mid-task must be grep/sed-verified against the live file
+        # BEFORE writing — never inserted from memory or session summaries
+        # (stale pointers and phantom anchors are the recorded failure mode).
+        p = self._prompt()
+        assert "WRITE-TIME" in p
+        assert "never insert an anchor from memory" in p
+
+    def test_reviewer_log_fallback_present(self):
+        # Blind Review: a missing/empty/PARTIAL report must not be read as
+        # "no findings" — fall back to the worker's own worker.log (spawn
+        # response prints its path) before treating the review as empty.
+        p = self._prompt()
+        assert "PARTIAL placeholder" in p
+        assert "fall back to the worker's own log" in p
+        assert "DEADLINE_MISSED" in p
+
     def test_closed_exemption_list_and_unverified_attribution_present(self):
         # Task-agnostic leak guard — no task-specific vocabulary.
         p = self._prompt()

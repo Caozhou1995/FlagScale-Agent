@@ -558,7 +558,17 @@ _JOB_REGISTRY = _JobRegistry()
 
 class ShellTool(Tool):
     name = "shell"
-    description = "Execute a shell command and return its output (stdout + stderr)."
+    description = (
+        "Execute a shell command and return its output (stdout + stderr). "
+        "Output is bounded (~200KB: first ~60KB (head) + last ~140KB (tail) "
+        "kept, everything between dropped), so long compound commands "
+        "(heredocs, multi-step seds, chained greps) can silently lose "
+        "intermediate sub-commands' output — a known failure mode that costs "
+        "repeated re-probes. "
+        "Workaround for long/probing output: have the command WRITE results to "
+        "a file (e.g. `... > /tmp/probe.txt 2>&1`), then read_file that file in "
+        "full — file-mediated output is never truncated by the shell tool."
+    )
     parameters = {
         "type": "object",
         "properties": {

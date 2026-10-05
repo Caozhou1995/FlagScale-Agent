@@ -63,6 +63,30 @@ class KnowledgeSkillGuard(Guard):
 
     def __init__(self):
         self._calls_since_knowledge = 0
+        # Set when a write is blocked with the "[PostEditBlocked]" mandate: the
+        # guard whose block demands a cold re-read must not be the guard that
+        # then blocks that very re-read. While set, the mandated read_file /
+        # the re-issued edit_file to `self._mandated_path` are exempt from the
+        # counter and the block (see _re_read_exempt).
+        self._mandated_reverify = False
+        self._mandated_path = ""
+
+    def _re_read_exempt(self, ctx: GuardContext) -> bool:
+        """True when ctx is a guard-mandated cold re-read / re-issued edit.
+
+        Exempting EXACTLY the mandated path (not a blanket read/edit pass)
+        keeps the gate's discipline: an unrelated call still counts and still
+        blocks at the threshold. Any real non-exempt call clears a stale
+        mandate (see _persist_call_count); a turn boundary clears it too.
+        """
+        if not self._mandated_reverify:
+            return False
+        if ctx.tool_name not in ("read_file", "edit_file"):
+            return False
+        path = str((ctx.tool_args or {}).get("path") or "").strip()
+        if not path or not self._mandated_path:
+            return True
+        return path == self._mandated_path
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
@@ -76,6 +100,15 @@ class KnowledgeSkillGuard(Guard):
         # Knowledge/skill loaded — reset counter.
         if ctx.tool_name in self._KNOWLEDGE_TOOLS:
             self._calls_since_knowledge = 0
+            return None
+
+        # A guard-mandated cold re-read / re-issued edit is exempt: the guard
+        # that demanded it must not block it. An edit consumes the mandate
+        # (the re-issue is the delivery); a read keeps it (the re-issue edit
+        # still follows).
+        if self._re_read_exempt(ctx):
+            if ctx.tool_name == "edit_file":
+                self._mandated_reverify = False
             return None
 
         # Read-only projection for the block/inject DECISION. The persistent
@@ -157,7 +190,15 @@ class KnowledgeSkillGuard(Guard):
             return
         if name in self._META_TOOLS:
             return
-        # A real, executed tool call.
+        # Exempt calls (the mandated re-read and the re-issued edit) do not
+        # count — mirror check_pre, or the re-read would still advance the very
+        # counter whose block it is escaping.
+        if self._re_read_exempt(ctx):
+            return
+        # A real, executed tool call. Any non-exempt call makes a pending
+        # mandate stale: the re-read/cleanup window is the immediately-following
+        # turns, not an indefinite pass.
+        self._mandated_reverify = False
         self._calls_since_knowledge += 1
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
@@ -167,6 +208,18 @@ class KnowledgeSkillGuard(Guard):
         # blocked (its result carries the [BLOCKED BY GUARD] marker) or retried
         # does NOT inflate the counter on every check_pre pass.
         self._persist_call_count(ctx)
+
+        # PostEditBlocked mandate: a write was blocked pending a cold re-read of
+        # the far end. Record THAT path so the mandated read_file (and the
+        # re-issued edit_file) are exempt from this guard's own counter/block —
+        # otherwise the guard deadlocks with the guard that issued the mandate.
+        if (ctx.tool_name in ("write_file", "edit_file")
+                and isinstance(ctx.tool_result, str)
+                and ctx.tool_result.startswith("[BLOCKED BY GUARD]")
+                and "[PostEditBlocked]" in ctx.tool_result):
+            self._mandated_reverify = True
+            self._mandated_path = str(
+                (ctx.tool_args or {}).get("path") or "").strip()
 
         # Information-gain inject for knowledge tools (inject, not block).
         # Aligns with the system prompt's Information Gain section: after any
@@ -222,4 +275,8 @@ class KnowledgeSkillGuard(Guard):
 
     def reset_turn(self):
         """Don't reset per-turn — knowledge need persists across turns."""
-        pass
+        # ...but a PostEditBlocked mandate is a SINGLE-turn cleanup window: the
+        # mandated re-read happens in the same turn as the block. Dropping it at
+        # the boundary prevents an indefinite read/edit exemption.
+        self._mandated_reverify = False
+        self._mandated_path = ""

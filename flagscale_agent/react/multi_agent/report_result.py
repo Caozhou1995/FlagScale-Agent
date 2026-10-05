@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional
 from flagscale_agent.react.paths import get_tasks_dir
 from flagscale_agent.react.tools.base import Tool
 
-from .contract import _within
+from .contract import _within, check_report_completeness, role_spec
 from .ledger import LedgerError, REPORTED, RUNNING, TaskLedger
 
 
@@ -182,6 +182,19 @@ class ReportResultTool(Tool):
                     f"ERROR: file {p!r} is not inside the contract's "
                     f"constraints.writable {writable!r}. Only write to "
                     "the allowed directories."
+                )
+
+        # ── 2b. [fa9b99a4] write-time completeness gate (reviewer roles) ─────
+        # A reviewer-class task whose output report is unfinished (empty, a
+        # dangling '(IN PROGRESS' header, or no finding and no explicit
+        # 'no findings' line) is REJECTED here, with guidance — the task stays
+        # RUNNING so the worker can finalize and report again.
+        if c is not None and role_spec(c.constraints).report_gate:
+            problem = check_report_completeness(c.output_ptr)
+            if problem:
+                return (
+                    f"ERROR: reviewer report rejected — {problem} Fix the "
+                    "report at output_ptr, then call report_result again."
                 )
 
         # ── 3. write result.json + RUNNING → REPORTED ────────────────────────

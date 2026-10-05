@@ -22,6 +22,9 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
 
 
+from flagscale_agent.react.guard.verification import _contract_constraints
+
+
 def _self_is_diverger_worker() -> bool:
     """True when THIS process is a spawned diverger worker.
 
@@ -29,20 +32,15 @@ def _self_is_diverger_worker() -> bool:
     rule") is a PARENT-side habit: a diverger worker already IS the
     alternative-framing channel — nesting the demand inside it would ask it
     to review its own re-framing and contend for the shared concurrency
-    gate. There is no dedicated constraints flag for the diverger role, so
-    detect via the contract text: the _DIVERGER_INJECT goal template
-    ("Propose 2-3 genuinely different framings of the task") is rendered
-    into every diverger contract, and no other contract type carries that
-    phrase. Errors fail silent-False (demand fires as usual).
+    gate. Detect via the spawned contract's STRUCTURED `constraints.reviewer`
+    flag (contract.json), never via prose in the rendered contract.prompt — a
+    body that merely QUOTES "framings of the task" must not suppress the
+    demand. Errors fail silent-False (demand fires as usual).
     """
     try:
         if not is_worker():
             return False
-        path = os.environ.get(CONTRACT_PATH_ENV, "")
-        if not path:
-            return False
-        with open(path, "r", encoding="utf-8") as f:
-            return "framings of the task" in f.read()
+        return _contract_constraints().get("reviewer") is True
     except Exception:
         return False
 
