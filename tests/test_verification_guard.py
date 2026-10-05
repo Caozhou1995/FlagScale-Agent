@@ -589,6 +589,19 @@ class TestConstraintGuidanceBlockedComputation:
         # not a scan / pattern check
         assert "not a scan" in low or "no pattern" in low
 
+    def test_citation_recheck_prior_check_not_excuse(self):
+        """Citation-drift awareness (user directive: prompt-level, not programmatic):
+        an anchor re-verified EARLIER is not exempt — a later line-shifting edit
+        stales every anchor below the shift point, and the harness drift guard's
+        git-HEAD baseline is silent for files outside a git repo (reports/notes/
+        docs), where the re-open is the only remaining check. Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        assert "re-verified-earlier is not a re-verify" in low
+        assert "shifted lines" in low
+        assert "silent for files outside a git" in low
+        assert "only remaining check" in low
+
     def test_text_complete_hygiene_requires_numeric_limit_check(self):
         """The text-path wrap-up checklist must carry the numeric-limit self-check
         sub-item (measure the delivered artifact against a stated cap; do not

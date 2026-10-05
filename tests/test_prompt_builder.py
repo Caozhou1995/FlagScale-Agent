@@ -574,6 +574,18 @@ class TestSystemPromptContent:
         assert "WRITE-TIME" in p
         assert "never insert an anchor from memory" in p
 
+    def test_citation_drift_awareness_present(self):
+        # Prompt-side citation-drift awareness (user directive: strengthen the
+        # AWARENESS in the prompt, not programmatic enforcement): line-shifting
+        # edits stale earlier anchors; the harness drift guard reads git HEAD as
+        # baseline and is silent for files not under git, where re-grep is the
+        # only remaining check.
+        p = self._prompt()
+        assert "AWARENESS OF DRIFT" in p
+        assert "re-grep before re-citing" in p
+        assert "not under git" in p
+        assert "final re-grep pass" in p
+
     def test_reviewer_log_fallback_present(self):
         # Blind Review: a missing/empty/PARTIAL report must not be read as
         # "no findings" — fall back to the worker's own worker.log (spawn

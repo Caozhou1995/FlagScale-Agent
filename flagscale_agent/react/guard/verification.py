@@ -817,7 +817,12 @@ re-confirm delivery after you clean):
           verification command together with the line you actually read:
           `artifact: <path>:<line> / replication: <exact command> / value: <the line>`.
           Do NOT quote from memory — a reference whose cited symbol no longer exists
-          (or whose line number drifted) must be corrected or withdrawn here. If the
+          (or whose line number drifted) must be corrected or withdrawn here. A
+          re-verified-EARLIER is not a re-verify: an edit that shifted lines after
+          that check stales every anchor below the shift point, and the harness
+          drift guard reads only git HEAD — it is silent for files outside a git
+          repo (reports/notes/docs), where this re-open is the ONLY remaining
+          check. If the
           answer cites nothing, write "citations: none". This is the SAME
           observe-don't-assert standard as the paragraph above, turned on your own
           quotes; it is not a scan or a pattern check.
