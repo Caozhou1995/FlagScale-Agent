@@ -70,6 +70,37 @@ class TestWriteFileTool:
         tool.execute(path=str(f), content="nested")
         assert f.read_text() == "nested"
 
+    def test_subthreshold_shrink_warns_but_writes(self, tmp_path):
+        # mode=write shrinking the file but by <50%: the write is ALLOWED
+        # (may be a legit rewrite) but the result carries a WARNING so the
+        # agent can notice a possible truncated continuation.
+        f = tmp_path / "doc.md"
+        f.write_text("A" * 1000)
+        tool = WriteFileTool()
+        result = tool.execute(path=str(f), content="B" * 800)
+        assert not result.startswith("ERROR:")
+        assert "WARNING" in result and "shrank" in result
+        assert f.read_text() == "B" * 800  # the write actually happened
+
+    def test_halving_shrink_still_hard_blocks(self, tmp_path):
+        # >50% drop stays a hard block (truncated-retry signature).
+        f = tmp_path / "doc.md"
+        f.write_text("A" * 1000)
+        tool = WriteFileTool()
+        result = tool.execute(path=str(f), content="B" * 100)
+        assert result.startswith("ERROR:")
+        assert "shrink" in result.lower()
+        assert f.read_text() == "A" * 1000  # original preserved
+
+    def test_growing_write_no_warning(self, tmp_path):
+        # A normal overwrite that grows (or stays equal) must NOT warn.
+        f = tmp_path / "doc.md"
+        f.write_text("A" * 100)
+        tool = WriteFileTool()
+        result = tool.execute(path=str(f), content="B" * 200)
+        assert not result.startswith("ERROR:")
+        assert "WARNING" not in result
+
 
 class TestEditFileTool:
     def test_edit_replaces(self, tmp_path):

@@ -199,6 +199,30 @@ def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
     return acc, deadline_minutes
 
 
+def _path_fingerprint(path: str) -> Optional[str]:
+    """md5+mtime of a FILE path input, or None (dirs/unreadable are skipped).
+
+    Why: a reviewer is handed a diff/text snapshot of a LIVE worktree. If the
+    worktree is edited again after dispatch, the reviewer cites a hunk the
+    running system never had — a false finding. Stamping the exact bytes'
+    fingerprint into the contract lets the reviewer (and the parent) detect
+    drift by re-hashing the same path before trusting a citation.
+    """
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return None
+        import hashlib
+        h = hashlib.md5()
+        with p.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        st = p.stat()
+        return f"md5={h.hexdigest()} mtime={int(st.st_mtime)} size={st.st_size}"
+    except OSError:
+        return None
+
+
 def _effective_max_depth() -> int:
     """The effective depth cap: env FLAGSCALE_MAX_DEPTH, clamped to safe range."""
     try:
@@ -291,6 +315,27 @@ def _render_contract(c: Contract) -> str:
             "you reviewed (git rev / mtime / line count) in your report; "
             "findings against a stale revision must say so."
         )
+        # Diff-of-diffs: the contract stamps a fingerprint for any file path
+        # input so the reviewer can detect a worktree that was edited AFTER
+        # dispatch (the source of false findings against a stale snapshot).
+        fp_rows = []
+        for inp in c.inputs or []:
+            if isinstance(inp, dict) and inp.get("kind") == "path":
+                fp = _path_fingerprint(str(inp.get("value", "")))
+                if fp:
+                    fp_rows.append((str(inp.get("value")), fp))
+        if fp_rows:
+            lines.append(
+                "REVISION PINNING: the lines below are the exact bytes of the "
+                "path(s) you were handed, stamped at dispatch. If an artifact "
+                "may change mid-review, RE-HASH the same path before trusting "
+                "it — `md5sum <path>` must equal the stamp. On a mismatch, your "
+                "citations address a stale revision the running system never "
+                "had: re-read the file and re-run the diff before citing, and "
+                "mark any finding you cannot re-confirm as 'possibly stale'."
+            )
+            for pth, fp in fp_rows:
+                lines.append(f"  - {pth} :: {fp}")
         lines.append(
             "For a follow-up review: your session env exposes "
             "FLAGSCALE_SESSION_ROOT/ID of the parent — recall_search the "

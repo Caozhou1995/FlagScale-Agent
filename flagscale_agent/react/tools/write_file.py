@@ -96,15 +96,19 @@ class WriteFileTool(Tool):
         # existing file by >50% is the signature of a truncated retry — the
         # earlier sections are usually already on disk. Refuse softly with both
         # escape hatches instead of destroying them (session-observed data loss).
-        if mode == "write" and not kwargs.get("ack_overwrite"):
+        # Sub-threshold shrink (up to 50%) is ALLOWED but flagged: an overwrite
+        # that still loses bytes may be a legitimate rewrite OR the tail of a
+        # truncated retry, so warn rather than block (the agent can see the drop
+        # and decide). Both probes measure BYTES on disk vs the encoded byte
+        # length of the new content — len(content) counts characters, which
+        # mis-measures multibyte (CJK/emoji) text.
+        shrink_note = ""
+        if mode == "write" and os.path.exists(path):
             try:
-                if os.path.exists(path):
-                    old_size = os.path.getsize(path)
-                    # Compare BYTES on disk with the encoded byte length of the
-                    # new content — len(content) counts characters, which
-                    # under-blocks for multibyte (CJK/emoji) text.
-                    new_size = len(content.encode("utf-8"))
-                    if old_size > 0 and new_size < old_size * 0.5:
+                old_size = os.path.getsize(path)
+                new_size = len(content.encode("utf-8"))
+                if old_size > 0 and new_size < old_size * 0.5:
+                    if not kwargs.get("ack_overwrite"):
                         return (
                             f"ERROR: mode=write would shrink {path} from {old_size} "
                             f"to {new_size} bytes (>50% drop). If this is a retry "
@@ -112,6 +116,13 @@ class WriteFileTool(Tool):
                             "use mode=append for the continuation, or pass "
                             "ack_overwrite=true to confirm a genuine full rewrite."
                         )
+                elif old_size > 0 and new_size < old_size:
+                    shrink_note = (
+                        f" [WARNING: mode=write shrank {path} from {old_size} to "
+                        f"{new_size} bytes — if this was meant to be a continuation "
+                        "of an earlier write, use mode=append; if it was a genuine "
+                        "full rewrite this is expected.]"
+                    )
             except OSError:
                 pass  # size probe failed -> fall through to the normal write path
 
@@ -124,6 +135,9 @@ class WriteFileTool(Tool):
             get_file_cache().invalidate(path)
             action = "Appended" if mode == "append" else "Wrote"
             total = os.path.getsize(os.path.abspath(path))
-            return f"{action} {len(content)} chars to {path} (total file size: {total} bytes)"
+            return (
+                f"{action} {len(content)} chars to {path} "
+                f"(total file size: {total} bytes){shrink_note}"
+            )
         except Exception as e:
             return f"ERROR: {e}"

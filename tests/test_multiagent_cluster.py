@@ -590,6 +590,54 @@ class TestRenderRoleLines:
         text = _render_contract(c)
         assert "## Reviewer discipline" not in text
 
+    def test_reviewer_render_pins_file_revision(self, tmp_path):
+        # prop_0d6be3ee: a file path input must be stamped with its exact
+        # bytes' fingerprint so the reviewer detects a worktree edited AFTER
+        # dispatch (diff-of-diffs, avoiding false findings on a stale snapshot).
+        c = _reviewer_contract(tmp_path)
+        text = _render_contract(c)
+        assert "REVISION PINNING" in text
+        assert "md5=" in text
+        assert "re-run the diff" in text
+
+    def test_no_pinning_without_file_path_input(self, tmp_path):
+        # No file path input (dir only) → no pins, but discipline still renders.
+        d = tmp_path / "somedir"
+        d.mkdir()
+        c = _reviewer_contract(tmp_path, inputs=[{"kind": "path", "value": str(d)},
+                                                 {"kind": "value", "value": "rev=x"}])
+        text = _render_contract(c)
+        assert "## Reviewer discipline" in text
+        assert "REVISION PINNING" not in text
+
+
+class TestPathFingerprint:
+    def test_fingerprint_file(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _path_fingerprint
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        fp = _path_fingerprint(str(f))
+        assert fp is not None
+        assert fp.startswith("md5=")
+        assert "size=5" in fp
+
+    def test_fingerprint_dir_is_none(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _path_fingerprint
+        assert _path_fingerprint(str(tmp_path)) is None
+
+    def test_fingerprint_missing_is_none(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _path_fingerprint
+        assert _path_fingerprint(str(tmp_path / "nope")) is None
+
+    def test_fingerprint_changes_with_content(self, tmp_path):
+        from flagscale_agent.react.multi_agent.spawn import _path_fingerprint
+        f = tmp_path / "b.txt"
+        f.write_text("one")
+        fp1 = _path_fingerprint(str(f))
+        f.write_text("two")
+        fp2 = _path_fingerprint(str(f))
+        assert fp1 != fp2
+
 
 class _FakeProc:
     def __init__(self, pid=4321):

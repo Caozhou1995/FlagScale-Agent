@@ -526,6 +526,28 @@ class TestConstraintGuidanceBlockedComputation:
             assert not re.search(r"\b" + re.escape(w), low), (
                 f"leaked task-specific term: {w!r}")
 
+    def test_delivery_hygiene_has_numeric_citation_recheck_bullet(self):
+        """prop_af7e6852: a NUMERIC CITATION RECHECK bullet forces every bare
+        number (count/size/md5/timestamp/percentage) in the deliverable to trace
+        to a command run in the SAME session, else be marked unverified.
+        Task-agnostic: no leaked numeric value or task noun."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = " ".join(_TASK_COMPLETE_DELIVERY_HYGIENE.lower().split())
+        assert "numeric citation recheck" in low
+        # the demand: trace to a command run THIS session
+        assert "bare number" in low or "bare numeric" in low
+        assert "this session" in low
+        # the failure modes named in the abstract
+        assert "memory" in low and ("prior summary" in low or "earlier prose" in low)
+        # the escape: mark unverified
+        assert "unverified" in low
+        # task-agnostic: the bullet names the MECHANIC, never a concrete
+        # count/size/timestamp from any particular deliverable — assert no
+        # bare numeric literal (>=3 digits) leaked into the guidance text.
+        import re
+        assert not re.search(r"\b\d{3,}\b", low), (
+            "leaked a concrete numeric value into task-agnostic guidance")
+
     def test_text_complete_hygiene_leads_with_final_answer(self):
         """The wrap-up hygiene prompt must FIRST demand the turn's real final output
         (not a checklist-only reply), because the user reads the end of the

@@ -170,8 +170,9 @@ class PostEditFarEndGuard(Guard):
             return None
 
         measurement = self._measure(path)
+        drift = self._citation_drift_note(ctx, path)
         return GuardVerdict.inject(
-            self._message(path, measurement),
+            self._message(path, measurement, drift),
             reason="post_edit_far_end",
             # Independent category — the registry deduplicates injects by
             # category, so a shared category would silently swallow this
@@ -188,7 +189,8 @@ class PostEditFarEndGuard(Guard):
         return _FALLBACK_HINT
 
     @classmethod
-    def _message(cls, path: str, measurement: str | None = None) -> str:
+    def _message(cls, path: str, measurement: str | None = None,
+                 drift: str | None = None) -> str:
         lines = [
             f"[Post-edit] {path} edited. Verify the FAR end now:",
         ]
@@ -223,7 +225,57 @@ class PostEditFarEndGuard(Guard):
                 "catch argv order, env/fd/cwd passing — run at least one REAL "
                 "(non-mocked) subprocess E2E before declaring done."
             )
+        if drift:
+            lines.append(drift)
         return "\n".join(lines)
+
+    @classmethod
+    def _citation_drift_note(cls, ctx: GuardContext, path: str) -> str | None:
+        """Detect that this edit SHIFTED the edited file's line count.
+
+        A `file:line` anchor written into any deliverable (a report, a doc, an
+        earlier note) goes STALE the moment the SAME file gains or loses lines
+        above the anchor. The agent rarely re-checks — the recorded failure mode
+        is a doc body citing `:1102`/`L620` after a later edit moved them to
+        `:1126`/`L623`. We cannot know which external document holds an anchor,
+        so we do the cheap, general thing: measure the line delta from THIS
+        edit (git HEAD vs working tree) and, when it is non-zero, demand a
+        re-grep of any anchor the agent holds to this file. Silent when git is
+        unavailable or the file has no committed baseline (nothing to compare).
+        """
+        # Only text/source files carry line anchors.
+        if not path.endswith((".py", ".md", ".txt", ".rst", ".yaml", ".yml",
+                              ".json", ".toml", ".sh")):
+            return None
+        try:
+            import subprocess as _sp
+            old = _sp.run(
+                ["git", "show", f"HEAD:{cls._relpath_for_git(path)}"],
+                capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECONDS,
+                cwd=os.path.dirname(os.path.abspath(path)) or None,
+            )
+        except (OSError, _sp.TimeoutExpired):
+            return None
+        if old.returncode != 0:
+            return None  # new file or not in a git repo — no baseline
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                new_lines = fh.read().count("\n")
+        except OSError:
+            return None
+        old_lines = old.stdout.count("\n")
+        delta = new_lines - old_lines
+        if delta == 0:
+            return None
+        sign = "+" if delta > 0 else ""
+        return (
+            f"  · CITATION DRIFT — this edit changed {path} by {sign}{delta} "
+            f"line(s). Any `file:line` anchor you hold to THIS file (in a report, "
+            f"doc, or earlier note) may now be stale. Before citing any line in "
+            f"{os.path.basename(path)}, re-grep/read that exact location on disk "
+            f"and confirm the quoted line still matches — never re-use a line "
+            f"number from memory."
+        )
 
     @classmethod
     def _render_probe(cls, path: str) -> str | None:
@@ -345,6 +397,33 @@ class PostEditFarEndGuard(Guard):
     @staticmethod
     def _is_agent_source(path: str) -> bool:
         return "flagscale_agent/" in path and path.endswith(".py")
+
+    @staticmethod
+    def _relpath_for_git(path: str) -> str:
+        """Best-effort repo-relative path for `git show HEAD:<path>`.
+
+        Runs `git rev-parse --show-toplevel` from the file's own directory so a
+        relative edit path (or an absolute one) both resolve correctly; falls
+        back to the basename when git is unavailable (the caller then gets a
+        non-zero return and stays silent).
+        """
+        abs_path = os.path.abspath(path)
+        d = os.path.dirname(abs_path)
+        try:
+            top = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECONDS,
+                cwd=d or None,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return os.path.basename(path)
+        if top.returncode != 0:
+            return os.path.basename(path)
+        root = top.stdout.strip()
+        try:
+            return os.path.relpath(abs_path, root)
+        except ValueError:
+            return os.path.basename(path)
 
     @classmethod
     def _touches_process_boundary(cls, path: str) -> bool:

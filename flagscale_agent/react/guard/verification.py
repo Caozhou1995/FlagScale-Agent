@@ -656,6 +656,14 @@ configured or the best candidate you held in memory. Walk the ones that apply:
     MEASURED value next to the threshold, one line each, with whether it clears.
     An otherwise-correct deliverable that exceeds the cap scores zero, and the
     margin is invisible without the measurement.
+  • **Numeric citation recheck**: every BARE NUMBER in the deliverable — a count,
+    a size, an md5/hash, a timestamp, a percentage — must trace to a command YOU
+    ran in THIS session whose output produced it. A number carried over from
+    memory, a prior summary, or your own earlier prose is an UNVERIFIED claim:
+    re-run the deriving command now and paste the value, or mark the number
+    "unverified" in the deliverable. Numbers pass every prose review and fail the
+    grader silently, because unlike a file:line anchor no reader can tell a
+    re-derived count from a remembered one.
 
 To proceed, re-issue plan_update(action="complete") with "_override_reason" that, for
 each item you checked, names the CONCRETE ANCHOR you saw on the DELIVERED artifact —

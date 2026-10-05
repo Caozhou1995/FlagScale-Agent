@@ -389,3 +389,76 @@ class TestMeasuredChecks:
         assert not os.path.isabs(rel)  # the bug-triggering condition, confirmed
         r = guard._render_probe(rel)
         assert r is None  # healthy file: render OK, no false RENDER FAILED
+
+
+class TestCitationDrift:
+    """prop_60077fda: an edit that shifts a file's line count must warn that any
+    held `file:line` anchor to that file may now be stale (the recorded failure:
+    a doc body cited :1102/:620 that later edits moved to :1126/:623)."""
+
+    def _git_file(self, tmp_path):
+        """A file committed to a throwaway git repo, so HEAD:<path> resolves."""
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        f = repo / "doc.md"
+        f.write_text("line1\nline2\nline3\n", encoding="utf-8")
+        subprocess.run(["git", "add", "doc.md"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+        return f
+
+    def test_drift_note_on_line_shift(self, guard, tmp_path):
+        f = self._git_file(tmp_path)
+        # add two lines -> delta +2
+        f.write_text("line1\nline2\nline3\nnew4\nnew5\n", encoding="utf-8")
+        note = guard._citation_drift_note(_ctx(path=str(f)), str(f))
+        assert note is not None
+        assert "CITATION DRIFT" in note
+        assert "+2 line" in note
+        assert "re-grep" in note
+
+    def test_no_note_when_no_line_change(self, guard, tmp_path):
+        f = self._git_file(tmp_path)
+        # rewrite without changing the line count -> delta 0 -> silent
+        f.write_text("LINE1\nLINE2\nLINE3\n", encoding="utf-8")
+        assert guard._citation_drift_note(_ctx(path=str(f)), str(f)) is None
+
+    def test_silent_on_non_anchor_file_types(self, guard, tmp_path):
+        import subprocess
+        repo = tmp_path / "r2"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        binfile = repo / "img.png"
+        binfile.write_bytes(b"x")
+        subprocess.run(["git", "add", "img.png"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "b"], cwd=repo, check=True)
+        binfile.write_bytes(b"xx\nyy\n")
+        assert guard._citation_drift_note(_ctx(path=str(binfile)), str(binfile)) is None
+
+    def test_silent_without_git_baseline(self, guard, tmp_path):
+        f = tmp_path / "untracked.md"
+        f.write_text("a\nb\n", encoding="utf-8")
+        assert guard._citation_drift_note(_ctx(path=str(f)), str(f)) is None
+
+    def test_message_includes_drift(self, guard, tmp_path):
+        f = self._git_file(tmp_path)
+        f.write_text("line1\nline2\nline3\nx\ny\n", encoding="utf-8")
+        note = guard._citation_drift_note(_ctx(path=str(f)), str(f))
+        msg = guard._message(str(f), "measured now: PASS", note)
+        assert "CITATION DRIFT" in msg
+        assert "valid-for-type" in msg  # base reminder not lost
+
+    def test_relpath_for_git_resolves(self, guard, tmp_path):
+        f = self._git_file(tmp_path)
+        rel = guard._relpath_for_git(str(f))
+        assert rel == "doc.md"
+
+    def test_relpath_for_git_fallback_without_repo(self, guard, tmp_path):
+        f = tmp_path / "loose.md"
+        f.write_text("a\n", encoding="utf-8")
+        assert guard._relpath_for_git(str(f)) == "loose.md"
