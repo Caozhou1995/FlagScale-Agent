@@ -722,6 +722,27 @@ class TestTaskCompleteRecheck:
         for w in ("povray", "pov-ray", "2.2", "wrapper script"):
             assert w not in low
 
+    def test_complete_recheck_has_contract_reread(self):
+        """Contract-recheck: the reminder must direct a per-item re-read of the
+        delivery contract (path, names, count, arg order, format) against the
+        produced bytes — the form phrases fail silently while functional checks
+        stay green. Task-agnostic."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        assert "contract-recheck" in low
+        assert "contract re-read" in low
+        assert "argument order" in low
+
+    def test_complete_recheck_has_equivalent_yardstick(self):
+        """Equivalent-yardstick: a borderline value that passes under one
+        convention must be re-expressed under an equivalent convention before
+        committing — one cheap multiply can flip a call sitting on the edge,
+        while GIVEN values stay verbatim."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
+        assert "equivalent-yardstick" in low
+        assert "second yardstick" in low
+
     def test_complete_recheck_flags_self_contaminated_verify_environment(self):
         """The pass/fail branch must catch environmental near/far confusion: a
         green result produced in the agent's own working environment (loaded with

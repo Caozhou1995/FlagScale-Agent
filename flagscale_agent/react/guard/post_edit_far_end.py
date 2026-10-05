@@ -133,6 +133,15 @@ class PostEditFarEndGuard(Guard):
             "the rule can pass while the verbatim rule fails. Re-list the task's "
             "form phrases for this file VERBATIM and check each against the "
             "written bytes — now, at write time, while the fix is still one edit away.",
+            "  · COLD-CONSUMER probe — before you call anything done, become a "
+            "stranger who has just received this artifact: `cat` the ACTUAL product "
+            "file (not your own summary of it) and confirm the thing is really "
+            "there and really in the required format. Reading back your own "
+            "narration is not the probe — only the bytes on disk are.",
+            "  · SIDE-EFFECT sweep — before delivering, run `git status --short` "
+            "(and `git diff --stat`) and READ the list: is there any change you did "
+            "not intend to ship — a scratch/byproduct file, or a file you should "
+            "not have touched at all? Revert it before the delivery is inspected.",
         ]
         if cls._is_agent_source(path):
             lines.append(

@@ -113,6 +113,15 @@ class TestDestructiveBlocked:
         assert "stash push" in v.message
         assert "stash apply" in v.message
 
+    def test_message_has_referencing_integrity_probe(self):
+        """Before destroying history, check whether the TASK text itself cites an
+        identifier (SHA/branch/path) this command would remove; if so, default to
+        NOT running and report the conflict. The cheap anchor check is a
+        rev-parse that survives the probe but dies in the wipe."""
+        from flagscale_agent.react.guard.vcs_backup import _DESTRUCTIVE_MESSAGE
+        assert "REFERENCING-INTEGRITY" in _DESTRUCTIVE_MESSAGE
+        assert "rev-parse" in _DESTRUCTIVE_MESSAGE
+
     def test_reason_is_pattern_scoped(self):
         g = VcsBackupGuard()
         v = g.check_pre(_shell("git reset --hard HEAD"))

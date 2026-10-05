@@ -635,7 +635,17 @@ Before running it, snapshot the dirty tree — it costs one command and keeps th
 If a stash/backup already exists, or you keep patches another way (bundle, patch file, remote branch), proceed:
   _override_reason: "backup exists: <stash id / patch path / branch name>"
 
-If the tree is already clean or the deleted data is regenerable, override with that explanation."""
+If the tree is already clean or the deleted data is regenerable, override with that explanation.
+
+REFERENCING-INTEGRITY probe — before you destroy history, check whether the TASK TEXT
+itself points at what you are about to wipe. Re-read the task for any identifier that
+denotes old state: a commit SHA, a branch/tag name, a file path, a line range, a
+function name. If the task refers to a specific SHA / path / filename that this
+command would remove or rewrite, the task may DEPEND on that exact object existing —
+default to NOT running it and report the conflict instead. Cheap check (survives the
+probe, dies in the wipe — use it BEFORE the destructive step, not after):
+  git rev-parse --verify --quiet <SHA>^{commit}   # exit 0 = the anchor is still there
+If the anchor is present and the task cites it, treat the destruction as blocked."""
 class VcsBackupGuard(Guard):
     """Targeted guard for destructive git operations."""
 

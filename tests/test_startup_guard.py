@@ -19,11 +19,22 @@ the core anti-self-satisfaction rule (a heavy network op does NOT satisfy the
 probe phase), single-shot gating, and override routing to the surfaced phase.
 """
 
+import time
+
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.startup import (
     StartupGuard, BackupPhase, NetworkProbePhase, ResearchPhase,
+    FirstActionPhase, _FIRST_ACTION_LATE_MESSAGE, _FIRST_ACTION_LIMIT_SECS,
     _is_heavy_network_cmd, _is_network_probe,
 )
+
+
+def _age(phase, secs):
+    phase._start = time.time() - secs
+
+
+def _phase(g, name):
+    return next(p for p in g._phases if p.name == name)
 
 
 def _shell(cmd, override=""):
@@ -258,3 +269,163 @@ class TestFullPipeline:
         # backup stays satisfied across turns (setup is once-per-task)
         assert g.check_pre(_shell("rm x")) is None or \
             g.check_pre(_shell("rm x")).reason != "upfront_backup_check"
+
+
+class TestFirstActionPhase:
+    """Order-3 one-shot nag fired when the run burns 180s with no tool event."""
+
+    def test_silent_before_limit(self):
+        p = FirstActionPhase()
+        _age(p, _FIRST_ACTION_LIMIT_SECS - 30)
+        assert p.check(_shell("ls")) is None
+
+    def test_injects_after_limit(self):
+        p = FirstActionPhase()
+        _age(p, _FIRST_ACTION_LIMIT_SECS + 20)
+        v = p.check(_shell("ls"))
+        assert v is not None and v.action == "inject"
+        assert v.reason == "startup_first_action_late"
+        assert v.category == "startup_first_action"
+
+    def test_fires_at_most_once(self):
+        p = FirstActionPhase()
+        _age(p, _FIRST_ACTION_LIMIT_SECS + 20)
+        assert p.check(_shell("ls")) is not None
+        # eager flag: a second check on the same (still-unsatisfied) phase is quiet
+        assert p.check(_shell("ls")) is None
+
+    def test_executed_call_satisfies(self):
+        p = FirstActionPhase()
+        _age(p, _FIRST_ACTION_LIMIT_SECS + 20)
+        ctx = _shell("ls")
+        ctx.tool_result = "ok"
+        p.observe_post(ctx)
+        assert p.is_satisfied()
+        assert p.check(_shell("ls")) is None
+
+    def test_blocked_call_does_not_satisfy(self):
+        # A blocked call never executed — it must not count as the first action.
+        p = FirstActionPhase()
+        ctx = _shell("ls")
+        ctx.tool_result = "[BLOCKED BY GUARD] read the message and retry"
+        p.observe_post(ctx)
+        assert not p.is_satisfied()
+
+    def test_override_does_not_release_an_inject(self):
+        p = FirstActionPhase()
+        assert p.accept_override("trust me", _shell("ls")) is False
+
+    def test_message_names_the_death_case_and_budget(self):
+        low = _FIRST_ACTION_LATE_MESSAGE.lower()
+        assert "3 minutes" in low
+        assert "zero tool events" in low
+
+    def test_single_shot_gating(self):
+        supervised = StartupGuard(single_shot=False)
+        assert all(p.name != "first_action"
+                   for p in supervised._active_phases())
+        single = StartupGuard(single_shot=True)
+        assert any(p.name == "first_action" for p in single._active_phases())
+
+    def test_registered_at_order_3(self):
+        g = StartupGuard(single_shot=True)
+        assert _phase(g, "first_action").order == 3
+        assert g._phases[-1].name == "first_action"
+
+    def test_advisory_merges_into_earlier_block(self):
+        # The registry's attach_on_block merge only crosses guard boundaries;
+        # within StartupGuard a later phase's inject must be merged here, or it
+        # is swallowed by the earlier block on the very call it should fire.
+        g = StartupGuard(single_shot=True)
+        _age(_phase(g, "first_action"), _FIRST_ACTION_LIMIT_SECS + 20)
+        v = g.check_pre(_shell("ls"))
+        assert v is not None and v.action == "block"
+        assert v.reason == "upfront_backup_check"  # first block still wins
+        assert "[concurrent startup advisory]" in v.message
+        assert "[StartupGuard/FirstAction]" in v.message
+
+    def test_override_still_routes_to_the_blocking_phase(self):
+        g = StartupGuard(single_shot=True)
+        _age(_phase(g, "first_action"), _FIRST_ACTION_LIMIT_SECS + 20)
+        g.check_pre(_shell("ls"))
+        # the merged inject must not hijack override routing
+        assert g.accept_override("regenerable, no backup needed", _shell("ls")) is True
+
+    def test_advisory_merges_into_later_block(self):
+        # Real scenario: the earlier gates are long released, and at t>3min the
+        # research phase blocks the first real-work call. The nag must ride that
+        # block, not vanish (the registry only merges ACROSS guards).
+        g = StartupGuard(single_shot=True)
+        g.check_pre(_shell("ls"))
+        g.accept_override("regenerable, no backup needed", _shell("ls"))
+        _age(_phase(g, "first_action"), _FIRST_ACTION_LIMIT_SECS + 20)
+        v = g.check_pre(_tool("read_file"))
+        assert v is not None and v.reason == "startup_research_gate"
+        assert "[concurrent startup advisory]" in v.message
+        assert "[StartupGuard/FirstAction]" in v.message
+
+    def test_no_merge_when_nag_already_fired(self):
+        # Once the nag has fired (eager flag), a later block carries no advisory.
+        g = StartupGuard(single_shot=True)
+        _age(_phase(g, "first_action"), _FIRST_ACTION_LIMIT_SECS + 20)
+        v1 = g.check_pre(_shell("ls"))
+        assert "[concurrent startup advisory]" in v1.message
+        g.accept_override("regenerable, no backup needed", _shell("ls"))
+        v2 = g.check_pre(_tool("read_file"))
+        assert v2 is not None and v2.reason == "startup_research_gate"
+        assert "[concurrent startup advisory]" not in v2.message
+
+
+class TestFirstActionRegistrySurvival:
+    """The nag must survive a concurrent block from a DIFFERENT guard.
+
+    Regression: the eager one-shot flag is set the moment check() runs, so if
+    the registry dropped the inject on a call that another guard blocked, the
+    advisory would never be emitted again.
+    """
+
+    def test_nag_rides_another_guards_block(self):
+        # DECISIVE cross-guard test. Use a META tool so StartupGuard itself does
+        # NOT block on this call (BackupPhase only fires on shell; NetworkProbe
+        # only on shell; ResearchPhase passes meta tools). StartupGuard then
+        # emits a PURE FirstAction inject, so the nag can reach the agent ONLY
+        # via the registry's cross-guard attach_on_block merge (og.name !=
+        # surfaced_guard.name). If attach_on_block were False, this assertion
+        # FAILS — that is what makes the test non-vacuous.
+        from flagscale_agent.react.guard import (
+            Guard, GuardVerdict, GuardRegistry,
+        )
+
+        class _Blocker(Guard):
+            name = "zblocker"
+            priority = 1  # ordered before startup (priority=5)
+
+            def check_pre(self, ctx):
+                return GuardVerdict.block("BLOCKED", reason="zblock", category="zblock")
+
+            def reset_turn(self):
+                pass
+
+        ctx = _tool("plan_update")  # meta: StartupGuard emits a pure inject
+
+        # Precondition — prove StartupGuard does NOT self-block on this call,
+        # i.e. the nag is a standalone inject and cannot ride an intra-guard
+        # merge. (The check below flips the eager one-shot flag, so use a fresh
+        # guard for the registry run.)
+        standalone = StartupGuard(single_shot=True)
+        _age(_phase(standalone, "first_action"), _FIRST_ACTION_LIMIT_SECS + 20)
+        own = standalone.check_pre(ctx)
+        assert own is not None and own.action == "inject"
+        assert "[StartupGuard/FirstAction]" in own.message
+
+        startup = StartupGuard(single_shot=True)
+        _age(_phase(startup, "first_action"), _FIRST_ACTION_LIMIT_SECS + 20)
+        reg = GuardRegistry()
+        reg.register(_Blocker())
+        reg.register(startup)
+        v = reg.check_pre(ctx)
+        assert v is not None and v.action == "block"
+        assert v.reason == "zblock"
+        # The nag rode the OTHER guard's block via the cross-guard merge.
+        assert "[concurrent trigger-bound guard advisory]" in v.message
+        assert "[StartupGuard/FirstAction]" in v.message

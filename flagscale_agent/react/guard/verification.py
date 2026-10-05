@@ -339,7 +339,34 @@ with "_override_reason" that gives each axis a CONCRETE ANCHOR, not a verdict:
     gap, OR the probe you ran, OR say explicitly "no evidence — gap unclosed".
 "Optimized, general, and it generalizes" is the empty answer this replaces — three
 adjectives point at nothing. This is not a content check — any override_reason lets
-it through; the point is that an axis with no anchor is the axis you did not look at."""
+it through; the point is that an axis with no anchor is the axis you did not look at.
+
+CONTRACT RE-READ (contract-recheck) — read the task statement once more and
+itemize the DELIVERY CONTRACT as first-class lines, then read each BACK against
+what you actually produced on disk:
+  • delivery path — the exact directory the task named.
+  • file name(s) — spelled exactly, right extension and casing.
+  • count — exactly the named set of files: nothing missing, nothing extra.
+  • callable signature & ARGUMENT ORDER — if the task fixed one, reproduce it
+    position by position; a swapped argument is a silent zero.
+  • output FORMAT — the container type the task named (a list where it asked for
+    a list, a tuple where it asked for a tuple; a bare answer string where it
+    asked for one, not a report about it).
+  • pinned paths / sockets / names the task fixed — use THAT one verbatim, not a
+    plausible substitute.
+For any judgment that rests on interpreting a displayed artifact (a screenshot
+or a UI state), do not bet between candidate readings on a single look — require
+a SECOND independent line of evidence before you commit.
+
+SECOND YARDSTICK (equivalent-yardstick) — one measurement does not settle a
+borderline value when an equivalent measurement is nearly free. After a check
+passes under one convention, re-express the SAME result under an equivalent
+convention and confirm it still lands inside tolerance — one cheap multiply or
+divide can flip a call that sat on the edge. Keep the GIVEN/RANGE line sharp: a
+value the task named you reproduce verbatim; only the units or the derivation
+you chose are yours to re-express. If an official specification is unreachable,
+do NOT invent a rule and self-verify against it — report the spec gap as an
+explicit risk instead."""
 
 
 _POST_RECOVERY_REMINDER = """[VerificationGuard] Context was just recovered via hard_reset.

@@ -478,6 +478,79 @@ class ResearchPhase(StartupPhase):
         return False
 
 
+_FIRST_ACTION_LIMIT_SECS = 180
+
+_FIRST_ACTION_LATE_MESSAGE = """[StartupGuard/FirstAction] {mins:.0f} minutes elapsed and you have produced ZERO tool events.
+
+Real death case: an agent spent the first 12 minutes in pure thought — 80% of a
+900s budget — before its first tool call, and had nothing left to verify with.
+Budget discipline: the FIRST tool event must land within 3 minutes of start.
+
+Fire a cheap action NOW — any tool call counts, and cheap beats clever:
+  • a 5-second probe (ls the workspace, head a config, wc -l a source file)
+  • the 30-second experiment that builds your diff loop (compile → compare →
+    one-variable fix), turning "guess the constant" into "measure the constant"
+  • write the minimal skeleton to the delivery path (write-through beats polish)
+Thinking is not progress until it is OBSERVABLE. Act first, refine after."""
+
+
+class FirstActionPhase(StartupPhase):
+    """Order 3: nag once when the run has burned 3 minutes with no tool event.
+
+    Single-shot only. Advisory (inject), NOT a block: the cure for "thinking
+    instead of acting" is not a fourth gate that blocks the action — it is one
+    loud, one-shot reminder riding alongside the first real call. Fires at most
+    ONCE per run (set eagerly at check time); satisfied permanently by the
+    FIRST executed (non-blocked) tool call of any kind, observed in
+    observe_post. Blocked calls do not count — they never executed.
+    """
+
+    name = "first_action"
+    order = 3
+    single_shot_only = True
+
+    def __init__(self):
+        self._start = time.time()
+        self._first_action_seen = False
+        self._nagged = False
+
+    def is_satisfied(self) -> bool:
+        return self._first_action_seen
+
+    def check(self, ctx: GuardContext) -> GuardVerdict | None:
+        if self._first_action_seen or self._nagged:
+            return None
+        elapsed = time.time() - self._start
+        if elapsed >= _FIRST_ACTION_LIMIT_SECS:
+            # Eager: flip the flag BEFORE returning so the nag fires at most
+            # once even if this very call is blocked by an earlier phase.
+            self._nagged = True
+            return GuardVerdict.inject(
+                message=_FIRST_ACTION_LATE_MESSAGE.format(
+                    mins=elapsed / 60.0),
+                reason="startup_first_action_late",
+                category="startup_first_action",
+                # One-shot: if the eager flag is set on this call, the nag is
+                # never emitted again. Without attach_on_block the registry
+                # would drop it whenever a DIFFERENT guard blocks this same
+                # call (e.g. VcsBackupGuard on the first call), losing the
+                # advisory for good. This verdict is invocation-bound, not a
+                # periodic nag, so riding the concurrent block is correct.
+                attach_on_block=True,
+            )
+        return None
+
+    def observe_post(self, ctx: GuardContext) -> None:
+        result = ctx.tool_result
+        if isinstance(result, str) and "[BLOCKED BY GUARD]" in result:
+            return
+        self._first_action_seen = True
+
+    def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        # An inject never routes here (only surfaced blocks do); stay closed.
+        return False
+
+
 # --- The guard ---------------------------------------------------------------
 
 class StartupGuard(Guard):
@@ -500,6 +573,7 @@ class StartupGuard(Guard):
             BackupPhase(),
             NetworkProbePhase(),
             ResearchPhase(),
+            FirstActionPhase(),
         ]
         self._phases.sort(key=lambda p: p.order)
         # The phase whose block was surfaced this check_pre — override routes to
@@ -521,13 +595,38 @@ class StartupGuard(Guard):
         if not ctx.tool_name:
             return None
         self._pending_phase = None
+        block_verdict: GuardVerdict | None = None
+        block_phase: StartupPhase | None = None
+        injects: list[GuardVerdict] = []
         for phase in self._active_phases():
             if phase.is_satisfied():
                 continue
             verdict = phase.check(ctx)
-            if verdict is not None:
-                self._pending_phase = phase
-                return verdict
+            if verdict is None:
+                continue
+            if verdict.action == "block":
+                # First block wins (lowest order); later phases still get
+                # consulted so their advisory injects are not lost.
+                if block_verdict is None:
+                    block_verdict = verdict
+                    block_phase = phase
+            else:
+                injects.append(verdict)
+        if block_verdict is not None:
+            self._pending_phase = block_phase
+            if injects:
+                # A time-bound nag from a later phase must not be swallowed by
+                # an earlier phase's block (e.g. the research gate blocks the
+                # first tool event at t>3min on the very call the first-action
+                # reminder should fire). The registry's attach_on_block merge
+                # only crosses guard boundaries; within one guard we merge here.
+                block_verdict.message += (
+                    "\n\n[concurrent startup advisory]\n"
+                    + "\n\n".join(v.message for v in injects)
+                )
+            return block_verdict
+        if injects:
+            return injects[0]
         return None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:

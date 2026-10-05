@@ -208,3 +208,23 @@ class TestFormContractNudge:
         assert "FAR end" in v.message
         assert "valid-for-type" in v.message
         assert "will the consumer actually read it at this exact path?" in v.message
+
+    def test_cold_consumer_probe_present(self, guard):
+        """Before done, become a stranger who just received the artifact: cat the
+        ACTUAL product file (not your own narration) and confirm it is really
+        there and really in the required format."""
+        v = guard.check_post(_ctx(path="cfg/exp.yaml",
+                                  result="Wrote 10 chars to cfg/exp.yaml"))
+        assert v is not None
+        assert "COLD-CONSUMER" in v.message
+        assert "cat" in v.message
+
+    def test_side_effect_sweep_present(self, guard):
+        """Before delivering, run git status/diff and READ the list for any
+        unintended change — a scratch/byproduct or a file that should not have
+        been touched — and revert it."""
+        v = guard.check_post(_ctx(path="cfg/exp.yaml",
+                                  result="Wrote 10 chars to cfg/exp.yaml"))
+        assert v is not None
+        assert "SIDE-EFFECT sweep" in v.message
+        assert "git status --short" in v.message
