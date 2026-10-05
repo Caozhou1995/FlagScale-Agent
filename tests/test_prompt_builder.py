@@ -535,6 +535,17 @@ class TestSystemPromptContent:
         assert "VERBATIM line" in p
         assert "one-character variants" in p
 
+    def test_memory_verify_cmd_discrimination_present(self):
+        # Memory write discipline: each load-bearing claim in a memory entry
+        # needs a verify cmd whose output DIFFERS when the claim is false —
+        # an aggregate count (e.g. roster size) cannot verify a sub-claim
+        # such as "task X was graded by the wrong test suite".
+        p = self._prompt()
+        assert "FALSIFIABLE probe" in p
+        assert "aggregate count" in p
+        assert "if this claim were FALSE" in p
+        assert "graded by the wrong test suite" in p
+
     def test_write_time_anchor_verification_present(self):
         # Principle 2 (d) write-time extension: file:line anchors written into a
         # deliverable mid-task must be grep/sed-verified against the live file
