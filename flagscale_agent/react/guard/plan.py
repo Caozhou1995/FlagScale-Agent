@@ -148,6 +148,51 @@ unruled alternative is an unexamined premise. This fires per framing — at
 every plan_create, where a wrong framing is cheapest to fix."""
 
 
+# Wall-aware first plan: the FIRST framing must bank a
+# minimal verifiable version inside the time wall before scaling up. The wall
+# value is read from FLAGSCALE_AGENT_TIME_BUDGET_SEC — the same env the
+# agent's budget-stats path reads — so the plan can order steps against the
+# actual number. Write-through: later increments REPLACE the deliverable in
+# place, never rewrite from scratch, so the best version so far is always on
+# disk when the wall arrives. Folded into the plan-framing gate (one gate, one
+# override — same pattern as the qualifier and diverger demands above).
+_WALL_AWARE_FIRST_PLAN = """
+
+Wall-aware first plan — a plan made without a time wall can spend the whole
+budget framing and refining with nothing settled. The first plan must
+guarantee a MINIMAL VERIFIABLE VERSION that can be settled within the wall
+lands early: order steps so a crude but complete, scorable deliverable is
+written to the required path first (write-through), then refine. Later
+increments REPLACE the deliverable in place — never rewrite from scratch.
+Price every expensive step against the wall before starting it; if the full
+version would overrun, the minimal version IS the deliverable, not a
+checkpoint on the way to one."""
+
+
+def _wall_aware_block() -> str:
+    """Wall-aware first-plan demand, parameterized by the actual wall.
+
+    Reads FLAGSCALE_AGENT_TIME_BUDGET_SEC (the same env the agent's budget
+    stats read, first config then env); a set wall is quoted as minutes so
+    the agent can order steps against a number, not a vibe. No wall here
+    still injects the generic demand — the consumer's run may have a wall
+    this process cannot see (config-only or external harness limit).
+    Malformed values degrade to the generic form, never crash the guard.
+    """
+    raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC")
+    if raw:
+        try:
+            secs = float(raw)
+            if secs > 0:
+                return (
+                    f"\n\nTime wall: ~{secs / 60.0:.0f} minutes from task start."
+                    + _WALL_AWARE_FIRST_PLAN
+                )
+        except (TypeError, ValueError):
+            pass
+    return "\n\n" + _WALL_AWARE_FIRST_PLAN
+
+
 class PlanGuard(Guard):
     """Nudges (interactive) or requires (single-shot) an active plan.
 
@@ -224,7 +269,7 @@ class PlanGuard(Guard):
                 and not (self._task_plan and self._task_plan.get_active())):
             self._qualifier_reminded = True
             return GuardVerdict.block(
-                message=_WRITE_FILE_NO_PLAN + _QUALIFIER_EXTRACTION,
+                message=_WRITE_FILE_NO_PLAN + _QUALIFIER_EXTRACTION + _wall_aware_block(),
                 reason="write_file_without_plan",
                 category="plan_required",
                 overridable=True,
@@ -255,6 +300,7 @@ class PlanGuard(Guard):
                 msg += _QUALIFIER_EXTRACTION
             if inject_diverger:
                 msg += _DIVERGER_INJECT
+            msg += _wall_aware_block()
             return GuardVerdict.inject(
                 message=msg,
                 reason="qualifier_extraction",
@@ -288,6 +334,7 @@ class PlanGuard(Guard):
                     f"fight later."
                     + _QUALIFIER_EXTRACTION
                     + _DIVERGER_INJECT
+                    + _wall_aware_block()
                 ),
                 reason="single_shot_plan_required",
                 category="plan_required",

@@ -332,8 +332,12 @@ class _HealthEvaluator:
 _SELF_KILL_RE = re.compile(
     r"\bkill\b.*\b(flagscale|agent\.py|react/agent)\b"
     r"|\bgrep\b.*\b(flagscale|agent\.py)\b.*\bkill\b"
-    r"|\bpkill\b.*\b(flagscale|agent)\b"
-    r"|\bkillall\b.*\b(flagscale|agent)\b",
+    # ANY pkill/killall (any pattern, any flags) is routed to the protector:
+    # a generic pattern like `pkill -f "some-process-name"` still matches the
+    # shell's own cmdline (the pattern text is IN the command being run) and
+    # the only way to know is to rewrite it with the agent-pid exclusion.
+    r"|\bpkill\b"
+    r"|\bkillall\b",
 )
 
 
@@ -368,12 +372,24 @@ def _protect_self_kill(command: str) -> str:
     exclude = _get_agent_pids()
     pids_str = "|".join(str(p) for p in sorted(exclude))
 
-    pkill_re = re.compile(r"\b(pkill|killall)\s+(-\S+\s+)*(flagscale\S*|agent\S*)")
+    # ANY pkill/killall with ANY pattern is rewritten: the pattern text
+    # (e.g. "some-process-name") matches the executing shell's own
+    # cmdline, because it sits inside the command line itself.
+    pkill_re = re.compile(
+        r"\b(pkill|killall)\s+((-\S+\s+)*)(\"(?P<q>[^\"]*)\"|'(?P<s>[^']*)'"
+        r"|(?P<b>[^\s;&|]+))"
+    )
     m = pkill_re.search(command)
     if m:
         signal_flag = m.group(2) or ""
-        pattern = m.group(3)
+        pattern = m.group("q") if m.group("q") is not None else (
+            m.group("s") if m.group("s") is not None else m.group("b")
+        )
         kill_sig = "-9" if "-9" in signal_flag else ""
+        # The rewritten pipeline carries NO pkill/killall token, so a re-pass
+        # does not re-enter this branch (the legacy flagscale form re-enters
+        # via the xargs-kill fallback below, which idempotently re-inserts the
+        # pid exclusion with the CURRENT pids).
         replacement = (
             f"ps aux | grep '{pattern}' | grep -v grep"
             f" | awk '{{print $2}}'"

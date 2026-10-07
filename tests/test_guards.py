@@ -643,3 +643,53 @@ class TestTrainingMonitorGuard:
         verdict = g.check_pre(next_ctx)
         assert verdict is not None
         assert verdict.action == "block"
+
+
+# ── Wall-aware first plan ────────────────────────────────────────────────
+
+
+class TestWallAwareFirstPlan:
+    def test_planframing_injects_wall_aware_demand(self):
+        g = PlanGuard()
+        result = g.check_pre(_ctx("plan_create", {}))
+        assert result is not None and result.action == "inject"
+        m = result.message.lower()
+        assert "minimal verifiable version" in m
+        assert "write-through" in m
+        assert "replace" in m
+
+    def test_wall_block_reads_env_minutes(self, monkeypatch):
+        from flagscale_agent.react.guard.plan import _wall_aware_block
+        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "900")
+        b = _wall_aware_block()
+        assert "15 minutes" in b
+        assert "minimal verifiable version" in b.lower()
+
+    def test_wall_block_generic_without_env(self, monkeypatch):
+        from flagscale_agent.react.guard.plan import _wall_aware_block
+        monkeypatch.delenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", raising=False)
+        b = _wall_aware_block()
+        assert "minimal verifiable version" in b.lower()
+        assert "Time wall:" not in b
+
+    def test_wall_block_malformed_env_degrades(self, monkeypatch):
+        from flagscale_agent.react.guard.plan import _wall_aware_block
+        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "abc")
+        b = _wall_aware_block()
+        assert "Time wall:" not in b
+        assert "minimal verifiable version" in b.lower()
+
+    def test_wall_block_in_plan_create_inject(self, monkeypatch):
+        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "600")
+        g = PlanGuard()
+        v = g.check_pre(_ctx("plan_create", {}))
+        assert v is not None and v.action == "inject"
+        assert "10 minutes" in v.message
+
+    def test_wall_block_in_write_file_gate(self, monkeypatch):
+        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "600")
+        g = PlanGuard(task_plan=None, single_shot=True)
+        v = g.check_pre(_ctx("write_file", {"path": "/tmp/x.txt"}))
+        assert v is not None and v.action == "block"
+        assert "10 minutes" in v.message
+        assert "minimal verifiable version" in v.message.lower()

@@ -102,6 +102,7 @@ from flagscale_agent.react.guard.shell_jobs_wait import ShellJobsWaitGuard
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.knowledge_index import KnowledgeIndexGuard
 from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
+from flagscale_agent.react.guard.deliverable_survival import DeliverableSurvivalGuard
 from flagscale_agent.react.guard.poll_spacing import PollSpacingGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
@@ -360,6 +361,14 @@ class WorkerAgent:
         # that the live process still runs old code until /reload. Generic across
         # file types, unlike UnitTestGuard. Never blocks.
         guard_registry.register(PostEditFarEndGuard())
+        # DeliverableSurvivalGuard (always active, inject-only): after a
+        # destructive command (rm/mv/kill/pkill/git clean/reset --hard/
+        # truncate) actually executed, demand a re-verification that the
+        # task's deliverables still exist at their delivery paths — a
+        # self-kill or an overbroad rm destroys verified state while the
+        # agent's belief in it survives. Never
+        # blocks.
+        guard_registry.register(DeliverableSurvivalGuard())
         # PollSpacingGuard (always active, inject-only): after consecutive
         # poll_tasks/dispatch_many rounds that return not-ready with nothing in
         # between, nudge toward real work between looks (or one bounded sleep)

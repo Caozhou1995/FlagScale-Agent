@@ -456,3 +456,65 @@ class TestWriteFileShrinkGuard:
         assert f.read_text() == "B" * 20
 
 
+
+
+class TestSelfKillProtectionGeneralized:
+    """ANY pkill/killall pattern (any target) is rewritten to exclude
+    the agent's own process tree — not just flagscale/agent-named patterns.
+    Evidence class: a `pkill -f` pattern matches the executing shell's own
+    cmdline (the pattern text sits in the command itself) and destroys the
+    run's verified state."""
+
+    def test_generic_quoted_pattern_routed_and_rewritten(self):
+        from flagscale_agent.react.tools.shell import _protect_self_kill
+        out = _protect_self_kill('pkill -f "some-job --flag=val"')
+        assert out.startswith("ps aux | grep")
+        assert "'some-job --flag=val'" in out
+        assert "grep -Ev" in out
+        assert "xargs -r kill" in out
+
+    def test_generic_bare_pattern(self):
+        from flagscale_agent.react.tools.shell import _protect_self_kill
+        out = _protect_self_kill("pkill some-job")
+        assert out.startswith("ps aux | grep 'some-job'")
+        assert "xargs -r kill" in out
+
+    def test_killall_generic_pattern(self):
+        from flagscale_agent.react.tools.shell import _protect_self_kill
+        out = _protect_self_kill("killall myjob")
+        assert out.startswith("ps aux | grep 'myjob'")
+
+    def test_signal_flag_preserved(self):
+        from flagscale_agent.react.tools.shell import _protect_self_kill
+        out = _protect_self_kill('pkill -9 -f "some-job --flag=val"')
+        assert "xargs -r kill -9" in out
+
+    def test_no_shell_comment_token_in_output(self):
+        # A mid-pipeline '#' would comment out awk/grep -Ev/xargs and turn
+        # the rewrite into a no-op — regression guard for the shipped bug.
+        from flagscale_agent.react.tools.shell import _protect_self_kill
+        out = _protect_self_kill('pkill -f "some-job --flag=val"')
+        assert "#" not in out
+
+    def test_routing_re_matches_any_pkill_or_killall(self):
+        from flagscale_agent.react.tools.shell import _SELF_KILL_RE
+        assert _SELF_KILL_RE.search('pkill -f "anything at all"')
+        assert _SELF_KILL_RE.search("killall anything")
+        assert _SELF_KILL_RE.search("pkill -9 flagscale_agent")
+
+    def test_rewritten_output_carries_no_retrigger_token(self):
+        # The ps|grep pipeline must not contain pkill/killall, or the call
+        # gate would rewrite the rewrite on a later pass.
+        from flagscale_agent.react.tools.shell import (
+            _SELF_KILL_RE,
+            _protect_self_kill,
+        )
+        out = _protect_self_kill('pkill -f "some-job --flag=val"')
+        assert "pkill" not in out and "killall" not in out
+        assert not _SELF_KILL_RE.search(out)
+
+    def test_legacy_flagscale_pattern_still_rewrites(self):
+        from flagscale_agent.react.tools.shell import _protect_self_kill
+        out = _protect_self_kill("pkill -9 flagscale_agent")
+        assert out.startswith("ps aux | grep 'flagscale_agent'")
+        assert "xargs -r kill -9" in out
