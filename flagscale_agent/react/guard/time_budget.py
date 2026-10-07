@@ -31,10 +31,11 @@ Key design decisions:
     injected (standalone / interactive runs). In that case this guard stays
     completely silent — it never invents a deadline, and never nags a session
     that has no real time pressure.
-  • Percentage thresholds, not absolute seconds. The same 25/50/75/90/100% ladder
+  • Percentage thresholds, not absolute seconds. The same 25/50/75/80/90/100% ladder
     works for a 20-minute wall and a 1-hour wall without any per-task tuning.
   • Two modes on the ladder:
       - 25/50/75%   → check_post inject (pacing / health-check advisories).
+      - 80%         → check_post inject (early WRAP-UP WINDOW — protective actions only).
       - 90%         → check_pre BLOCK (overridable) — forces the agent to SHOW
                       (evidence, not claim) that a deliverable exists or that
                       THIS call produces it, before spending a near-final tool
@@ -76,7 +77,7 @@ class TimeBudgetGuard(Guard):
     priority = 92  # Low priority — advisory only, near MemoryDiscipline.
 
     # Ordered high→low so the FIRST crossed-but-unfired threshold is the most
-    # severe one still pending. Each maps to (label, builder).
+    # severe one still pending. Each maps to its wrap-up/advisory message via _message().
     #
     # Why 25% is the FIRST rung (not 50%): the earliest advisory carries the
     # "front-load the expensive steps, background the long ones, re-check the
