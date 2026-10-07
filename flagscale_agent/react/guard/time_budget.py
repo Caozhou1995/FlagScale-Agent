@@ -87,7 +87,7 @@ class TimeBudgetGuard(Guard):
     # dataset download at ~13% budget and gave up at ~40% would never even see a
     # 50% nudge). Firing at 25% puts the pacing guidance where the agent has
     # enough trajectory to gauge its burn rate AND enough budget left to correct.
-    _THRESHOLDS = (100, 90, 75, 50, 25)
+    _THRESHOLDS = (100, 90, 80, 75, 50, 25)
 
     def __init__(self, stats_fn):
         """stats_fn() -> dict|None with keys elapsed/budget/remaining/pct.
@@ -173,10 +173,6 @@ class TimeBudgetGuard(Guard):
                 f"survival-range test: cross-session truth -> memory, GLOBAL; "
                 f"this-session progress -> plan notes; do not dump what one ls/grep "
                 f"can cheaply re-derive).\n\n"
-                f"Mechanism fact: guard injections are NOT a clock — their frequency "
-                f"or presence says nothing about remaining time (silence between "
-                f"them may just mean one long call is still running). The only "
-                f"remaining-time source is the numbers in this message."
             )
             return GuardVerdict.block(
                 message=message,
@@ -252,10 +248,6 @@ class TimeBudgetGuard(Guard):
                 f"decision, more input, or an action you cannot take, hand control "
                 f"back with NEED_USER_INPUT stating exactly what you need and the "
                 f"current state — rather than burning the overrun on more attempts.\n"
-                f"Mechanism fact: guard injections are NOT a clock — 'the guard is "
-                f"still giving me turns' is not evidence of slack. Silence between "
-                f"injections may just mean one long call is still running; the only "
-                f"remaining-time source is the numbers in this message."
             )
         head = (
             f"[TimeBudget] {pct:.0f}% of your enforced wall-clock budget is gone "
@@ -270,6 +262,25 @@ class TimeBudgetGuard(Guard):
                 "write it through to the delivery path THIS STEP. A crude-but-complete "
                 "answer that is banked beats a perfect one that never gets written. "
                 "Stop refining; stop exploring new approaches."
+            )
+        elif thr >= 80:
+            # Wrap-up starts BEFORE the wall: the harness hard-stop at <=0 remaining
+            # pre-empts the 100% nudge, so 80% is the earliest point where an
+            # unattended run can still afford protective actions after reading it.
+            tail = (
+                " WRAP-UP WINDOW — this turn ends soon and the harness hard-stop will "
+                "not wait for the 100% nudge. Your remaining slack buys PROTECTIVE "
+                "actions only, in this priority order:\n"
+                "  1. Make sure a COMPLETE, valid result is written through to its "
+                "required delivery path RIGHT NOW — a crude-but-complete answer that "
+                "is banked beats a perfect one that never gets saved.\n"
+                "  2. VERIFY what is banked (`ls`/`cat` the delivery path — verify, "
+                "do not recompute). NEVER start anything that could overwrite a "
+                "banked deliverable.\n"
+                "  3. If a doubt about the banked value stays unresolved, record it "
+                "explicitly next to the value — an audited degrade beats a silent "
+                "one.\n"
+                "  4. No new lines of work after this; close out cleanly."
             )
         elif thr >= 75:
             tail = (

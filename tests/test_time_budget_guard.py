@@ -335,8 +335,21 @@ class TestTimeBudgetGateCopy:
         assert "audited degrade" in v.message
 
     def test_90_injections_not_a_clock(self):
+        # copy-slimming: the NOT-a-clock long tail was removed from the 90% block
+        # message — it stays in the message only as actionable instructions.
         v = self._pre90()
-        assert "guard injections are NOT a clock" in v.message
+        assert "guard injections are NOT a clock" not in v.message
+        # the actionable core must survive the slimming
+        assert "CRITICAL CHECKPOINT" in v.message
+        assert "crude-but-complete" in v.message
+
+    def test_100_wrapup_no_mechanism_tail(self):
+        # copy-slimming: the NOT-a-clock long tail was removed from the >=100%
+        # WRAP-UP message as well.
+        v = self._post(100.0)
+        assert "guard injections are NOT a clock" not in v.message
+        assert "TIME IS UP" in v.message
+        assert "written through to its" in v.message
 
     def test_90_keeps_escape_and_memory_block(self):
         v = self._pre90()
@@ -376,6 +389,61 @@ class TestTimeBudgetGateCopy:
         assert v.message.index("  1. Make sure") < v.message.index("  2. VERIFY")
 
     def test_100_no_guards_give_me_turns(self):
+        # copy-slimming: the NOT-a-clock long tail was removed from the WRAP-UP;
+        # the actionable wrap-up contract (protected actions, ordered) survives.
         v = self._post(105.0)
-        assert "not evidence of slack" in v.message
-        assert "guard injections are NOT a clock" in v.message
+        assert "not evidence of slack" not in v.message
+        assert "guard injections are NOT a clock" not in v.message
+        assert "PROTECTIVE actions only" in v.message
+
+    # --- 80% wrap-up threshold (brought forward from 100%) ---
+    def test_thresholds_include_80(self):
+        assert 80 in TimeBudgetGuard._THRESHOLDS
+        assert 80 not in (100, 90, 75, 50, 25)
+
+    def test_80_fires_wrapup_at_80_pct(self):
+        s = _Stats()
+        s.pct = 82.0
+        g = TimeBudgetGuard(stats_fn=s)
+        v = g.check_post(make_ctx())
+        assert v is not None and v.action == "inject"
+        assert "WRAP-UP WINDOW" in v.message
+        assert "  1. Make sure a COMPLETE" in v.message
+        assert "  4. No new lines of work" in v.message
+
+    def test_80_does_not_fire_below_80(self):
+        # fully silent below the lowest threshold (nothing crossed)
+        s = _Stats()
+        s.pct = 20.0
+        g = TimeBudgetGuard(stats_fn=s)
+        assert g.check_post(make_ctx()) is None
+
+    def test_80_does_not_hijack_75_window(self):
+        # in [75, 80) the 75% checklist must still fire, not the 80% wrap-up
+        s = _Stats()
+        s.pct = 77.0
+        g = TimeBudgetGuard(stats_fn=s)
+        v = g.check_post(make_ctx())
+        assert v is not None and "WRAP-UP WINDOW" not in v.message
+        assert "Most of the budget is spent" in v.message
+
+    def test_80_fires_once_per_turn(self):
+        s = _Stats()
+        s.pct = 85.0
+        g = TimeBudgetGuard(stats_fn=s)
+        v1 = g.check_post(make_ctx())
+        assert v1 is not None and "WRAP-UP WINDOW" in v1.message
+        # same turn: 80 already spent, 75 also marked spent by the jump — silent
+        assert g.check_post(make_ctx()) is None
+        # new turn resets the fired set -> fires again
+        g.reset_turn()
+        v2 = g.check_post(make_ctx())
+        assert v2 is not None and "WRAP-UP WINDOW" in v2.message
+
+    def test_80_not_added_to_check_pre_block_window(self):
+        # check_pre must keep blocking only in [90, 100): the 80 wrap-up is a
+        # post-call inject, not a gate — no new blocking regime at 80.
+        s = _Stats()
+        s.pct = 82.0
+        g = TimeBudgetGuard(stats_fn=s)
+        assert g.check_pre(make_ctx()) is None
