@@ -524,13 +524,20 @@ class WorkerAgent:
 
     # ── System prompt ────────────────────────────────────────────────────────
 
-    def _refresh_system_prompt(self, memory_context: str = "", plan_context: str = ""):
+    def _refresh_system_prompt(self, memory_context: str = "",
+                               plan_context: str = "", bump_turn: bool = True):
         tool_names = [t.name for t in self.tool_registry.all_tools()]
         # Feed the runtime gauges to the dashboard before each rebuild.
         try:
             self._prompt_builder.runtime_stats = {
                 "evict_count": self._evict_count,
                 "budget": self._task_budget_stats(),
+                # Pure stopwatch for THIS turn (seconds since _turn_start), shown
+                # when no external deadline exists. It is NOT a budget: the
+                # dashboard renders it as "elapsed" only, and the budget guards
+                # keep reading _task_budget_stats (None -> silent) — so this never
+                # fabricates a deadline nor wakes a guard.
+                "turn_elapsed": max(0.0, time.time() - self._turn_start),
             }
         except Exception:
             pass  # dashboard degrades to existing lines, never crashes the turn
@@ -542,6 +549,7 @@ class WorkerAgent:
             plan_context=plan_context,
             tool_names=tool_names,
             session_dir=self._session_dir,
+            bump_turn=bump_turn,
         )
 
     # ── Health judge (delegates to unified Judge) ───────────────────────────
@@ -567,7 +575,7 @@ class WorkerAgent:
         )
 
     def _task_budget_stats(self) -> dict | None:
-        """Resolve the whole-task wall-clock budget as structured numbers.
+        """Resolve the per-turn wall-clock budget as structured numbers.
 
         Returns a dict {elapsed, budget, remaining, pct} (all floats/seconds)
         ONLY when a concrete per-turn wall exists, from either source (config
@@ -1912,10 +1920,15 @@ class WorkerAgent:
                 except TypeError:
                     pass
 
-        # Refresh system prompt if plan tools were used
-        if any(tc["name"] in ("plan_create", "plan_update", "plan_status")
-               for tc in tool_calls):
-            self._refresh_system_prompt()
+        # Dashboard is a live instrument: rebuild after EVERY tool round so all
+        # gauges (Ctx/Time/BG/Memory/plan) stay fresh, not only after plan tools.
+        # bump_turn=False — an intra-turn rebuild is not a new turn. Degrade
+        # silently on failure: a dashboard hiccup must never crash the turn.
+        try:
+            plan_context = self._build_plan_context()
+            self._refresh_system_prompt(plan_context=plan_context, bump_turn=False)
+        except Exception:
+            pass
 
         # Context pressure warning is handled by ContextPressureGuard - no duplicate check here
 

@@ -22,7 +22,7 @@ class TestBuildDashboard:
         b._turn_count = 7
         with patch.object(b, "_build_memory_keys_summary", return_value=""):
             result = b._build_dashboard("", session_dir="")
-        assert "Turn: 7" in result
+        assert "Turn: 7R" in result
 
     def test_no_plan_no_task_step(self):
         b = make_builder()
@@ -106,7 +106,7 @@ class TestBuildDashboard:
             result = b._build_dashboard(plan_ctx, session_dir="/home/user/.flagscale/sessions/abc")
         assert "Task: Deploy" in result
         assert "Step: 1/2" in result
-        assert "Turn: 5" in result
+        assert "Turn: 5R" in result
         assert "Session: /home/user/.flagscale/sessions/abc" in result
         assert "Memory domains: fact/x" in result
 
@@ -159,6 +159,46 @@ class TestDashboardRuntimeGauges:
         with patch.object(b, "_build_memory_keys_summary", return_value=""):
             result = b._build_dashboard("", session_dir="")
         assert "Time:" not in result
+
+    def test_time_elapsed_shown_when_no_budget(self):
+        """No budget but a live turn stopwatch → pure elapsed, no % / no remaining."""
+        b = make_builder()
+        b._turn_count = 1
+        b.runtime_stats = {"budget": None, "turn_elapsed": 125.0}
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Time: 2m05s elapsed" in result
+        assert "%" not in result.split("Time:")[1].split("\n")[0]
+        assert "left" not in result
+
+    def test_time_elapsed_hour_format(self):
+        b = make_builder()
+        b._turn_count = 1
+        b.runtime_stats = {"budget": None, "turn_elapsed": 3725.0}
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Time: 1h02m elapsed" in result
+
+    def test_time_elapsed_absent_when_key_missing(self):
+        """No budget AND no stopwatch snapshot → no Time gauge at all."""
+        b = make_builder()
+        b._turn_count = 1
+        b.runtime_stats = {}
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Time:" not in result
+
+    def test_time_budget_takes_precedence_over_elapsed(self):
+        """When a real budget exists, only the pct/remaining line renders."""
+        b = make_builder()
+        b._turn_count = 1
+        b.runtime_stats = {"budget": {"elapsed": 600, "budget": 3600,
+                                      "remaining": 3000, "pct": 16.7},
+                           "turn_elapsed": 600.0}
+        with patch.object(b, "_build_memory_keys_summary", return_value=""):
+            result = b._build_dashboard("", session_dir="")
+        assert "Time: 17% used, 50m left" in result
+        assert "elapsed" not in result.split("Time:")[1].split("\n")[0]
 
     def test_bg_jobs_listed(self):
         b = make_builder()

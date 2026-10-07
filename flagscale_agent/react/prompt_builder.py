@@ -59,6 +59,9 @@ class PromptBuilder:
         session_dir: str = "",
         # Deprecated — accepted but ignored
         shared_storage_paths: list[str] | None = None,
+        # Dashboard rebuilds (e.g. per-tool-round refreshes) must NOT advance
+        # the turn counter — bump only on genuine turn boundaries (default).
+        bump_turn: bool = True,
     ):
         """Build and set the system prompt on the history manager.
 
@@ -70,7 +73,8 @@ class PromptBuilder:
             plan_context: IGNORED for prompt injection (used only for dashboard)
             session_dir: Session directory path, injected into dashboard
         """
-        self._turn_count += 1
+        if bump_turn:
+            self._turn_count += 1
 
         # ── Tool names ──
         tools_str = (
@@ -178,7 +182,9 @@ class PromptBuilder:
                 current = int(pending_match.group(1))
                 parts.append(f"Step: {current}/{total}")
 
-        parts.append(f"Turn: {self._turn_count}")
+        # R suffix = rebuild count: per-message/per-tool-round refreshes make
+        # this exceed the true turn count (which the turn summary reports).
+        parts.append(f"Turn: {self._turn_count}R")
 
         # Session paths — injected so agent can read logs without shell(find ...)
         if session_dir:
@@ -227,7 +233,7 @@ class PromptBuilder:
         if ctx_parts:
             parts.append("Ctx: " + " ".join(ctx_parts))
 
-        # Time: whole-task wall-clock budget (only when a real budget exists —
+        # Time: per-turn wall-clock budget (only when a real budget exists —
         # _task_budget_stats returns None when no external deadline is enforced;
         # we must NOT fabricate one).
         budget = self.runtime_stats.get("budget")
@@ -239,6 +245,20 @@ class PromptBuilder:
                 )
             except (TypeError, ValueError, KeyError):
                 pass
+        else:
+            # No external deadline -> no budget to report (we must NOT fabricate
+            # one). But a live stopwatch for THIS turn is still useful: show pure
+            # ELAPSED time, never a percentage or a made-up "remaining".
+            turn_elapsed = self.runtime_stats.get("turn_elapsed")
+            if turn_elapsed is not None:
+                try:
+                    total = int(max(0.0, float(turn_elapsed)))
+                    m, s = divmod(total, 60)
+                    h, m = divmod(m, 60)
+                    stamp = f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
+                    parts.append(f"Time: {stamp} elapsed")
+                except (TypeError, ValueError):
+                    pass
 
         # BG: live background jobs (the registry drops jobs once polled to
         # completion, so anything listed here is still alive — the anchor the
