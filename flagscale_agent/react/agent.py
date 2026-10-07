@@ -1929,13 +1929,19 @@ class WorkerAgent:
                 except TypeError:
                     pass
 
-        # Dashboard is a live instrument: rebuild after EVERY tool round so all
-        # gauges (Ctx/Time/BG/Memory/plan) stay fresh, not only after plan tools.
-        # bump_turn=False — an intra-turn rebuild is not a new turn. Degrade
-        # silently on failure: a dashboard hiccup must never crash the turn.
+        # Rebuild the system prompt ONLY on plan-tool usage (turn boundaries
+        # already refresh it via _inject_context). The dashboard lives at the
+        # tail of the system prompt, AFTER the provider's cache breakpoint on
+        # the static section — an intra-turn rebuild changes those bytes on
+        # every request and invalidates the entire cached conversation prefix
+        # (observed: cache_read collapsing to the static section alone).
+        # Degrade silently on failure: a dashboard hiccup must never crash
+        # the turn.
         try:
-            plan_context = self._build_plan_context()
-            self._refresh_system_prompt(plan_context=plan_context, bump_turn=False)
+            if any(tc["name"] in ("plan_create", "plan_update", "plan_status")
+                   for tc in tool_calls):
+                plan_context = self._build_plan_context()
+                self._refresh_system_prompt(plan_context=plan_context)
         except Exception:
             pass
 
