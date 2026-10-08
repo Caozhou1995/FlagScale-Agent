@@ -432,6 +432,13 @@ class PlanUpdateGuard(Guard):
                     "— TIME signal: wall-clock has elapsed on this step without "
                     "recorded progress. If you are waiting on in-flight background "
                     "jobs, that is legitimate — record it in a note and continue. "
+                    "But a long bet must be a FALSIFIABLE one: before you keep "
+                    "waiting, state the prediction — when this job finishes, what "
+                    "NUMBER do you expect to see, and what will it PROVE? If the "
+                    "result is not that number, which route do you switch to? A long "
+                    "hold with no predicted outcome (\"let's see what comes back\") is "
+                    "not an experiment — cancel it, or narrow it to the smallest probe "
+                    "that returns a real output. "
                     "Otherwise, more deliberation in place will not move you; convert "
                     "the next thought into an OBSERVATION — run the smallest experiment "
                     "that returns a REAL output and read it. Every further action without a new "
@@ -480,17 +487,22 @@ class PlanUpdateGuard(Guard):
                     f"genuinely finished or abandoned, mark it done/skipped."
                 )
 
+                # LLM-judge loop diagnosis: does the recent activity show the
+                # agent repeating one method-class (edit-same-file + rerun-whole-
+                # program) instead of escaping downward/upward? Computed on EVERY
+                # reminder — inject AND block — not only the escalate block. A
+                # time-only advisory ("wall-clock elapsed") can be read and ignored,
+                # but the judge's method-class read turns the FIRST advisory into a
+                # decision-type nudge, letting the agent switch class before the
+                # budget is spent on the wrong one. Semantic judgment is delegated to
+                # the judge — no signatures, counting, or regex here (design
+                # constraint). Gracefully degrades to "" when no judge is wired or
+                # the judge sees no loop, so both paths keep their prior behavior.
+                loop_note = self._loop_diagnosis(ctx)
+
                 if escalate:
                     # Advisory nudges were ignored this many times — force a stop.
                     self._block_pending = True
-                    # LLM-judge loop diagnosis: does the recent activity show the
-                    # agent repeating one method-class (edit-same-file + rerun-whole-
-                    # program) instead of escaping downward/upward? If so, name the
-                    # loop concretely in the block so the escape is unmistakable.
-                    # Semantic judgment is delegated to the judge — no signatures,
-                    # counting, or regex here (design constraint). Gracefully skips
-                    # when no judge is wired.
-                    loop_note = self._loop_diagnosis(ctx)
                     return GuardVerdict.block(
                         message=(
                             body
@@ -529,7 +541,7 @@ class PlanUpdateGuard(Guard):
                         category="plan_update",
                     )
                 return GuardVerdict.inject(
-                    message=body,
+                    message=body + loop_note,
                     reason="possible_stall",
                     category="plan_update",
                 )

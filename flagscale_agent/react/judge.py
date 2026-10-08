@@ -149,11 +149,17 @@ again and again; tweaking one value and re-running the full pipeline; trying
 variant after variant of the same tactic (a faster rewrite, a different constant,
 a reorder) — all SIDEWAYS moves within one method-class. The tell is that each
 round re-runs the entire thing rather than isolating a single unit, and no new
-method-class or smaller experiment appears.
+method-class or smaller experiment appears. One more tell: a LONG BET placed
+without arithmetic — the agent launches an operation expected to consume a large
+slice of the wall-clock budget (>~10%) without first estimating its cost
+(total × unit cost vs remaining budget) or running a short sample to calibrate;
+if the activity shows repeated long un-calibrated bets, treat the betting itself
+as the loop.
 
 Answer YES (a real problem, block) when the recent activity is dominated by
 re-running the same whole program and editing the same target, with no smaller
-isolating experiment and no switch of method-class.
+isolating experiment and no switch of method-class — or when it shows repeated
+long bets placed with no cost arithmetic behind them.
 Answer NO (fine, allow) when the agent has already gone DOWNWARD (built a minimal
 isolating test) or UPWARD (switched method-class, consulted a reference, adopted a
 different tool), or when the activity is varied enough that it is clearly not

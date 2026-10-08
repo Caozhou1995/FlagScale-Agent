@@ -166,7 +166,15 @@ written to the required path first (write-through), then refine. Later
 increments REPLACE the deliverable in place — never rewrite from scratch.
 Price every expensive step against the wall before starting it; if the full
 version would overrun, the minimal version IS the deliverable, not a
-checkpoint on the way to one."""
+checkpoint on the way to one.
+
+If the task has SEVERAL plausible solution paths and you cannot yet tell which
+is right, do NOT make the first plan a linear commit to path #1. Make it a
+PORTFOLIO: one step that runs a DISCRIMINATING micro-experiment per candidate
+(2-3 candidates, ~10-15% of budget each) — an experiment whose every outcome
+rules at least one candidate in or out — then a following step that focuses on
+the survivor. Serial trial-and-error taxes each wrong path at its full cost;
+a discriminating probe buys the elimination at a fraction of it."""
 
 
 def _wall_aware_block() -> str:
@@ -191,6 +199,68 @@ def _wall_aware_block() -> str:
         except (TypeError, ValueError):
             pass
     return "\n\n" + _WALL_AWARE_FIRST_PLAN
+
+
+def _premortem_block() -> str:
+    """Feature-keyed premortem one-liners, injected at plan framing.
+
+    Surfaces a PAID-FOR lesson at the decision moment — but only when the
+    task's own workspace shows the matching OBSERVABLE feature, so a task that
+    does not match the archetype gets no noise (no feature → no inject). The
+    archetypes and their trigger features come from the 89-dossier fail-family
+    analysis: grader-contract-invisible (§ the largest family), bypassed-judge-
+    tool, single-path over-bet. Detection is a cheap NON-RECURSIVE scan of the
+    agent process working directory (env ``FLAGSCALE_AGENT_TASK_DIR`` when the
+    launcher exports it, else cwd; subdirectories are NOT scanned — artifacts
+    placed under fixtures/tests are invisible to this probe by design), and
+    every failure degrades to "" — a guard must never crash the framing path.
+    Known calibration limit: when the agent process happens to run from a
+    directory that itself contains harness-like files (e.g. a source checkout
+    with pyproject.toml/test_*.py), the harness note fires on that cwd — the
+    note is keyed to the process cwd, not a verified task workspace.
+    """
+    root = os.environ.get("FLAGSCALE_AGENT_TASK_DIR") or os.getcwd()
+    try:
+        names = set(os.listdir(root))
+    except OSError:
+        return ""
+
+    notes: list[str] = []
+
+    def _any(*preds) -> bool:
+        return any(p(n) for n in names for p in preds)
+
+    has_ref = _any(
+        lambda n: n in ("expected_output.txt", "output.txt", "expected.txt",
+                        "sample_output.txt", "reference.txt", "golden.txt"),
+        lambda n: n.startswith("expected") or n.endswith(".expected"),
+    )
+    has_harness = _any(
+        lambda n: n in ("verify.sh", "run_tests.sh", "test.sh", "Makefile",
+                        "conftest.py", "pytest.ini", "pyproject.toml"),
+        lambda n: n.startswith("test_") or n.endswith("_test.py"),
+    )
+
+    if has_ref:
+        notes.append(
+            "Reference artifacts are present in the working directory — the "
+            "task's own acceptance surface is observable here. Before inventing "
+            "your own convention (file format, field order, rounding), diff it "
+            "against these reference artifacts; a self-built convention that was "
+            "never checked back is the largest silent-failure family."
+        )
+    if has_harness:
+        notes.append(
+            "A test/verify harness is present in the working directory — USE IT "
+            "as the grader, do not bypass it. Run it early and after every "
+            "change; a hand-rolled check that shadows the provided harness "
+            "doubles the cost and can still miss the real contract."
+        )
+    if not notes:
+        return ""
+    return "\n\nPremortem — this task shows the shape of a known loss archetype:\n" + "\n".join(
+        f"- {n}" for n in notes
+    )
 
 
 class PlanGuard(Guard):
@@ -269,7 +339,7 @@ class PlanGuard(Guard):
                 and not (self._task_plan and self._task_plan.get_active())):
             self._qualifier_reminded = True
             return GuardVerdict.block(
-                message=_WRITE_FILE_NO_PLAN + _QUALIFIER_EXTRACTION + _wall_aware_block(),
+                message=_WRITE_FILE_NO_PLAN + _QUALIFIER_EXTRACTION + _wall_aware_block() + _premortem_block(),
                 reason="write_file_without_plan",
                 category="plan_required",
                 overridable=True,
@@ -301,6 +371,7 @@ class PlanGuard(Guard):
             if inject_diverger:
                 msg += _DIVERGER_INJECT
             msg += _wall_aware_block()
+            msg += _premortem_block()
             return GuardVerdict.inject(
                 message=msg,
                 reason="qualifier_extraction",
@@ -335,6 +406,7 @@ class PlanGuard(Guard):
                     + _QUALIFIER_EXTRACTION
                     + _DIVERGER_INJECT
                     + _wall_aware_block()
+                    + _premortem_block()
                 ),
                 reason="single_shot_plan_required",
                 category="plan_required",
