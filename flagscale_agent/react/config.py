@@ -158,11 +158,15 @@ class AgentConfig:
             config = cls()
             config._config_path = config_path
 
+        # Snapshot pre-override model: __post_init__ already resolved
+        # max_context_tokens from it.
+        prev_model = config.model
+
         # Apply overrides
         for k, v in overrides.items():
             if v is not None and hasattr(config, k):
                 setattr(config, k, v)
-        
+
         # Re-run provider-dependent initialization if provider was overridden
         if "provider" in overrides and overrides["provider"] is not None:
             # Re-detect model, api_key, base_url based on the new provider
@@ -189,7 +193,18 @@ class AgentConfig:
                     config.base_url = os.environ.get("ANTHROPIC_BASE_URL")
                 elif config.provider == "openai":
                     config.base_url = os.environ.get("OPENAI_BASE_URL")
-        
+
+        # Re-resolve model-derived fields after all overrides. __post_init__
+        # only runs at construction, so a late model/provider override would
+        # otherwise leave max_context_tokens resolved from the pre-override
+        # model. Re-resolve only when the model actually changed and the
+        # caller did not pass an explicit max_context_tokens.
+        if (
+            config.model != prev_model
+            and overrides.get("max_context_tokens") is None
+        ):
+            config.max_context_tokens = _resolve_context_window(config.model)
+
         return config
 
     def reload(self):
