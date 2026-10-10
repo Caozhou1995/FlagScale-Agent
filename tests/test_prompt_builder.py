@@ -798,7 +798,57 @@ class TestAnalyzeDontJustUse:
         assert "read at the *mechanism* level" in p
 
 
-    # ── Information Retrieval: check memory for the location before searching ──
+class TestKeepClimbingOptimization:
+    """The KEEP CLIMBING imperative (PRINCIPLE 1): an optimization task is never
+    done at the first working result or at beating the baseline — the agent keeps
+    improving, banks its best-so-far, and compares against that best-so-far, not
+    against the first version or the handed baseline. Task-agnostic."""
+
+    def _prompt(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        return SYSTEM_PROMPT_STATIC
+
+    def test_keep_climbing_heading_present(self):
+        p = self._prompt()
+        assert "KEEP CLIMBING" in p
+
+    def test_never_done_at_first_working_result(self):
+        p = self._prompt()
+        # first result is not the finish line
+        assert "never \"done\" at the first result that works" in p
+        assert "never at the moment you beat the baseline" in p
+
+    def test_compares_against_best_so_far(self):
+        p = self._prompt()
+        # the standard of comparison is own best-so-far, not the first/baseline
+        assert "BEST-SO-FAR" in p
+        assert "your standard of comparison is always your own best-so-far" in p
+        assert "never the first version nor the handed baseline" in p
+
+    def test_banks_best_and_records_rejections(self):
+        p = self._prompt()
+        # best accepted improvement is written through before the next probe
+        assert "BANKED" in p
+        assert "written through to the deliverable path" in p
+
+    def test_stop_only_after_a_different_family_plateaus(self):
+        p = self._prompt()
+        assert "floors, not finish lines" in p
+        assert "structurally different family" in p
+        assert "Beating your own best-so-far" in p
+
+    def test_task_agnostic_no_threshold_or_noun_leak(self):
+        low = " ".join(self._prompt().lower().split())
+        # no hardcoded threshold word leaking
+        for w in ("minute", "hour", "gb", "second"):
+            assert f" {w} " not in low, f"standalone threshold word leaked: {w!r}"
+        # no task-specific nouns
+        import re
+        for w in ("jump", "hurdle", "takeoff", "gcode", "qemu", "mnist", "query-optimize"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
+
+
 
     def test_pre_search_memory_location_check_present(self):
         # The retrieval checklist must lead with: consult memory for the named
@@ -824,6 +874,46 @@ class TestAnalyzeDontJustUse:
         blk = p[i:j]
         for marker in ("site-packages", "node_modules", "logs", "checkpoints"):
             assert marker in blk, marker
+
+
+class TestDivergerDispatchAfterPlanCreate:
+    """The Diverger re-emphasis (Plan section): ONE diverger worker must be
+    dispatched immediately after EVERY plan_create() — handed the ORIGINAL task
+    statement, it proposes genuinely different framings (ideas only), and the
+    parent rules on each. Re-arms when the plan is re-framed. Task-agnostic."""
+
+    def _prompt(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        return SYSTEM_PROMPT_STATIC
+
+    def test_dispatch_after_every_plan_create(self):
+        p = self._prompt()
+        assert "Dispatch the Diverger the moment a plan exists" in p
+        assert "Immediately after EVERY plan_create()" in p
+
+    def test_ideas_only_and_parent_rulings(self):
+        p = self._prompt()
+        assert "ideas only, no verdicts, no ranking" in p
+        assert "adopt" in p and "reject" in p
+        assert "An unruled alternative is an unexamined premise" in p
+
+    def test_why_framing_is_the_leverage_point(self):
+        p = self._prompt()
+        assert "cheapest to fix and hardest to see" in p
+        assert "every later check inherits that blindness" in p
+
+    def test_rearms_on_reframe(self):
+        p = self._prompt()
+        assert "new plan, new dispatch" in p
+
+    def test_task_agnostic_no_leak(self):
+        low = " ".join(self._prompt().lower().split())
+        for w in ("minute", "hour", "gb", "second"):
+            assert f" {w} " not in low, f"standalone threshold word leaked: {w!r}"
+        import re
+        for w in ("query-optimize", "gcode", "qemu", "sam-cell-seg", "video-processing"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
 
 
 class TestConstraintLoyaltyFormContract:
