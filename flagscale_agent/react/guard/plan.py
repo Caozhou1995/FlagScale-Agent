@@ -419,18 +419,18 @@ class PlanGuard(Guard):
         if ctx.tool_name in ("plan_update", "plan_status"):
             return None
 
-        # A dispatch tool IS the compliance — never block it (a compliant agent
-        # whose first action after plan_create is the diverger spawn must not be
-        # blocked on that very call; check_post clears the gate after it).
-        if ctx.tool_name in ("spawn_worker", "dispatch_many"):
-            return None
-
         # Diverger-dispatch gate: the FIRST non-plan tool call after a
         # plan_create that carried the divergence demand is blocked once
         # (overridable) if no diverger was dispatched. Exempt for reviewer/
         # diverger workers — the demand is parent-side only. Overridable, not a
         # hard wall: a genuinely-trivial framing can document the skip.
-        if self._diverger_pending and not _self_is_review_or_diverge_worker():
+        # Dispatch tools ARE the compliance — never blocked (a compliant agent
+        # whose first action after plan_create IS the diverger spawn must not be
+        # blocked on that very call); they clear the gate instead (check_post,
+        # plus the fall-through below) and keep their normal no-plan accounting.
+        if (self._diverger_pending
+                and ctx.tool_name not in ("spawn_worker", "dispatch_many")
+                and not _self_is_review_or_diverge_worker()):
             self._diverger_pending = False
             return GuardVerdict.block(
                 message=(
