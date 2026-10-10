@@ -47,6 +47,69 @@ def _write(text):
 # marker itself, only once completion is actually accepted.
 COMPLETION_SENTINELS = ("[TASK_COMPLETE]", "[NEED_USER_INPUT]")
 
+# Models sometimes wrap the sentinel in markdown bold ("**[NEED_USER_INPUT]**").
+# Every consumer must accept the decorated form, and the stripper must remove
+# the decorations too — otherwise `****` leaks onto the screen (the two pairs
+# of asterisks left behind by a bare-marker-only strip) and the strict
+# endswith() checks reject the signal, forcing endless "no stop signal" retries.
+_DECORATION_RE = r"[*_]{0,2}"
+
+_SENTINEL_TAIL_RE = re.compile(
+    r"(?:" + _DECORATION_RE + r"\[(?:TASK_COMPLETE|NEED_USER_INPUT)\]"
+    + _DECORATION_RE + r")\s*$"
+)
+
+# Strip pattern for the stripper: decorated-or-bare sentinel anywhere in the
+# buffer, decorations included, so `**[NEED_USER_INPUT]**` disappears whole.
+_SENTINEL_STRIP_RE = re.compile(
+    _DECORATION_RE + r"\[(?:TASK_COMPLETE|NEED_USER_INPUT)\]" + _DECORATION_RE
+)
+
+# Decoration prefixes that may open a decorated sentinel (held back mid-stream).
+# The empty prefix keeps the ORIGINAL bare-sentinel hold; the decorated forms
+# cover bold ("**"/"__") and italic ("*"/"_"). The double-char opening spans
+# two deltas in streaming, so both must be held.
+_DECORATION_PRE = ("", "*", "**", "_", "__")
+
+# Residue consisting only of decoration chars — the orphaned closing bold left
+# after a sentinel strip; dropped at flush time instead of leaking to screen.
+_DECORATION_ONLY_RE = re.compile(r"[*_]{1,4}")
+
+
+def trailing_sentinel(text):
+    """Return the completion sentinel terminating *text*, or None.
+
+    Tolerant trailing match: accepts the bare marker and the markdown-decorated
+    forms ("**[NEED_USER_INPUT]**", "__[TASK_COMPLETE]__"), optionally followed
+    by trailing whitespace. Returns the BARE sentinel name so all downstream
+    consumers compare against a single canonical value.
+    """
+    if not text:
+        return None
+    m = _SENTINEL_TAIL_RE.search(text)
+    if not m:
+        return None
+    for s in COMPLETION_SENTINELS:
+        if s in m.group(0):
+            return s
+    return None
+
+
+def has_override_completion(text):
+    """True if *text* carries the override form: a [TASK_COMPLETE] marker
+    (bare or decorated) followed by an inline ``_override_reason:`` line.
+
+    The override form has text AFTER the marker, so trailing_sentinel() does
+    not see it; this is the second completion shape the kernel gate accepts.
+    """
+    if not text:
+        return False
+    return re.search(
+        _DECORATION_RE + r"\[TASK_COMPLETE\]" + _DECORATION_RE
+        + r"\s*\n?_override_reason\s*[:=]",
+        text,
+    ) is not None
+
 
 class SentinelStripper:
     """Streaming filter that removes completion sentinels from displayed text.
@@ -63,22 +126,30 @@ class SentinelStripper:
 
     @staticmethod
     def _held_suffix_len(buf, sentinels):
-        """Longest k such that buf[-k:] is a proper prefix of some sentinel."""
+        """Longest k such that buf[-k:] is a proper prefix of some sentinel.
+
+        Decoration-aware: a trailing run of 1-2 markdown chars (* or _) may be
+        the OPENING bold/italic of a decorated sentinel ("**[TASK_COMPLETE]**")
+        completing in the next delta, so it must be held back too — otherwise
+        the decoration is emitted, the sentinel is stripped later, and the
+        orphaned decorations leak onto the screen as `****`.
+        """
         best = 0
         for s in sentinels:
-            maxk = min(len(buf), len(s) - 1)
-            for k in range(maxk, 0, -1):
-                if s.startswith(buf[-k:]):
-                    if k > best:
-                        best = k
-                    break
+            for pre in _DECORATION_PRE:
+                head = pre + s
+                maxk = min(len(buf), len(head) - 1)
+                for k in range(maxk, 0, -1):
+                    if head.startswith(buf[-k:]):
+                        if k > best:
+                            best = k
+                        break
         return best
 
     def feed(self, text):
         """Consume a text delta; return the portion safe to display now."""
         self._buf += text
-        for s in self._sentinels:
-            self._buf = self._buf.replace(s, "")
+        self._buf = _SENTINEL_STRIP_RE.sub("", self._buf)
         hold = self._held_suffix_len(self._buf, self._sentinels)
         emit = self._buf[:len(self._buf) - hold] if hold else self._buf
         self._buf = self._buf[len(self._buf) - hold:] if hold else ""
@@ -87,10 +158,18 @@ class SentinelStripper:
     def flush(self):
         """Return any residual buffered text at end of stream.
 
-        A leftover here is a partial that never completed into a sentinel (e.g. a
-        truncated stream), so it is genuine text and should be shown.
+        A leftover here is normally a partial that never completed into a
+        sentinel (e.g. a truncated stream), so it is genuine text and should
+        be shown. The one exception: a bare 1-2 char decoration run ("**")
+        that was held as a potential sentinel prefix but never completed —
+        after a stripped sentinel this is its orphaned closing bold, and
+        displaying it is exactly the `****` leak. Drop decoration-only
+        residue; a genuine trailing "**" (unclosed markdown) is cosmetic and
+        acceptable to lose at terminator time.
         """
         out, self._buf = self._buf, ""
+        if _DECORATION_ONLY_RE.fullmatch(out):
+            return ""
         return out
 
 

@@ -16,7 +16,12 @@
 completion sentinels ([TASK_COMPLETE]/[NEED_USER_INPUT]) from the live terminal
 stream so a gate-blocked completion never appears on screen with authority.
 """
-from flagscale_agent.react.display import SentinelStripper, COMPLETION_SENTINELS
+from flagscale_agent.react.display import (
+    SentinelStripper,
+    COMPLETION_SENTINELS,
+    trailing_sentinel,
+    has_override_completion,
+)
 
 
 def _run(stripper, deltas):
@@ -85,3 +90,93 @@ class TestSentinelStripper:
     def test_sentinels_constant_present(self):
         assert "[TASK_COMPLETE]" in COMPLETION_SENTINELS
         assert "[NEED_USER_INPUT]" in COMPLETION_SENTINELS
+
+
+class TestDecoratedSentinelStripping:
+    """Models often wrap the sentinel in markdown (``**[NEED_USER_INPUT]**``).
+    The stripper must remove the decorations too — a bare-marker-only strip
+    leaves ``****`` on screen (the reported bug) and a strict endswith() gate
+    rejects the signal, forcing endless "no stop signal" retries.
+    """
+
+    def test_bold_sentinel_single_delta(self):
+        s = SentinelStripper()
+        assert _run(s, ["done. **[NEED_USER_INPUT]**"]) == "done. "
+
+    def test_bold_task_complete_single_delta(self):
+        s = SentinelStripper()
+        assert _run(s, ["done. **[TASK_COMPLETE]**"]) == "done. "
+
+    def test_bold_split_into_deltas(self):
+        s = SentinelStripper()
+        # Opening "**" and closing "**" arrive as their own deltas.
+        assert _run(s, ["done. **", "[NEED", "_USER_INPUT]", "**"]) == "done. "
+
+    def test_bold_char_by_char(self):
+        s = SentinelStripper()
+        assert _run(s, list("result **[TASK_COMPLETE]**")) == "result "
+
+    def test_no_asterisk_leak_on_held_prefix(self):
+        # The exact reported failure: after stripping the marker the orphaned
+        # opening decoration must never be emitted.
+        s = SentinelStripper()
+        parts = [s.feed(d) for d in ["ok **", "[NEED_USER_INPUT]", "**"]]
+        parts.append(s.flush())
+        assert "".join(parts) == "ok "
+        assert "*" not in "".join(parts)
+
+    def test_underscore_bold_sentinel(self):
+        s = SentinelStripper()
+        assert _run(s, ["done. __[TASK_COMPLETE]__"]) == "done. "
+
+    def test_italic_sentinel(self):
+        s = SentinelStripper()
+        assert _run(s, ["x *[TASK_COMPLETE]*"]) == "x "
+
+    def test_decorated_mid_text_after_sentinel_shown(self):
+        s = SentinelStripper()
+        assert _run(s, ["a**[TASK_COMPLETE]**b"]) == "ab"
+
+
+class TestTrailingSentinel:
+    """Shared helper used by the kernel gate and the verification gate."""
+
+    def test_bare(self):
+        assert trailing_sentinel("line\n[TASK_COMPLETE]") == "[TASK_COMPLETE]"
+
+    def test_bold(self):
+        assert trailing_sentinel("x **[NEED_USER_INPUT]**") == "[NEED_USER_INPUT]"
+
+    def test_underscore_bold(self):
+        assert trailing_sentinel("x __[TASK_COMPLETE]__") == "[TASK_COMPLETE]"
+
+    def test_trailing_whitespace(self):
+        assert trailing_sentinel("x **[NEED_USER_INPUT]**  \n") == "[NEED_USER_INPUT]"
+
+    def test_non_sentinel_none(self):
+        assert trailing_sentinel("see [NOTE] here") is None
+
+    def test_mention_not_trailing_none(self):
+        # A quoted marker with words after it is not a terminator.
+        assert trailing_sentinel("x [TASK_COMPLETE]\ntrailing words") is None
+
+    def test_empty_none(self):
+        assert trailing_sentinel("") is None
+
+
+class TestOverrideCompletion:
+    """The override completion shape: marker followed by an inline reason."""
+
+    def test_bare_override(self):
+        assert has_override_completion(
+            "done [TASK_COMPLETE]\n_override_reason: trivial rename") is True
+
+    def test_decorated_override(self):
+        assert has_override_completion(
+            "done **[TASK_COMPLETE]**\n_override_reason: trivial") is True
+
+    def test_no_reason_false(self):
+        assert has_override_completion("done [TASK_COMPLETE]") is False
+
+    def test_empty_false(self):
+        assert has_override_completion("") is False

@@ -51,6 +51,7 @@ import re
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
+from flagscale_agent.react.display import has_override_completion, trailing_sentinel
 
 
 def _contract_constraints() -> dict:
@@ -640,6 +641,8 @@ configured or the best candidate you held in memory. Walk the ones that apply:
     State plainly: is what sits at the delivery path the TRUE PRODUCT of the process
     the task named, or a constructed look-alike / stub / placeholder standing in for
     work you did not actually complete?
+  • **Success CRITERION is the task's, not yours**: if the task names the reference a result is judged against (a baseline, a golden/expected output, a label table, a metric definition with a threshold), the criterion is THAT — never a weaker standard you substituted ("much faster than before", "high accuracy"). Locate and RUN the task's named reference; report the delivered artifact's value against IT, one line each. A pass under your own criterion says nothing about the grade.
+
   • **Contract readback (quote-vs-value)**: if the task pins down a FORM or
     CONTRACT — a required format, an exact name, a numbering/ordering rule, a
     field/interface signature, units, or a "from X / named Y" source rule — do
@@ -1211,11 +1214,8 @@ class VerificationGuard(Guard):
         # start of every new turn before the agent has done any work.
         _text = (ctx.assistant_text or "").rstrip()
         _is_completion = (
-            _text.endswith("[TASK_COMPLETE]")
-            or re.search(
-                r'\[TASK_COMPLETE\]\s*\n?_override_reason\s*[:=]',
-                _text,
-            ) is not None
+            trailing_sentinel(_text) == "[TASK_COMPLETE]"
+            or has_override_completion(_text)
         )
         if ctx.tool_name == "" and _is_completion and ctx.llm_responded:
             # Reviewer settlement gate. The step_done reviewer demand is

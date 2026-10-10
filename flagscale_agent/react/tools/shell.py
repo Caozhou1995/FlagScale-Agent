@@ -361,7 +361,16 @@ _SELF_KILL_RE = re.compile(
     # shell's own cmdline (the pattern text is IN the command being run) and
     # the only way to know is to rewrite it with the agent-pid exclusion.
     r"|\bpkill\b"
-    r"|\bkillall\b",
+    r"|\bkillall\b"
+    # Bare `kill` fed by a process-list / command substitution — the target set
+    # is SELECTED at runtime and can include the agent (the shell's own cmdline
+    # carries the match pattern). Root-fixed by injecting the pid exclusion
+    # into the substitution (see _protect_self_kill).
+    r"|\bkill\b\s+(?:-\S+\s+)*\$\([^)]*\b(?:pgrep|ps|grep)\b"
+    r"|\bkill\b\s+(?:-\S+\s+)*`[^`]*\b(?:pgrep|ps|grep)\b"
+    # Bare `kill` with literal numeric pids — one of them may be the agent's.
+    # Root-fixed by dropping the agent's pids from the literal list.
+    r"|\bkill\b\s+(?:-\S+\s+)*\d",
 )
 
 
@@ -430,6 +439,44 @@ def _protect_self_kill(command: str) -> str:
             lambda m: f"| {pid_filter}xargs {m.group(1) or ''}kill",
             command,
         )
+        return command
+
+    # Bare `kill` fed by a process-list / command substitution: inject a pid
+    # exclusion INSIDE the substitution, so the SELECTED set can never contain
+    # the agent (the match pattern lives in the shell's own cmdline). Works for
+    # any inner command (pgrep/ps/grep/…); the exclusion is pid-based, so it is
+    # correct regardless of how the set is built.
+    cmd_sub_re = re.compile(
+        r"(\bkill\b\s+(?:-\S+\s+)*)(\$\((?P<sub>[^)]*)\)|`(?P<bt>[^`]*)`)"
+    )
+    m = cmd_sub_re.search(command)
+    if m:
+        head = m.group(1)
+        if m.group("sub") is not None:
+            inner, open_tok, close_tok = m.group("sub").rstrip(), "$(", ")"
+        else:
+            inner, open_tok, close_tok = m.group("bt").rstrip(), "`", "`"
+        filter_expr = "\\b(" + pids_str + ")\\b"
+        woven = "{ " + inner + "; } 2>/dev/null | grep -Ev '" + filter_expr + "'"
+        replacement = f"{head}{open_tok}{woven}{close_tok}"
+        return command[:m.start()] + replacement + command[m.end():]
+
+    # Bare `kill` with literal numeric pids: drop the agent's own pids from the
+    # argument list, so a stray self-pid cannot be signalled.
+    # NOTE: group2 matches bare digits only (no `-?`). Allowing `-?` let the
+    # regex backtrack group1 to zero-width and swallow a signal flag as the pid
+    # (e.g. `kill -9 flagscale_agent` → `kill 9flagscale_agent`); requiring a
+    # digit forces group1 to keep any flags inside itself.
+    pid_re = re.compile(r"(\bkill\b\s+(?:-\S+\s+)*)((?:\d+\s*)+)")
+    m = pid_re.search(command)
+    if m:
+        head, args = m.group(1), m.group(2)
+        kept = [t for t in re.findall(r"\d+", args) if int(t) not in exclude]
+        replacement = (
+            f"{head}{' '.join(kept)}" if kept
+            else "echo 'KillSafety: all target pids are agent pids; kill suppressed'"
+        )
+        return command[:m.start()] + replacement + command[m.end():]
 
     return command
 

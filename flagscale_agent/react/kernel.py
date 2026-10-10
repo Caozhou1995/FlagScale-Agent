@@ -36,6 +36,10 @@ from typing import Any, Callable
 
 from flagscale_agent.react.guard import GuardContext, GuardRegistry, GuardVerdict
 from flagscale_agent.react import display
+# Bind the sentinel helpers into the kernel namespace: tests monkeypatch the
+# display MODULE for guard_inject/completion_signal routing, and calling them
+# through that mock would break the completion detection itself.
+from flagscale_agent.react.display import has_override_completion, trailing_sentinel
 
 
 @dataclass
@@ -363,16 +367,17 @@ class AgentKernel:
                     # mention (e.g. the agent quoting "[TASK_COMPLETE]" while
                     # explaining guard logic). A sentinel is a line that is
                     # (almost) just the marker, optionally followed by an
-                    # _override_reason on the same or next line.
+                    # _override_reason on the same or next line. The trailing
+                    # check tolerates markdown decoration ("**[TASK_COMPLETE]**")
+                    # — models routinely bold the marker, and a strict
+                    # endswith() would reject it and loop on "no stop signal".
                     _text_stripped = assistant_text.rstrip()
+                    _trailing = trailing_sentinel(_text_stripped)
+                    _override_completion = has_override_completion(_text_stripped)
                     _is_completion = (
-                        _text_stripped.endswith("[TASK_COMPLETE]")
-                        or re.search(
-                            r'\[TASK_COMPLETE\]\s*\n?_override_reason\s*[:=]',
-                            _text_stripped,
-                        ) is not None
+                        _trailing == "[TASK_COMPLETE]" or _override_completion
                     )
-                    _is_need_input = _text_stripped.endswith("[NEED_USER_INPUT]")
+                    _is_need_input = _trailing == "[NEED_USER_INPUT]"
                     if _is_completion or _is_need_input:
                         # ── Completion-path guard consultation ──
                         # The break below is otherwise unconditional, so guards that
@@ -431,12 +436,17 @@ class AgentKernel:
                         # By convention the terminating sentinel is the LAST one in
                         # the text; an earlier mention (e.g. the agent quoting
                         # "[TASK_COMPLETE]" while explaining code) must NOT override
-                        # the actual trailing signal. Pick by last occurrence, not
-                        # by a fixed tuple order.
-                        _last_sentinel = max(
-                            ("[TASK_COMPLETE]", "[NEED_USER_INPUT]"),
-                            key=lambda s: assistant_text.rfind(s),
-                        )
+                        # the actual trailing signal. Prefer the trailing sentinel
+                        # already detected (decoration-tolerant); fall back to the
+                        # last bare occurrence for the override form, where text
+                        # follows the marker on the next line.
+                        if _trailing is not None:
+                            _last_sentinel = _trailing
+                        else:
+                            _last_sentinel = max(
+                                ("[TASK_COMPLETE]", "[NEED_USER_INPUT]"),
+                                key=lambda s: assistant_text.rfind(s),
+                            )
                         if _last_sentinel in assistant_text:
                             d.display.completion_signal(_last_sentinel)
                         result.stop_reason = "explicit_signal"

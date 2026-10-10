@@ -21,8 +21,8 @@ Part of the three-phase guard framework:
 
 Logic (MIDDLE phase only):
 - Track tool calls since last knowledge/skill/web_fetch load.
-- Every 15 calls without a research load → inject a reminder.
-- Every 40 calls without a research load → block (overridable).
+- Every 30 calls without a research load → inject a reminder.
+- Every 80 calls without a research load → block (overridable).
 - After any research load (web_fetch/load_knowledge/load_skill), inject an
   information-gain self-check (three-state: ACQUIRED / MISSING / SELF-FILLABLE).
 - Meta tools (evict, plan, memory) don't count toward the threshold.
@@ -47,8 +47,8 @@ class KnowledgeSkillGuard(Guard):
     name = "knowledge_skill"
     priority = 85  # Low priority — advisory
 
-    INJECT_THRESHOLD = 15
-    BLOCK_THRESHOLD = 40
+    INJECT_THRESHOLD = 30
+    BLOCK_THRESHOLD = 80
 
     _KNOWLEDGE_TOOLS = frozenset((
         "load_knowledge", "load_skill", "web_fetch",

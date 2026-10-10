@@ -224,3 +224,44 @@ def test_trailing_sentinel_wins_over_earlier_mention():
     result = kernel.run_turn()
     assert result.stop_reason == "explicit_signal"
     kernel.deps.display.completion_signal.assert_called_once_with("[NEED_USER_INPUT]")
+
+
+def test_bold_decorated_sentinel_completes():
+    """A model that bolds the marker ("**[NEED_USER_INPUT]**") must still
+    complete — strict endswith() rejected the decorated form and the loop
+    burned iterations on "no stop signal" retries (observed in production).
+
+    The authoritative marker printed must be the BARE sentinel (canonical
+    form), not the decorated text.
+    """
+    kernel = _make_kernel(
+        [{"content": "here is my question **[NEED_USER_INPUT]**",
+          "tool_calls": []}],
+        single_shot=False,
+    )
+    result = kernel.run_turn()
+    assert result.stop_reason == "explicit_signal", result.stop_reason
+    assert kernel._call_count["n"] == 1
+    kernel.deps.display.completion_signal.assert_called_once_with("[NEED_USER_INPUT]")
+
+
+def test_bold_decorated_task_complete_completes():
+    kernel = _make_kernel(
+        [{"content": "all done **[TASK_COMPLETE]**", "tool_calls": []}],
+        single_shot=False,
+    )
+    result = kernel.run_turn()
+    assert result.stop_reason == "explicit_signal", result.stop_reason
+    kernel.deps.display.completion_signal.assert_called_once_with("[TASK_COMPLETE]")
+
+
+def test_bold_decorated_sentinel_single_shot_completes():
+    """Single-shot mode with the bolded marker — same acceptance."""
+    kernel = _make_kernel(
+        [{"content": "**[TASK_COMPLETE]**", "tool_calls": []}],
+        single_shot=True,
+    )
+    result = kernel.run_turn()
+    assert result.stop_reason == "explicit_signal", result.stop_reason
+    assert kernel._call_count["n"] == 1
+    kernel.deps.display.completion_signal.assert_called_once_with("[TASK_COMPLETE]")

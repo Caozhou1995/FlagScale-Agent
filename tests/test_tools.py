@@ -23,7 +23,7 @@ from flagscale_agent.react.tools.base import Tool
 from flagscale_agent.react.tools.edit_file import EditFileTool
 from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.shell import (
-    ShellTool, _strip_trailing_pipe,
+    ShellTool, _strip_trailing_pipe, _protect_self_kill,
 )
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools import ToolRegistry
@@ -167,6 +167,23 @@ class TestShellTool:
         result = tool.execute(command="pkill -9 flagscale_agent")
         # Should rewrite command, not actually kill agent
         assert "flagscale" not in result or "xargs" in result or "(no output)" in result or "no process" in result.lower()
+
+
+class TestProtectSelfKillLiteralPid:
+    """Regression: the literal-pid rewrite must not corrupt flag-bearing kills."""
+
+    def test_flag_not_swallowed_as_pid(self):
+        # Bug (fixed): regex group2 allowed `-?\d+`, so on `kill -9 <name>` the
+        # engine backtracked group1 to zero-width and swallowed the `-9` signal
+        # flag as a pid → `kill 9flagscale_agent`. group2 now requires bare
+        # digits, so a non-numeric target passes through untouched.
+        out = _protect_self_kill("kill -9 flagscale_agent")
+        assert out == "kill -9 flagscale_agent"
+
+    def test_literal_self_pid_dropped(self):
+        # A literal numeric kill whose only target is an agent pid is suppressed.
+        out = _protect_self_kill(f"kill -9 {os.getpid()}")
+        assert "KillSafety" in out or str(os.getpid()) not in out
 
 
 class TestHealthJudge:

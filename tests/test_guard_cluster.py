@@ -16,7 +16,7 @@
 
 Covers five defects discovered by source analysis + run evidence:
   1. KnowledgeSkillGuard deadlock: a write blocked with "[PostEditBlocked]"
-     mandates a cold re-read, but the re-read itself advanced the 40-call
+     mandates a cold re-read, but the re-read itself advanced the block
      counter and got blocked by the very same guard.
   2. VerificationGuard wrap-up: re-reported the SAME open proposals verbatim
      at every completion — long lists drown the new signal.
@@ -68,7 +68,7 @@ _POST_EDIT_BLOCKED = (
 class TestKnowledgeRereadExemption:
     def test_mandated_reread_is_exempt_and_does_not_count(self):
         g = KnowledgeSkillGuard()
-        g._calls_since_knowledge = 39  # one call from the 40-call block
+        g._calls_since_knowledge = g.BLOCK_THRESHOLD - 1  # one call from the block
 
         # A write was blocked with the PostEditBlocked mandate.
         g.check_post(GuardContext(
@@ -83,7 +83,7 @@ class TestKnowledgeRereadExemption:
         g.check_post(GuardContext(
             tool_name="read_file", tool_args={"path": "/x/a.py"},
             tool_result="file body"))
-        assert g._calls_since_knowledge == 39, "exempt read must not count"
+        assert g._calls_since_knowledge == g.BLOCK_THRESHOLD - 1, "exempt read must not count"
 
         # The re-issued edit is exempt too, and clears the mandate.
         v2 = g.check_pre(GuardContext(
@@ -99,7 +99,7 @@ class TestKnowledgeRereadExemption:
 
     def test_blanket_prose_without_mandate_does_not_exempt(self):
         g = KnowledgeSkillGuard()
-        g._calls_since_knowledge = 39
+        g._calls_since_knowledge = g.BLOCK_THRESHOLD - 1
         v = g.check_pre(GuardContext(
             tool_name="read_file", tool_args={"path": "/x/a.py"}))
         assert v is not None and v.action == "block"

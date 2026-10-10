@@ -37,8 +37,9 @@ Key design decisions:
       - 25/50/75%   → check_post inject (pacing / health-check advisories).
       - 80%         → check_post inject (early WRAP-UP WINDOW — protective actions only).
       - 90%         → check_pre BLOCK (overridable) — forces the agent to SHOW
-                      (evidence, not claim) that a deliverable exists or that
-                      THIS call produces it, before spending a near-final tool
+                      (evidence, not claim) that a deliverable exists, that
+                      THIS call produces it, or that a background job already in
+                      flight is producing it, before spending a near-final tool
                       call on exploration.
       - 100%        → check_post inject (WRAP-UP). The per-turn wall-clock is
                       spent: this is the agent's last stretch this turn. The
@@ -113,9 +114,12 @@ class TimeBudgetGuard(Guard):
               override_reason must cite the output of a verification action just
               run (e.g. ls -la / cat on the delivery path), OR
           (2) This specific tool call will produce/finalize the deliverable —
-              cite the delivery path it writes or this tool's concrete output.
+              cite the delivery path it writes or this tool's concrete output, OR
+          (3) A background job already in flight is producing/finalizing the
+              deliverable — cite its job id and the delivery path it writes, then
+              collect it. A job in flight counts: do not kill it to pass the gate.
         
-        If neither is true, the agent should STOP optimizing and write a crude-but-
+        If none is true, the agent should STOP optimizing and write a crude-but-
         complete answer instead. The override_reason becomes the forcing function.
         """
         if not ctx.tool_name:
@@ -154,7 +158,14 @@ class TimeBudgetGuard(Guard):
                 f"matching the expected content).\n"
                 f"  (2) THIS specific tool call will produce or finalize the "
                 f"deliverable — cite the delivery path it writes or this tool's "
-                f"concrete output.\n\n"
+                f"concrete output.\n"
+                f"  (3) A background job YOU already started is producing or "
+                f"finalizing the deliverable RIGHT NOW — cite its job id and the "
+                f"delivery path it writes, then POLL it. A job already in flight "
+                f"counts: the write is delegated, so waiting/collecting it — not "
+                f"killing it, and not re-running the work — is what satisfies this "
+                f"item. Do NOT kill a job that is producing your deliverable just "
+                f"to make this gate pass.\n\n"
                 f"Re-classified so it cannot be misread: verifying a claim you are "
                 f"about to bank is NOT refining. When a result you ALREADY hold is "
                 f"suspect, the CHEAPEST trust-restoring action on that same "

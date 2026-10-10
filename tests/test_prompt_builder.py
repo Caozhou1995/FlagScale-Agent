@@ -837,3 +837,54 @@ class TestConstraintLoyaltyFormContract:
         assert "form rules" in low
         assert "silent" in low
         assert "never against your paraphrase" in low
+
+
+class TestDeliverableConstraintSpotCheck:
+    """G7: the deliverable is measured against EVERY stated constraint, and the
+    task's named reference (baseline / golden / label table) is the criterion —
+    never a weaker standard the agent substituted for it."""
+
+    def _prompt(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        return SYSTEM_PROMPT_STATIC
+
+    def test_test_deliverable_against_every_stated_constraint_present(self):
+        low = " ".join(self._prompt().lower().split())
+        assert "test the deliverable against every stated constraint" in low
+
+    def test_quantitative_constraint_measured_command_and_run(self):
+        low = " ".join(self._prompt().lower().split())
+        # the mechanic: quote the task's own phrase, write a measuring command, RUN it
+        assert "quantitative constraint" in low
+        assert "measures the delivered artifact" in low
+        assert "run that command" in low
+        # a re-stated-but-unmeasured constraint is unverified
+        assert "never measured is unverified" in low
+
+    def test_success_criterion_reference_not_substituted(self):
+        low = " ".join(self._prompt().lower().split())
+        # the task's named reference is the criterion; a self-substituted one is not
+        assert "success metric" in low
+        assert "reference the task names" in low
+        assert "never a criterion you substituted" in low
+
+
+class TestDeliveryHygieneSuccessCriterionBullet:
+    """G7 (guard side): the delivery-hygiene message carries a Success-CRITERION
+    bullet binding the grade to the task's NAMED reference, not a weaker
+    standard the agent chose. Task-agnostic: no leaked task nouns/values."""
+
+    def test_success_criterion_bullet_present(self):
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
+        low = " ".join(_TASK_COMPLETE_DELIVERY_HYGIENE.lower().split())
+        assert "success criterion is the task's" in low
+        # the named-reference classes, in the abstract
+        assert "baseline" in low or "golden" in low
+        assert "label table" in low or "expected output" in low
+        # the substitution failure it guards against
+        assert "substituted" in low
+        # task-agnostic: no leaked task nouns/values
+        import re
+        for w in ("gcode", "qemu", "mnist", "1.149", "90x", "query-optimize"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")

@@ -205,6 +205,25 @@ class TestTimeBudgetGuard90Block:
         s.pct = 89.0
         assert g.check_pre(make_ctx()) is None
 
+    def test_90_block_offers_in_flight_background_job_as_valid_case(self):
+        # The 90% gate must recognise a background job already producing the
+        # deliverable as a satisfiable override case — otherwise an agent that
+        # correctly delegated the write is forced to either fabricate a reason or
+        # kill its own productive job to make case (1) true.
+        s = _Stats()
+        g = TimeBudgetGuard(stats_fn=s)
+        s.pct = 92.0
+        v = g.check_pre(make_ctx())
+        assert v is not None and v.reason == "time_budget_90pct_block"
+        msg = v.message
+        # All three satisfiable cases are spelled out.
+        assert "(1)" in msg and "(2)" in msg and "(3)" in msg
+        # Case (3) is explicitly about a background job in flight.
+        assert "background job" in msg.lower()
+        assert "job id" in msg
+        # And it forbids the self-defeating kill.
+        assert "kill" in msg.lower()
+
     def test_jump_past_90_blocks_once(self):
         # Jumping 30 -> 95 should block at 90, marking all thresholds as spent.
         s = _Stats()

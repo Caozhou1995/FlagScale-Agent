@@ -166,22 +166,22 @@ class TestInjectStillWorks:
 
 
     def test_knowledge_skill_inject_timing(self):
-        """Inject should trigger every 15 calls.
+        """Inject should trigger every 30 calls.
 
         With check_post persistence, the inject verdict comes from the check_pre
         projection (calls_since = counter+1) and check_post then advances the
-        counter for the executed call — so injects still land at 15 and 30."""
+        counter for the executed call — so injects still land at 30 and 60."""
         guard = KnowledgeSkillGuard()
 
         inject_at = []
-        for i in range(1, 41):
+        for i in range(1, 61):
             ctx = GuardContext(tool_name="shell", tool_args={"command": "ls"})
             verdict = guard.check_pre(ctx)
             if verdict and verdict.action == "inject":
                 inject_at.append(i)
             guard.check_post(ctx)  # persist the executed call's increment
 
-        assert inject_at == [15, 30], f"Inject should trigger at 15/30, got {inject_at}"
+        assert inject_at == [30, 60], f"Inject should trigger at 30/60, got {inject_at}"
     def test_memory_discipline_inject_timing(self):
         """Inject should trigger every 10 calls. Block at 30 supersedes inject."""
         guard = MemoryDisciplineGuard()
@@ -202,15 +202,15 @@ class TestInjectStillWorks:
         assert block_at == [30], f"Block should trigger at 30, got {block_at}"
 
     def test_knowledge_skill_inject_timing(self):
-        """Inject should trigger every 15 calls (check_post persistence)."""
+        """Inject should trigger every 30 calls (check_post persistence)."""
         guard = KnowledgeSkillGuard()
 
         inject_at = []
-        for i in range(1, 41):
+        for i in range(1, 61):
             ctx = GuardContext(tool_name="shell", tool_args={"command": "ls"})
             verdict = guard.check_pre(ctx)
             if verdict and verdict.action == "inject":
                 inject_at.append(i)
             guard.check_post(ctx)  # persist the executed call's increment
 
-        assert inject_at == [15, 30], f"Inject should trigger at 15/30, got {inject_at}"
+        assert inject_at == [30, 60], f"Inject should trigger at 30/60, got {inject_at}"

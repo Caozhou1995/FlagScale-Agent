@@ -103,6 +103,7 @@ from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.knowledge_index import KnowledgeIndexGuard
 from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
 from flagscale_agent.react.guard.deliverable_survival import DeliverableSurvivalGuard
+from flagscale_agent.react.guard.kill_safety import KillSafetyGuard
 from flagscale_agent.react.guard.poll_spacing import PollSpacingGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
@@ -296,6 +297,7 @@ class WorkerAgent:
         from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
         guard_registry.register(CompileRedirectGuard())
         guard_registry.register(ShellSafetyGuard())
+        guard_registry.register(KillSafetyGuard())
         # VcsBackupGuard: targeted block on destructive git ops (checkout --,
         # reset --hard, clean -f, stash drop/clear, ...) — protects uncommitted
         # work from irreversible loss (e.g. a checkout discarding a patch).
