@@ -442,6 +442,7 @@ class WorkerAgent:
             remind_interval=self.config.shell_remind_interval,
             env=self.config.shell_env,
             health_judge_fn=self._health_judge,
+            auto_detach_grace_secs=self.config.shell_auto_detach_grace_secs,
         )
         self.tool_registry.register(_shell_tool)
         # Background-job control tool: poll/wait/list/kill jobs started with

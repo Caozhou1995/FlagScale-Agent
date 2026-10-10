@@ -80,6 +80,7 @@ class AgentConfig:
     max_iterations: int = 200000
     max_context_tokens: int = 0  # 0 = auto-detect from model
     shell_remind_interval: int = 60
+    shell_auto_detach_grace_secs: int = 30  # foreground command running past this many seconds is auto-detached to a background job (0 disables); aligns with LongTimeShellGuard's 30s threshold
     max_output_tokens: int = 8192
     thinking_budget: int = 0  # 0 = disabled; >0 = enable thinking with budget_tokens cap (must be ≥1024 and < max_output_tokens)
     session_dir: Optional[str] = None

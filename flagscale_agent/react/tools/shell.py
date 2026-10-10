@@ -608,10 +608,20 @@ class ShellTool(Tool):
     }
 
     def __init__(self, remind_interval: int = 120, env: dict = None,
-                 health_judge_fn=None):
+                 health_judge_fn=None, auto_detach_grace_secs: int = 30):
         self._remind_interval = remind_interval
         self._env = env or {}
         self._health_judge_fn = health_judge_fn
+        # Foreground grace window (seconds). A foreground command still running
+        # after this many seconds is longer than the agent should block on
+        # blind: the monitor loop hands control back by DETACHING it to a
+        # background job (see the grace branch in execute()). This is a
+        # MECHANISM, not a policy — it is independent of the health judge and of
+        # any task budget: the trigger is simply "this one command has run past
+        # the window". Nothing is killed; the agent then decides (poll / kill /
+        # do other work). 0 disables auto-detach. 30 aligns with
+        # LongTimeShellGuard's THRESHOLD_SECONDS.
+        self._auto_detach_grace = auto_detach_grace_secs
         # Per-prefix command history for the LLM health judge. Maps a command
         # prefix (first 2 tokens) to a list of (outcome, duration_secs) tuples.
         # outcome is "completed", "killed", or "error".
@@ -866,6 +876,36 @@ class ShellTool(Tool):
 
             while proc.poll() is None:
                 elapsed = time.time() - start
+
+                # ── Grace-period auto-detach: hand control back to the agent ──
+                # Independent of the health judge AND of any task budget. Any
+                # foreground command still running past the grace window is long
+                # enough that the agent should DECIDE (keep polling / kill /
+                # do other work) instead of blocking blind — a "healthy" but
+                # pointless long scan (e.g. a recursive grep over a huge NFS
+                # tree) is exactly the case the health judge can never flag,
+                # because its criteria only ask "is the command broken?", not
+                # "is it worth waiting for?". This is a MECHANISM: it fires on
+                # the single fact "elapsed > window", unconditionally. Lossless
+                # — nothing is killed, the job stays monitored, and the agent
+                # can shell_jobs(wait) to keep blocking. Sits at the TOP of the
+                # loop so it preempts at the window edge, not at the next 30s
+                # health tick. 0 disables.
+                if (self._auto_detach_grace
+                        and elapsed > self._auto_detach_grace):
+                    return self._detach_to_background(
+                        command, proc, stdout_chunks, stderr_chunks,
+                        t_out, t_err, start, _health_sampler,
+                        reason=(
+                            f"Foreground grace window "
+                            f"({self._auto_detach_grace}s) exceeded — you now "
+                            f"have control of this command. It was NOT killed; "
+                            f"it is running in the background. Decide: "
+                            f"shell_jobs(action=\"wait\", job_id=...) to keep "
+                            f"blocking, shell_jobs(action=\"kill\", job_id=...) "
+                            f"to stop it, or continue with other useful work."
+                        ),
+                    )
 
                 if elapsed > next_check:
                     next_check = elapsed + check_interval
