@@ -25,17 +25,19 @@ from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worke
 from flagscale_agent.react.guard.verification import _contract_constraints
 
 
-def _self_is_diverger_worker() -> bool:
-    """True when THIS process is a spawned diverger worker.
+def _self_is_review_or_diverge_worker() -> bool:
+    """True when THIS process is a spawned reviewer OR diverger worker.
 
-    The diverger demand ("propose 2-3 genuinely different framings, then
-    rule") is a PARENT-side habit: a diverger worker already IS the
-    alternative-framing channel — nesting the demand inside it would ask it
-    to review its own re-framing and contend for the shared concurrency
-    gate. Detect via the spawned contract's STRUCTURED `constraints.reviewer`
-    flag (contract.json), never via prose in the rendered contract.prompt — a
-    body that merely QUOTES "framings of the task" must not suppress the
-    demand. Errors fail silent-False (demand fires as usual).
+    Both roles are exempt from the parent-side diverger-DISPATCH block: the
+    demand ("spawn ONE diverger after plan_create, then rule") is a PARENT-side
+    habit, and a worker — an independent reviewer or the diverger itself — must
+    not nest it (that self-references the demand chain and contends for the
+    shared concurrency gate). Both roles carry the SAME structured
+    `constraints.reviewer` flag (contract.json) — there is no separate diverger
+    tag — so one check covers both. Detected from the structured contract, never
+    from prose in the rendered contract.prompt (a body that merely QUOTES
+    "framings of the task" must not suppress the demand). Errors fail
+    silent-False (the demand fires as usual).
     """
     try:
         if not is_worker():
@@ -43,6 +45,15 @@ def _self_is_diverger_worker() -> bool:
         return _contract_constraints().get("reviewer") is True
     except Exception:
         return False
+
+
+def _self_is_diverger_worker() -> bool:
+    """True for a spawned diverger worker (historical name).
+
+    Identical to `_self_is_review_or_diverge_worker`: reviewer and diverger
+    share the structured `constraints.reviewer` flag (no separate diverger tag).
+    """
+    return _self_is_review_or_diverge_worker()
 
 
 # Folded into the plan-framing gate on purpose: qualifier extraction is a
@@ -107,11 +118,26 @@ _WRITE_FILE_NO_PLAN = (
 # diverger worker (read-only, no verdict, no agreement) that proposes alternative
 # framings of the task, then the parent issues a one-line ruling for EACH
 # alternative (adopt → revise the plan, or reject → why). Rulings are the
-# deliverable: they force the unexamined premises into the open. Fire once
-# PER FRAMING (every plan_create — a re-framing re-arms the demand) and only
-# via plan_create —
-# same folded-into-one-gate pattern as _QUALIFIER_EXTRACTION, never a separate
-# block (cross-talk rule, see verification.py Timing 0b note).
+# Delivered as an inject ON the plan_create call itself, then ENFORCED with a
+# block (check_pre) on the FIRST non-plan tool call after plan_create when no
+# diverger was dispatched. Firing the block on the tool AFTER plan_create (not
+# on plan_create) keeps plan_create advisory, breaks the old cross-talk with the
+# qualifier inject (a plan_create block released the qualifier too), and leaves
+# the block overridable for a genuinely-trivial framing. Exempt for reviewer/
+# diverger workers.
+# Enforcement header prepended to the dispatch BLOCK (fired on the first
+# non-plan tool call after plan_create, when no diverger was dispatched). The
+# demand text (_DIVERGER_INJECT) is reused verbatim so the two never drift; this
+# only states that the check is now enforced, not merely suggested.
+_DIVERGER_ENFORCE = """[Plan] Diverger not dispatched.
+
+The divergence check is part of framing the plan, not an optional afterthought
+— it is where a wrong premise is cheapest to fix and hardest to see. plan_create
+delivered the demand; the first non-plan tool call after it is blocked (once,
+overridable) until a diverger is dispatched or you override with a reason.
+"""
+
+
 _DIVERGER_INJECT = """
 
 Divergence check — before this plan hardens, probe what it made invisible.
@@ -312,6 +338,10 @@ class PlanGuard(Guard):
         # itself (a one-line ruling for EVERY alternative), not in a
         # once-per-run flag.
         self._diverger_reminded = False
+        # Set by plan_create (when the divergence demand was delivered); the
+        # NEXT non-plan tool call blocks once if no diverger was dispatched.
+        # Cleared by that block OR by a spawn_worker/dispatch_many (check_post).
+        self._diverger_pending = False
 
     def set_single_shot(self, enabled: bool = True):
         """Enable single-shot enforcement at runtime (set once run mode known)."""
@@ -358,17 +388,26 @@ class PlanGuard(Guard):
             # already have carried them — consume the flags unconditionally
             # either way, so the NEXT framing re-arms them.
             inject_qualifier = not self._qualifier_reminded
-            inject_diverger = (
-                not self._diverger_reminded and not _self_is_diverger_worker()
+            print_diverger = (
+                not self._diverger_reminded
+                and not _self_is_review_or_diverge_worker()
             )
+            # Arm the dispatcher gate: the NEXT non-plan tool call blocks once
+            # if no diverger was dispatched. Only an actual spawn_worker /
+            # dispatch_many clears it (check_post). The single-shot block below
+            # carries the demand AND arms this gate itself, so a later
+            # plan_create in that framing re-delivers nothing (print_diverger
+            # False) yet the gate stays armed for its first non-plan tool call.
+            if print_diverger:
+                self._diverger_pending = True
             self._qualifier_reminded = False
             self._diverger_reminded = False
-            if not inject_qualifier and not inject_diverger:
+            if not inject_qualifier and not print_diverger:
                 return None
             msg = "[Plan] Framing the plan."
             if inject_qualifier:
                 msg += _QUALIFIER_EXTRACTION
-            if inject_diverger:
+            if print_diverger:
                 msg += _DIVERGER_INJECT
             msg += _wall_aware_block()
             msg += _premortem_block()
@@ -379,6 +418,32 @@ class PlanGuard(Guard):
             )
         if ctx.tool_name in ("plan_update", "plan_status"):
             return None
+
+        # A dispatch tool IS the compliance — never block it (a compliant agent
+        # whose first action after plan_create is the diverger spawn must not be
+        # blocked on that very call; check_post clears the gate after it).
+        if ctx.tool_name in ("spawn_worker", "dispatch_many"):
+            return None
+
+        # Diverger-dispatch gate: the FIRST non-plan tool call after a
+        # plan_create that carried the divergence demand is blocked once
+        # (overridable) if no diverger was dispatched. Exempt for reviewer/
+        # diverger workers — the demand is parent-side only. Overridable, not a
+        # hard wall: a genuinely-trivial framing can document the skip.
+        if self._diverger_pending and not _self_is_review_or_diverge_worker():
+            self._diverger_pending = False
+            return GuardVerdict.block(
+                message=(
+                    _DIVERGER_ENFORCE
+                    + _DIVERGER_INJECT
+                    + _wall_aware_block()
+                    + _premortem_block()
+                ),
+                reason="diverger_not_dispatched",
+                category="plan_required",
+                overridable=True,
+            )
+        self._diverger_pending = False
 
         # If plan exists, nothing to do
         if self._task_plan and self._task_plan.get_active():
@@ -392,6 +457,7 @@ class PlanGuard(Guard):
             # delivered to prevent double-injection on the subsequent plan_create.
             self._qualifier_reminded = True
             self._diverger_reminded = True
+            self._diverger_pending = True
             return GuardVerdict.block(
                 message=(
                     f"[Plan] Pause. {self._calls_without_plan} tool calls in this "
@@ -434,6 +500,11 @@ class PlanGuard(Guard):
         if ctx.tool_name == "plan_create":
             self._calls_without_plan = 0
             self._plan_ever_created = True
+        # A dispatch satisfies the divergence demand for THIS framing: the
+        # agent actually spawned the independent proposer. Clear the gate so the
+        # following tool call is not blocked.
+        elif ctx.tool_name in ("spawn_worker", "dispatch_many"):
+            self._diverger_pending = False
         return None
 
     def reset_turn(self):
@@ -458,3 +529,6 @@ class PlanGuard(Guard):
         self._calls_without_plan = 0
         self._qualifier_reminded = False
         self._diverger_reminded = False
+        # The pending-dispatch gate is per framing/turn; a new turn re-arms it
+        # only when its plan_create re-delivers the demand.
+        self._diverger_pending = False

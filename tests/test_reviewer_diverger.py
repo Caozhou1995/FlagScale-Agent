@@ -16,6 +16,8 @@ Mechanisms under test:
    override released the reviewer gate.
 """
 
+import json
+
 from flagscale_agent.react.guard.plan import PlanGuard, _DIVERGER_INJECT, _QUALIFIER_EXTRACTION
 from flagscale_agent.react.guard.verification import (
     VerificationGuard,
@@ -351,3 +353,89 @@ class TestFlagSemantics:
         ctx = _completion_ctx()
         ctx.llm_responded = False
         assert guard.check_pre(ctx) is None
+
+
+class TestDivergerDispatchBlock:
+    """The diverger demand is ENFORCED: after a plan_create that carried the
+    demand, the FIRST non-plan tool call BLOCKS once (overridable) unless a
+    diverger was dispatched. Exempt for reviewer/diverger worker processes
+    (user ruling: only non-reviewer, non-diverger are gated)."""
+
+    def test_block_fires_on_first_tool_after_plan_create(self):
+        guard = PlanGuard()
+        v = guard.check_pre(_plan_ctx())
+        assert v is not None and v.action == "inject"  # plan_create advisory
+        assert guard._diverger_pending is True
+        b = guard.check_pre(_plan_ctx("shell"))
+        assert b is not None and b.action == "block"
+        assert b.reason == "diverger_not_dispatched"
+        assert b.overridable is True
+        assert _DIVERGER_INJECT in b.message
+
+    def test_block_fires_only_once_then_releases(self):
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        first = guard.check_pre(_plan_ctx("shell"))
+        assert first is not None and first.action == "block"
+        assert guard._diverger_pending is False
+        # the gate is one-shot: the next tool call is not blocked
+        assert guard.check_pre(_plan_ctx("shell")) is None
+
+    def test_complying_spawn_as_first_action_is_not_blocked(self):
+        """A compliant agent whose FIRST action after plan_create IS the
+        dispatch must not be blocked on that very call."""
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        assert guard.check_pre(_plan_ctx("spawn_worker")) is None
+        assert guard.check_pre(_plan_ctx("dispatch_many")) is None
+
+    def test_spawn_worker_clears_pending(self):
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        guard.check_post(_plan_ctx("spawn_worker"))
+        assert guard._diverger_pending is False
+        assert guard.check_pre(_plan_ctx("shell")) is None
+
+    def test_dispatch_many_clears_pending(self):
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        guard.check_post(_plan_ctx("dispatch_many"))
+        assert guard._diverger_pending is False
+        assert guard.check_pre(_plan_ctx("shell")) is None
+
+    def test_plan_update_and_status_never_blocked(self):
+        """plan_update / plan_status are plan tools: they must not trip the
+        dispatch gate (and must not clear it either)."""
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        assert guard.check_pre(_plan_ctx("plan_update")) is None
+        assert guard.check_pre(_plan_ctx("plan_status")) is None
+        assert guard._diverger_pending is True  # still armed
+        assert guard.check_pre(_plan_ctx("shell")) is not None
+
+    def test_reset_turn_clears_pending(self):
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        assert guard._diverger_pending is True
+        guard.reset_turn()
+        assert guard._diverger_pending is False
+        assert guard.check_pre(_plan_ctx("shell")) is None
+
+    def test_reviewer_and_diverger_workers_exempt(
+            self, tmp_path, monkeypatch):
+        """The gate is parent-side only: a spawned reviewer OR diverger worker
+        (both carry constraints.reviewer=True) is never blocked."""
+        from flagscale_agent.react.multi_agent.wiring import (
+            CONTRACT_PATH_ENV, TASK_ID_ENV,
+        )
+        task_dir = tmp_path / "task_x"
+        task_dir.mkdir()
+        (task_dir / "contract.prompt").write_text("plain", encoding="utf-8")
+        (task_dir / "contract.json").write_text(
+            json.dumps({"constraints": {"reviewer": True, "writable": []}}),
+            encoding="utf-8")
+        monkeypatch.setenv(TASK_ID_ENV, "task_x")
+        monkeypatch.setenv(CONTRACT_PATH_ENV, str(task_dir / "contract.prompt"))
+        guard = PlanGuard()
+        guard._diverger_pending = True
+        assert guard.check_pre(_plan_ctx("shell")) is None
