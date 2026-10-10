@@ -868,6 +868,21 @@ class TestDeliverableConstraintSpotCheck:
         assert "reference the task names" in low
         assert "never a criterion you substituted" in low
 
+    def test_no_leaked_verifier_threshold(self):
+        """De-leak: the prompt must NOT contain the concrete verifier threshold
+        (e.g. '1.05x the golden') the hidden grader uses, nor any task-specific
+        numeric cutoff/term — those leak the answer and overfit the prompt."""
+        low = " ".join(self._prompt().lower().split())
+        # the exact ratio the query-optimize verifier asserts on must be gone
+        assert "1.05" not in low
+        # the criterion is named generically, not by a concrete worked number
+        assert "≤1.05" not in low and "1.05x" not in low
+        # no other task-specific leak
+        import re
+        for w in ("gcode", "qemu", "mnist", "query-optimize"):
+            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
+                f"leaked task-specific term: {w!r}")
+
 
 class TestDeliveryHygieneSuccessCriterionBullet:
     """G7 (guard side): the delivery-hygiene message carries a Success-CRITERION

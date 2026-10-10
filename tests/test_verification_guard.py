@@ -952,6 +952,18 @@ class TestTaskCompleteRecheck:
         # guards against calling one family's limit the task's limit
         assert "one family's limit and called it the task's" in low
 
+    def test_open_ended_relative_standard_not_baseline(self):
+        """Optimize tasks are judged RELATIVE: push to the highest within the time
+        window and compare against your OWN prior iteratively-optimized version —
+        beating the fixed baseline is the floor, not the finish."""
+        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
+        low = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
+        # the relative standard, stated as the bar
+        assert "highest you can reach within the time window" in low
+        assert "own prior iteratively-optimized" in low
+        # beating a handed baseline is explicitly NOT the finish
+        assert "not against a fixed baseline" in low
+
 
 class TestTaskCompleteObservationGate:
     """Second task-complete gate: when the first gate's release reason only ARGUES

@@ -297,8 +297,12 @@ Then decide what kind of task this was, because that decides what "done" means:
     sample-calibrated.
 
   • open-ended — optimize, minimize, maximize, make it faster: the first working
-    result is NOT the finish line. Ask: is there another distinct method I have not
-    tried? Judge whether your "distinct" attempts were actually distinct: if results
+    result is NOT the finish line, and neither is "better than the baseline." The
+    standard here is RELATIVE, not absolute: push to the highest you can reach WITHIN
+    the time window, and measure yourself against your OWN prior iteratively-optimized
+    version — not against a fixed baseline you were handed. Ask: is there another
+    distinct method I have not tried? Judge whether your "distinct" attempts were
+    actually distinct: if results
     all land in the same narrow band — the same order of magnitude — that near-tie
     means they were variants within one method-family, and you have hit the depth limit
     of that family. The response is to widen: reach for a structurally different
@@ -313,7 +317,9 @@ imagined check. These axes are independent — a result can be fully optimized y
 fail to generalize, or general yet not the best available. Answer each on its own:
 
   1. OPTIMIZED — is what you hold the best you reached, or just the first thing that
-     worked? If a distinct method could plausibly do better and you have not ruled
+     worked? For an open-ended task the bar is the HIGHEST you could reach within the
+     time window, measured against your own prior iteration (not a fixed baseline).
+     If a distinct method could plausibly do better and you have not ruled
      it out by measurement, not done.
   2. GENERAL — does your solution handle the whole CLASS, or did you special-case
      it to the one input you developed against? Would it produce a well-formed
@@ -641,7 +647,7 @@ configured or the best candidate you held in memory. Walk the ones that apply:
     State plainly: is what sits at the delivery path the TRUE PRODUCT of the process
     the task named, or a constructed look-alike / stub / placeholder standing in for
     work you did not actually complete?
-  • **Success CRITERION is the task's, not yours**: if the task names the reference a result is judged against (a baseline, a golden/expected output, a label table, a metric definition with a threshold), the criterion is THAT — never a weaker standard you substituted ("much faster than before", "high accuracy"). Locate and RUN the task's named reference; report the delivered artifact's value against IT, one line each. A pass under your own criterion says nothing about the grade.
+  • **Success CRITERION is the task's, not yours**: if the task names the reference a result is judged against (a baseline, a golden/expected output, a label table, a metric definition with a threshold), the criterion is THAT — never a weaker standard you substituted ("much faster than before", "high accuracy"). Locate and RUN the task's named reference; report the delivered artifact's value against IT, one line each. A pass under your own criterion says nothing about the grade. For an OPEN-ENDED / optimization task the reference is RELATIVE — the task's bar is the highest you can reach within the time window, and the comparison that counts is against your OWN prior iteratively-optimized version, not against the fixed baseline you started from: beating the baseline is the floor, not the finish.
 
   • **Contract readback (quote-vs-value)**: if the task pins down a FORM or
     CONTRACT — a required format, an exact name, a numbering/ordering rule, a
