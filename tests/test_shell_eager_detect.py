@@ -46,12 +46,13 @@ class _FakeJob:
     """Minimal stand-in for a _BackgroundJob exposing only what the detector
     touches: queue_event, job_id, start, stdout/stderr chunk lists."""
 
-    def __init__(self, job_id="job1", start=None):
+    def __init__(self, job_id="job1", start=None, running=True):
         self.job_id = job_id
         self.start = start if start is not None else time.time()
         self.stdout_chunks = []
         self.stderr_chunks = []
         self.events = []
+        self.running = running
 
     def queue_event(self, msg):
         self.events.append(msg)
@@ -141,6 +142,20 @@ def test_detector_survives_evaluator_exception():
     # Must not raise; the sampler thread would otherwise die.
     det(sampler=None)
     assert job.events == []
+
+
+def test_detector_ignores_finished_job():
+    # A FINISHED job must never be reported as hung: between exit and the first
+    # proc.poll() the child is an unreaped zombie, which should_kill_process
+    # convicts as deterministic death -> a false "looks hung" for a SUCCESSFUL
+    # job. The detector must short-circuit on a non-running job.
+    job = _FakeJob(running=False)
+    det = _EagerDetector(job)
+    det._evaluator = _StubEvaluator([_ok_kill("Process became zombie")])
+    det(sampler=None)
+    assert job.events == []
+    # And it must not even evaluate a finished job.
+    assert det._evaluator.calls == 0
 
 
 def test_queue_and_drain_events_roundtrip():

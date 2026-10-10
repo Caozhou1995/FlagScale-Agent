@@ -507,6 +507,16 @@ class _EagerDetector:
 
     def __call__(self, sampler):
         job = self._job
+        # A FINISHED process must never be reported as hung. Between exit and
+        # the first proc.poll() the child is an UNREAPED ZOMBIE; get_process_health
+        # reports zombie=True and should_kill_process convicts it as
+        # deterministic death, which would queue a false "looks hung" for a job
+        # that actually SUCCEEDED. Only evaluate a job that is still running.
+        try:
+            if not job.running:
+                return
+        except Exception:
+            return
         try:
             elapsed = time.time() - job.start
             res = self._evaluator.evaluate(
