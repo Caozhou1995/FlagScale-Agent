@@ -108,7 +108,7 @@ class _HealthSampler:
     its age), never that the heartbeat freezes.
     """
 
-    def __init__(self, fn, pid, interval):
+    def __init__(self, fn, pid, interval, on_sample=None):
         self._fn = fn
         self._pid = pid
         self._interval = interval
@@ -117,11 +117,34 @@ class _HealthSampler:
         self._ts = 0.0
         self._seq = 0  # increments on every fresh sample
         self._stop = threading.Event()
+        # Optional per-sample callback, run on THIS sampler thread right after a
+        # fresh sample is stored. Used by the eager detector (see _EagerDetector)
+        # so the SAME long-lived thread that reads /proc also runs a lightweight
+        # hard-indicator check — no extra thread is created.
+        self._on_sample = on_sample
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
         self._thread.start()
         return self
+
+    def bind_on_sample(self, cb):
+        """Attach/replace the per-sample callback (eager-detector hook).
+
+        Safe to call after start(): the attribute swap is atomic under the GIL
+        and the callback is exception-guarded, so a late bind never breaks the
+        sampler thread.
+        """
+        self._on_sample = cb
+
+    def _fire_on_sample(self):
+        cb = self._on_sample
+        if cb is None:
+            return
+        try:
+            cb(self)
+        except Exception:
+            pass
 
     def _run(self):
         while not self._stop.is_set():
@@ -134,6 +157,7 @@ class _HealthSampler:
                     self._latest = value
                     self._ts = time.time()
                     self._seq += 1
+                self._fire_on_sample()
             # Wait interval, but wake early if asked to stop.
             self._stop.wait(self._interval)
 
@@ -457,6 +481,54 @@ def _strip_trailing_pipe(command: str):
 # process-wide singleton because both ShellTool (which detaches) and
 # ShellJobsTool (which polls/waits/kills) must see the same jobs.
 
+class _EagerDetector:
+    """Continuous hang detection for a detached/background job, run ON the
+    job's own sampler thread (creates NO new thread).
+
+    WHY THIS EXISTS: _health_tick only runs when the agent calls
+    shell_jobs(poll/wait). A detached job the agent forgot about was therefore
+    never health-checked at all -- the exact case the health monitor was meant
+    to catch (a download that hangs). Every background/detached job already
+    owns a long-lived _HealthSampler thread; this detector hangs off that same
+    thread, runs a lightweight hard-indicator check per fresh sample, and
+    QUEUES a one-line event when the job looks hung. shell_jobs(poll/wait)
+    drains the queue into its reply, so a forgotten-but-hung job still surfaces
+    a warning the first time the agent looks.
+
+    It owns a PRIVATE _HealthEvaluator so its incremental state never races the
+    evaluator that _health_tick mutates on the main thread, and it NEVER kills:
+    the kill authority stays with _health_tick, so control stays with the agent.
+    """
+
+    def __init__(self, job):
+        self._job = job
+        self._evaluator = _HealthEvaluator()
+        self._reported = False
+
+    def __call__(self, sampler):
+        job = self._job
+        try:
+            elapsed = time.time() - job.start
+            res = self._evaluator.evaluate(
+                sampler, job.stdout_chunks, job.stderr_chunks, elapsed,
+            )
+        except Exception:
+            return
+        if res.get('status') != 'ok':
+            return
+        if not res.get('should_kill'):
+            # Recovered -- re-arm so a later hang is reported again.
+            self._reported = False
+            return
+        if self._reported:
+            return
+        self._reported = True
+        job.queue_event(
+            f"{job.job_id} looks hung after {int(elapsed)}s "
+            f"({res.get('kill_reason', 'no progress')})"
+        )
+
+
 class _BackgroundJob:
     """A detached/background shell command still running under reader threads.
 
@@ -484,6 +556,12 @@ class _BackgroundJob:
         self.evaluator = _HealthEvaluator() if health_sampler is not None else None
         # Last human-readable health note (activity / advisory), surfaced by poll.
         self.health_note = ""
+        # Eager-detector events, queued by the sampler thread while the agent is
+        # NOT polling, then drained and surfaced on the next shell_jobs(poll or
+        # wait). See _EagerDetector: this closes the blind spot where a detached
+        # job the agent forgot about was never health-checked at all.
+        self.pending_events = []
+        self._events_lock = threading.Lock()
         # Read cursors: how many chunks the caller has already seen.
         self._out_cursor = 0
         self._err_cursor = 0
@@ -514,6 +592,20 @@ class _BackgroundJob:
     def full_output(self):
         return "".join(self.stdout_chunks) + "".join(self.stderr_chunks)
 
+    def queue_event(self, msg):
+        """Append a health event, called from the sampler thread. Thread-safe:
+        the sampler thread writes while the main thread may be draining."""
+        with self._events_lock:
+            self.pending_events.append(msg)
+
+    def drain_events(self):
+        """Return and clear queued events, called from the main thread on the
+        next shell_jobs(poll/wait). Returns a list (possibly empty)."""
+        with self._events_lock:
+            events = list(self.pending_events)
+            self.pending_events.clear()
+            return events
+
 
 class _JobRegistry:
     """Process-wide registry of background jobs, keyed by job_id."""
@@ -528,11 +620,21 @@ class _JobRegistry:
         with self._lock:
             self._counter += 1
             job_id = f"job{self._counter}"
-            self._jobs[job_id] = _BackgroundJob(
+            job = _BackgroundJob(
                 job_id, command, proc, stdout_chunks, stderr_chunks,
                 t_out, t_err, start, health_sampler,
             )
-            return job_id
+            self._jobs[job_id] = job
+        # Attach the eager detector to the job's own sampler thread (outside the
+        # registry lock). This makes the detached job health-checked even when
+        # the agent never polls -- the sampler thread already ticks; the
+        # detector just rides along, queueing an event if the job hangs.
+        if health_sampler is not None:
+            try:
+                health_sampler.bind_on_sample(_EagerDetector(job))
+            except Exception:
+                pass
+        return job_id
 
     def get(self, job_id):
         with self._lock:
@@ -1110,6 +1212,14 @@ class ShellTool(Tool):
                         health_reason = kill_reason
 
                     # Fallback: LLM judge (if hard indicators passed).
+                    # NOTE: the foreground LLM judge is KEPT FOR NOW, TO BE
+                    # REMOVED LATER. With the default auto_detach_grace_secs (30s)
+                    # the grace branch above detaches any command that runs longer
+                    # than the window, so this synchronous judge is normally
+                    # shadowed (grace < remind interval) and only reaches here
+                    # when auto-detach is disabled (grace=0). It is retained as
+                    # the opt-out path until the background eager detector fully
+                    # replaces it.
                     # Pass the live resource signals so the judge can tell a
                     # genuinely hung process (no output + no CPU/child work)
                     # apart from a healthy silent one (no output but actively
@@ -1340,6 +1450,20 @@ class ShellJobsTool(Tool):
         elapsed = time.time() - job.start
         return f"{job.job_id}: [{job.status_str()}] {elapsed:.0f}s  {job.command[:80]}"
 
+    def _drain_job_events(self, job):
+        """Drain healthy/hung events the eager detector queued on the job's
+        sampler thread since the last poll/wait. Returns a formatted block (or
+        '' when there is nothing new), appended to the poll/wait reply so a job
+        that hung while the agent was NOT looking still surfaces a warning."""
+        try:
+            events = job.drain_events()
+        except Exception:
+            return ""
+        if not events:
+            return ""
+        lines = "\n".join(events)
+        return f"\n🩺 background health (while unpolled):\n{lines}"
+
     def _set_wait_hint(self, job, activity="", finished=False):
         """Push a live one-line progress hint onto the active spinner during a
         'wait', so the terminal shows what the job is doing instead of a frozen
@@ -1510,7 +1634,7 @@ class ShellJobsTool(Tool):
                             pass
                     _JOB_REGISTRY.remove(job_id)
                     header += "  [finished — removed from registry]"
-                return f"{header}\n{body}"
+                return f"{header}\n{body}{self._drain_job_events(job)}"
 
             if action == "wait":
                 deadline = time.time() + timeout
@@ -1545,6 +1669,7 @@ class ShellJobsTool(Tool):
                     return (
                         f"{header}  [still running after {timeout}s wait]\n{body}\n"
                         f"Not finished yet. Poll again or wait more."
+                        f"{self._drain_job_events(job)}"
                     )
                 if job.health_sampler is not None:
                     try:
@@ -1553,7 +1678,10 @@ class ShellJobsTool(Tool):
                         pass
                 new_out = _truncate_output(job.new_output())
                 _JOB_REGISTRY.remove(job_id)
-                return f"{header}  [finished — removed from registry]\n{new_out}"
+                return (
+                    f"{header}  [finished — removed from registry]\n{new_out}"
+                    f"{self._drain_job_events(job)}"
+                )
 
             if action == "kill":
                 if job.health_sampler is not None:
