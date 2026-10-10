@@ -267,13 +267,15 @@ class TestSleepProbe:
 # Fix 5 — suppression keyed on structured constraints.reviewer, not prose
 # --------------------------------------------------------------------------
 
-def _make_contract(tmp_path, monkeypatch, reviewer, prompt_body):
+def _make_contract(tmp_path, monkeypatch, reviewer, prompt_body, diverger=None):
     task_dir = tmp_path / "task_x"
     task_dir.mkdir(exist_ok=True)
     (task_dir / "contract.prompt").write_text(prompt_body, encoding="utf-8")
+    cons = {"reviewer": reviewer, "writable": []}
+    if diverger is not None:
+        cons["diverger"] = diverger
     (task_dir / "contract.json").write_text(
-        json.dumps({"constraints": {"reviewer": reviewer, "writable": []}}),
-        encoding="utf-8")
+        json.dumps({"constraints": cons}), encoding="utf-8")
     monkeypatch.setenv(TASK_ID_ENV, "task_x")
     monkeypatch.setenv(CONTRACT_PATH_ENV, str(task_dir / "contract.prompt"))
 
@@ -292,11 +294,15 @@ class TestSuppressionFlag:
         assert _self_is_reviewer_worker() is False
 
     def test_diverger_keyed_on_flag_not_prose(self, tmp_path, monkeypatch):
-        _make_contract(tmp_path, monkeypatch, True, "plain diverger contract")
+        # A diverger carries its OWN structured flag (diverger=True), distinct
+        # from the reviewer tag (a diverger is not reviewer-class).
+        _make_contract(tmp_path, monkeypatch, False,
+                       "plain diverger contract", diverger=True)
         assert _self_is_diverger_worker() is True
         # Prose present, flag absent/False → NOT suppressed.
         _make_contract(tmp_path, monkeypatch, False,
-                       "Propose 2-3 genuinely different framings of the task")
+                       "Propose 2-3 genuinely different framings of the task",
+                       diverger=False)
         assert _self_is_diverger_worker() is False
 
     def test_no_env_is_false(self, monkeypatch):

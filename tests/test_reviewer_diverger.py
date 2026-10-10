@@ -18,18 +18,26 @@ Mechanisms under test:
 
 import json
 
-from flagscale_agent.react.guard.plan import PlanGuard, _DIVERGER_INJECT, _QUALIFIER_EXTRACTION
+from flagscale_agent.react.guard.plan import (
+    PlanGuard, _DIVERGER_INJECT, _DIVERGER_ENFORCE, _QUALIFIER_EXTRACTION,
+    _dispatch_includes_diverger,
+)
+from flagscale_agent.react.multi_agent.spawn import (
+    _is_diverger_goal, maybe_auto_inject_diverger,
+)
 from flagscale_agent.react.guard.verification import (
     VerificationGuard,
     _REVIEWER_FINDINGS,
     _REVIEWER_FINDINGS_SETTLE,
     _STEP_DONE_PREMORTEM,
 )
-from flagscale_agent.react.guard import GuardContext
+from flagscale_agent.react.guard import (
+    Guard, GuardContext, GuardRegistry, GuardVerdict,
+)
 
 
-def _plan_ctx(tool_name="plan_create"):
-    return GuardContext(tool_name=tool_name, tool_args={})
+def _plan_ctx(tool_name="plan_create", tool_args=None):
+    return GuardContext(tool_name=tool_name, tool_args=tool_args or {})
 
 
 def _step_done_ctx(with_override=True):
@@ -390,18 +398,54 @@ class TestDivergerDispatchBlock:
         assert guard.check_pre(_plan_ctx("dispatch_many")) is None
 
     def test_spawn_worker_clears_pending(self):
+        """A spawn whose goal IS a diverger clears the gate. Exercise the REAL
+        kernel order: check_pre (per tool) THEN check_post."""
         guard = PlanGuard()
         guard.check_pre(_plan_ctx())
-        guard.check_post(_plan_ctx("spawn_worker"))
+        spawn = _plan_ctx(
+            "spawn_worker",
+            {"goal": "Propose 2-3 genuinely different framings of the task."})
+        assert guard.check_pre(spawn) is None  # dispatch tool never blocked
+        guard.check_post(spawn)
         assert guard._diverger_pending is False
         assert guard.check_pre(_plan_ctx("shell")) is None
 
     def test_dispatch_many_clears_pending(self):
+        """A dispatch_many carrying a diverger spec clears the gate."""
         guard = PlanGuard()
         guard.check_pre(_plan_ctx())
-        guard.check_post(_plan_ctx("dispatch_many"))
+        dm = _plan_ctx(
+            "dispatch_many",
+            {"specs": [{"goal": "Propose 2-3 alternative framings."}]})
+        assert guard.check_pre(dm) is None
+        guard.check_post(dm)
         assert guard._diverger_pending is False
         assert guard.check_pre(_plan_ctx("shell")) is None
+
+    def test_non_diverger_spawn_does_not_clear(self):
+        """A spawn for ANY other purpose must NOT satisfy the demand (F1):
+        the gate stays armed and the next tool still blocks. Real kernel order:
+        check_pre THEN check_post (check_pre must not erase the gate first)."""
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        spawn = _plan_ctx(
+            "spawn_worker", {"goal": "Port the model to Megatron."})
+        assert guard.check_pre(spawn) is None
+        guard.check_post(spawn)
+        assert guard._diverger_pending is True
+        assert guard.check_pre(_plan_ctx("shell")) is not None
+
+    def test_non_diverger_dispatch_many_does_not_clear(self):
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        dm = _plan_ctx(
+            "dispatch_many",
+            {"specs": [{"goal": "Train config A."},
+                       {"goal": "Train config B."}]})
+        assert guard.check_pre(dm) is None
+        guard.check_post(dm)
+        assert guard._diverger_pending is True
+        assert guard.check_pre(_plan_ctx("shell")) is not None
 
     def test_plan_update_and_status_never_blocked(self):
         """plan_update / plan_status are plan tools: they must not trip the
@@ -439,3 +483,171 @@ class TestDivergerDispatchBlock:
         guard = PlanGuard()
         guard._diverger_pending = True
         assert guard.check_pre(_plan_ctx("shell")) is None
+
+
+class TestDivergerGoalAutoTag:
+    """A diverger GOAL is auto-tagged with the SEPARATE `diverger` flag at the
+    spawn layer (never `reviewer` — that would enter the reviewer preset)."""
+
+    def test_diverger_goal_detected(self):
+        assert _is_diverger_goal(
+            "Propose 2-3 genuinely different framings of the task.")
+        assert _is_diverger_goal("Act as a diverger for this plan.")
+        assert _is_diverger_goal("Offer alternative framings.")
+
+    def test_non_diverger_goal_not_detected(self):
+        assert not _is_diverger_goal("Port the model to Megatron.")
+        assert not _is_diverger_goal("Review the diff for bugs.")
+
+    def test_injects_separate_flag_not_reviewer(self):
+        cons = {}
+        maybe_auto_inject_diverger(
+            "Propose 2-3 genuinely different framings of the task.", cons)
+        assert cons.get("diverger") is True
+        assert "reviewer" not in cons
+
+    def test_explicit_tag_suppresses_injection(self):
+        cons = {"reviewer": True}
+        maybe_auto_inject_diverger(
+            "Propose 2-3 genuinely different framings.", cons)
+        assert "diverger" not in cons
+
+
+class TestDispatchIncludesDiverger:
+    """F1: only an ACTUAL diverger dispatch satisfies the demand."""
+
+    def test_spawn_worker_diverger_goal(self):
+        assert _dispatch_includes_diverger(
+            "spawn_worker", {"goal": "Propose 2-3 different framings."})
+
+    def test_spawn_worker_diverger_tag(self):
+        assert _dispatch_includes_diverger(
+            "spawn_worker", {"goal": "x", "constraints": {"diverger": True}})
+
+    def test_spawn_worker_plain(self):
+        assert not _dispatch_includes_diverger(
+            "spawn_worker", {"goal": "Port the model."})
+
+    def test_dispatch_many_any_spec(self):
+        assert _dispatch_includes_diverger(
+            "dispatch_many",
+            {"specs": [{"goal": "Train A."},
+                       {"goal": "Propose alternative framings."}]})
+
+    def test_dispatch_many_none(self):
+        assert not _dispatch_includes_diverger(
+            "dispatch_many",
+            {"specs": [{"goal": "Train A."}, {"goal": "Train B."}]})
+
+
+class TestDivergerBlockMessageConsistency:
+    """F2: the block message must not leave the legacy inject wording
+    ('advisory / never blocking') standing as this call's own description."""
+
+    def test_block_message_marks_enforced_and_disambiguates(self):
+        guard = PlanGuard()
+        guard.check_pre(_plan_ctx())
+        b = guard.check_pre(_plan_ctx("shell"))
+        assert b is not None and b.action == "block"
+        # the reused inject text is still present (back-compat) ...
+        assert _DIVERGER_INJECT in b.message
+        assert _DIVERGER_ENFORCE in b.message
+        low = b.message.lower()
+        # ... but the enforcement header disambiguates it.
+        assert "reused verbatim" in low
+        assert "enforced" in low
+
+
+class TestExemptionSeparateFlags:
+    """The exemption covers BOTH reviewer (`reviewer: True`) and diverger
+    (`diverger: True`) workers — two DISTINCT structured flags."""
+
+    def _worker_ctx(self, tmp_path, monkeypatch, constraints):
+        from flagscale_agent.react.multi_agent.wiring import (
+            CONTRACT_PATH_ENV, TASK_ID_ENV,
+        )
+        task_dir = tmp_path / "task_x"
+        task_dir.mkdir()
+        (task_dir / "contract.prompt").write_text("plain", encoding="utf-8")
+        (task_dir / "contract.json").write_text(
+            json.dumps({"constraints": constraints}), encoding="utf-8")
+        monkeypatch.setenv(TASK_ID_ENV, "task_x")
+        monkeypatch.setenv(CONTRACT_PATH_ENV, str(task_dir / "contract.prompt"))
+        guard = PlanGuard()
+        guard._diverger_pending = True
+        return guard
+
+    def test_reviewer_flag_exempt(self, tmp_path, monkeypatch):
+        guard = self._worker_ctx(tmp_path, monkeypatch, {"reviewer": True})
+        assert guard.check_pre(_plan_ctx("shell")) is None
+
+    def test_diverger_flag_exempt(self, tmp_path, monkeypatch):
+        guard = self._worker_ctx(tmp_path, monkeypatch, {"diverger": True})
+        assert guard.check_pre(_plan_ctx("shell")) is None
+
+    def test_plain_worker_not_exempt(self, tmp_path, monkeypatch):
+        guard = self._worker_ctx(tmp_path, monkeypatch, {})
+        assert guard.check_pre(_plan_ctx("shell")) is not None
+
+
+class TestDivergerBlockNotSurfacedReArms:
+    """F4: when a HIGHER-ranked block wins the resolve, PlanGuard's diverger
+    block never reaches the agent, so its one-shot consumption of
+    `_diverger_pending` must be UNDONE (registry calls block_not_surfaced) and
+    the demand re-fires once the winning block clears."""
+
+    class _HardBlock(Guard):
+        """Non-overridable block on shell — outranks the overridable diverger."""
+        name = "hardblock"
+        priority = 0
+
+        def __init__(self, active=True):
+            self.active = active
+
+        def check_pre(self, ctx):
+            if self.active and ctx.tool_name == "shell":
+                return GuardVerdict.block(
+                    message="hard", reason="hard_reason",
+                    category="x", overridable=False)
+            return None
+
+    def _registry(self):
+        registry = GuardRegistry()
+        hard = self._HardBlock()
+        registry.register(hard)
+        plan = PlanGuard()
+        registry.register(plan)
+        return registry, hard, plan
+
+    def test_outranked_diverger_demand_survives_and_refires(self):
+        registry, hard, plan = self._registry()
+        registry.check_pre(_plan_ctx())  # arms the gate
+        assert plan._diverger_pending is True
+        v = registry.check_pre(_plan_ctx("shell"))
+        # the hard block wins the ranking; the diverger block is not surfaced
+        assert v is not None and v.reason == "hard_reason"
+        # ... yet the demand is NOT consumed (F4 fix): it must re-fire later
+        assert plan._diverger_pending is True
+        hard.active = False  # the hard wall clears
+        v2 = registry.check_pre(_plan_ctx("shell"))
+        assert v2 is not None and v2.reason == "diverger_not_dispatched"
+
+    def test_surfaced_block_still_consumes_once(self):
+        """Control: with no competitor the block surfaces and the one-shot
+        demand IS consumed exactly once (the fix did not break the normal path)."""
+        registry, hard, plan = self._registry()
+        hard.active = False
+        registry.check_pre(_plan_ctx())
+        v = registry.check_pre(_plan_ctx("shell"))
+        assert v is not None and v.reason == "diverger_not_dispatched"
+        assert plan._diverger_pending is False
+        v_next = registry.check_pre(_plan_ctx("shell"))
+        assert not (v_next is not None and v_next.action == "block")
+
+    def test_other_blocks_do_not_spuriously_rearm(self):
+        """A non-diverger-origin block losing the ranking must NOT re-arm the
+        dispatch gate (the marker is scoped to the diverger block branch)."""
+        guard = PlanGuard()
+        guard._diverger_pending = False
+        guard.block_not_surfaced()  # no diverger block consumed this resolve
+        assert guard._diverger_pending is False

@@ -32,17 +32,21 @@ def _self_is_review_or_diverge_worker() -> bool:
     demand ("spawn ONE diverger after plan_create, then rule") is a PARENT-side
     habit, and a worker — an independent reviewer or the diverger itself — must
     not nest it (that self-references the demand chain and contends for the
-    shared concurrency gate). Both roles carry the SAME structured
-    `constraints.reviewer` flag (contract.json) — there is no separate diverger
-    tag — so one check covers both. Detected from the structured contract, never
-    from prose in the rendered contract.prompt (a body that merely QUOTES
-    "framings of the task" must not suppress the demand). Errors fail
-    silent-False (the demand fires as usual).
+    shared concurrency gate). The two roles carry DIFFERENT structured flags in
+    contract.json: a reviewer has `reviewer: True` (also `role: reviewer` /
+    `re_reviewer`), a diverger is tagged `diverger: True` by the spawn layer
+    (spawn.maybe_auto_inject_diverger) — a diverger is deliberately NOT
+    reviewer-class (it must not enter the reviewer preset). Both are checked
+    here so the one exemption covers both roles. Detected from the structured
+    contract, never from prose in the rendered contract.prompt (a body that
+    merely QUOTES "framings of the task" must not suppress the demand). Errors
+    fail silent-False (the demand fires as usual).
     """
     try:
         if not is_worker():
             return False
-        return _contract_constraints().get("reviewer") is True
+        cons = _contract_constraints()
+        return cons.get("reviewer") is True or cons.get("diverger") is True
     except Exception:
         return False
 
@@ -50,10 +54,41 @@ def _self_is_review_or_diverge_worker() -> bool:
 def _self_is_diverger_worker() -> bool:
     """True for a spawned diverger worker (historical name).
 
-    Identical to `_self_is_review_or_diverge_worker`: reviewer and diverger
-    share the structured `constraints.reviewer` flag (no separate diverger tag).
+    A diverger carries the structured `constraints.diverger` flag (set by the
+    spawn layer for a diverger goal); a reviewer carries `constraints.reviewer`.
+    Both are exempt — see `_self_is_review_or_diverge_worker`.
     """
-    return _self_is_review_or_diverge_worker()
+    try:
+        if not is_worker():
+            return False
+        return _contract_constraints().get("diverger") is True
+    except Exception:
+        return False
+
+
+def _dispatch_includes_diverger(tool_name: str, tool_args: dict) -> bool:
+    """True when a spawn_worker/dispatch_many call actually dispatches a
+    DIVERGER — goal reads like a diverger task (the harness's own diverger
+    contract wording) or the caller tagged `constraints.diverger`. ONLY such a
+    dispatch satisfies the per-framing divergence demand; any other spawn (e.g.
+    a step-1 worker) does not. Imported lazily to avoid any import cycle."""
+    if not isinstance(tool_args, dict):
+        return False
+    from flagscale_agent.react.multi_agent.spawn import _is_diverger_goal
+    if tool_name == "spawn_worker":
+        cons = tool_args.get("constraints")
+        if isinstance(cons, dict) and cons.get("diverger") is True:
+            return True
+        return _is_diverger_goal(tool_args.get("goal", ""))
+    for spec in (tool_args.get("specs") or []):
+        if not isinstance(spec, dict):
+            continue
+        cons = spec.get("constraints")
+        if isinstance(cons, dict) and cons.get("diverger") is True:
+            return True
+        if _is_diverger_goal(spec.get("goal", "")):
+            return True
+    return False
 
 
 # Folded into the plan-framing gate on purpose: qualifier extraction is a
@@ -135,6 +170,11 @@ The divergence check is part of framing the plan, not an optional afterthought
 — it is where a wrong premise is cheapest to fix and hardest to see. plan_create
 delivered the demand; the first non-plan tool call after it is blocked (once,
 overridable) until a diverger is dispatched or you override with a reason.
+
+The standing demand below is reused verbatim from the plan_create inject; its
+"advisory / never blocking / skipping is legal" wording describes THAT channel.
+Here the check is ENFORCED — this call is blocked until you dispatch a diverger
+or override with a reason.
 """
 
 
@@ -342,12 +382,22 @@ class PlanGuard(Guard):
         # NEXT non-plan tool call blocks once if no diverger was dispatched.
         # Cleared by that block OR by a spawn_worker/dispatch_many (check_post).
         self._diverger_pending = False
+        # True only within the resolve in which the diverger block fired, so
+        # `block_not_surfaced` can tell that a higher-ranked block outranked
+        # OURS and re-arm the demand (F4). Without this the diverger block's
+        # one-shot clear of `_diverger_pending` would consume the demand even
+        # though the agent never saw the block. Reset at the top of check_pre.
+        self._diverger_block_consumed = False
 
     def set_single_shot(self, enabled: bool = True):
         """Enable single-shot enforcement at runtime (set once run mode known)."""
         self._single_shot = enabled
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Fresh resolve: clear the transient "our diverger block fired this
+        # resolve" marker (re-set below iff it fires), so a stale True from a
+        # previous turn can never cause a spurious re-arm.
+        self._diverger_block_consumed = False
         if not ctx.tool_name:
             # No completion-time gate. Completing without a plan is intentionally
             # NOT blocked: the old NON-OVERRIDABLE completion block livelocked weak
@@ -432,6 +482,10 @@ class PlanGuard(Guard):
                 and ctx.tool_name not in ("spawn_worker", "dispatch_many")
                 and not _self_is_review_or_diverge_worker()):
             self._diverger_pending = False
+            # Mark that THIS resolve consumed the demand via our block. If a
+            # higher-ranked block outranks ours, the registry calls
+            # block_not_surfaced() and we re-arm (the agent never saw us).
+            self._diverger_block_consumed = True
             return GuardVerdict.block(
                 message=(
                     _DIVERGER_ENFORCE
@@ -443,7 +497,15 @@ class PlanGuard(Guard):
                 category="plan_required",
                 overridable=True,
             )
-        self._diverger_pending = False
+        # A plain spawn_worker/dispatch_many that did NOT carry a diverger does
+        # NOT satisfy the demand: leave the gate ARMED so the next non-plan tool
+        # still blocks (F1). This must live here, not only in check_post — the
+        # kernel runs check_pre for every tool call, so an unconditional clear
+        # here would erase the gate before check_post could judge the dispatch.
+        # Every OTHER tool reaching this point was either consumed by the block
+        # above, is exempt (worker), or is a plan tool (early-returned) — clear.
+        if ctx.tool_name not in ("spawn_worker", "dispatch_many"):
+            self._diverger_pending = False
 
         # If plan exists, nothing to do
         if self._task_plan and self._task_plan.get_active():
@@ -504,7 +566,10 @@ class PlanGuard(Guard):
         # agent actually spawned the independent proposer. Clear the gate so the
         # following tool call is not blocked.
         elif ctx.tool_name in ("spawn_worker", "dispatch_many"):
-            self._diverger_pending = False
+            # Only an ACTUAL diverger dispatch satisfies the demand — a spawn
+            # for any other purpose leaves the gate armed (F1).
+            if _dispatch_includes_diverger(ctx.tool_name, ctx.tool_args):
+                self._diverger_pending = False
         return None
 
     def reset_turn(self):
@@ -532,3 +597,22 @@ class PlanGuard(Guard):
         # The pending-dispatch gate is per framing/turn; a new turn re-arms it
         # only when its plan_create re-delivers the demand.
         self._diverger_pending = False
+        self._diverger_block_consumed = False
+
+    def block_not_surfaced(self):
+        """Registry callback: OUR diverger block lost the severity ranking to a
+        higher-ranked block and never reached the agent.
+
+        The block branch clears `_diverger_pending` (one-shot) at the moment it
+        fires. If a harder block (escalate / non-overridable) outranks ours in
+        the SAME resolve, the agent never sees the diverger demand, yet the flag
+        was already consumed — the demand silently vanishes. Re-arm it here so
+        it re-fires on the next call once the winning block clears (F4).
+
+        Scoped by `_diverger_block_consumed`, which is set ONLY in the diverger
+        block branch (never by the write_file / single-shot blocks), so those
+        blocks losing the ranking do NOT spuriously re-arm the dispatch gate.
+        """
+        if self._diverger_block_consumed:
+            self._diverger_pending = True
+            self._diverger_block_consumed = False

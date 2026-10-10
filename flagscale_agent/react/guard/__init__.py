@@ -169,6 +169,15 @@ class Guard(abc.ABC):
         """Called at the start of each new user message. Clear per-turn state."""
         pass
 
+    def block_not_surfaced(self):
+        """Called by the registry when THIS guard returned a block/escalate
+        verdict that was NOT the one surfaced to the agent — a higher-ranked
+        block won the same resolve. A guard whose block has a one-shot side
+        effect (e.g. consuming a pending-demand flag when the block is shown)
+        must UNDO that side effect here, so the demand survives and re-fires
+        once the winning block clears. Default: no-op."""
+        pass
+
 
 class GuardRegistry:
     """Manages all guards, runs them in priority order, deduplicates injects."""
@@ -258,7 +267,12 @@ class GuardRegistry:
             # called at most once per guard here, so no double-eval side effects.
             surfaced: GuardVerdict | None = None
             surfaced_guard: Guard | None = None
-            for guard, verdict in blocks:
+            # Guards from this index down returned a block that a higher-ranked
+            # block outranked — their verdicts never reached the agent. Notify
+            # them so a one-shot side effect (e.g. consuming a pending-demand
+            # flag) is undone and the demand re-fires once the winner clears.
+            ranked_out_from: int | None = None
+            for idx, (guard, verdict) in enumerate(blocks):
                 # An override reason may release a block ONLY if that block is the
                 # one this registry surfaced to the agent last turn. You cannot
                 # override a block you were never shown. A guard that fires for the
@@ -292,10 +306,21 @@ class GuardRegistry:
                     ):
                         new_verdict.guard_name = guard.name
                         surfaced, surfaced_guard = new_verdict, guard
+                        ranked_out_from = idx + 1
                         break
                     continue  # released; fall through to next hardest block
                 surfaced, surfaced_guard = verdict, guard
+                ranked_out_from = idx + 1
                 break
+
+            if surfaced is not None and ranked_out_from is not None:
+                # Blocks at ranked_out_from.. returned a block the agent never
+                # saw (outranked). Let each undo any one-shot side effect.
+                for out_guard, _ in blocks[ranked_out_from:]:
+                    try:
+                        out_guard.block_not_surfaced()
+                    except Exception:
+                        pass
 
             if surfaced is not None:
                 # Name the owner guard so the agent knows WHICH guard is blocking
