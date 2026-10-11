@@ -1494,6 +1494,162 @@ class TestTaskCompleteSubstitutionGate:
         assert result2 is False
 
 
+class TestTaskCompleteUnverifiedPremiseGate:
+    """Completion that RESTS on a load-bearing premise the agent ITSELF named as
+    UNSETTLED (unverifiable here / unknown / assumed / "no reference observable"),
+    delivered with no falsification-intent probe and no bearing risk-acceptance.
+    Semantic judge; default=False with no provider. Sits OUTSIDE the
+    _complete_recheck_reminded latch (reached on the attempt AFTER gate 1 is
+    released), symmetric tool/text paths. Task-agnostic."""
+
+    @staticmethod
+    def _active_plan():
+        from unittest.mock import MagicMock
+        plan = MagicMock()
+        plan.get_active.return_value = {"title": "test", "status": "active", "steps": []}
+        return plan
+
+    def _complete(self, premise_fires, reason):
+        def mock_judge(question, data, default):
+            if question == "reason_lacks_observation":
+                return False  # has an observation → gate 2 releases
+            if question == "reason_overfits_sample":
+                return False  # generalizes → gate 3 releases
+            if question == "reason_discloses_substitution":
+                return False  # no substitution → gate 4 releases
+            if question == "reason_rests_on_unverified_premise":
+                return premise_fires
+            return default
+        return GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete", "_override_reason": reason},
+            override_reason=reason,
+            classify_fn=mock_judge,
+        )
+
+    def _guard(self):
+        guard = VerificationGuard()
+        # Gate 1 already released this run (latch set). The new gate lives OUTSIDE
+        # the latch, so a single check_pre reaches it directly.
+        guard._complete_recheck_reminded = True
+        return guard
+
+    def test_fires_on_unsettled_premise(self):
+        guard = self._guard()
+        verdict = guard.check_pre(self._complete(
+            True,
+            "delivered; the parser uses the 2.2 convention but I could not verify it here",
+        ))
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "task_complete_unverified_premise"
+        assert guard._complete_unverified_premise_demanded is True
+
+    def test_releases_when_premise_settled(self):
+        guard = self._guard()
+        verdict = guard.check_pre(self._complete(
+            False, "ran the probe and read its output; the premise is confirmed settled"
+        ))
+        # new gate does not fire; chain falls through to the terminal reconcile gate
+        assert verdict is not None
+        assert verdict.reason == "task_complete_facet_reconcile"
+        assert guard._complete_unverified_premise_demanded is False
+
+    def test_fires_at_most_once(self):
+        guard = self._guard()
+        v1 = guard.check_pre(self._complete(
+            True, "the premise is unverifiable here, delivering anyway"
+        ))
+        assert v1 is not None and v1.reason == "task_complete_unverified_premise"
+        # re-issue, still unsettled → gate spent, falls through to reconcile
+        v2 = guard.check_pre(self._complete(
+            True, "still unverifiable, still delivering"
+        ))
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        assert guard.check_pre(self._complete(True, "still unverified")) is None
+
+    def test_reset_clears_flag(self):
+        guard = self._guard()
+        guard.check_pre(self._complete(True, "unverifiable premise"))
+        assert guard._complete_unverified_premise_demanded is True
+        guard.reset_turn()
+        assert guard._complete_unverified_premise_demanded is False
+        assert guard._text_complete_unverified_premise_demanded is False
+
+    def test_no_provider_default_false(self):
+        guard = self._guard()
+        # classify_fn=None → helper returns False (no-provider safety)
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete", "_override_reason": "premise unverifiable x"},
+            override_reason="premise unverifiable x",
+            classify_fn=None,
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.reason == "task_complete_facet_reconcile"
+        assert guard._complete_unverified_premise_demanded is False
+
+    def test_text_path_wired(self):
+        guard = VerificationGuard(plan=self._active_plan())
+        guard._text_complete_hygiene_demanded = True  # wrap-up gate already delivered
+        ctx = GuardContext(
+            tool_name="",
+            tool_args={"_override_reason": "premise unverifiable here"},
+            override_reason="premise unverifiable here",
+            assistant_text="Done with the work. [TASK_COMPLETE]",
+            llm_responded=True,
+            classify_fn=lambda q, d, default: (
+                q == "reason_rests_on_unverified_premise"
+            ),
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.reason == "task_complete_unverified_premise"
+        assert guard._text_complete_unverified_premise_demanded is True
+
+    def test_message_constant_teaches_both_branches(self):
+        from flagscale_agent.react.guard.verification import (
+            _TASK_COMPLETE_UNVERIFIED_PREMISE_DEMAND,
+        )
+        low = " ".join(_TASK_COMPLETE_UNVERIFIED_PREMISE_DEMAND.lower().split())
+        assert "premise" in low
+        assert "falsif" in low          # branch (a): falsification probe
+        assert "risk-acceptance" in low  # branch (b): bearing acceptance
+        assert "_override_reason" in _TASK_COMPLETE_UNVERIFIED_PREMISE_DEMAND
+        assert "fires once" in low
+        # no case-by-case task specifics leaked in
+        for w in ("jump", "takeoff", "chess", "sql", "video", "hurdle"):
+            assert w not in low
+
+    def test_helper_boundaries(self):
+        from flagscale_agent.react.guard.verification import (
+            _rests_on_unverified_premise,
+        )
+        # No classify_fn → False (no-provider safety)
+        assert _rests_on_unverified_premise("the premise is unverifiable here") is False
+        assert _rests_on_unverified_premise("") is False
+
+        def judge(q, data, default):
+            if q == "reason_rests_on_unverified_premise":
+                return "unverifiable" in data.get("reason", "").lower()
+            return default
+
+        assert _rests_on_unverified_premise(
+            "the premise is unverifiable", None, judge
+        ) is True
+        assert _rests_on_unverified_premise(
+            "ran the probe and settled it", None, judge
+        ) is False
+
+    def test_judge_prompt_registered(self):
+        from flagscale_agent.react.judge import _CLASSIFY_PROMPTS
+        assert "reason_rests_on_unverified_premise" in _CLASSIFY_PROMPTS
+        body = _CLASSIFY_PROMPTS["reason_rests_on_unverified_premise"].lower()
+        assert "premise" in body
+        assert "false" in body  # asks for a true/false verdict
+
+
 class TestMagicAssumptionGate:
     """Third complete-gate extension: the NUMBER-FREE overfit. A reason that keys a
     filter/match on the one concrete FORM a categorical value took in the sample

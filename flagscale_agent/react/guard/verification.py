@@ -540,6 +540,39 @@ def _is_disclosed_substitution(reason: str, messages=None, classify_fn=None) -> 
     )
 
 
+def _rests_on_unverified_premise(reason: str, messages=None, classify_fn=None) -> bool:
+    """True when the reason OR recent assistant messages rest completion on a
+    LOAD-BEARING premise the agent itself named as UNSETTLED (unverifiable /
+    unknown / assumed / "no reference observable") and delivers anyway WITHOUT a
+    falsification-intent probe OR a bearing risk-acceptance.
+
+    Uses an LLM judge (classify_fn) for semantic classification. If no judge is
+    available, returns False (does not trigger) — same no-provider safety as the
+    other completion gates.
+
+    Runtime form of "NOT VERIFIED = not complete": honesty about an unsettled
+    premise is not a delivery license. The gate withholds completion until the
+    premise is either falsification-probed (run + read) or carried by an explicit
+    risk-acceptance naming the world where it is false.
+
+    Expanded input (same method as _is_disclosed_substitution): the unsettled
+    premise is usually named DURING the work, not in the final completion reason,
+    so the recent assistant messages are appended before judging.
+    """
+    context = _extract_recent_assistant_text(messages)
+    if not reason and not context:
+        return False
+    if classify_fn is None:
+        return False
+    if context:
+        payload = f"{reason}\n\n[Recent context]:\n{context}"
+    else:
+        payload = reason
+    return classify_fn(
+        "reason_rests_on_unverified_premise", {"reason": payload}, default=False
+    )
+
+
 _TASK_COMPLETE_OBSERVATION_DEMAND = """[VerificationGuard] Your reason argues the method; it does not report an observation.
 
 It explains why your approach OUGHT to be right — "reasonable", "conservative",
@@ -635,6 +668,35 @@ To proceed, re-issue plan_update(action="complete") with "_override_reason" that
 reports you obtained the EXACT named artifact (name the value you verified — the version
 string, the hash, the exact match), or states plainly that you are reporting BLOCKED and
 did NOT deliver a substitute. This gate fires once."""
+
+
+_TASK_COMPLETE_UNVERIFIED_PREMISE_DEMAND = """[VerificationGuard] Your completion rests on a premise you have not settled.
+
+Your own reason (or recent narration) names a LOAD-BEARING premise — an assumption,
+convention, or input-property the DELIVERABLE's correctness depends on — that you
+state is unverifiable here / unknown / assumed / "no reference observable". You are
+about to deliver anyway. Honesty about the gap is not a delivery license: a
+self-named `NOT VERIFIED` / "unresolved premise" line is a DEBT, not evidence of
+completion.
+
+Before this task may complete, for EACH such unsettled load-bearing premise pick one:
+
+  (a) FALSIFY IT — run a probe whose DESIGN INTENT was to kill the premise, and read
+      the result. The point is the design intent, not a green result: even if the
+      premise survives, you must have RUN something that could have falsified it
+      (not a check that only re-confirms the convention you already chose — a
+      validator sharing the premise's assumption can only re-confirm it, the
+      tautology trap).
+  (b) CARRY IT — write a bearing risk-acceptance that NAMES the world-state in which
+      the premise is false, and why that world is impossible, or cheap enough to bet
+      against. "I acknowledge some uncertainty" is NON-bearing — it does not count.
+
+Report in your `_override_reason`, then complete: which premise(s) you found, and
+for each which branch (a)/(b) you took and its output.
+
+Note: this gate fires once per run. Once it has fired, a later completion attempt is
+accepted — the honest escape is to run the probe, write the acceptance, or state
+plainly that the premise is in fact settled (not merely restate it)."""
 
 
 _TASK_COMPLETE_DELIVERY_HYGIENE = """[VerificationGuard] Before completing — check the DELIVERED artifact, not the process that made it.
@@ -741,7 +803,9 @@ Rules that make this evidence rather than a formality:
   • If a requirement has no runnable check (pure prose, a constraint you could not
     test), write "NOT VERIFIED" against it. Do not fill the cell with "should be
     fine" / "looks correct" / "handled" — an asserted-but-unrun cell is the failure
-    this gate exists to catch. Naming the uncovered row is the honest outcome.
+    this gate exists to catch. Naming the uncovered row is honest, but NOT complete:
+    each `NOT VERIFIED` row must be paired with either a falsification probe's output
+    or a bearing risk-acceptance (see the unverified-premise completion gate).
 
 Finally, name the ONE thing most likely to fool you here — a threshold tuned on a
 single sample, an assumption about the input's form or constraints, a value you did
@@ -1184,6 +1248,14 @@ class VerificationGuard(Guard):
         self._complete_observation_demanded = False
         self._complete_generalization_demanded = False
         self._complete_substitution_demanded = False
+        # Unverified-premise completion gate (d2_harness_improvement_plan §提案1):
+        # withholds completion when the agent itself names an unsettled load-bearing
+        # premise and delivers without a falsification probe or bearing acceptance.
+        # Sits OUTSIDE the _complete_recheck_reminded latch (next to the reconcile
+        # gate) so it re-judges on each completion attempt; this flag stops a repeat
+        # within one attempt-chain.
+        self._complete_unverified_premise_demanded = False
+        self._text_complete_unverified_premise_demanded = False
         self._complete_delivery_hygiene_demanded = False
         self._text_complete_hygiene_demanded = False
         # Facet-reconcile gates (FINAL_PROPOSAL_1011 §2): force the task's own
@@ -1223,6 +1295,8 @@ class VerificationGuard(Guard):
         self._text_complete_hygiene_demanded = False
         self._complete_reconcile_demanded = False
         self._text_complete_reconcile_demanded = False
+        self._complete_unverified_premise_demanded = False
+        self._text_complete_unverified_premise_demanded = False
         self._step_done_recheck_reminded = False
         self._premortem_pending = False
 
@@ -1360,6 +1434,21 @@ class VerificationGuard(Guard):
                     reason="text_complete_hygiene",
                     category="verification_required",
                 )
+            # Unverified-premise gate — symmetric with the tool-path gate, and
+            # likewise OUTSIDE any latch (this path has none; it uses one-way
+            # flags). Withholds completion when the agent itself named an
+            # unsettled load-bearing premise with no falsification probe and no
+            # bearing risk-acceptance. Semantic judge; no provider → no fire.
+            if not self._text_complete_unverified_premise_demanded and \
+                    _rests_on_unverified_premise(
+                        ctx.override_reason, ctx.messages, ctx.classify_fn
+                    ):
+                self._text_complete_unverified_premise_demanded = True
+                return GuardVerdict.block(
+                    message=_TASK_COMPLETE_UNVERIFIED_PREMISE_DEMAND,
+                    reason="task_complete_unverified_premise",
+                    category="verification_required",
+                )
             # Facet-reconcile gate (§2): the FINAL text-completion gate, symmetric
             # with the complete-path reconcile gate (which sits after gates 1-5).
             # After the reviewer-settle gate and the wrap-up checklist have had their
@@ -1480,6 +1569,22 @@ class VerificationGuard(Guard):
                         category="verification_required",
                     )
                 return None
+            # Unverified-premise gate — sits OUTSIDE the latch, immediately before
+            # the reconcile gate (same rationale as that gate: a gate nested inside
+            # the latch after gate 1 is released would "never be reached"). Withholds
+            # completion when the agent itself named an unsettled LOAD-BEARING premise
+            # and delivers without a falsification-intent probe or a bearing
+            # risk-acceptance. Semantic judge; no provider → default=False, no fire.
+            if not self._complete_unverified_premise_demanded and \
+                    _rests_on_unverified_premise(
+                        ctx.override_reason, ctx.messages, ctx.classify_fn
+                    ):
+                self._complete_unverified_premise_demanded = True
+                return GuardVerdict.block(
+                    message=_TASK_COMPLETE_UNVERIFIED_PREMISE_DEMAND,
+                    reason="task_complete_unverified_premise",
+                    category="verification_required",
+                )
             # Facet-reconcile gate (§2): the FINAL completion gate. It sits OUTSIDE
             # the _complete_recheck_reminded latch — the latch is skipped once gate
             # 1 has been released, so a gate nested inside it (after gate 5) would
