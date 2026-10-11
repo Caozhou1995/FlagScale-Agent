@@ -934,8 +934,9 @@ class TestTaskCompleteRecheck:
         """Open-ended branch must teach how to judge whether 'distinct' attempts
         were actually distinct: a clustered/near-tie spread across attempts means
         depth limit of ONE method-family, and the response is to widen to a
-        STRUCTURALLY different family, not to stop. Must NOT rely on knowing the
-        target's absolute best (agent cannot see the grader/reference)."""
+        STRUCTURALLY different family, not to stop. A flat spread of YOUR OWN
+        attempts alone is NOT a plateau — the agent must identify and measure the
+        recognized best-practice method for the problem class as its proxy target."""
         from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
         low = _TASK_COMPLETE_RECHECK_REMINDER.lower()
         # reads the spread of measured results as the signal
@@ -947,22 +948,31 @@ class TestTaskCompleteRecheck:
         assert "depth limit" in low
         # prescribes widening to a structurally different family
         assert "structurally different" in low
-        # explicitly does not require knowing the absolute best target
-        assert "do not need to know the target's absolute best" in low
+        # a flat spread of your own attempts is NOT sufficient — anchor to the
+        # standard method for the class instead
+        assert "your own spread" in low
+        assert "standard method" in low
+        assert "proxy target" in low
+        # the license-to-stop sentence is gone (own spread alone proves nothing)
+        assert "do not need to know the target's absolute best; the flat spread" not in low
         # guards against calling one family's limit the task's limit
         assert "one family's limit and called it the task's" in low
 
     def test_open_ended_relative_standard_not_baseline(self):
-        """Optimize tasks are judged RELATIVE: push to the highest within the time
-        window and compare against your OWN prior iteratively-optimized version —
-        beating the fixed baseline is the floor, not the finish."""
+        """Optimize tasks are judged RELATIVE and EXTERNALLY anchored: push to the
+        highest within the time window, but the binding bar is the recognized
+        best-practice method measured at competent quality — beating your own prior
+        version (and the handed baseline) is a necessary-but-insufficient floor."""
         from flagscale_agent.react.guard.verification import _TASK_COMPLETE_RECHECK_REMINDER
         low = " ".join(_TASK_COMPLETE_RECHECK_REMINDER.lower().split())
         # the relative standard, stated as the bar
         assert "highest you can reach within the time window" in low
         assert "own prior iteratively-optimized" in low
-        # beating a handed baseline is explicitly NOT the finish
-        assert "not against a fixed baseline" in low
+        # the own-prior comparison is DEMOTED to a floor, not the authoritative bar
+        assert "necessary-but-insufficient" in low or "necessary-but insufficient" in low
+        # the external anchor is the binding standard
+        assert "standard method" in low
+        assert "external" in low
 
 
 class TestTaskCompleteObservationGate:

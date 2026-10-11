@@ -91,6 +91,25 @@ def _dispatch_includes_diverger(tool_name: str, tool_args: dict) -> bool:
     return False
 
 
+def _tool_result_indicates_failure(result) -> bool:
+    """True when a tool_result shows the call did NOT really succeed: a kernel/
+    executor exception wrapper ("Error executing tool: ..."), a guard block
+    ("[BLOCKED BY GUARD] ..."), or the tool's own "ERROR: ..." return.
+
+    `None` is treated as NOT-a-failure: callers that don't plumb a result (e.g.
+    unit tests, or a path where the result was not captured) must keep their
+    historical success semantics. Only a POSITIVE error signal flips this.
+    """
+    if result is None:
+        return False
+    text = str(result).lstrip()
+    return (
+        text.startswith("Error executing tool")
+        or text.startswith("[BLOCKED BY GUARD]")
+        or text.startswith("ERROR")
+    )
+
+
 # Folded into the plan-framing gate on purpose: qualifier extraction is a
 # plan-framing concern, and PlanGuard forces the plan into existence. One gate,
 # one override, no laundering — a separate block caused cross-talk where the
@@ -172,15 +191,39 @@ delivered the demand; the first non-plan tool call after it is blocked (once,
 overridable) until a diverger is dispatched or you override with a reason.
 
 The standing demand below is reused verbatim from the plan_create inject; its
-"advisory / never blocking / skipping is legal" wording describes THAT channel.
-Here the check is ENFORCED — this call is blocked until you dispatch a diverger
+"advisory / never blocking / skipping is legal" wording describes THAT channel
+(it is a spawn-and-continue background worker, off your critical path). Here
+the check is ENFORCED — this call is blocked until you dispatch a diverger
 or override with a reason.
 """
 
 
 _DIVERGER_INJECT = """
 
-Divergence check — before this plan hardens, probe what it made invisible.
+Divergence check — dispatch a diverger the moment this plan exists. It runs
+IN PARALLEL with your plan and costs the time wall NOTHING.
+
+PARALLEL, ZERO WALL-CLOCK: the diverger is a spawn-and-continue BACKGROUND
+worker — you fire it and keep working your own next step; you are never
+blocked on it, and it never consumes your time window (never blocking). So
+the DEFAULT is to DISPATCH: unless the task is genuinely trivial — a single
+known command, a rename, a version bump with no design choice — spawn it.
+"Skipping saves time" is a false economy here: the worker is ~3-minute and
+off the critical path, so skipping saves zero wall-clock and forfeits the one
+independent check you cannot perform on your own framing.
+
+PURPOSE — its three concrete questions, any one of which can change your plan:
+  1. A BETTER method — is there a faster / cheaper / simpler approach than
+     the one this plan commits to (a different algorithm, tool, or cut of the
+     problem)?  [this is the optimality check]
+  2. A MORE CORRECT method — is there an approach that avoids a correctness
+     risk this plan carries (a wrong assumption, an overfit-to-one-sample, a
+     silent-failure mode)?  [this is the correctness check]
+  3. An UNCONSIDERED method — what framing did this plan never even put on the
+     table (a different decomposition, or a different reading of an ambiguous
+     term)?  [this is the "did I think narrowly?" check]
+If it surfaces none of the three, that is itself the gain: "I checked what
+else it could be" replaces "I think this framing is right".
 
 WHY: you framed this plan, so its premises are invisible to you — the same
 context that produced a framing cannot reliably judge it (self-review
@@ -194,14 +237,17 @@ GAIN: one of two concrete outcomes — (a) a genuinely better framing adopted
 while changing it costs minutes, or (b) alternatives rejected against fresh
 eyes, which upgrades "I think this framing is right" into "I checked what
 else it could be". Cost: one ~3-minute read-only worker, spawn-and-continue
-(never blocking). Skipping is legal — this is advisory — but it saves 3
-minutes against the risk that the whole plan rests on an unexamined premise.
+(never blocking), running alongside your next step. Skipping is legal — this
+is advisory — but recognize the trade honestly: the worker is off the
+critical path, so skipping buys back no wall-clock, only the risk that the
+whole plan rests on an unexamined premise.
 
 Spawn ONE diverger worker (spawn_worker) RIGHT AFTER framing this plan — do not
-wait for step 2. Contract:
-  - goal: "Propose 2-3 genuinely different framings of the task — different
-    method-class, different decomposition, or a different reading of an ambiguous
-    term — NOT refinements of this plan."
+wait for step 2, and do not wait for the result before acting. Contract:
+  - goal: "Propose 2-3 genuinely different framings of the task — is there a
+    BETTER / MORE CORRECT / not-yet-considered method? Different method-class,
+    different decomposition, or a different reading of an ambiguous term — NOT
+    refinements of this plan."
   - constraints: read-only (writable: [one scratch dir that contains output_ptr —
     an empty list is rejected by validation]; forbidden: modify any file),
     max_minutes: 3. Give it the task's ORIGINAL statement, not your plan.
@@ -511,6 +557,20 @@ class PlanGuard(Guard):
         if self._task_plan and self._task_plan.get_active():
             return None
 
+        # A plan that was created and then COMPLETED/ABANDONED clears the active
+        # pointer, so get_active() returns None and the check above reads it as
+        # "never planned" — re-incrementing the counter and re-nagging after the
+        # plan is already done. In single-shot there is exactly one turn, so the
+        # sticky _plan_ever_created flag is equivalent to per-turn: once a plan
+        # has SUCCESSFULLY been framed, the "you have not planned yet" obligation
+        # is discharged and the no-plan budget must not re-fire. (The flag covers
+        # any later plan state — completed, abandoned, or paused — because the
+        # nag's purpose is to get a FIRST plan framed, which has happened.)
+        # Scoped to single_shot ONLY: an interactive multi-turn session must keep
+        # nagging a fresh later turn that has not planned yet.
+        if self._single_shot and self._plan_ever_created:
+            return None
+
         self._calls_without_plan += 1
 
         # Single-shot: after observation budget, require a plan (block).
@@ -561,7 +621,15 @@ class PlanGuard(Guard):
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         if ctx.tool_name == "plan_create":
             self._calls_without_plan = 0
-            self._plan_ever_created = True
+            # Only a plan_create that ACTUALLY produced a plan may discharge the
+            # no-plan obligation. A failed/blocked call (exception wrapper, guard
+            # block, or the tool's own "ERROR: ..." return) leaves `tool_result`
+            # carrying a failure marker — do NOT set the sticky flag, or the
+            # single-shot no-plan block would be silently disabled for the rest of
+            # the run by a mere ATTEMPT. `None` (no result plumbed) keeps the
+            # historical success semantics.
+            if not _tool_result_indicates_failure(ctx.tool_result):
+                self._plan_ever_created = True
         # A dispatch satisfies the divergence demand for THIS framing: the
         # agent actually spawned the independent proposer. Clear the gate so the
         # following tool call is not blocked.

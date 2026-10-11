@@ -43,8 +43,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# goal length cap ("<=200 chars, single sentence, decidable")
-GOAL_MAX_LEN = 200
+# goal length cap ("<=400 chars, single sentence, decidable")
+GOAL_MAX_LEN = 400
 
 # ── RoleSpec — one mechanism for the reviewer role and everything it implies ──
 # A task's ROLE is derived from EXPLICIT constraint tags only (never from
@@ -358,7 +358,7 @@ class Contract:
                 side re-validates the CONTRACT but not filesystem state (the
                 path may be remote / fetched lazily).
         """
-        # 1. goal non-empty, <= 200 chars; acceptance non-empty, each check non-empty
+        # 1. goal non-empty, <= 400 chars; acceptance non-empty, each check non-empty
         if not self.goal or not self.goal.strip():
             raise ContractError(f"goal must be non-empty (got: {self.goal!r})")
         if len(self.goal) > GOAL_MAX_LEN:

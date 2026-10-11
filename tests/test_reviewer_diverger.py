@@ -195,6 +195,34 @@ class TestAdvisoryWordingWhyGain:
         # advisory status stated, not hidden
         assert "advisory" in _DIVERGER_INJECT
 
+    def test_diverger_inject_states_parallel_and_zero_wallclock(self):
+        """The demand must say it runs IN PARALLEL with the plan at zero
+        wall-clock, so the DEFAULT is to dispatch (2026-10 ruling)."""
+        low = _DIVERGER_INJECT.lower()
+        assert "in parallel" in low
+        assert "parallel, zero wall-clock" in low
+        # the default flips to DISPATCH
+        assert "the default is to dispatch" in low
+        # and the honest trade: skipping buys back no wall-clock
+        assert "skipping saves zero wall-clock" in low
+
+    def test_diverger_inject_states_three_purpose_questions(self):
+        """The diverger's PURPOSE is concrete: a BETTER / MORE CORRECT /
+        UNCONSIDERED method — any one can change the plan."""
+        low = _DIVERGER_INJECT.lower()
+        assert "better method" in low
+        assert "more correct method" in low
+        assert "unconsidered method" in low
+
+    def test_diverger_prompt_states_three_purpose_questions(self):
+        """SYSTEM_PROMPT_STATIC carries the same better/more-correct/
+        unconsidered purpose, so the standing prompt matches the inject."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+        p = SYSTEM_PROMPT_STATIC.lower()
+        assert "better method" in p
+        assert "more correct method" in p
+        assert "unconsidered method" in p
+
     def test_reviewer_demand_has_why_and_gain(self):
         assert "WHY:" in _REVIEWER_FINDINGS
         assert "GAIN:" in _REVIEWER_FINDINGS

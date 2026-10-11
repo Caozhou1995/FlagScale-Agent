@@ -505,7 +505,7 @@ class SpawnWorkerTool(Tool):
         "properties": {
             "goal": {
                 "type": "string",
-                "description": "Task goal, one sentence (<=200 chars).",
+                "description": "Task goal, one sentence (<=400 chars).",
             },
             "constraints": {
                 "type": "object",

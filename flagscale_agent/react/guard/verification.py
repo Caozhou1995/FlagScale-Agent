@@ -299,16 +299,41 @@ Then decide what kind of task this was, because that decides what "done" means:
   • open-ended — optimize, minimize, maximize, make it faster: the first working
     result is NOT the finish line, and neither is "better than the baseline." The
     standard here is RELATIVE, not absolute: push to the highest you can reach WITHIN
-    the time window, and measure yourself against your OWN prior iteratively-optimized
-    version — not against a fixed baseline you were handed. Ask: is there another
+    the time window. The comparison that counts has TWO parts, and the authoritative
+    one is EXTERNAL. Beating your OWN prior iteratively-optimized version (and the
+    fixed baseline you were handed) is a NECESSARY-but-insufficient FLOOR — it proves
+    progress, not that you reached the depth limit, because every self-attempt can share
+    one defect and look flat while a better method still exists. So the binding check is:
+    anchor to the recognized best-practice method for this problem class, measured at
+    competent quality (the ANCHOR block below). Ask: is there another
     distinct method I have not tried? Judge whether your "distinct" attempts were
     actually distinct: if results
     all land in the same narrow band — the same order of magnitude — that near-tie
     means they were variants within one method-family, and you have hit the depth limit
     of that family. The response is to widen: reach for a structurally different
-    family that attacks from another angle. You do not need to know the target's absolute best;
-    the flat spread of results is enough signal. Only after trying a
-    genuinely different family and it too fails is "reached the method's limit"
+    family that attacks from another angle. And before you call a family exhausted,
+    MEASURE where the time actually goes: profile the per-stage cost split of your
+    current best (which stage dominates) rather than reasoning about it — a family is
+    rarely exhausted while its dominant stage is unmeasured.
+    ANCHOR TO THE STANDARD METHOD, NOT JUST YOUR OWN SPREAD — a flat spread across
+    YOUR OWN attempts does NOT prove a plateau: every attempt may share one defect,
+    so the whole set can look flat while a competent implementation of the recognized
+    best-practice technique for this problem class is still faster. You cannot see the
+    hidden reference, but most optimization problem classes HAVE a recognized
+    best-practice or textbook technique (what a knowledge lookup / the literature
+    returns). Identify it, implement it AT COMPETENT QUALITY, measure
+    it the same way, and treat that measured value as your proxy target for the hidden
+    reference — this is a strictly stronger anchor than your own spread, so it does not
+    contradict "beating the baseline is the floor": the baseline is a floor, the own-prior
+    comparison is a floor, and the standard method measured that way is the bar. Where no
+    single standard method exists (a genuinely novel problem, or no offline lookup
+    available), name the most-cited technique for the class and measure it that way;
+    if none applies, say so explicitly and justify the plateau against the strongest
+    alternative you can construct. A plateau is
+    honest only when your best-so-far is at or beyond the standard method measured that
+    way — and beats your own prior version. Only after a
+    genuinely different family (implemented at competent quality, measured) also
+    fails is "reached the method's limit"
     honest — otherwise you have reached one family's limit and called it the task's.
 
 Whichever kind it is, name which kind it is — then run these orthogonal self-checks
@@ -318,9 +343,15 @@ fail to generalize, or general yet not the best available. Answer each on its ow
 
   1. OPTIMIZED — is what you hold the best you reached, or just the first thing that
      worked? For an open-ended task the bar is the HIGHEST you could reach within the
-     time window, measured against your own prior iteration (not a fixed baseline).
+     time window, and the binding anchor is the recognized best-practice method for
+     the problem class, measured at competent quality (beating your own prior iteration
+     is a necessary-but-insufficient floor).
      If a distinct method could plausibly do better and you have not ruled
-     it out by measurement, not done.
+     it out by measurement, not done. Do NOT treat your own flat spread as a plateau:
+     identify the recognized best-practice method for this problem class, implement it
+     to competent quality, measure it the same way, and hold your best-so-far against
+     that measured value — a competent standard implementation may beat every attempt
+     you have made so far.
   2. GENERAL — does your solution handle the whole CLASS, or did you special-case
      it to the one input you developed against? Would it produce a well-formed
      answer on a sibling input that differs in the ways the task does not fix?
@@ -338,8 +369,10 @@ fail to generalize, or general yet not the best available. Answer each on its ow
 
 If an axis does not apply, say so. To proceed, re-issue plan_update(action="complete")
 with "_override_reason" that gives each axis a CONCRETE ANCHOR, not a verdict:
-  • OPTIMIZED — name the measured number you hold AND the alternative you ruled out
-    (by what measurement), or state no distinct alternative exists.
+  • OPTIMIZED — name the measured number you hold AND (a) the recognized best-practice
+    method for this problem class, measured at competent quality, with your best-so-far
+    held against it, AND (b) the alternative you ruled out (by what measurement), or
+    state no distinct alternative exists.
   • GENERAL — name the sibling input you considered and what your method does on it,
     or the one property you special-cased and why it is safe.
   • GENERALIZES — cite the command/output in your trace that already exercised the
@@ -647,7 +680,7 @@ configured or the best candidate you held in memory. Walk the ones that apply:
     State plainly: is what sits at the delivery path the TRUE PRODUCT of the process
     the task named, or a constructed look-alike / stub / placeholder standing in for
     work you did not actually complete?
-  • **Success CRITERION is the task's, not yours**: if the task names the reference a result is judged against (a baseline, a golden/expected output, a label table, a metric definition with a threshold), the criterion is THAT — never a weaker standard you substituted ("much faster than before", "high accuracy"). Locate and RUN the task's named reference; report the delivered artifact's value against IT, one line each. A pass under your own criterion says nothing about the grade. For an OPEN-ENDED / optimization task the reference is RELATIVE — the task's bar is the highest you can reach within the time window, and the comparison that counts is against your OWN prior iteratively-optimized version, not against the fixed baseline you started from: beating the baseline is the floor, not the finish.
+  • **Success CRITERION is the task's, not yours**: if the task names the reference a result is judged against (a baseline, a golden/expected output, a label table, a metric definition with a threshold), the criterion is THAT — never a weaker standard you substituted ("much faster than before", "high accuracy"). Locate and RUN the task's named reference; report the delivered artifact's value against IT, one line each. A pass under your own criterion says nothing about the grade. For an OPEN-ENDED / optimization task the reference is RELATIVE — the task's bar is the highest you can reach within the time window, and beating the fixed baseline you started from is the floor, not the finish. The comparison that counts has TWO parts, and beating your OWN prior iteratively-optimized version is only the first (a self-referential check that can stay flat while a better method still exists): the second, and the one that catches a false plateau, is the recognized best-practice method for the problem class, identified and measured to competent quality, with your best-so-far held against THAT value. A scored optimization task normally ships with a hidden QUALIFIED reference of its own (a golden/expected solution), so the handed baseline is only the floor — assume a competent solution MAY exist beyond your best, and your best evidence against it is that externally-anchored measurement.
 
   • **Contract readback (quote-vs-value)**: if the task pins down a FORM or
     CONTRACT — a required format, an exact name, a numbering/ordering rule, a

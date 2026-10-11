@@ -837,6 +837,32 @@ class TestKeepClimbingOptimization:
         assert "structurally different family" in p
         assert "Beating your own best-so-far" in p
 
+    def test_plateau_requires_benchmarking_the_standard_method(self):
+        """A flat spread across your OWN attempts is NOT a plateau. The stop
+        criterion now has a precondition: identify the recognized best-practice
+        method for the problem class, implement it to competent quality, measure
+        it, and show best-so-far is at or beyond that value."""
+        p = " ".join(self._prompt().split())
+        # the precondition, in order
+        assert "PRECONDITION you must satisfy FIRST" in p
+        assert "recognized best-practice" in p
+        assert "implement it to COMPETENT quality and measure it" in p
+        assert "at or beyond that measured value" in p
+        # the strawman guard: your own flat spread proves nothing
+        assert "can all share one defect and look flat" in p
+        assert "\"my spread is flat\" and \"I tried two families\" are NOT sufficient" in p
+        # honors the model of a hidden qualified reference beyond the handed baseline
+        assert "hidden QUALIFIED reference" in p
+        # the family that failed must itself have been implemented competently
+        assert "implemented at competent quality and measured, also fails" in p
+
+    def test_keep_climbing_no_internal_bookkeeping_leak(self):
+        # the new prose must not leak a case-specific ratio or task noun
+        low = " ".join(self._prompt().lower().split())
+        import re
+        for w in ("1.05", "golden.sql", "row_number", "sqlite", "query-optimize"):
+            assert not re.search(re.escape(w), low), f"leaked:{w!r}"
+
     def test_task_agnostic_no_threshold_or_noun_leak(self):
         low = " ".join(self._prompt().lower().split())
         # no hardcoded threshold word leaking

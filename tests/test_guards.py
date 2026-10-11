@@ -355,6 +355,89 @@ class TestPlanGuardSingleShot:
         assert result is not None and result.action == "block"
 
 
+class TestPlanGuardNoNagAfterPlanComplete:
+    """Regression: after a plan is CREATED then COMPLETED/ABANDONED (active
+    pointer cleared), single-shot must NOT re-nag or re-block as if no plan was
+    ever framed. The reported defect: get_active()->None reads as 'never
+    planned', re-incrementing the no-plan counter and re-firing inject@5/10/15/20
+    and block@21+ AFTER the plan was already done."""
+
+    def _completed_plan_guard(self, single_shot):
+        from unittest.mock import MagicMock
+        task_plan = MagicMock()
+        # A completed/abandoned plan clears the active pointer.
+        task_plan.get_active.return_value = None
+        g = PlanGuard(task_plan=task_plan, single_shot=single_shot)
+        # Framing the plan marks _plan_ever_created and consumes the budget.
+        g.check_post(_ctx("plan_create", {}))
+        return g
+
+    def test_single_shot_no_inject_after_plan_completed(self):
+        g = self._completed_plan_guard(single_shot=True)
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD + 10):
+            r = g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+            assert r is None, f"unexpected {r.action} at call {i}: {r.reason}"
+
+    def test_single_shot_no_block_after_plan_completed(self):
+        # The specific reported defect: block at >SINGLE_SHOT_BLOCK_THRESHOLD.
+        g = self._completed_plan_guard(single_shot=True)
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD * 2):
+            r = g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+            assert r is None
+
+    def test_interactive_still_nags_after_plan_created(self):
+        # Pins the distinction: interactive multi-turn must keep nagging (a
+        # sticky 'ever created' suppression would over-suppress a fresh later
+        # turn that has not planned yet). Only single_shot is suppressed.
+        g = self._completed_plan_guard(single_shot=False)
+        actions = []
+        for i in range(PlanGuard.REMIND_THRESHOLD + 5):
+            r = g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+            if r is not None:
+                actions.append(r.action)
+        assert "inject" in actions, "interactive mode must still nag"
+
+    def test_single_shot_still_blocks_when_no_plan_ever_created(self):
+        # Sanity: the fix must NOT suppress the legitimate no-plan block when no
+        # plan was ever framed.
+        g = PlanGuard(task_plan=None, single_shot=True)
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD):
+            g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+        r = g.check_pre(_ctx("shell", {"command": "one_more"}))
+        assert r is not None and r.action == "block"
+        assert r.reason == "single_shot_plan_required"
+
+    def test_failed_plan_create_does_not_discharge_obligation(self):
+        # F1 regression: a plan_create whose execution FAILED (exception wrapper,
+        # guard block, or the tool's own "ERROR: ...") frames no plan, so it must
+        # NOT set _plan_ever_created — otherwise a mere ATTEMPT silently disables
+        # the single-shot no-plan block for the rest of the run.
+        from unittest.mock import MagicMock
+        task_plan = MagicMock()
+        task_plan.get_active.return_value = None
+        for bad in ("Error executing tool: boom",
+                    "[BLOCKED BY GUARD] This tool call was prevented.",
+                    "ERROR: At least one step is required."):
+            g = PlanGuard(task_plan=task_plan, single_shot=True)
+            g.check_post(_ctx("plan_create", {}, bad))
+            assert g._plan_ever_created is False, f"discharged on {bad!r}"
+            for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD):
+                g.check_pre(_ctx("shell", {"command": f"c{i}"}))
+            r = g.check_pre(_ctx("shell", {"command": "one_more"}))
+            assert r is not None and r.action == "block", f"no block after {bad!r}"
+
+    def test_successful_plan_create_still_discharges_obligation(self):
+        # Positive control: a plan_create that SUCCEEDED must set the flag.
+        from unittest.mock import MagicMock
+        task_plan = MagicMock()
+        task_plan.get_active.return_value = None
+        g = PlanGuard(task_plan=task_plan, single_shot=True)
+        g.check_post(_ctx("plan_create", {}, "Plan created.\n\nPlan: t [active]"))
+        assert g._plan_ever_created is True
+        for i in range(PlanGuard.SINGLE_SHOT_BLOCK_THRESHOLD + 5):
+            assert g.check_pre(_ctx("shell", {"command": f"c{i}"})) is None
+
+
 class TestPlanGuardCompletionGate:
     """Completion is NEVER blocked (the old NON-OVERRIDABLE completion gate was
     removed — it livelocked weak models into auto-kill). Enforcement moved to the
