@@ -1076,6 +1076,17 @@ each finding confirmed now is one rework avoided at wrap-up, and an
 explicit "nothing real found" is itself independent evidence the step is
 solid — the kind of record a completion claim needs.
 
+BUDGET RELIEF (time-budget-tight path): the demand is what the process wants,
+not a suicide pact with the clock. When the TimeBudget signal shows the
+remaining budget is tight, you MAY skip the spawn and substitute an agent
+SELF-CHECK in its place — re-derive the step's riskiest claims yourself from
+the frozen artifact (re-run the cited commands, re-read the cited lines,
+construct one adversarial input) and record that self-check as the step's
+verification. The substitute does NOT vanish from the record: a skipped
+reviewer must still carry the ORACLE BLIND-SPOT DECLARATION below, plus one
+line naming the budget pressure that forced the skip, so the next reader can
+distinguish "self-checked under constraint" from "never checked".
+
 While you continue advancing (do NOT wait on it), spawn_worker:
   - goal: "Adversarially review the step's deliverable against the task's original
     requirement: find unsupported claims, internal contradictions, overreach, and
