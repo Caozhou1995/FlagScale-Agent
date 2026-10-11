@@ -653,11 +653,14 @@ class TestTaskCompleteRecheck:
         v1 = guard.check_pre(ctx1)
         assert v1 is not None and v1.reason == "task_complete_delivery_hygiene"
         assert guard._complete_recheck_reminded is True
-        # second complete without override → all gates spent, passes through
+        # second complete: cascade gates all spent; the FINAL facet-reconcile gate
+        # (outside the latch) fires once, then a third attempt passes through
         ctx2 = GuardContext(
             tool_name="plan_update",
             tool_args={"action": "complete"},
         )
+        v2 = guard.check_pre(ctx2)
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
         assert guard.check_pre(ctx2) is None
 
     def test_complete_recheck_covers_both_task_kinds_generically(self):
@@ -1058,7 +1061,8 @@ class TestTaskCompleteObservationGate:
         # agent re-issues, still no observation → gate is spent, passes through
         # (honest escape: "nothing runnable to check" said on the retry releases it)
         v2 = guard.check_pre(self._complete("still principled, nothing runnable to check"))
-        assert v2 is None
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        assert guard.check_pre(self._complete("nothing runnable to check")) is None
 
     def test_second_gate_message_teaches_observation_not_argument(self):
         from flagscale_agent.react.guard.verification import _TASK_COMPLETE_OBSERVATION_DEMAND
@@ -1208,7 +1212,10 @@ class TestTaskCompleteGeneralizationGate:
         v2 = guard.check_pre(
             self._complete("still tuned to the sample, got it right")
         )
-        assert v2 is None
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        assert guard.check_pre(
+            self._complete("still tuned to the sample, got it right")
+        ) is None
 
     def test_third_gate_message_is_generic_and_prescribes_stress_input(self):
         from flagscale_agent.react.guard.verification import (
@@ -1365,7 +1372,10 @@ class TestTaskCompleteSubstitutionGate:
         v2 = guard.check_pre(
             self._complete("ran it again, still used the newer version, it was unavailable")
         )
-        assert v2 is None
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        assert guard.check_pre(
+            self._complete("ran it again, still used the newer version, it was unavailable")
+        ) is None
 
     def test_fourth_gate_message_is_generic_and_teaches_given_vs_range(self):
         from flagscale_agent.react.guard.verification import (
@@ -1651,7 +1661,10 @@ class TestCompletionDeliveryHygieneGate:
         assert v1 is not None and v1.reason == "task_complete_delivery_hygiene"
         # re-issue → gate spent, passes through
         v2 = guard.check_pre(self._complete(reason + "; checked reloaded artifact fresh"))
-        assert v2 is None
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        assert guard.check_pre(
+            self._complete(reason + "; checked reloaded artifact fresh")
+        ) is None
 
     def test_fifth_gate_message_names_delivery_traps_and_is_generic(self):
         from flagscale_agent.react.guard.verification import (
@@ -1812,8 +1825,11 @@ class TestTextCompleteHygieneGate:
         # Fires once — a re-emitted bare completion after the gate already bit
         # passes through (agent saw the message; the gate is a checkpoint).
         guard = VerificationGuard(plan=self._active_plan())
-        guard.check_pre(self._text_complete())  # first: blocks
-        verdict = guard.check_pre(self._text_complete())  # second: released
+        guard.check_pre(self._text_complete())  # first: blocks (wrap-up hygiene)
+        # The FINAL gate (facet reconcile, §2) then blocks once too.
+        v2 = guard.check_pre(self._text_complete())  # second: reconcile
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        verdict = guard.check_pre(self._text_complete())  # third: released
         assert verdict is None
 
     def test_override_reason_releases(self):
@@ -1827,8 +1843,9 @@ class TestTextCompleteHygieneGate:
         assert verdict is not None and verdict.action == "block"
         assert verdict.reason == "text_complete_hygiene"
         assert guard._text_complete_hygiene_demanded is True
-        # after delivery, later attempts pass through (override or bare)
-        assert guard.check_pre(self._text_complete("re-issue after checklist")) is None
+        # after delivery, the FINAL gate (facet reconcile) blocks once, then passes
+        v2 = guard.check_pre(self._text_complete("re-issue after checklist"))
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
         assert guard.check_pre(self._text_complete()) is None
 
     def test_need_user_input_not_triggered(self):
@@ -2148,13 +2165,16 @@ class TestTextCompleteStalePlanGuard:
         assert verdict.reason == "text_complete_hygiene"
 
     def test_hygiene_demanded_prevents_double_fire(self):
-        """Second [TASK_COMPLETE] in the same turn → no block (demanded flag)."""
+        """Second [TASK_COMPLETE] in the same turn → no re-fire of the hygiene
+        gate; the FINAL facet-reconcile gate then blocks once."""
         guard = VerificationGuard(plan=None)
         guard.reset_turn()
         v1 = guard.check_pre(self._text_complete())
         assert v1 is not None and v1.action == "block"
         v2 = guard.check_pre(self._text_complete())
-        assert v2 is None
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        v3 = guard.check_pre(self._text_complete())
+        assert v3 is None
 
     def test_override_first_arrival_still_delivers_then_releases(self):
         """Override on FIRST arrival must not silence the checklist: the gate
@@ -2164,6 +2184,9 @@ class TestTextCompleteStalePlanGuard:
         guard.reset_turn()
         verdict = guard.check_pre(self._text_complete(override="verified all outputs"))
         assert verdict is not None and verdict.reason == "text_complete_hygiene"
+        # FINAL gate (facet reconcile) blocks once, then passes
+        v2 = guard.check_pre(self._text_complete(override="verified all outputs"))
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
         assert guard.check_pre(self._text_complete(override="verified all outputs")) is None
 
 
@@ -2219,7 +2242,9 @@ class TestTextCompleteHygieneStaleCompletion:
         )
         verdict = guard.check_pre(ctx)
         assert verdict is not None and verdict.reason == "text_complete_hygiene"
-        # next attempt (override or bare) passes — delivered once
+        # FINAL gate (facet reconcile) blocks once, then the submission passes
+        v2 = guard.check_pre(ctx)
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
         assert guard.check_pre(ctx) is None
 
     def test_stale_then_fresh_same_guard_instance(self):
@@ -2361,3 +2386,98 @@ class TestWrapUpUnclosedDoubts:
         low = _TEXT_COMPLETE_HYGIENE.lower()
         assert "debian" not in low
         assert "pmars" not in low
+
+
+class TestFacetReconcileGate:
+    """FINAL_PROPOSAL_1011 §2: the terminal completion gate forces a reconciliation
+    of the task's OWN requirements against the DELIVERED artifact — requirement ×
+    command × output — before submission. Fires once per path; a non-empty
+    override_reason releases it. Sits LAST (after the complete cascade; after the
+    text wrap-up) so it adds a step without disturbing the existing gate ordering."""
+
+    def test_complete_path_reconcile_fires_after_full_cascade(self):
+        guard = VerificationGuard()
+        # call 1: no override → premise recheck
+        v1 = guard.check_pre(GuardContext(
+            tool_name="plan_update", tool_args={"action": "complete"}))
+        assert v1 is not None and v1.reason == "task_complete_premise_recheck"
+        # call 2: override + no markers → cascade passes gates 2-4, delivery hygiene fires
+        ctx2 = GuardContext(
+            tool_name="plan_update",
+            tool_args={"action": "complete",
+                       "_override_reason": "measured: ran the tool, read the output"},
+            override_reason="measured: ran the tool, read the output",
+            classify_fn=lambda q, data, default: False,
+        )
+        v2 = guard.check_pre(ctx2)
+        assert v2 is not None and v2.reason == "task_complete_delivery_hygiene"
+        # call 3: the FINAL gate — facet reconcile
+        v3 = guard.check_pre(ctx2)
+        assert v3 is not None
+        assert v3.action == "block"
+        assert v3.reason == "task_complete_facet_reconcile"
+        assert v3.category == "verification_required"
+        # call 4: released (fires once)
+        assert guard.check_pre(ctx2) is None
+
+    def test_text_path_reconcile_fires_after_wrap_up(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="",
+            tool_args={},
+            assistant_text="done.\n\n[TASK_COMPLETE]",
+            llm_responded=True,
+        )
+        v1 = guard.check_pre(ctx)
+        assert v1 is not None and v1.reason == "text_complete_hygiene"
+        v2 = guard.check_pre(ctx)
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        assert guard.check_pre(ctx) is None
+
+    def test_reconcile_required_before_override_releases(self):
+        # A bare attempt (no override) still sees the reconcile gate once the
+        # earlier gates are past; the gate is overridable, not non-overridable.
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="",
+            tool_args={},
+            assistant_text="done.\n\n[TASK_COMPLETE]",
+            llm_responded=True,
+        )
+        guard.check_pre(ctx)  # hygiene
+        v = guard.check_pre(ctx)  # reconcile
+        assert v is not None and v.reason == "task_complete_facet_reconcile"
+        assert v.overridable is True
+
+    def test_message_carries_three_columns_and_rules(self):
+        from flagscale_agent.react.guard.verification import (
+            _TASK_COMPLETE_FACET_RECONCILE,
+        )
+        msg = _TASK_COMPLETE_FACET_RECONCILE
+        # three columns
+        assert "REQUIREMENT" in msg and "COMMAND" in msg and "OUTPUT" in msg
+        # the delivered-artifact rule (not an intermediate)
+        low = msg.lower()
+        assert "final deliverable" in low
+        assert "intermediate" in low
+        # the self-reference prohibition
+        assert "reference" in low and "yourself" in low
+        # the honest escape
+        assert "NOT VERIFIED" in msg
+        # the "most likely to fool you" line (§4)
+        assert "fool you" in low
+
+    def test_reset_turn_clears_reconcile_flags(self):
+        guard = VerificationGuard()
+        ctx = GuardContext(
+            tool_name="",
+            tool_args={},
+            assistant_text="done.\n\n[TASK_COMPLETE]",
+            llm_responded=True,
+        )
+        guard.check_pre(ctx)  # hygiene
+        guard.check_pre(ctx)  # reconcile → flag set
+        assert guard._text_complete_reconcile_demanded is True
+        guard.reset_turn()
+        assert guard._text_complete_reconcile_demanded is False
+        assert guard._complete_reconcile_demanded is False

@@ -294,7 +294,12 @@ class TestReviewerFindingsGate:
         assert v is not None and v.action == "block"
         assert v.reason == "text_complete_hygiene"
         assert guard._text_complete_hygiene_demanded is True
-        # the next override attempt passes through — checklist delivered once
+        # the next override attempt reaches the facet-reconcile gate (last
+        # gate, once) — its first arrival delivers the reconcile demand
+        v2 = guard.check_pre(_completion_ctx(with_override=True,
+                                             override_text="done"))
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        # ... and only THEN does an override attempt pass through
         assert guard.check_pre(_completion_ctx(with_override=True,
                                                override_text="done")) is None
         # ... but a later BARE attempt re-blocks (reviewer gate has no latch)
@@ -312,8 +317,12 @@ class TestReviewerFindingsGate:
         v1 = guard.check_pre(ctx)
         assert v1 is not None and v1.reason == "text_complete_hygiene"
         # ... and a later attempt is NOT re-blocked by the reviewer gate (no
-        # latch on an override retry), and the wrap-up gate — already
-        # delivered — passes through
+        # latch on an override retry); it reaches the facet-reconcile gate
+        # (last gate, once) whose first arrival delivers the reconcile demand
+        v2 = guard.check_pre(_completion_ctx(with_override=True,
+                                             override_text="done"))
+        assert v2 is not None and v2.reason == "task_complete_facet_reconcile"
+        # ... and only THEN does an override attempt pass through
         assert guard.check_pre(_completion_ctx(with_override=True,
                                                override_text="done")) is None
         # ... but a later BARE attempt re-blocks (reviewer gate has no latch)

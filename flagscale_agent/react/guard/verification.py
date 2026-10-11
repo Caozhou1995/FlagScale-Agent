@@ -717,6 +717,43 @@ anchor per applicable item, or an explicit "none apply" — not a checklist of t
 This gate fires once."""
 
 
+_TASK_COMPLETE_FACET_RECONCILE = """[VerificationGuard] Before you submit — reconcile the task's OWN requirements against the DELIVERED artifact.
+
+A completion claim says "I did the task". This gate asks the harder question the
+completion gates above do not: take the task statement you were GIVEN, list the
+requirements it actually states, and for EACH one show the command you ran and the
+output you got. Three columns, one row per requirement:
+
+  1. REQUIREMENT — the task's own words for that requirement (quote or paraphrase
+     the statement, not your restatement of what you decided to build).
+  2. COMMAND     — the exact command you ran (or the exact check you performed).
+  3. OUTPUT      — the REAL output it produced, pasted, OR the words "NOT VERIFIED".
+
+Rules that make this evidence rather than a formality:
+  • The command must exercise the FINAL deliverable at its delivery path — run the
+    artifact you are submitting, not an intermediate, a dev copy, or a simplified
+    stand-in. Evidence from anything other than the delivered thing proves nothing
+    about the delivered thing.
+  • A reference solution, an expected-output file, or a model YOU built yourself is
+    NOT evidence: grading your own answer against your own answer is circular. If
+    the only "check" was "it matches the reference I wrote", say so plainly — that
+    row is NOT VERIFIED, not verified.
+  • If a requirement has no runnable check (pure prose, a constraint you could not
+    test), write "NOT VERIFIED" against it. Do not fill the cell with "should be
+    fine" / "looks correct" / "handled" — an asserted-but-unrun cell is the failure
+    this gate exists to catch. Naming the uncovered row is the honest outcome.
+
+Finally, name the ONE thing most likely to fool you here — a threshold tuned on a
+single sample, an assumption about the input's form or constraints, a value you did
+not re-read from disk. If you can cheaply test it now, test it and paste the output;
+if you cannot, say so explicitly.
+
+To proceed, re-issue the completion (plan_update(action="complete"), or the
+[TASK_COMPLETE] message) with "_override_reason" carrying that reconciliation — the
+rows, the commands, the outputs, and the honest NOT VERIFIED cells. This gate fires
+once."""
+
+
 # Covers the PURE-TEXT [TASK_COMPLETE] finish path (no tool_name), which bypasses
 # the plan_update(action="complete") gate chain above. Single-shot runs routinely
 # end with a bare [TASK_COMPLETE] and never call plan_update(complete), so the full
@@ -1138,6 +1175,11 @@ class VerificationGuard(Guard):
         self._complete_substitution_demanded = False
         self._complete_delivery_hygiene_demanded = False
         self._text_complete_hygiene_demanded = False
+        # Facet-reconcile gates (FINAL_PROPOSAL_1011 §2): force the task's own
+        # requirements × real command × real output reconciliation before submit.
+        # One flag per submission path; each fires once per run.
+        self._complete_reconcile_demanded = False
+        self._text_complete_reconcile_demanded = False
         # Set the first time the reviewer demand is injected on a passing
         # step_done (check_post). The findings gate below keeps firing from that
         # point on, across turns, until an override reason documents the
@@ -1168,6 +1210,8 @@ class VerificationGuard(Guard):
         self._complete_substitution_demanded = False
         self._complete_delivery_hygiene_demanded = False
         self._text_complete_hygiene_demanded = False
+        self._complete_reconcile_demanded = False
+        self._text_complete_reconcile_demanded = False
         self._step_done_recheck_reminded = False
         self._premortem_pending = False
 
@@ -1305,6 +1349,20 @@ class VerificationGuard(Guard):
                     reason="text_complete_hygiene",
                     category="verification_required",
                 )
+            # Facet-reconcile gate (§2): the FINAL text-completion gate, symmetric
+            # with the complete-path reconcile gate (which sits after gates 1-5).
+            # After the reviewer-settle gate and the wrap-up checklist have had their
+            # say, the agent still must reconcile the task's OWN requirements against
+            # the DELIVERED artifact — requirement × command × output — before the
+            # submission is accepted. First arrival ALWAYS delivers the reconcile
+            # demand (override or not); later attempts pass, override or bare.
+            if not self._text_complete_reconcile_demanded:
+                self._text_complete_reconcile_demanded = True
+                return GuardVerdict.block(
+                    message=_TASK_COMPLETE_FACET_RECONCILE,
+                    reason="task_complete_facet_reconcile",
+                    category="verification_required",
+                )
             return None
 
         # NOTE: qualifier extraction at plan-framing time used to live here as a
@@ -1411,6 +1469,25 @@ class VerificationGuard(Guard):
                         category="verification_required",
                     )
                 return None
+            # Facet-reconcile gate (§2): the FINAL completion gate. It sits OUTSIDE
+            # the _complete_recheck_reminded latch — the latch is skipped once gate
+            # 1 has been released, so a gate nested inside it (after gate 5) would
+            # never be reached. Placed here it fires on the completion attempt
+            # AFTER the latch has been set (i.e. gate 1 was released). NOTE: it does
+            # NOT guarantee gates 2-5 all ran — the latch-setting attempt returns
+            # whatever gate it reaches first, so if gate 2 fires there, gates 3-5 are
+            # skipped by the latch and reconcile still fires next. Either way it adds
+            # the requirement × command × output reconciliation as the last thing the
+            # agent must answer before the submission is accepted. First arrival ALWAYS
+            # delivers (override or not); later attempts pass, override or bare.
+            if not self._complete_reconcile_demanded:
+                self._complete_reconcile_demanded = True
+                return GuardVerdict.block(
+                    message=_TASK_COMPLETE_FACET_RECONCILE,
+                    reason="task_complete_facet_reconcile",
+                    category="verification_required",
+                )
+            return None
 
         # Timing 0: acceptance is frozen once a step leaves "pending".
         # Once implementation has begun, letting the criteria change means the
