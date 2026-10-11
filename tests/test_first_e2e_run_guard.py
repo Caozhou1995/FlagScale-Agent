@@ -188,11 +188,15 @@ class TestFirstE2eRunMessageContent:
         assert "COLD-CONSUMER checkpoint" in _MSG_75
         # the prediction-vs-run distinction is the whole point
         assert "predict" in _MSG_75.lower()
-        assert "COMMAND you ran" in _MSG_75 or "output" in _MSG_75.lower()
+        # anchor is the consumer's command cold-reloaded from the delivery path
+        assert "CONSUMER will run" in _MSG_75 or "output" in _MSG_75.lower()
         # evidence binding: paste command + output, not a bare yes/no
         assert "OUTPUT it produced" in _MSG_75
+        assert "COLD-RELOADED" in _MSG_75
         assert "_override_reason" in _MSG_75
         assert "(a)" in _MSG_75 and "(b)" in _MSG_75 and "(c)" in _MSG_75
+        # (b) is not a procrastination escape: "not yet reached it" != "none apply"
+        assert "not yet reached it" in _MSG_75.lower()
         # Cross-contamination guard: 75% carries its own face only.
         assert "WRITE-THROUGH" not in _MSG_75
         assert "FIRST-EXERCISE" not in _MSG_75
