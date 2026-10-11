@@ -595,6 +595,38 @@ class TestDivergerBlockMessageConsistency:
         assert "enforced" in low
 
 
+class TestFacetManifest:
+    """Facet manifest (start_mid proposal A): the plan_create inject must
+    demand a written manifest file with the three mandatory facet sections,
+    and the diverger block must require the manifest path in the override
+    reason — both as text pins (guard deliverables are prompt text)."""
+
+    def test_qualifier_inject_demands_manifest_file(self):
+        assert _QUALIFIER_EXTRACTION in PlanGuard().check_pre(
+            _plan_ctx()).message
+        low = _QUALIFIER_EXTRACTION.lower()
+        # a manifest FILE, not just in-head extraction
+        assert "facet manifest" in low
+        assert "file" in low
+        # three mandatory sections: FORM conventions, named references,
+        # example-vs-graded-domain
+        assert "form convention" in low
+        assert "reference artifacts" in low
+        assert "example vs graded domain" in low
+        # pinned to the task's own words, no grader-guessing
+        assert "task's own words" in low
+        assert "do not" in low and "grader" in low
+        # close-out seam: manifest feeds the delivery reconciliation
+        assert "close-out" in low
+
+    def test_diverger_block_demands_manifest_path_on_override(self):
+        from flagscale_agent.react.guard.plan import _DIVERGER_ENFORCE
+        low = _DIVERGER_ENFORCE.lower()
+        assert "facet manifest" in low
+        assert "override reason must state both" in low
+        assert "file path" in low
+
+
 class TestExemptionSeparateFlags:
     """The exemption covers BOTH reviewer (`reviewer: True`) and diverger
     (`diverger: True`) workers — two DISTINCT structured flags."""

@@ -144,7 +144,28 @@ can mean the state as it stood at a given point (with anything that came later o
 
 Before committing to shape, apply P1's framework: name the problem CLASS, identify the STANDARD METHOD, and ensure the plan includes a SMALL-SAMPLE step that validates the method on the smallest meaningful input before scaling to the full task — the small run also gives a time estimate, and each debugging iteration at full scale costs 10-100x more. Generic steps ("analyze", "implement", "test") mean the class was never identified — a brute-force sweep is the tell.
 
-Some qualifiers pin you to a concrete tool instance (specific version, revision, named model). The instance may have usage requirements that differ from the generic API in ANY form (preprocessing, defaults, precision, prefix). When pinned, add a step to consult that instance's own documentation before writing the call — per P1's TOOL INSTANCE rule, the task's VERB selects which documented usage applies, and the documented way is the DEFAULT. Consulting is the near half; APPLYING what the doc says is the far half — a literal-minimal reading silently swaps the task for an easier one."""
+Some qualifiers pin you to a concrete tool instance (specific version, revision, named model). The instance may have usage requirements that differ from the generic API in ANY form (preprocessing, defaults, precision, prefix). When pinned, add a step to consult that instance's own documentation before writing the call — per P1's TOOL INSTANCE rule, the task's VERB selects which documented usage applies, and the documented way is the DEFAULT. Consulting is the near half; APPLYING what the doc says is the far half — a literal-minimal reading silently swaps the task for an easier one.
+
+FACET MANIFEST — extraction that stays in your head is extraction the run
+cannot reuse. Write the task's qualifiers to a facet manifest file (e.g.
+analysis/facets.md; state the path in the plan) with three mandatory
+sections, each entry pinned to the task's OWN words — quote the line and
+cite where it says so. Do NOT read beyond the task statement or guess the
+grader's logic: you are copying constraints the task itself states, not
+predicting them.
+  1. FORM conventions the task leaves open (output format, units, field
+     order, naming): list the candidates and pin ONE supported by the task
+     text, with its source line.
+  2. Reference artifacts the task NAMES (required files, commands, example
+     paths): quote each verbatim — this IS the grading surface.
+  3. Example vs graded domain: state whether the task's example IS the graded
+     instance. If not, write "the graded instance is another — do not
+     extrapolate." When the graded input is obtainable in the environment,
+     the plan must run the REAL graded input at least once (the example alone
+     is not calibration); when it is not obtainable, the manifest says so
+     explicitly with the extrapolation basis.
+Reuse the manifest at close-out: the delivery-time reconciliation reads its
+first column from this file, not from re-scraping the conversation."""
 
 _WRITE_FILE_NO_PLAN = (
     "[Plan] You are about to write or edit a file — the concrete signal that you have "
@@ -195,6 +216,14 @@ The standing demand below is reused verbatim from the plan_create inject; its
 (it is a spawn-and-continue background worker, off your critical path). Here
 the check is ENFORCED — this call is blocked until you dispatch a diverger
 or override with a reason.
+
+Also delivered with the framing demand is the FACET MANIFEST requirement
+(the plan_create inject's facet section): when overriding this block, your
+override reason must state BOTH — that the diverger was dispatched (or why
+it is genuinely skippable) AND the facet manifest file path (or why the task
+has no extractable facets). The manifest is the upstream data source for the
+close-out reconciliation: without it on disk, the final deliverable check
+re-scrapes the conversation instead of reading the pinned qualifiers.
 """
 
 
