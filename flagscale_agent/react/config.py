@@ -124,7 +124,7 @@ class AgentConfig:
         # Display policy: env override beats YAML but loses to explicit CLI
         # flags (cli.py applies its options after construction). "0"/"false"
         # hide; any other non-empty value (incl. "1") shows. Unset → YAML or
-        # default (True) stands.
+        # default (False) stands.
         def _env_flag(name):
             raw = os.environ.get(name)
             if raw is None or raw == "":

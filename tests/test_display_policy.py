@@ -150,7 +150,9 @@ def _patch_worker_agent(monkeypatch):
 
 def test_cli_no_show_thinking(monkeypatch):
     _patch_worker_agent(monkeypatch)
-    monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_THINKING", raising=False)
+    # Seed an OPPOSITE (True) baseline so the assertion discriminates: the flag
+    # must actively override env=1 -> False, not merely agree with the new default.
+    monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_THINKING", "1")
     result = runner.invoke(app, ["--no-show-thinking", "--model", "test-model-x"])
     assert result.exit_code == 0
     assert _CaptureAgent.last_cfg.show_thinking is False
@@ -166,10 +168,13 @@ def test_cli_flag_beats_env(monkeypatch):
 
 def test_cli_no_flag_leaves_env(monkeypatch):
     _patch_worker_agent(monkeypatch)
-    monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY", "false")
+    # Opposite-of-default env value (True) with NO flag: proves the env channel
+    # still flows when CLI is silent (post-flip the default is False, so
+    # asserting True here discriminates).
+    monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY", "1")
     result = runner.invoke(app, ["--model", "test-model-x"])
     assert result.exit_code == 0
-    assert _CaptureAgent.last_cfg.show_guard_advisory is False
+    assert _CaptureAgent.last_cfg.show_guard_advisory is True
 
 
 class TestBehaviorNeutrality:
