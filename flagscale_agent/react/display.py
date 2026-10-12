@@ -361,7 +361,8 @@ def _tool_icon(name):
 
 # ── Display policy (verbosity control) ─────────────────────────────────
 # Module-level policy flags, synced once from AgentConfig by WorkerAgent
-# construction. Defaults True = byte-identical to the pre-policy behavior.
+# construction. Defaults False = concise display (thinking + soft advisory
+# hidden); enabling the policy restores the pre-policy output.
 # thinking: ⏳ spinner, 💭 label, dim streamed thinking text (render-only —
 #   the model still thinks; only the display is suppressed).
 # guard advisory: soft 🛡 inject echoes. Guard BLOCK (🚫) and ESCALATE (⚠️)

@@ -148,8 +148,9 @@ class WorkerAgent:
         # ── Display policy (verbosity control) ──
         # Sync config → display module once; kernel.py and the streaming loop
         # consult display.thinking_enabled()/guard_advisory_enabled() with no
-        # config plumbing. Defaults keep byte-identical output. Re-run this
-        # same sync after a hot config reload (commands.py /reload config).
+        # config plumbing. Defaults hide thinking + soft advisories (concise
+        # output); enabling the policy restores the pre-policy display. Re-run
+        # this same sync after a hot config reload (commands.py /reload config).
         self._sync_display_policy()
 
         # ── Infrastructure ──
