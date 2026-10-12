@@ -31,7 +31,12 @@ guard reads THAT at the text-only completion path.
 Design (single block, overridable):
 - check_pre fires ONLY at completion consultation (tool_name == "" and
   llm_responded — the fresh text-only [TASK_COMPLETE] path, kernel.py) so it can
-  never interfere with ordinary tool execution.
+  never interfere with ordinary tool execution. It further requires the text to
+  actually CARRY the completion sentinel: the kernel consults completion guards
+  for BOTH [TASK_COMPLETE] and [NEED_USER_INPUT] (kernel.py:381), and llm_responded
+  is True in both cases — so without a sentinel check this gate wrongly blocked a
+  legitimate mid-task QUESTION while a reviewer was still running. A question is
+  not a completion; release it.
 - It blocks when any reviewer-class child (role reviewer/re_reviewer) recorded
   in THIS session's registry is not yet in a TERMINAL status. Two classes:
   * ACTIVE (SPAWNING/RUNNING/REPORTED) — poll_tasks(action='check') finalizes
@@ -169,6 +174,18 @@ class ReviewerFeedbackGuard(Guard):
         if ctx.tool_name:
             return None
         if not ctx.llm_responded:
+            return None
+        # The kernel consults completion guards for BOTH [TASK_COMPLETE] and
+        # [NEED_USER_INPUT] (kernel.py:381): llm_responded is True in both. This
+        # gate is about COMPLETION only, so require the completion sentinel in the
+        # text — mirroring the kernel's own _is_completion (trailing sentinel OR
+        # the override form). Without this, a legitimate mid-task QUESTION ("which
+        # config?") was wrongly blocked while a reviewer was still running.
+        from flagscale_agent.react.display import (
+            trailing_sentinel, has_override_completion)
+        _text = (ctx.assistant_text or "").rstrip()
+        if not (trailing_sentinel(_text) == "[TASK_COMPLETE]"
+                or has_override_completion(_text)):
             return None
         live = self._live_reviewers()
         if not live:

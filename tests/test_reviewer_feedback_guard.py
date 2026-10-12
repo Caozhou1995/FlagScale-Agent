@@ -71,9 +71,12 @@ def _active(led, c, status="REPORTED"):
         led.transition(c.id, "REPORTED")
 
 
-def _ctx(name="", responded=True, args=None):
+def _ctx(name="", responded=True, args=None, text="done\n[TASK_COMPLETE]"):
+    # Default text carries the real completion sentinel: the kernel only consults
+    # completion gates when the assistant text trails [TASK_COMPLETE] (kernel.py:377).
     return GuardContext(tool_name=name, tool_args=args or {},
-                        llm_responded=responded, messages=[])
+                        llm_responded=responded, messages=[],
+                        assistant_text=text)
 
 
 def _guard(env):
@@ -121,6 +124,28 @@ def test_blocks_only_at_completion_path(env):
     assert g.check_pre(_ctx(name="poll_tasks")) is None
     # A top-of-loop scan (stale sentinel in history) is never gated.
     assert g.check_pre(_ctx(responded=False)) is None
+
+
+def test_question_is_not_gated(env):
+    # Regression: the kernel consults completion guards for BOTH [TASK_COMPLETE]
+    # and [NEED_USER_INPUT] (kernel.py:381), and llm_responded is True in both.
+    # A parent asking the user a legitimate mid-task question while a reviewer is
+    # still running must NOT be blocked — a question is not a completion.
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    _active(led, c, "REPORTED")
+    record_spawn(env["session"], c.id, "reviewer")
+    g = _guard(env)
+    assert g.check_pre(_ctx(text="Which config should I use?\n[NEED_USER_INPUT]")) is None
+    # A prose turn with no sentinel at all is likewise not a completion.
+    assert g.check_pre(_ctx(text="still working on it")) is None
+    # But a real completion IS gated.
+    assert g.check_pre(_ctx()) is not None
+    # ...including the override form (marker + _override_reason), which the
+    # kernel's _is_completion also accepts.
+    assert g.check_pre(
+        _ctx(text="done\n[TASK_COMPLETE]\n_override_reason: trivial\n")) is not None
 
 
 def test_silent_when_reviewer_terminal(env):
