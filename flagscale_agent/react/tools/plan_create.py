@@ -114,12 +114,13 @@ _RSI_STEP_ACCEPTANCE = [
 _FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
 
 _FRAME_STEP_ACCEPTANCE = [
-    "Divergence check — do BOTH halves, like the Review step. (1) YOUR OWN "
+    "Divergence check — the self-divergence half is ALWAYS done; the dispatched "
+    "half is priced (per the next item, a deliberate trade-off). (1) YOUR OWN "
     "deeper divergence: put 2-3 genuinely different framings of the task's "
     "ORIGINAL statement on the table — a BETTER method (faster/cheaper/simpler), a "
     "MORE CORRECT method (avoids a risk this plan carries), or an UNCONSIDERED "
     "decomposition/reading. (2) A read-only diverger worker — dispatch it (per the "
-    "trade-off in the next item) when the framing warrants a fresh set of eyes. "
+    "trade-off in the next item) when the framing warrants a fresh set of eyes; "
     "spawn_worker "
     "with role=\"diverger\" and a read-only contract — the diverger tag is a LEAF "
     "role: it gets NO reviewer preset (it has no deliverable path + rev marker "

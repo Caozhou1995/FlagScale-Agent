@@ -46,6 +46,17 @@ def _no_tier_label(low: str) -> None:
         assert not re.search(r"\b" + token + r"\b", low), f"tier token {token} leaked"
 
 
+def _no_unconditional_both_halves(low: str) -> None:
+    """The dispatched half must read as CONDITIONAL, not a 'BOTH halves' mandate.
+
+    Renaming tiers to a trade-off left the old unconditional 'do BOTH halves'
+    phrase in place — the two halves then contradict (item 1 mandates, item 2
+    prices). The self-half may be unconditional, but the phrase 'BOTH halves'
+    must not survive.
+    """
+    assert "both halves" not in low, "unconditional 'BOTH halves' mandate leaked"
+
+
 class TestTradeoffGateInAcceptanceBlocks:
     def test_frame_acceptance_names_the_tradeoff(self):
         low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
@@ -54,6 +65,7 @@ class TestTradeoffGateInAcceptanceBlocks:
         assert "time budget" in low
         assert "state the decision and why" in low
         _no_tier_label(low)
+        _no_unconditional_both_halves(low)
 
     def test_review_acceptance_names_the_tradeoff(self):
         low = _norm(" ".join(_REVIEW_STEP_ACCEPTANCE))
@@ -87,6 +99,9 @@ class TestTradeoffGateInPrompt:
 
     def test_no_tier_label_in_prompt(self):
         _no_tier_label(_norm(SYSTEM_PROMPT_STATIC))
+
+    def test_no_unconditional_both_halves_in_prompt(self):
+        _no_unconditional_both_halves(_norm(SYSTEM_PROMPT_STATIC))
 
 
 class TestFrameAcceptanceLinksStillPresent:
