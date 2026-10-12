@@ -120,24 +120,21 @@ class KnowledgeSkillGuard(Guard):
             # Do NOT reset counter here — only reset in accept_override if override succeeds
             return GuardVerdict.block(
                 f"[KnowledgeSkill] {self.BLOCK_THRESHOLD} tool calls without loading "
-                "domain knowledge, skills, or external references. Consider whether "
+                "domain knowledge, skills, or external references. Consider "
                 "load_knowledge()/load_skill() (INTERNAL domains), web_fetch() "
                 "(EXTERNAL domains, for any field where your prior knowledge may not "
                 "reflect standard methods), or networked shell operations (git clone, "
-                "pip/apt install, wget, curl downloads — substantive external dependency "
-                "acquisition) would help. If you are about to conclude "
-                "'no better/other method exists within this library or tool budget', that "
-                "is an unverified knowledge gap — web_fetch the standard technique for the "
-                "problem class before you commit to it; you cannot prove 'no other method "
-                "exists' with 'I do not know another method'. "
-                "To override, do NOT just assert 'I know this domain' or 'I have prior "
-                "experience' — that bare claim is exactly the self-exemption this gate "
-                "targets, and it releases on any string. Instead make the exemption "
-                "FALSIFIABLE: name the PROBLEM CLASS in one phrase AND the STANDARD "
-                "METHOD you are applying to it (the concrete algorithm / API / config "
-                "name, not 'my experience'). If you cannot name BOTH concretely — if it "
-                "comes out as 'some heuristic' or 'I'll tune it' — that vagueness IS the "
-                "knowledge gap, and you should research before overriding.",
+                "pip/apt install, wget, curl downloads). Concluding "
+                "'no better/other method exists' is an unverified knowledge gap — "
+                "web_fetch the standard technique for the problem class first; you cannot "
+                "prove 'no other method exists' with 'I do not know another method'. "
+                "To override, do NOT merely assert 'I know this domain' or 'I have prior "
+                "experience' — that bare claim is the self-exemption this gate targets. "
+                "Instead make the exemption FALSIFIABLE: name the PROBLEM CLASS in one "
+                "phrase AND the STANDARD METHOD you apply (the concrete algorithm / API / "
+                "config name, not 'my experience'). If you cannot name BOTH concretely — "
+                "if it comes out as 'some heuristic' or 'I'll tune it' — that vagueness IS "
+                "the knowledge gap; research before overriding.",
                 reason=f"no_knowledge_load_{self.BLOCK_THRESHOLD}_calls",
                 category="knowledge_skill",
             )
@@ -146,20 +143,18 @@ class KnowledgeSkillGuard(Guard):
             return GuardVerdict.inject(
                 f"[KnowledgeSkill] {calls_since} tool calls without "
                 "loading domain knowledge, skills, or external references. Two channels: "
-                "(1) INTERNAL domain → load_knowledge()/load_skill() (e.g. parallelism, "
-                "training config, NCCL, data pipeline, model porting). "
+                "(1) INTERNAL domain → load_knowledge()/load_skill(). "
                 "(2) EXTERNAL domain → web_fetch() for any field where your prior knowledge "
                 "may not reflect standard methods. The trigger is a "
-                "KNOWLEDGE GAP, not a syntax error — and note you often will NOT feel the "
-                "gap. If you are about to reach for a hand-tuned threshold, a static "
-                "assumption, or conclude 'no other method is available within this "
-                "library/tool', that conclusion is itself an unverified knowledge gap: "
-                "web_fetch the standard technique for the problem class BEFORE committing. "
-                "Before you proceed without research, run one falsifiable self-check: can "
-                "you name this task's PROBLEM CLASS and the STANDARD METHOD (concrete "
-                "algorithm / API / config) you are applying? If yes, proceed. If the "
-                "answer is a vague 'I'll figure it out' or 'some heuristic', that is the "
-                "gap — look it up first.",
+                "KNOWLEDGE GAP, not a syntax error — and you often will NOT feel the "
+                "gap. Reaching for a hand-tuned threshold, a static assumption, or "
+                "concluding 'no other method is available within this library/tool' is "
+                "itself an unverified knowledge gap: web_fetch the standard technique for "
+                "the problem class BEFORE committing. Before proceeding without research, "
+                "run one falsifiable self-check: can you name this task's PROBLEM CLASS "
+                "and the STANDARD METHOD (concrete algorithm / API / config) you apply? "
+                "If yes, proceed. If the answer is a vague 'I'll figure it out' or 'some "
+                "heuristic', that is the gap — look it up first.",
                 reason="no_knowledge_load_recently",
                 category="knowledge_skill",
             )

@@ -998,24 +998,3 @@ class TestDeliverableConstraintSpotCheck:
         for w in ("gcode", "qemu", "mnist", "query-optimize"):
             assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
                 f"leaked task-specific term: {w!r}")
-
-
-class TestDeliveryHygieneSuccessCriterionBullet:
-    """G7 (guard side): the delivery-hygiene message carries a Success-CRITERION
-    bullet binding the grade to the task's NAMED reference, not a weaker
-    standard the agent chose. Task-agnostic: no leaked task nouns/values."""
-
-    def test_success_criterion_bullet_present(self):
-        from flagscale_agent.react.guard.verification import _TASK_COMPLETE_DELIVERY_HYGIENE
-        low = " ".join(_TASK_COMPLETE_DELIVERY_HYGIENE.lower().split())
-        assert "success criterion is the task's" in low
-        # the named-reference classes, in the abstract
-        assert "baseline" in low or "golden" in low
-        assert "label table" in low or "expected output" in low
-        # the substitution failure it guards against
-        assert "substituted" in low
-        # task-agnostic: no leaked task nouns/values
-        import re
-        for w in ("gcode", "qemu", "mnist", "1.149", "90x", "query-optimize"):
-            assert not re.search(r"\b" + re.escape(w) + r"\b", low), (
-                f"leaked task-specific term: {w!r}")

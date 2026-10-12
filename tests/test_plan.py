@@ -208,7 +208,8 @@ class TestPlanCreateToolStringSteps:
         )
         assert "Plan created" in result
         plan = tp.get_active()
-        assert len(plan["steps"]) == 3
+        # +2: PlanCreateTool auto-appends the fixed review + RSI steps
+        assert len(plan["steps"]) == 5
         assert plan["steps"][0]["title"] == "Create conda env"
         assert plan["steps"][2]["title"] == "Run training"
 
@@ -221,7 +222,8 @@ class TestPlanCreateToolStringSteps:
         )
         assert "Plan created" in result
         plan = tp.get_active()
-        assert len(plan["steps"]) == 3
+        # +2: PlanCreateTool auto-appends the fixed review + RSI steps
+        assert len(plan["steps"]) == 5
 
     def test_steps_as_normal_list(self, tp):
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
@@ -232,7 +234,8 @@ class TestPlanCreateToolStringSteps:
         )
         assert "Plan created" in result
         plan = tp.get_active()
-        assert len(plan["steps"]) == 2
+        # +2: PlanCreateTool auto-appends the fixed review + RSI steps
+        assert len(plan["steps"]) == 4
         assert plan["steps"][0]["title"] == "Step A"
 
 

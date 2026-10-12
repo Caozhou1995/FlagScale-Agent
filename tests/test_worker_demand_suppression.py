@@ -69,28 +69,6 @@ def _step_done_ctx():
     )
 
 
-class TestReviewerDemandSuppression:
-    def test_reviewer_worker_gets_no_nested_demand(self, tmp_path, monkeypatch):
-        """A reviewer worker's passing step_done carries the pre-mortem only."""
-        _worker_env(monkeypatch, REVIEWER_CONTRACT, tmp_path, reviewer=True)
-        guard = VerificationGuard()
-        guard._step_done_recheck_reminded = True  # let the step_done pass
-        assert guard.check_pre(_step_done_ctx()) is None
-        v = guard.check_post(_step_done_ctx())
-        assert v is not None and v.action == "inject"
-        assert v.reason == "step_done_premortem"
-        assert REVIEWER_DEMAND_MARKER not in v.message
-
-    def test_parent_still_gets_the_demand(self):
-        """Without worker env, the reviewer demand fires as before."""
-        guard = VerificationGuard()
-        guard._step_done_recheck_reminded = True
-        assert guard.check_pre(_step_done_ctx()) is None
-        v = guard.check_post(_step_done_ctx())
-        assert v is not None
-        assert REVIEWER_DEMAND_MARKER in v.message
-
-
 class TestDivergerDemandSuppression:
     def test_diverger_worker_gets_no_nested_demand(self, tmp_path, monkeypatch):
         """A diverger worker's plan_create inject omits the framing demand."""

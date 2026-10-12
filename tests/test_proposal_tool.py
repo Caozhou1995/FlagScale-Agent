@@ -10,10 +10,6 @@ import pytest
 
 from flagscale_agent.react.proposals import ProposalRegistry
 from flagscale_agent.react.tools.proposal import ProposalTool
-from flagscale_agent.react.guard.verification import (
-    VerificationGuard,
-    _TEXT_COMPLETE_HYGIENE,
-)
 
 
 @pytest.fixture
@@ -115,54 +111,3 @@ class TestBatchUpdate:
             action="update", proposal_id=pid, status="done"
         )
 
-
-class TestWrapupInjection:
-    def test_no_registry_is_unchanged(self):
-        g = VerificationGuard(plan=None, proposals=None)
-        assert g._text_complete_hygiene_message() == _TEXT_COMPLETE_HYGIENE
-
-    def test_empty_registry_is_unchanged(self):
-        d = tempfile.mkdtemp()
-        try:
-            g = VerificationGuard(plan=None, proposals=ProposalRegistry(d))
-            assert g._text_complete_hygiene_message() == _TEXT_COMPLETE_HYGIENE
-        finally:
-            shutil.rmtree(d, ignore_errors=True)
-
-    def test_open_proposal_injected(self):
-        d = tempfile.mkdtemp()
-        try:
-            reg = ProposalRegistry(d)
-            e = reg.add("Add a timer guard", container="agent-code", session_id="prev")
-            g = VerificationGuard(plan=None, proposals=reg)
-            msg = g._text_complete_hygiene_message()
-            # 66b8bbc8: the block is a DELTA — only new/changed open proposals
-            # are listed (the old full-list header "Open proposals already on
-            # file" was replaced by the delta header).
-            assert "DELTA since the last wrap-up" in msg
-            assert e["id"] in msg
-            assert "Add a timer guard" in msg
-            # The original template's re-issue instruction must remain last.
-            assert msg.rstrip().endswith("This gate fires once.")
-            # The injected block sits inside the message, before the final line.
-            assert msg.index("DELTA since the last wrap-up") < msg.index(
-                "Re-issue [TASK_COMPLETE]"
-            )
-        finally:
-            shutil.rmtree(d, ignore_errors=True)
-
-    def test_closed_proposal_not_injected(self):
-        d = tempfile.mkdtemp()
-        try:
-            reg = ProposalRegistry(d)
-            e = reg.add("Done thing", session_id="prev")
-            reg.set_status(e["id"], "rejected")
-            g = VerificationGuard(plan=None, proposals=reg)
-            assert g._text_complete_hygiene_message() == _TEXT_COMPLETE_HYGIENE
-        finally:
-            shutil.rmtree(d, ignore_errors=True)
-
-    def test_template_mentions_registry_and_status(self):
-        # The static template must teach registration + reconciliation.
-        assert "proposal tool" in _TEXT_COMPLETE_HYGIENE
-        assert "RECONCILE THE REGISTRY" in _TEXT_COMPLETE_HYGIENE

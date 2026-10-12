@@ -45,10 +45,7 @@ from flagscale_agent.react.guard.startup import (
     install_background_monitor_exemption,
     sleep_probe_quiet_budget,
 )
-from flagscale_agent.react.guard.verification import (
-    VerificationGuard,
-    _self_is_reviewer_worker,
-)
+from flagscale_agent.react.guard.verification import VerificationGuard
 from flagscale_agent.react.multi_agent.wiring import (
     CONTRACT_PATH_ENV, TASK_ID_ENV,
 )
@@ -134,38 +131,6 @@ _P1 = "  • prop_aaaa1111 (proposed): [agent-code] fix A"
 _P2 = "  • prop_bbbb2222 (proposed): [skill] do B"
 _P3 = "  • prop_cccc3333 (proposed): [knowledge] doc C"
 
-
-class TestWrapupDelta:
-    def test_first_wrapup_lists_all_then_only_delta(self):
-        reg = _FakeRegistry("\n".join([_HEADER, _P1, _P2]))
-        g = VerificationGuard(proposals=reg)
-
-        first = g._text_complete_hygiene_message()
-        assert "prop_aaaa1111" in first and "prop_bbbb2222" in first
-
-        # Same registry, second completion: nothing new → no verbatim re-list.
-        second = g._text_complete_hygiene_message()
-        assert "prop_aaaa1111" not in second, "already-reported must not repeat"
-        assert "prop_bbbb2222" not in second
-        assert "no NEW or CHANGED" in second
-
-        # A genuinely new proposal → only IT is listed.
-        reg._lines = "\n".join([_HEADER, _P1, _P2, _P3])
-        third = g._text_complete_hygiene_message()
-        assert "prop_cccc3333" in third
-        assert "prop_aaaa1111" not in third
-        assert "prop_bbbb2222" not in third
-
-    def test_status_change_relisted(self):
-        reg = _FakeRegistry("\n".join([_HEADER, _P1]))
-        g = VerificationGuard(proposals=reg)
-        g._text_complete_hygiene_message()
-        # Same id, changed status line → treated as delta (re-listed).
-        reg._lines = "\n".join(
-            [_HEADER, _P1.replace("(proposed)", "(approved)")])
-        msg = g._text_complete_hygiene_message()
-        assert "prop_aaaa1111" in msg
-        assert "(approved)" in msg
 
 class TestResearchGate:
     def test_memory_tools_accepted_as_research(self):
@@ -279,34 +244,3 @@ def _make_contract(tmp_path, monkeypatch, reviewer, prompt_body, diverger=None):
     monkeypatch.setenv(TASK_ID_ENV, "task_x")
     monkeypatch.setenv(CONTRACT_PATH_ENV, str(task_dir / "contract.prompt"))
 
-
-class TestSuppressionFlag:
-    def test_reviewer_keyed_on_flag_not_prose(self, tmp_path, monkeypatch):
-        # reviewer=True but NO "## Reviewer discipline" prose → still suppressed.
-        _make_contract(tmp_path, monkeypatch, True, "just a plain contract")
-        assert _self_is_reviewer_worker() is True
-
-    def test_reviewer_prose_without_flag_does_not_suppress(
-            self, tmp_path, monkeypatch):
-        # The banned failure mode: prose present but flag False → NOT suppressed.
-        _make_contract(tmp_path, monkeypatch, False,
-                       "## Reviewer discipline\nread-only review body")
-        assert _self_is_reviewer_worker() is False
-
-    def test_diverger_keyed_on_flag_not_prose(self, tmp_path, monkeypatch):
-        # A diverger carries its OWN structured flag (diverger=True), distinct
-        # from the reviewer tag (a diverger is not reviewer-class).
-        _make_contract(tmp_path, monkeypatch, False,
-                       "plain diverger contract", diverger=True)
-        assert _self_is_diverger_worker() is True
-        # Prose present, flag absent/False → NOT suppressed.
-        _make_contract(tmp_path, monkeypatch, False,
-                       "Propose 2-3 genuinely different framings of the task",
-                       diverger=False)
-        assert _self_is_diverger_worker() is False
-
-    def test_no_env_is_false(self, monkeypatch):
-        monkeypatch.delenv(TASK_ID_ENV, raising=False)
-        monkeypatch.delenv(CONTRACT_PATH_ENV, raising=False)
-        assert _self_is_reviewer_worker() is False
-        assert _self_is_diverger_worker() is False

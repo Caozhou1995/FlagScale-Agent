@@ -231,30 +231,32 @@ class TestSaveGuidanceSurvivalRange:
 
     def test_two_hard_reset_blocks_identical(self):
         """The two hard_reset emission sites (recovery-path + threshold-path)
-        must carry the SAME guidance text; the evict site is distinct."""
+        share ONE helper source of guidance text (structurally deduped, so the
+        two sites cannot drift); the evict site is distinct."""
         import inspect
         import re
         from flagscale_agent.react.guard import context_pressure as cp
         src = inspect.getsource(cp)
-        # Three emission sites total (2 hard_reset + 1 evict), each ending
-        # with "Allowed tools:".
-        assert src.count("Allowed tools:") == 3
-        # Both hard_reset sites carry the reset-specific clause.
-        assert src.count("Only memory survives a reset") == 2
-
-        # Extract the two hard_reset blocks and compare after indent normalizing.
+        # Single shared hard_reset block + the distinct evict site, each
+        # ending with "Allowed tools:".
+        assert src.count("Allowed tools:") == 2
+        # The reset-specific clause lives once, in the shared block.
+        assert src.count("Only memory survives a reset") == 1
+        # Both emission sites route through the shared helper.
+        assert src.count("self._hard_reset_block(pct, evictable)") == 2
+        # The shared block still carries the full guidance.
         lines = src.split("\n")
         starts = [i for i, l in enumerate(lines)
                   if "Eviction cannot free enough space" in l]
-        assert len(starts) == 2, f"expected 2 hard_reset blocks, got {len(starts)}"
-        blocks = []
-        for s in starts:
-            e = s
-            while "Allowed tools:" not in lines[e]:
-                e += 1
-            blocks.append([re.sub(r"^\s+", "", x).rstrip()
-                           for x in lines[s:e + 1] if x.strip()])
-        assert blocks[0] == blocks[1], "two hard_reset blocks differ"
+        assert len(starts) == 1, f"expected 1 shared hard_reset block, got {len(starts)}"
+        e = starts[0]
+        while "Allowed tools:" not in lines[e]:
+            e += 1
+        block = [re.sub(r"^\s+", "", x).rstrip()
+                 for x in lines[starts[0]:e + 1] if x.strip()]
+        joined = " ".join(block)
+        assert "EXTRACT NOW" in joined
+        assert "survival-range test" in joined
 
 
 class TestEvictionGradingContract:

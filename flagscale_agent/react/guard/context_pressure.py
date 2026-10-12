@@ -61,6 +61,32 @@ class ContextPressureGuard(Guard):
     def working_window_tokens(self) -> int:
         return self._working_window_tokens or 120_000
 
+    def _hard_reset_block(self, pct, evictable):
+        """Shared hard_reset-required block (both call sites identical)."""
+        return GuardVerdict.block(
+            f"[Context pressure {pct}% with only "
+            f"{len(evictable)} evictable messages] "
+            f"Eviction cannot free enough space. Execute in order:\n"
+            f"1. memory_write() — EXTRACT NOW. You still hold the FULL message text\n"
+            f"   that is about to be discarded; after the reset it is gone and no\n"
+            f"   later session can ever see it. One entry now costs one call, while\n"
+            f"   re-discovering it later costs many turns.\n"
+            f"   WHERE — the survival-range test decides the container:\n"
+            f"     * cross-session truth (exact commands, paths, env state, pitfalls,\n"
+            f"       configs, decisions+why) -> memory_write() — GLOBAL.\n"
+            f"     * this-session progress (trial state, current hypothesis, temp paths)\n"
+            f"       -> plan_update(notes='...').\n"
+            f"   WHAT NOT — do not dump what one ls/grep/git status can cheaply re-derive;\n"
+            f"   bloat poisons later retrieval.\n"
+            f"2. plan_update(notes='...') — record current state\n"
+            f"3. hard_reset(reason='...') — reset context. Only memory survives a reset;\n"
+            f"   the continuation summary lives only in the next window, so a second\n"
+            f"   reset loses it — put durable facts in memory, not just continuation.\n"
+            f"Allowed tools: {', '.join(sorted(self._SAVE_TOOLS))}",
+            reason="hard_reset_required",
+            category="context_pressure_hard_reset",
+        )
+
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         # Skip the pre-LLM-call check (tool_name=""). We only gate actual tool
         # executions — blocking before the LLM call would prevent the LLM from
@@ -85,29 +111,7 @@ class ContextPressureGuard(Guard):
             else:
                 if ctx.tool_name in self._SAVE_TOOLS:
                     return None
-                return GuardVerdict.block(
-                    f"[Context pressure {pct}% with only "
-                    f"{len(evictable)} evictable messages] "
-                    f"Eviction cannot free enough space. Execute in order:\n"
-                    f"1. memory_write() — EXTRACT NOW. You still hold the FULL message text\n"
-                    f"   that is about to be discarded; after the reset it is gone and no\n"
-                    f"   later session can ever see it. One entry now costs one call, while\n"
-                    f"   re-discovering it later costs many turns.\n"
-                    f"   WHERE — the survival-range test decides the container:\n"
-                    f"     * cross-session truth (exact commands, paths, env state, pitfalls,\n"
-                    f"       configs, decisions+why) -> memory_write() — GLOBAL.\n"
-                    f"     * this-session progress (trial state, current hypothesis, temp paths)\n"
-                    f"       -> plan_update(notes='...').\n"
-                    f"   WHAT NOT — do not dump what one ls/grep/git status can cheaply re-derive;\n"
-                    f"   bloat poisons later retrieval.\n"
-                    f"2. plan_update(notes='...') — record current state\n"
-                    f"3. hard_reset(reason='...') — reset context. Only memory survives a reset;\n"
-                    f"   the continuation summary lives only in the next window, so a second\n"
-                    f"   reset loses it — put durable facts in memory, not just continuation.\n"
-                    f"Allowed tools: {', '.join(sorted(self._SAVE_TOOLS))}",
-                    reason="hard_reset_required",
-                    category="context_pressure_hard_reset",
-                )
+                return self._hard_reset_block(pct, evictable)
 
         # Below block threshold — pass
         if pressure < BLOCK_RATIO:
@@ -119,29 +123,7 @@ class ContextPressureGuard(Guard):
             self._need_hard_reset = True
             if ctx.tool_name in self._SAVE_TOOLS:
                 return None
-            return GuardVerdict.block(
-                f"[Context pressure {pct}% with only "
-                f"{len(evictable)} evictable messages] "
-                f"Eviction cannot free enough space. Execute in order:\n"
-                f"1. memory_write() — EXTRACT NOW. You still hold the FULL message text\n"
-                f"   that is about to be discarded; after the reset it is gone and no\n"
-                f"   later session can ever see it. One entry now costs one call, while\n"
-                f"   re-discovering it later costs many turns.\n"
-                f"   WHERE — the survival-range test decides the container:\n"
-                f"     * cross-session truth (exact commands, paths, env state, pitfalls,\n"
-                f"       configs, decisions+why) -> memory_write() — GLOBAL.\n"
-                f"     * this-session progress (trial state, current hypothesis, temp paths)\n"
-                f"       -> plan_update(notes='...').\n"
-                f"   WHAT NOT — do not dump what one ls/grep/git status can cheaply re-derive;\n"
-                f"   bloat poisons later retrieval.\n"
-                f"2. plan_update(notes='...') — record current state\n"
-                f"3. hard_reset(reason='...') — reset context. Only memory survives a reset;\n"
-                f"   the continuation summary lives only in the next window, so a second\n"
-                f"   reset loses it — put durable facts in memory, not just continuation.\n"
-                f"Allowed tools: {', '.join(sorted(self._SAVE_TOOLS))}",
-                reason="hard_reset_required",
-                category="context_pressure_hard_reset",
-            )
+            return self._hard_reset_block(pct, evictable)
         else:
             # Enough to evict — block until pressure < 50%
             if ctx.tool_name in self._SAVE_TOOLS:
@@ -151,29 +133,23 @@ class ContextPressureGuard(Guard):
                 f"{len(evictable)} evictable messages] "
                 f"Evict aggressively until pressure drops below 50%. "
                 f"Call evict(indexes=[...]) with wide ranges.\n"
-                f"BEFORE evicting, decide what to SAVE vs DISCARD — eviction is LOSSLESS\n"
-                f"(placeholder + index remain; recall_search -> recall recovers any\n"
-                f"message later), so grade messages, do NOT write out a per-index list:\n"
-                f"  • IRREPRODUCIBLE (unique evidence, in-flight conclusions, exact\n"
-                f"    tool outputs you will need after the swap) -> extract to\n"
-                f"    memory_write()/plan_update() FIRST — regenerating them may be\n"
-                f"    impossible or expensive even though the text is recoverable.\n"
-                f"  • REGENERABLE (cheap-to-re-derive state, intermediate scratch,\n"
-                f"    bulky tool output you are done with) -> evict freely.\n"
-                f"Keep only what one command can re-derive out of memory; record the\n"
-                f"non-reproducible.\n"
-                f"1. memory_write() — EXTRACT NOW for the irreproducible. You still hold\n"
-                f"   the FULL message text that is about to become a placeholder — one\n"
-                f"   entry now costs one call, re-discovering it later costs many turns.\n"
-                f"   WHERE — the survival-range test decides the container:\n"
-                f"     * cross-session truth (exact commands, paths, env state, pitfalls,\n"
-                f"       configs, decisions+why) -> memory_write() — GLOBAL, the next session\n"
-                f"       greps it too. No plan? memory_write is your ONLY recovery mechanism\n"
-                f"       after eviction.\n"
+                f"BEFORE evicting, grade messages — eviction is LOSSLESS (placeholder +\n"
+                f"index remain; recall_search -> recall recovers any message later), so\n"
+                f"do NOT write out a per-index list:\n"
+                f"  • IRREPRODUCIBLE (unique evidence, in-flight conclusions, exact tool\n"
+                f"    outputs needed after the swap) -> memory_write()/plan_update() FIRST.\n"
+                f"  • REGENERABLE (cheap-to-re-derive state, intermediate scratch, bulky\n"
+                f"    tool output you are done with) -> evict freely.\n"
+                f"1. memory_write() — EXTRACT NOW for the irreproducible; one call now\n"
+                f"   beats re-discovery later, which is not free. Keep only what one command\n"
+                f"   can re-derive. WHERE — the survival-range test decides the container:\n"
+                f"     * cross-session truth (commands, paths, env state, pitfalls, configs,\n"
+                f"       decisions+why) -> memory_write() — GLOBAL, the next session greps it;\n"
+                f"       with no plan it is your ONLY post-eviction recovery.\n"
                 f"     * this-session progress (trial state, current hypothesis, temp paths)\n"
                 f"       -> plan_update(notes='...') — lives with THIS session.\n"
                 f"   WHAT NOT — do not dump what one ls/grep/git status can cheaply re-derive;\n"
-                f"   bloat poisons later retrieval. Record the non-reproducible.\n"
+                f"   bloat poisons later retrieval. Record only the non-reproducible.\n"
                 f"2. plan_update(notes='...') — record current state\n"
                 f"3. evict(indexes=[...]) — free context space\n"
                 f"Evictable: {evictable}\n"

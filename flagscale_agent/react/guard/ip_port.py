@@ -46,13 +46,13 @@ _SSH_FAMILY_RE = re.compile(
 # A port flag on ssh-family commands: -p <num>, -P <num>, --port=<num>.
 _PORT_FLAG_RE = re.compile(r"(?:\s-[pP]\s*\d+)|(?:\s--port=\d+)")
 
-_IP_PORT_MESSAGE = """[IpPortGuard] This command involves an IP or port — both are proven hallucination hotspots in this cluster (parallel host segments with near-identical suffixes, multiple SSH channels with different port roles, false "node down" verdicts from misread ports).
+_IP_PORT_MESSAGE = """[IpPortGuard] This command involves an IP or port — proven hallucination hotspots (parallel host segments with near-identical suffixes, SSH channels with different port roles, false "node down" verdicts from misread ports).
 
-Before drawing any conclusion from this command's result:
-1. IP/port values must come from FACTS, not recall: look up the authoritative IP/port mapping saved in memory (a fact-type entry), and cat the on-disk hostfile the launcher actually uses, before any node-health claim or fan-out. Never type an IP from memory recall without verifying it against these.
-2. Port role first: each SSH channel (agent→host, agent→container, container→container) has its own port, key set, and failure semantics. A "connection refused/denied" on one channel says nothing about the others — misreading a channel's port as an outage signal is the classic false verdict.
+Before concluding anything:
+1. IP/port values must come from FACTS, not recall: look up the authoritative mapping in memory (a fact-type entry) and cat the on-disk hostfile the launcher uses, before any node-health claim or fan-out. Never type an IP from recall unverified.
+2. Port role first: each SSH channel (agent→host, agent→container, container→container) has its own port, key set, and failure semantics. A "connection refused/denied" on one channel says nothing about the others — misreading a port as an outage is the classic false verdict.
 
-This is an advisory only — no action is blocked. Override/retry freely; the reminder exists to break recall-based probing."""
+Advisory only — nothing is blocked; override/retry freely. The reminder breaks recall-based probing."""
 
 
 class IpPortGuard(Guard):

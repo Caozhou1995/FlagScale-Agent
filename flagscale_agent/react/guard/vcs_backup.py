@@ -625,9 +625,9 @@ _CLASS3_IDXS = frozenset(
     range(len(_CLASS12_MATCHERS), len(_DESTRUCTIVE_MATCHERS))
 )
 
-_DESTRUCTIVE_MESSAGE = """[VcsBackupGuard] This git command can destroy work IRREVERSIBLY — it may wipe uncommitted changes, a recoverable state you may need (stash/branch/reflog), or rewrite history / delete objects so commit hashes and old content are gone for good (lesson: `git checkout` erased an uncommitted checkpoint patch — cost days of experiments to recover).
+_DESTRUCTIVE_MESSAGE = """[VcsBackupGuard] This git command can destroy work IRREVERSIBLY — it may wipe uncommitted changes (a recoverable state you may need), or rewrite history / delete objects so commit hashes and old content are gone for good (lesson: `git checkout` erased an uncommitted checkpoint patch — cost days of experiments to recover).
 
-Before running it, snapshot the dirty tree — it costs one command and keeps the working tree unchanged:
+Before running it, snapshot the dirty tree (one command; keeps the working tree unchanged):
   git stash push -u -m "backup-before-destructive"   # includes untracked (-u)
   # ... run your destructive command ...
   git stash apply                                     # restore; drop ONLY after verified recovery
@@ -638,12 +638,10 @@ If a stash/backup already exists, or you keep patches another way (bundle, patch
 If the tree is already clean or the deleted data is regenerable, override with that explanation.
 
 REFERENCING-INTEGRITY probe — before you destroy history, check whether the TASK TEXT
-itself points at what you are about to wipe. Re-read the task for any identifier that
-denotes old state: a commit SHA, a branch/tag name, a file path, a line range, a
-function name. If the task refers to a specific SHA / path / filename that this
-command would remove or rewrite, the task may DEPEND on that exact object existing —
-default to NOT running it and report the conflict instead. Cheap check (survives the
-probe, dies in the wipe — use it BEFORE the destructive step, not after):
+cites an identifier this command would remove or rewrite: a commit SHA, a branch/tag
+name, a file path, a line range, a function name. If so, the task may DEPEND on that
+exact object existing — default to NOT running and report the conflict. Cheap check
+(survives the probe, dies in the wipe — run it BEFORE the destructive step):
   git rev-parse --verify --quiet <SHA>^{commit}   # exit 0 = the anchor is still there
 If the anchor is present and the task cites it, treat the destruction as blocked."""
 class VcsBackupGuard(Guard):

@@ -104,25 +104,20 @@ class PostEvictRecoveryGuard(Guard):
         self._reminded = True
         return GuardVerdict.inject(
             f"[PostEvictRecovery] You just evicted {self._evicted_count}+ messages — "
-            f"significant context was lost. Before continuing, restore your working state:\n"
-            f"1. plan_status() — check current task progress and step notes\n"
-            f"2. memory_list() — scan all memory entries to find relevant facts, "
-            f"pitfalls, and insights for your current domain\n"
+            f"significant context was lost. Restore your working state:\n"
+            f"1. plan_status() — current progress and step notes\n"
+            f"2. memory_list() — relevant facts, pitfalls, insights for this domain\n"
             f"3. recall_search(query='...') to locate, then recall(index=N) to fetch the\n"
-            f"   original text of any evicted message — the ledger is lossless, so a\n"
-            f"   value can almost always be RECOVERED via these dedicated recall tools\n"
-            f"   rather than re-derived or re-executed\n\n"
-            f"Do NOT proceed on stale assumptions. After recovery, verify these "
-            f"commonly error-prone items against memory or plan notes:\n"
-            f"- Exact commands and their syntax (flags, JSON formats, argument order)\n"
-            f"- File paths and delivery paths (exact location the task requires output)\n"
-            f"- Environment state (which user, which container, which working directory, "
-            f"which branch)\n"
-            f"- Task constraints (version numbers, exact formats, GIVEN values with "
-            f"zero tolerance)\n"
-            f"- Recently corrected memory entries (ensure you are using the updated "
-            f"version, not the stale one)\n"
-            f"- Previously failed approaches (avoid repeating the same mistake)",
+            f"   original text — the ledger is lossless, so a value can almost always be\n"
+            f"   RECOVERED via these recall tools rather than re-derived.\n\n"
+            f"Do NOT proceed on stale assumptions. After recovery, verify against memory "
+            f"or plan notes:\n"
+            f"- Exact commands (flags, JSON formats, argument order)\n"
+            f"- File/delivery paths (exact output location)\n"
+            f"- Environment (user, container, working dir, branch)\n"
+            f"- Task constraints (versions, formats, GIVEN values with zero tolerance)\n"
+            f"- Recently corrected memory entries (updated version, not the stale one)\n"
+            f"- Previously failed approaches (avoid repeating)",
             reason="heavy_eviction_detected",
             category="post_evict_recovery",
         )

@@ -118,65 +118,30 @@ _QUALIFIER_EXTRACTION = """
 
 While framing this plan — extract the task's qualifiers, not just its subject.
 
-A task names a subject and usually qualifies it: a point in time, a version, a
-subset, a specific metric definition. The subject is obvious; the qualifier is
-easy to drop — work completes with a confident answer whether or not you honored
-it. A dropped qualifier silently answers a nearby question the task did not ask.
+A task names a subject and qualifies it: a point in time, a version, a subset, a metric definition. The subject is obvious; the qualifier is easy to drop — the work produces a confident answer whether or not you honored it, and a dropped qualifier silently answers a nearby question the task did not ask.
 
-Treat every qualifier as machine-verified by a grader you cannot reach or fool: it
-re-parses the time boundary, diffs the exact version string, compares the output file
-byte-for-byte against a reference, re-counts the entries. Reporting the task done does
-not feed that check — if a qualifier is not literally satisfied, the scored result is
-FAIL no matter how finished the work looks or how you word the completion. So a
-qualifier is not a nicety to mention; it is a hard pass/fail condition to build the
-plan around.
+Treat every qualifier as machine-verified by a grader you cannot reach or fool: it re-parses the time boundary, diffs the exact version string, compares the output byte-for-byte against a reference, re-counts the entries. Reporting done does not feed that check — if a qualifier is not literally satisfied, the result is FAIL no matter how finished the work looks. A qualifier is a hard pass/fail condition to build the plan around.
 
-Re-read the task statement; list every qualifier as a first-class item. Fold each
-into the plan as a step or acceptance criterion. A qualifier not in the plan is one
-execution silently skips. But extraction is only half the job — you must also read
-what boundary each qualifier draws, in the direction the task means. State each
-qualifier's meaning in your own words. The common failure is bending a fixed
-boundary toward what is convenient: widening to the larger, fresher, or more
-available thing. A "newest / most available is best" instinct overwrites a bounded
-qualifier. When the task fixes a boundary, the answer inside it is right even if a
-better candidate exists outside. A bound on time is especially easy to invert: it
-can mean the state as it stood at a given point (with anything that came later out of scope), or the state right now; these select different answers — let the task's words decide, not defaulting to the most up-to-date data.
+Re-read the task statement; list every qualifier as a first-class item and fold each into the plan as a step or acceptance criterion — a qualifier not in the plan is one execution silently skips. Extraction is only half: you must read the boundary each qualifier draws in the direction the task means and state its meaning in your own words. The common failure bends a fixed boundary toward what is convenient (the larger, fresher, more available thing) — a "newest is best" instinct overwrites a bounded qualifier, yet the answer inside the boundary is right even if a better candidate exists outside. A bound on time is especially easy to invert: the state as it stood at a point (things that came later out of scope) vs. the state right now select different answers — read it in the direction the task means, letting the task's words decide, not the most up-to-date data.
 
-Before committing to shape, apply P1's framework: name the problem CLASS, identify the STANDARD METHOD, and ensure the plan includes a SMALL-SAMPLE step that validates the method on the smallest meaningful input before scaling to the full task — the small run also gives a time estimate, and each debugging iteration at full scale costs 10-100x more. Generic steps ("analyze", "implement", "test") mean the class was never identified — a brute-force sweep is the tell.
+Before committing to shape, apply P1's framework: name the problem CLASS, identify the STANDARD METHOD, and include a SMALL-SAMPLE step validating the method on the smallest meaningful input before scaling — the small run also estimates time, and each full-scale debugging iteration costs 10-100x more. Generic steps ("analyze", "implement", "test") mean the class was never identified; a brute-force sweep / enumeration is the tell.
 
-Some qualifiers pin you to a concrete tool instance (specific version, revision, named model). The instance may have usage requirements that differ from the generic API in ANY form (preprocessing, defaults, precision, prefix). When pinned, add a step to consult that instance's own documentation before writing the call — per P1's TOOL INSTANCE rule, the task's VERB selects which documented usage applies, and the documented way is the DEFAULT. Consulting is the near half; APPLYING what the doc says is the far half — a literal-minimal reading silently swaps the task for an easier one.
+Some qualifiers pin you to a concrete tool instance (specific version, revision, named model) whose usage may differ from the generic API in ANY form. When pinned, add a step to consult that instance's own documentation before writing the call — per P1's TOOL INSTANCE rule the task's VERB selects the documented usage, and the documented way is the DEFAULT. Consulting is the near half; APPLYING what the doc says is the far half.
 
-FACET MANIFEST — extraction that stays in your head is extraction the run
-cannot reuse. Write the task's qualifiers to a facet manifest file (e.g.
-analysis/facets.md; state the path in the plan) with three mandatory
-sections, each entry pinned to the task's OWN words — quote the line and
-cite where it says so. Do NOT read beyond the task statement or guess the
-grader's logic: you are copying constraints the task itself states, not
-predicting them.
-  1. FORM conventions the task leaves open (output format, units, field
-     order, naming): list the candidates and pin ONE supported by the task
-     text, with its source line.
-  2. Reference artifacts the task NAMES (required files, commands, example
-     paths): quote each verbatim — this IS the grading surface.
-  3. Example vs graded domain: state whether the task's example IS the graded
-     instance. If not, write "the graded instance is another — do not
-     extrapolate." When the graded input is obtainable in the environment,
-     the plan must run the REAL graded input at least once (the example alone
-     is not calibration); when it is not obtainable, the manifest says so
-     explicitly with the extrapolation basis.
-Reuse the manifest at close-out: the delivery-time reconciliation reads its
-first column from this file, not from re-scraping the conversation."""
+FACET MANIFEST — extraction kept in your head cannot be reused. Write the task's qualifiers to a manifest file (e.g. analysis/facets.md; state the path in the plan) with three sections, each entry pinned to the task's OWN words — quote the line and cite where it says so. Do NOT read beyond the task statement or guess the grader's logic.
+  1. FORM conventions left open (output format, units, field order, naming): list candidates and pin ONE supported by the task text, with its source line.
+  2. Reference artifacts the task NAMES (required files, commands, example paths): quote each verbatim — this IS the grading surface.
+  3. Example vs graded domain: state whether the task's example IS the graded instance; if not, write "the graded instance is another — do not extrapolate." Run the REAL graded input at least once when obtainable, else record the extrapolation basis.
+Reuse the manifest at close-out: delivery-time reconciliation reads it from this file, not from re-scraping the conversation."""
 
 _WRITE_FILE_NO_PLAN = (
     "[Plan] You are about to write or edit a file — the concrete signal that you have "
-    "started producing a deliverable. A plan must exist before you produce "
-    "output.\n"
+    "started producing a deliverable. A plan must exist before you produce output.\n"
     "\n"
     "Call plan_create() now: frame the task as ordered steps with acceptance "
     "criteria naming what THIS task requires. A budget-order first step ('land a "
     "crude but complete, scorable deliverable at the required path, then refine') "
-    "keeps an unsupervised run from spending its whole budget with nothing on "
-    "disk.\n"
+    "keeps an unsupervised run from spending its whole budget with nothing on disk.\n"
     "\n"
     "If this write is a genuinely throwaway scratch/draft file (not the "
     "deliverable), override with a one-line reason and proceed."
@@ -206,24 +171,21 @@ _WRITE_FILE_NO_PLAN = (
 # only states that the check is now enforced, not merely suggested.
 _DIVERGER_ENFORCE = """[Plan] Diverger not dispatched.
 
-The divergence check is part of framing the plan, not an optional afterthought
-— it is where a wrong premise is cheapest to fix and hardest to see. plan_create
-delivered the demand; the first non-plan tool call after it is blocked (once,
-overridable) until a diverger is dispatched or you override with a reason.
+The divergence check is part of framing the plan, not an optional afterthought — it
+is where a wrong premise is cheapest to fix and hardest to see. plan_create delivered
+the demand; the first non-plan tool call after it is blocked (once, overridable) until
+a diverger is dispatched or you override with a reason.
 
-The standing demand below is reused verbatim from the plan_create inject; its
-"advisory / never blocking / skipping is legal" wording describes THAT channel
-(it is a spawn-and-continue background worker, off your critical path). Here
-the check is ENFORCED — this call is blocked until you dispatch a diverger
-or override with a reason.
+The demand below is reused verbatim from the plan_create inject; its "advisory /
+never blocking / skipping is legal" wording describes THAT channel (a spawn-and-
+continue background worker, off your critical path). Here the check is ENFORCED.
 
-Also delivered with the framing demand is the FACET MANIFEST requirement
-(the plan_create inject's facet section): when overriding this block, your
-override reason must state BOTH — that the diverger was dispatched (or why
-it is genuinely skippable) AND the facet manifest file path (or why the task
-has no extractable facets). The manifest is the upstream data source for the
-close-out reconciliation: without it on disk, the final deliverable check
-re-scrapes the conversation instead of reading the pinned qualifiers.
+The FACET MANIFEST requirement (the plan_create inject's facet section) also rides
+this channel: your override reason must state BOTH — that the diverger was dispatched
+(or why it is genuinely skippable) AND the facet manifest file path (or why the task
+has no extractable facets). The manifest is the upstream source for close-out
+reconciliation: without it, the final deliverable check re-scrapes the conversation
+instead of reading the pinned qualifiers.
 """
 
 
@@ -232,61 +194,21 @@ _DIVERGER_INJECT = """
 Divergence check — dispatch a diverger the moment this plan exists. It runs
 IN PARALLEL with your plan and costs the time wall NOTHING.
 
-PARALLEL, ZERO WALL-CLOCK: the diverger is a spawn-and-continue BACKGROUND
-worker — you fire it and keep working your own next step; you are never
-blocked on it, and it never consumes your time window (never blocking). So
-the DEFAULT is to DISPATCH: unless the task is genuinely trivial — a single
-known command, a rename, a version bump with no design choice — spawn it.
-"Skipping saves time" is a false economy here: the worker is ~3-minute and
-off the critical path, so skipping saves zero wall-clock and forfeits the one
-independent check you cannot perform on your own framing.
+PARALLEL, ZERO WALL-CLOCK: the diverger is a spawn-and-continue BACKGROUND worker — you fire it and keep working your own next step; never blocked on it, it never consumes your time window. So the DEFAULT is to DISPATCH: unless the task is genuinely trivial (a single known command, a rename, a version bump with no design choice), spawn it. "Skipping saves time" is a false economy — the worker is ~3-minute and off the critical path, so skipping saves zero wall-clock and forfeits the one independent check you cannot run on your own framing.
 
-PURPOSE — its three concrete questions, any one of which can change your plan:
-  1. A BETTER method — is there a faster / cheaper / simpler approach than
-     the one this plan commits to (a different algorithm, tool, or cut of the
-     problem)?  [this is the optimality check]
-  2. A MORE CORRECT method — is there an approach that avoids a correctness
-     risk this plan carries (a wrong assumption, an overfit-to-one-sample, a
-     silent-failure mode)?  [this is the correctness check]
-  3. An UNCONSIDERED method — what framing did this plan never even put on the
-     table (a different decomposition, or a different reading of an ambiguous
-     term)?  [this is the "did I think narrowly?" check]
-If it surfaces none of the three, that is itself the gain: "I checked what
-else it could be" replaces "I think this framing is right".
+PURPOSE — three questions, any one of which can change your plan:
+  1. A BETTER method — faster / cheaper / simpler than the one this plan commits to (a different algorithm, tool, or cut)?  [optimality]
+  2. A MORE CORRECT method — one that avoids a correctness risk this plan carries (a wrong assumption, an overfit-to-one-sample, a silent-failure mode)?  [correctness]
+  3. An UNCONSIDERED method — a framing this plan never put on the table (a different decomposition, or a different reading of an ambiguous term)?  ["did I think narrowly?"]
+If it surfaces none of the three, that is itself the gain: "I checked what else it could be" replaces "I think this framing is right".
 
-WHY: you framed this plan, so its premises are invisible to you — the same
-context that produced a framing cannot reliably judge it (self-review
-inherits the blind spot that produced the claim; Huang et al. 2024). A wrong
-framing is the most expensive defect class: every step, test and hour
-downstream inherits it, and it surfaces only as late-stage dead-ends
-("why is this not working") when the budget is nearly gone. The diverger
-reads the task WITHOUT your plan, so it sees framings you did not consider.
+WHY: you framed this plan, so its premises are invisible to you — the same context that produced a framing cannot reliably judge it (self-review inherits the blind spot; Huang et al. 2024). A wrong framing is the most expensive defect class: every step, test and hour downstream inherits it, and it surfaces only as late-stage dead-ends when the budget is nearly gone. The diverger reads the task WITHOUT your plan, so it sees framings you did not.
 
-GAIN: one of two concrete outcomes — (a) a genuinely better framing adopted
-while changing it costs minutes, or (b) alternatives rejected against fresh
-eyes, which upgrades "I think this framing is right" into "I checked what
-else it could be". Cost: one ~3-minute read-only worker, spawn-and-continue
-(never blocking), running alongside your next step. Skipping is legal — this
-is advisory — but recognize the trade honestly: the worker is off the
-critical path, so skipping buys back no wall-clock, only the risk that the
-whole plan rests on an unexamined premise.
-
-Spawn ONE diverger worker (spawn_worker) RIGHT AFTER framing this plan — do not
-wait for step 2, and do not wait for the result before acting. Contract:
-  - goal: "Propose 2-3 genuinely different framings of the task — is there a
-    BETTER / MORE CORRECT / not-yet-considered method? Different method-class,
-    different decomposition, or a different reading of an ambiguous term — NOT
-    refinements of this plan."
-  - constraints: read-only (writable: [one scratch dir that contains output_ptr —
-    an empty list is rejected by validation]; forbidden: modify any file),
-    max_minutes: 3. Give it the task's ORIGINAL statement, not your plan.
-  - The diverger proposes IDEAS ONLY: no verdicts, no ranking, no agreeing with
-    you. It answers "what else could this problem be", not "is this plan good".
-When it returns, issue a ONE-LINE ruling for EACH alternative it proposed —
-adopt (then actually revise the plan) or reject (name WHY in one sentence, e.g.
-"incompatible with X constraint"). A ruling with no reason is not a ruling; an
-unruled alternative is an unexamined premise. This fires per framing — at
-every plan_create, where a wrong framing is cheapest to fix."""
+Spawn ONE diverger worker (spawn_worker) RIGHT AFTER framing this plan — do not wait for step 2, and do not wait for the result before acting. Contract:
+  - goal: "Propose 2-3 genuinely different framings of the task — is there a BETTER / MORE CORRECT / not-yet-considered method? Different method-class, different decomposition, or a different reading of an ambiguous term — NOT refinements of this plan."
+  - constraints: read-only (writable: [one scratch dir containing output_ptr — an empty list is rejected by validation]; forbidden: modify any file), max_minutes: 3. Give it the task's ORIGINAL statement, not your plan.
+  - The diverger proposes IDEAS ONLY: no verdicts, no ranking, no agreeing. It answers "what else could this problem be", not "is this plan good".
+When it returns, issue a ONE-LINE ruling for EACH alternative — adopt (then actually revise the plan) or reject (name WHY, e.g. "incompatible with X constraint"). A ruling with no reason is not a ruling; an unruled alternative is an unexamined premise. This fires per framing — at every plan_create."""
 
 
 # Wall-aware first plan: the FIRST framing must bank a
@@ -299,23 +221,20 @@ every plan_create, where a wrong framing is cheapest to fix."""
 # override — same pattern as the qualifier and diverger demands above).
 _WALL_AWARE_FIRST_PLAN = """
 
-Wall-aware first plan — a plan made without a time wall can spend the whole
-budget framing and refining with nothing settled. The first plan must
-guarantee a MINIMAL VERIFIABLE VERSION that can be settled within the wall
-lands early: order steps so a crude but complete, scorable deliverable is
-written to the required path first (write-through), then refine. Later
-increments REPLACE the deliverable in place — never rewrite from scratch.
-Price every expensive step against the wall before starting it; if the full
-version would overrun, the minimal version IS the deliverable, not a
-checkpoint on the way to one.
+Wall-aware first plan — a plan made without a time wall can spend the whole budget
+framing with nothing settled. Order steps so a MINIMAL VERIFIABLE VERSION lands
+within the wall: a crude but complete, scorable deliverable at the required path
+first (write-through), then refine — later increments REPLACE it in place, never
+rewrite from scratch. Price every expensive step against the wall; if the full
+version would overrun, the minimal version IS the deliverable, not a checkpoint on
+the way to one.
 
-If the task has SEVERAL plausible solution paths and you cannot yet tell which
-is right, do NOT make the first plan a linear commit to path #1. Make it a
-PORTFOLIO: one step that runs a DISCRIMINATING micro-experiment per candidate
-(2-3 candidates, ~10-15% of budget each) — an experiment whose every outcome
-rules at least one candidate in or out — then a following step that focuses on
-the survivor. Serial trial-and-error taxes each wrong path at its full cost;
-a discriminating probe buys the elimination at a fraction of it."""
+If SEVERAL plausible paths exist and you cannot tell which is right, do NOT make the
+first plan a linear commit to path #1. Make it a PORTFOLIO: one step running a
+DISCRIMINATING micro-experiment per candidate (2-3 candidates, ~10-15% of budget
+each) whose every outcome rules at least one candidate in or out, then a step on the
+survivor. Serial trial-and-error taxes each wrong path at full cost; a discriminating
+probe buys the elimination at a fraction of it."""
 
 
 def _wall_aware_block() -> str:
@@ -435,33 +354,70 @@ class PlanGuard(Guard):
     # written before understanding, which is worse than no plan.
     SINGLE_SHOT_BLOCK_THRESHOLD = 20
 
+    # Tools whose COMPLETED call can settle the divergence demand. Named once:
+    # check_pre's gate exempts them (a compliant dispatch must not be blocked
+    # on the very call that complies) and check_post settles them.
+    _DISPATCH_TOOLS = ("spawn_worker", "dispatch_many")
+
     def __init__(self, task_plan=None, single_shot: bool = False):
         self._task_plan = task_plan
-        self._calls_without_plan = 0
         self._single_shot = single_shot
-        # Whether plan_create was ever called — completion gate checks this
-        # (distinct from get_active(): a plan may be created then deactivated).
+        # ── State ledger ─────────────────────────────────────────────────
+        # Every field below is one obligation of the plan-framing contract.
+        # Lifecycle is tagged per field: [per-turn] reset by reset_turn(),
+        # [per-framing] armed on each plan_create, [per-resolve] transient
+        # within one registry resolve, [per-run] sticky for the whole run.
+        #
+        # The ONLY flag check_post mutates is _diverger_pending: check_post is
+        # the SETTLEMENT site — it observes the completed call (tool_result +
+        # full tool_args), which check_pre cannot see, and discharges an
+        # obligation only when the call actually DID the required thing, never
+        # on the appearance of it (attempt != done). Silence is deliberate:
+        # settlement state feeds check_pre's future gates; a verdict here would
+        # be per-obligation chatter with zero new information.
+
+        # No-plan nag budget. [per-turn]
+        # Armed: incremented by every non-plan check_pre. Discharged: a
+        # plan_create (check_post resets to 0 — the framing happened) or
+        # reset_turn().
+        self._calls_without_plan = 0
+
+        # A plan was actually framed at least once. [per-run]
+        # Distinct from task_plan.get_active(): a plan may later be completed/
+        # abandoned, but the "you have not planned yet" obligation stays
+        # discharged. Set ONLY by a plan_create whose result shows success —
+        # a blocked/errored attempt leaves the obligation live.
         self._plan_ever_created = False
-        # Qualifier extraction delivered once per FRAMING: set by whichever
-        # block carries it (write_file / single-shot), or injected on a
-        # plan_create; a plan_create consumes it again so re-planning re-injects.
+
+        # Qualifier-extraction demand delivered for the CURRENT framing.
+        # [per-framing]
+        # Armed: a plan_create consumes-and-delivers it (or a block carries it
+        # first). reset_turn() re-arms for the next framing.
         self._qualifier_reminded = False
-        # Divergence demand, like the qualifier, is PER FRAMING: injected on
-        # EVERY plan_create (a later re-framing's premises are as unexamined
-        # as the first's — user ruling 2026-09-23), consumed on injection,
-        # re-armed by reset_turn. Anti-ritualization lives in the contract
-        # itself (a one-line ruling for EVERY alternative), not in a
+
+        # Divergence demand delivered for the CURRENT framing. [per-framing]
+        # Same lifecycle as _qualifier_reminded; a later re-framing's premises
+        # are as unexamined as the first's (user ruling 2026-09-23), so the
+        # demand re-arms per framing. Anti-ritualization lives in the demand's
+        # contract (a one-line ruling for EVERY alternative), not in a
         # once-per-run flag.
         self._diverger_reminded = False
-        # Set by plan_create (when the divergence demand was delivered); the
-        # NEXT non-plan tool call blocks once if no diverger was dispatched.
-        # Cleared by that block OR by a spawn_worker/dispatch_many (check_post).
+
+        # The divergence demand was delivered and NOT yet settled by an actual
+        # diverger dispatch. [per-framing gate]
+        # Armed: delivery sites (plan_create / single-shot block). Settled:
+        # check_post observing a real diverger dispatch; or consumed by the
+        # one-shot block; or reset_turn(). Re-armed by block_not_surfaced()
+        # when the block never reached the agent.
         self._diverger_pending = False
-        # True only within the resolve in which the diverger block fired, so
-        # `block_not_surfaced` can tell that a higher-ranked block outranked
-        # OURS and re-arm the demand (F4). Without this the diverger block's
-        # one-shot clear of `_diverger_pending` would consume the demand even
-        # though the agent never saw the block. Reset at the top of check_pre.
+
+        # A one-shot marker within the resolve where OUR diverger block fired.
+        # [per-resolve transient]
+        # Lets block_not_surfaced() know a higher-ranked block outranked OURS
+        # (the agent never saw the demand) so the demand must re-arm — without
+        # spuriously re-arming when an unrelated block (write_file / single-shot)
+        # lost the ranking. Cleared at the top of every check_pre and in
+        # reset_turn().
         self._diverger_block_consumed = False
 
     def set_single_shot(self, enabled: bool = True):
@@ -544,43 +500,37 @@ class PlanGuard(Guard):
         if ctx.tool_name in ("plan_update", "plan_status"):
             return None
 
-        # Diverger-dispatch gate: the FIRST non-plan tool call after a
-        # plan_create that carried the divergence demand is blocked once
-        # (overridable) if no diverger was dispatched. Exempt for reviewer/
-        # diverger workers — the demand is parent-side only. Overridable, not a
-        # hard wall: a genuinely-trivial framing can document the skip.
-        # Dispatch tools ARE the compliance — never blocked (a compliant agent
-        # whose first action after plan_create IS the diverger spawn must not be
-        # blocked on that very call); they clear the gate instead (check_post,
-        # plus the fall-through below) and keep their normal no-plan accounting.
-        if (self._diverger_pending
-                and ctx.tool_name not in ("spawn_worker", "dispatch_many")
-                and not _self_is_review_or_diverge_worker()):
-            self._diverger_pending = False
-            # Mark that THIS resolve consumed the demand via our block. If a
-            # higher-ranked block outranks ours, the registry calls
-            # block_not_surfaced() and we re-arm (the agent never saw us).
-            self._diverger_block_consumed = True
-            return GuardVerdict.block(
-                message=(
-                    _DIVERGER_ENFORCE
-                    + _DIVERGER_INJECT
-                    + _wall_aware_block()
-                    + _premortem_block()
-                ),
-                reason="diverger_not_dispatched",
-                category="plan_required",
-                overridable=True,
-            )
-        # A plain spawn_worker/dispatch_many that did NOT carry a diverger does
-        # NOT satisfy the demand: leave the gate ARMED so the next non-plan tool
-        # still blocks (F1). This must live here, not only in check_post — the
-        # kernel runs check_pre for every tool call, so an unconditional clear
-        # here would erase the gate before check_post could judge the dispatch.
-        # Every OTHER tool reaching this point was either consumed by the block
-        # above, is exempt (worker), or is a plan tool (early-returned) — clear.
-        if ctx.tool_name not in ("spawn_worker", "dispatch_many"):
-            self._diverger_pending = False
+        # Diverger-dispatch gate: after a framing delivered the divergence
+        # demand, the first subsequent tool call is blocked once (overridable)
+        # if no diverger was dispatched. Three outcomes, in order:
+        if self._diverger_pending:
+            if ctx.tool_name in self._DISPATCH_TOOLS:
+                # Compliance candidate — never block the very call that
+                # complies. Do NOT clear here: only an ACTUAL diverger
+                # dispatch settles the demand, and only check_post can judge
+                # the args (F1: a plain spawn leaves the gate armed).
+                pass
+            elif _self_is_review_or_diverge_worker():
+                # The demand is parent-side only; a worker context neither
+                # enforces nor is bound by it. Clear so it does not linger.
+                self._diverger_pending = False
+            else:
+                self._diverger_pending = False
+                # Mark that THIS resolve consumed the demand via our block. If a
+                # higher-ranked block outranks ours, the registry calls
+                # block_not_surfaced() and we re-arm (the agent never saw us).
+                self._diverger_block_consumed = True
+                return GuardVerdict.block(
+                    message=(
+                        _DIVERGER_ENFORCE
+                        + _DIVERGER_INJECT
+                        + _wall_aware_block()
+                        + _premortem_block()
+                    ),
+                    reason="diverger_not_dispatched",
+                    category="plan_required",
+                    overridable=True,
+                )
 
         # If plan exists, nothing to do
         if self._task_plan and self._task_plan.get_active():
@@ -648,6 +598,26 @@ class PlanGuard(Guard):
         return None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        """Settlement site for the plan-framing obligations.
+
+        Nothing here is surfaced to the LLM: check_post runs AFTER the tool,
+        and its verdicts are advisory-only (this method always returns None).
+        Its job is to SETTLE an obligation by OBSERVING that the completed
+        call actually did the required thing — never by the appearance of
+        it. It is the only hook that can, because check_pre runs before the
+        tool and cannot see the result or the dispatch content.
+
+        Two settlements:
+          * plan_create — reset the no-plan nag budget, and discharge the
+            "you have not planned" obligation ONLY if the result shows the
+            plan really was produced (a failed/blocked ATTEMPT does not).
+          * a real diverger dispatch — settle the divergence demand the
+            framing armed (a spawn for any other purpose does not).
+
+        The settled state feeds a LATER check_pre gate; silence here is
+        deliberate — a per-obligation verdict would be chatter with no new
+        information.
+        """
         if ctx.tool_name == "plan_create":
             self._calls_without_plan = 0
             # Only a plan_create that ACTUALLY produced a plan may discharge the
@@ -662,7 +632,7 @@ class PlanGuard(Guard):
         # A dispatch satisfies the divergence demand for THIS framing: the
         # agent actually spawned the independent proposer. Clear the gate so the
         # following tool call is not blocked.
-        elif ctx.tool_name in ("spawn_worker", "dispatch_many"):
+        elif ctx.tool_name in self._DISPATCH_TOOLS:
             # Only an ACTUAL diverger dispatch satisfies the demand — a spawn
             # for any other purpose leaves the gate armed (F1).
             if _dispatch_includes_diverger(ctx.tool_name, ctx.tool_args):

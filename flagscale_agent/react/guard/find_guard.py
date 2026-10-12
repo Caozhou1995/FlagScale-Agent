@@ -886,25 +886,23 @@ def _scan(
 
 
 _FIND_MESSAGE = (
-    "[FindGuard] `find` on a large directory tree is slow and often the wrong "
-    "tool. Before running find, follow the internal information-retrieval order:\n"
+    "[FindGuard] `find` on a large tree is slow and often the wrong tool. First "
+    "follow the internal information-retrieval order:\n"
     "\n"
     "  1. conversation_full.json / conversation.json (session dir) — grep for the "
-    "path/file you're chasing. Near-zero cost, it may already be recorded.\n"
-    "  2. memory — memory_list(keyword=...) or memory_read(key='fact/<domain>/'). "
-    "A path you discovered before is likely already saved.\n"
-    "  3. scoped search tools — locate files by name with a fast indexed search; "
-    "search contents with `grep -rn <pattern> <specific_dir>`. Both beat a bare "
-    "`find /` walk.\n"
+    "path/file you're chasing; near-zero cost, may be recorded.\n"
+    "  2. memory — memory_list(keyword=...) or memory_read(key='fact/<domain>/'); a "
+    "path you found before is likely saved.\n"
+    "  3. scoped search — locate files by name with an indexed search; search "
+    "contents with `grep -rn <pattern> <specific_dir>`. Both beat a bare `find /`.\n"
     "  4. ask the user for the path if it's a package/source location.\n"
     "\n"
     "A broad `find /` or a find over a big shared/NFS tree can take minutes and "
     "hammer the filesystem — that is what this guard blocks.\n"
     "\n"
-    "If your find is genuinely necessary AND tightly scoped (bounded root, "
-    "-maxdepth / -name filters keeping the walk cheap), override with "
-    "_override_reason explaining the root is bounded and the cheaper channels "
-    "above don't apply."
+    "If your find is necessary AND tightly scoped (bounded root, -maxdepth / -name "
+    "filters), override with _override_reason: the root is bounded and the cheaper "
+    "channels above don't apply."
 )
 
 

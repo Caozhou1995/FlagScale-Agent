@@ -219,7 +219,7 @@ class StartupPhase(abc.ABC):
         return bool(reason and len(reason.strip()) > 5)
 
 
-_UPFRONT_BACKUP_MESSAGE = """[StartupGuard/Backup] This is your first shell command — before you touch any files, check whether the task provides irreplaceable input resources.
+_UPFRONT_BACKUP_BODY = """This is your first shell command — before you touch any files, check whether the task provides irreplaceable input resources.
 
 Irreplaceable inputs include:
   • Databases (.db, .sqlite) and their WAL files
@@ -237,6 +237,8 @@ first touch.
 
 If no irreplaceable inputs exist (task generates data from scratch, or inputs are
 regenerable), override this with "_override_reason" explaining why no backup is needed."""
+
+_UPFRONT_BACKUP_MESSAGE = "[StartupGuard/Backup] " + _UPFRONT_BACKUP_BODY
 
 
 class BackupPhase(StartupPhase):
@@ -284,11 +286,9 @@ class BackupPhase(StartupPhase):
 _PROBE_BLOCK_MESSAGE = (
     "[StartupGuard/NetworkProbe] You are about to run a HEAVY network operation "
     "({op}) as your first network act — with NO lightweight connectivity probe "
-    "first. This block is NON-OVERRIDABLE: run a probe, then retry the heavy op.\n\n"
-    "GOAL: a probe is NOT a yes/no reachability ping. Its job is to pick the "
-    "FASTEST working path BEFORE you pay a slow blind fetch — connectivity is "
-    "only the floor. A heavy op that hangs for minutes on an unreachable or slow "
-    "host teaches you nothing about WHERE it failed; a few 5-second probes do.\n"
+    "first. NON-OVERRIDABLE: run a probe, then retry.\n\n"
+    "A probe is NOT a yes/no reachability ping: its job is to pick the FASTEST "
+    "working path before you pay a slow blind fetch.\n"
     "  1. NAME the host(s) this op pulls from (repo, package index, CDN).\n"
     "  2. CHECK which tool exists, then probe with bounded time:\n"
     "       command -v curl wget python3 2>/dev/null\n"
@@ -296,22 +296,20 @@ _PROBE_BLOCK_MESSAGE = (
     "       wget -T 5 -t 1 --spider -S <host>              # if no curl\n"
     "       python3 -c \"import urllib.request,socket; socket.setdefaulttimeout(5); "
     "print(urllib.request.urlopen('<host>').status)\"   # if neither\n"
-    "  3. RACE THE ALTERNATIVES — do not settle for the first host that answers. "
-    "Time 2-3 candidate paths and KEEP THE FASTEST:\n"
-    "       • mirrors — for pip/apt/conda/npm/HF, time the default vs a mirror "
-    "(e.g. pypi.org vs a pip index-url mirror, deb.debian.org vs a local apt "
-    "mirror, huggingface.co vs an hf-mirror) with 'time curl -sI --max-time 5'.\n"
-    "       • proxy on/off — the ambient HTTP(S)_PROXY may be SLOWER or may block "
-    "the target; compare 'curl -sI <host>' against 'env -u HTTP_PROXY -u "
-    "HTTPS_PROXY curl -sI <host>' and use whichever wins.\n"
-    "       • then CONFIGURE the winner before the heavy op (pip -i / "
-    "--index-url, apt sources, npm registry, HF_ENDPOINT, git remote), so the "
-    "download actually rides the fast path you found.\n"
-    "  4. If a path fails, DEGRADE (proxy toggle → mirror → case-flip URL → "
-    "cache) — a single failure is ONE data point, not proof of unreachability.\n"
+    "  3. RACE THE ALTERNATIVES — time 2-3 candidates, KEEP THE FASTEST:\n"
+    "       • mirror — default vs a mirror (pypi.org vs a pip index-url mirror, "
+    "deb.debian.org vs a local apt mirror, huggingface.co vs an hf-mirror) with "
+    "'time curl -sI --max-time 5'.\n"
+    "       • proxy on/off — HTTP(S)_PROXY may be slower or block the target; "
+    "compare 'curl -sI <host>' vs 'env -u HTTP_PROXY -u HTTPS_PROXY curl -sI "
+    "<host>' and keep the winner.\n"
+    "       • CONFIGURE the winner before the heavy op (pip -i / --index-url, apt "
+    "sources, npm registry, HF_ENDPOINT, git remote) so the download rides it.\n"
+    "  4. If a path fails, DEGRADE (proxy toggle → mirror → case-flip URL → cache) "
+    "— one failure is ONE data point, not proof of unreachability.\n"
     "A heavy op (git clone / pip install / wget download / uv / conda / npm / apt "
-    "install) does NOT count as a probe — the whole point is to probe, pick the "
-    "fastest source, and only THEN pay the cost."
+    "install) does NOT count as a probe — probe, pick the fastest source, only "
+    "THEN pay the cost."
 )
 
 
@@ -486,14 +484,14 @@ _FIRST_ACTION_LIMIT_SECS = 180
 
 _FIRST_ACTION_LATE_MESSAGE = """[StartupGuard/FirstAction] {mins:.0f} minutes elapsed and you have produced ZERO tool events.
 
-Real death case: an agent spent the first 12 minutes in pure thought — 80% of a
-900s budget — before its first tool call, and had nothing left to verify with.
-Budget discipline: the FIRST tool event must land within 3 minutes of start.
+Real death case: an agent spent the first 12 minutes in pure thought (80% of a
+900s budget) before its first tool call, and had nothing left to verify with. The
+FIRST tool event must land within 3 minutes of start.
 
 Fire a cheap action NOW — any tool call counts, and cheap beats clever:
   • a 5-second probe (ls the workspace, head a config, wc -l a source file)
   • the 30-second experiment that builds your diff loop (compile → compare →
-    one-variable fix), turning "guess the constant" into "measure the constant"
+    one-variable fix): "measure the constant" beats "guess the constant"
   • write the minimal skeleton to the delivery path (write-through beats polish)
 Thinking is not progress until it is OBSERVABLE. Act first, refine after."""
 

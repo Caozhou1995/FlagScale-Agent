@@ -407,7 +407,9 @@ class WorkerAgent:
         # Knowledge-first guard (always active, inject-only)
         self._knowledge_guard = KnowledgeSkillGuard()
         guard_registry.register(self._knowledge_guard)
-        # Verification discipline guard (always active, block on step_done without evidence)
+        # Verification discipline guard — now keeps ONLY the plan step_done
+        # evidence gate; the terminal completion gates moved into the plan's
+        # fixed review step (tools/plan_create.py). Re-enabled.
         guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals))
 
         deps = KernelDeps(

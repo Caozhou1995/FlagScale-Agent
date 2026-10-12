@@ -150,34 +150,20 @@ def _streams_to_monitor(cmd: str) -> bool:
 
 _MESSAGE = """[CompileRedirectGuard] Long-running build/compile command whose output is not visible to the monitor.
 
-Verbose builds (make -j, cmake --build, cargo build, ...) can run for many
-minutes. The live monitor watches the child's stdout in real time. Two forms make the
-run LOOK HUNG even while it progresses:
-  • piped to a pager/filter (`| tail` / `| head`) — the child full-buffers, nothing
-    appears until it exits.
-  • a BARE file redirect (`> build.log 2>&1`, `&> build.log`) — ALL output goes to the
-    file and the monitor's stdout pipe stays empty for the whole run. The health judge
-    can only peek the file out-of-band and usually sees stale/buffered content, so it
-    cannot tell real progress from a true hang. A pure redirect is a BLACK BOX to the
-    monitor — it does NOT satisfy this guard.
+The live monitor watches the child's stdout. Two forms make a build LOOK HUNG while it progresses:
+  • piped to a pager/filter (`| tail` / `| head`) — the child full-buffers; nothing until it exits.
+  • a BARE file redirect (`> build.log 2>&1`) — all output goes to the file, the monitor's stdout pipe stays empty, out-of-band peeking sees stale content. A pure redirect is a BLACK BOX and does NOT satisfy this guard.
 
-Keep the output flowing to the terminal AND a file, so it is visible live and inspectable after:
-  <build cmd> 2>&1 | tee build.log                 # preferred: stream to terminal + file
+Keep output flowing to the terminal AND a file, visible live and inspectable after:
+  <build cmd> 2>&1 | tee build.log                  # preferred: terminal + file
   <build cmd> > build.log 2>&1 &  tail -f build.log # background + stream the log back
+`tee` (or `tail -f` streaming the log back) is what the monitor needs — not a bare `> file`.
 
-`tee` (or a `tail -f` that streams the redirected log back to the terminal) is what the
-monitor needs — not a bare `> file`.
-
-While you are here — parallelism strategy, before you commit the full build:
-  • Probe single-threaded first, THEN build with BOUNDED parallelism. A parallel
-    first build interleaves output and buries the first real config/toolchain/dep
-    error in noise; a single-threaded probe surfaces it cleanly. Once the probe
-    confirms it configures and starts compiling, scale up:
+Parallelism — probe first, then build with BOUNDED parallelism:
+  • Probe single-threaded FIRST: a parallel first build buries the first real config/toolchain/dep error in noise; a clean probe surfaces it:
       timeout 120 make -j1 2>&1 | tee build.probe.log   # probe: clean first error
-      # CGROUP-AWARE core/mem detection: in a container `nproc` and /proc/meminfo
-      # report the HOST (e.g. 256 cores / 1TB) even when the cgroup caps you at
-      # 1 CPU / 2GB. Reading the host over-parallelizes and OOM-kills the build.
-      # Read the cgroup limit FIRST, fall back to host only when unlimited.
+  • NEVER bare `make -j` or `make -j$(nproc)` without ALL THREE caps:
+      1. CGROUP cap: in a container `nproc` and /proc/meminfo report the HOST, not your slice. A 2GB/1-CPU cgroup with `-j32` forks 32 cc1plus needing ~1GB each → instant OOM-kill (`Killed signal terminated program cc1plus`) and 1-CPU thrash. Read the cgroup limit FIRST and take the min against the host:
       Q=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null | awk '{if($1!="max")print int($1/$2)}')   # cores v2
       [ -z "$Q" ] && Q=$(awk 'END{if($1>0)print int($1/p)}' p=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null) /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null)  # v1
       NP=$(nproc); C=${Q:-$NP}; [ "$C" -gt "$NP" ] 2>/dev/null && C=$NP; [ "$C" -lt 1 ] 2>/dev/null && C=1
@@ -188,66 +174,29 @@ While you are here — parallelism strategy, before you commit the full build:
       M=$(( AVKB/2000000 ))                              # ~2GB/compiler, memory-bounded
       J=$C; J=$(( M<J ? M : J )); J=$(( J<1 ? 1 : J ))   # min(cgroup-cores, mem-bound)
       J=$(( J>32 ? 32 : J ))                             # absolute cap: >32 thrashes cache/BW
-      echo "Using -j$J (cgroup-cores=$C host-nproc=$NP mem-bound=$M)"
-      make -j$J 2>&1 | tee build.log                     # then bounded-parallel build
-  • NEVER use bare `make -j` or `make -j$(nproc)` WITHOUT the caps above. THREE caps
-    matter, and ALL are needed:
-      1. CGROUP cap (C/LIM): in a container, `nproc` and /proc/meminfo show the HOST,
-         not your slice. A 2GB / 1-CPU cgroup with `-j32` (host said 256 cores) forks
-         32 cc1plus each needing ~1GB → instant OOM-kill (`Killed signal terminated
-         program cc1plus`) and 1-CPU thrash. Always read /sys/fs/cgroup/{cpu.max,
-         memory.max} (v2) or the cpu.cfs_*/memory.limit_in_bytes (v1) and take the
-         min against the host.
-      2. MEMORY cap (M): each compiler can use 1-2GB; an unbounded `-j` forks as many
-         compilers as the graph allows and OOMs/thrashes a small (4-8GB) box.
-      3. ABSOLUTE cap (32): a big host (256 cores / ~1TB RAM) passes the memory cap
-         with a huge J (e.g. -j256). That is NOT faster — 256 heavy C++ compilers
-         saturate cache and memory bandwidth, thrash the scheduler, and spawn a
-         256-node process tree that starves the monitor. Mid-size C/C++ projects
-         build fastest around -j8..32; beyond ~32 the return is flat-to-negative.
-    On a 2GB/1-CPU container the formula lands at -j1; on a big host it settles
-    at 32 instead of running away to the core count.
-  • For other build systems, apply the same memory-bounded parallelism:
+      make -j$J 2>&1 | tee build.log                     # bounded-parallel build
+      2. MEMORY cap: each compiler uses 1-2GB; an unbounded `-j` forks as many as the graph allows and OOMs/thrashes a small (4-8GB) box.
+      3. ABSOLUTE cap (32): a big host (256 cores / ~1TB) passes the memory cap with -j256 — NOT faster; that many heavy C++ compilers saturate cache and memory bandwidth and starve the monitor. Builds are fastest around -j8..32; beyond ~32 returns are flat-to-negative.
+  • Other build systems, same memory-bounded parallelism:
       cargo build -j "$J" 2>&1 | tee build.log
       cmake --build . -j "$J" 2>&1 | tee build.log
       ninja -j "$J" 2>&1 | tee build.log
 
-OVERLAP THE BUILD WITH INDEPENDENT EXPENSIVE STEPS — a build is long, and other
-costly steps this task needs usually do NOT depend on the build's output. A dataset /
-model / asset download needs only the network; an unrelated package install needs only
-the index. Running them AFTER the build finishes wastes wall-clock the per-task budget
-cannot spare — the download sits idle behind the compile for no reason. Instead, launch
-the build in the BACKGROUND (background=true) and kick off the dependency-free steps
-NOW so they run concurrently, then join on all of them:
+OVERLAP THE BUILD WITH INDEPENDENT EXPENSIVE STEPS — a build is long, and other costly steps usually do NOT depend on its output. A dataset/model/asset download needs only the network; an unrelated install needs only the index. Running them AFTER the build wastes wall-clock the budget cannot spare — the download idles behind the compile. Launch the build in the BACKGROUND (background=true) and kick off the dependency-free steps NOW so they run concurrently, then join:
   <build cmd> 2>&1 | tee build.log     # background=true → returns a job handle
-  # immediately, while it compiles, start the independent download/install:
   wget/curl <dataset-url> ... 2>&1 | tee fetch.log   (also background=true)
-Only steps that truly need the build's output (run the compiled binary, train on the
-built framework) stay ordered after it. Total wall-clock becomes the LONGEST branch,
-not the SUM of all steps. Map which steps feed which BEFORE serializing them.
+Only steps that truly need the build's output stay ordered. Total wall-clock is the LONGEST branch, not the SUM.
 
-If this command is short, already streams its own progress, or output is intentionally
-discarded, override with "_override_reason" explaining why.
-
-After any build/install: check its exit code before assuming success. A long
-install (pip, cargo, apt) can fail silently — the log scrolls past the error and
-the prompt returns, but the package was NOT installed. Verify:
+After any build/install: check the exit code before assuming success — a long install (pip, cargo, apt) can fail silently: the log scrolls past the error and the prompt returns, but the package was NOT installed.
   echo "EXIT: $?"                     # right after the command
   which <binary>; <binary> --version  # confirm the artifact exists and runs
-Do not proceed to the next step until you confirm the build actually succeeded.
 
-Installing multiple dependencies — install CRITICAL packages ONE BY ONE, not all
-at once. A multi-package install (e.g. `pip install pkg1 pkg2 pkg3`) can freeze
-for 10+ minutes with no visible progress because the package manager resolves all
-dependencies together and a single slow/failing package stalls the entire batch.
-Install each critical package individually and check its exit code BEFORE moving
-to the next:
+Installing multiple dependencies — install CRITICAL packages ONE BY ONE, not all at once. A multi-package install can freeze for minutes with no visible progress: the manager resolves all dependencies together, so one slow/failing package stalls the whole batch. Install each individually, verifying each succeeds before moving on:
   pip install <critical-pkg> 2>&1 | tee install.log; echo "EXIT: $?"
   pip install <next-pkg>    2>&1 | tee install.log; echo "EXIT: $?"
-If one package fails, you see EXACTLY which one and can debug it in isolation
-instead of debugging a frozen multi-package batch. This applies to all package
-managers (apt, pip, cargo, npm, etc.) — install the most critical / most
-likely-to-fail packages first, one at a time, verifying each succeeds."""
+Applies to all package managers (apt, pip, cargo, npm): install the most critical / most likely-to-fail packages first, one at a time.
+
+If this command is short, already streams its own progress, or output is intentionally discarded, override with "_override_reason" explaining why."""
 
 
 class CompileRedirectGuard(Guard):

@@ -26,26 +26,10 @@ VerificationGuard's _TEXT_COMPLETE_HYGIENE gate.
 from __future__ import annotations
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.guard.startup import _UPFRONT_BACKUP_BODY
 
 
-_UPFRONT_BACKUP_MESSAGE = """[BackupGuard] This is your first shell command — before you touch any files, check whether the task provides irreplaceable input resources.
-
-Irreplaceable inputs include:
-  • Databases (.db, .sqlite) and their WAL files
-  • Binary data files that cannot be regenerated
-  • Input files for forensic analysis or byte-level validation
-  • Any resource where "opening it" may mutate it (even without explicit rm)
-
-If such files exist in the task directory, back them up FIRST:
-  cp <file> <file>.bak
-  cp <file.wal> <file.wal>.bak
-
-Many tools (sqlite3, recovery utilities) mutate files the moment they open them — a
-logical undo does NOT restore original bytes. Protect irreplaceable data before the
-first touch.
-
-If no irreplaceable inputs exist (task generates data from scratch, or inputs are
-regenerable), override this with "_override_reason" explaining why no backup is needed."""
+_UPFRONT_BACKUP_MESSAGE = "[BackupGuard] " + _UPFRONT_BACKUP_BODY
 
 
 class BackupGuard(Guard):
