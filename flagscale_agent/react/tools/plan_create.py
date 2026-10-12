@@ -46,7 +46,8 @@ _REVIEW_STEP_ACCEPTANCE = [
     "yourself described as unverifiable/assumed/no-reference, either give a "
     "probe output whose design intent was to falsify it, or state the "
     "world-state in which the premise is false and why it is a safe bet.",
-    "Name the single point most likely to fool you, and how you ruled it out.",
+    "Pre-mortem (assume you are wrong): name the single point most likely to "
+    "fool you, and how you ruled it out.",
     "Task tier (set at Frame) — PRICE the reviewer, do not obey a mandate. T0 → no "
     "reviewer: self-verify and state the skip reason. T1 → at most ONE reviewer. T2 → "
     "full reviewer. An unconditional 'spawn ONE reviewer' "

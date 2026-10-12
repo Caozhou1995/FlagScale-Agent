@@ -94,7 +94,7 @@ class TestRoleOrderSeparation:
     """diverger and reviewer are DIFFERENT roles at DIFFERENT times.
 
     Frame (pre-artifact) dispatches the DIVERGER — the framing probe; a
-    reviewer needs a FROZEN artifact and belongs at step_done. The Frame
+    reviewer needs a FROZEN artifact and belongs at the review step. The Frame
     acceptance must not read as if Frame dispatches reviewers.
     """
 
