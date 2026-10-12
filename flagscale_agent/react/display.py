@@ -359,6 +359,36 @@ def _tool_icon(name):
     return _TOOL_ICONS.get(name, "⚙️")
 
 
+# ── Display policy (verbosity control) ─────────────────────────────────
+# Module-level policy flags, synced once from AgentConfig by WorkerAgent
+# construction. Defaults True = byte-identical to the pre-policy behavior.
+# thinking: ⏳ spinner, 💭 label, dim streamed thinking text (render-only —
+#   the model still thinks; only the display is suppressed).
+# guard advisory: soft 🛡 inject echoes. Guard BLOCK (🚫) and ESCALATE (⚠️)
+#   verdicts are deliberately NOT policy-controlled: they explain why a tool
+#   did not run and are part of the agent's safety contract, not decoration.
+
+_show_thinking = True
+_show_guard_advisory = True
+
+
+def set_policy(show_thinking=None, show_guard_advisory=None):
+    """Set the display policy. None leaves the corresponding flag unchanged."""
+    global _show_thinking, _show_guard_advisory
+    if show_thinking is not None:
+        _show_thinking = bool(show_thinking)
+    if show_guard_advisory is not None:
+        _show_guard_advisory = bool(show_guard_advisory)
+
+
+def thinking_enabled():
+    return _show_thinking
+
+
+def guard_advisory_enabled():
+    return _show_guard_advisory
+
+
 # ── Spinner for long-running tools ──────────────────────────────────────
 
 class _Spinner:
@@ -540,7 +570,14 @@ class _ThinkingAnim:
 
 
 def thinking():
+    """Start the ⏳ thinking spinner.
+
+    Policy-gated: when show_thinking is off, this is a no-op (the spinner
+    never starts, so thinking_done/thinking_clear are equally silent).
+    """
     global _thinking_anim
+    if not _show_thinking:
+        return
     _stop_all_spinners()
     _thinking_anim = _ThinkingAnim()
     _thinking_anim.start()
@@ -810,7 +847,13 @@ def guard_inject(message):
     
     Shows all lines with icon, subsequent lines indented to align with text.
     No truncation for reviewer visibility.
+
+    Policy-gated: soft advisory echoes are hidden when show_guard_advisory is
+    off. The advisory STILL reaches the model (agent._append_advisory), this
+    only mutes the terminal echo.
     """
+    if not _show_guard_advisory:
+        return
     lines = [l for l in message.strip().split('\n') if l.strip()]
     if not lines:
         return

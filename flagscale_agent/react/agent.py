@@ -145,6 +145,16 @@ class WorkerAgent:
                  _memory=None, _task_plan=None):
         self.config = config
 
+        # ── Display policy (verbosity control) ──
+        # Sync config → display module once; kernel.py and the streaming loop
+        # consult display.thinking_enabled()/guard_advisory_enabled() with no
+        # config plumbing. Defaults keep byte-identical output.
+        from flagscale_agent.react import display as _display_mod
+        _display_mod.set_policy(
+            show_thinking=config.show_thinking,
+            show_guard_advisory=config.show_guard_advisory,
+        )
+
         # ── Infrastructure ──
         self.skill_manager = _skill_manager or SkillManager(config.skill_dirs)
         self.tool_registry = _tool_registry or ToolRegistry()
@@ -2168,10 +2178,11 @@ class WorkerAgent:
                             reasoning_only = True
                     elif event["type"] == "thinking":
                         thinking_text += event["content"]
-                        if display._use_color():
-                            display._write(display.dim(event["content"]))
-                        else:
-                            display._write(event["content"])
+                        if display.thinking_enabled():
+                            if display._use_color():
+                                display._write(display.dim(event["content"]))
+                            else:
+                                display._write(event["content"])
                         # ── Runtime cap check ──
                         if not thinking_capped and not content_parts and not tool_calls:
                             thinking_counter.add(event["content"])
@@ -2193,9 +2204,10 @@ class WorkerAgent:
                         if not thinking_cleared:
                             display.thinking_done()
                             thinking_cleared = True
-                        display._write(display.dim("💭 thinking...\n"))
+                        if display.thinking_enabled():
+                            display._write(display.dim("💭 thinking...\n"))
                     elif event["type"] == "block_stop":
-                        if thinking_text:
+                        if thinking_text and display.thinking_enabled():
                             display._write(display.dim("\n"))
                     elif event["type"] == "signature":
                         thinking_signature += event["content"]

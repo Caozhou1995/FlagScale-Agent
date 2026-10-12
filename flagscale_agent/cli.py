@@ -58,6 +58,8 @@ def main(
     max_context_tokens: int = typer.Option(0, "--max-context-tokens", help="Max context window tokens (0 = auto-detect from model)"),
     thinking_budget: int = typer.Option(0, "--thinking-budget", help="Thinking budget tokens (0=disabled, >0=enable thinking)"),
     time_budget_sec: float = typer.Option(0.0, "--time-budget-sec", help="Per-turn wall-clock budget in seconds (0=unset). Drives time-remaining warnings and a wrap-up reminder at 100%; NOT a hard kill. Equivalent to env FLAGSCALE_AGENT_TIME_BUDGET_SEC."),
+    show_thinking: Optional[bool] = typer.Option(None, "--show-thinking/--no-show-thinking", help="Display model thinking (⏳ spinner, 💭 label, dim streamed text). Default: from config/env (FLAGSCALE_AGENT_SHOW_THINKING)."),
+    show_guard_advisory: Optional[bool] = typer.Option(None, "--show-guard-advisory/--no-show-guard-advisory", help="Display soft guard advisory injects (🛡). Guard block/escalate are always shown. Default: from config/env (FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY)."),
     version: bool = typer.Option(None, "--version", "-v", is_eager=True, help="Show version"),
 ):
     """Start the FlagScale Agent, or run a single query."""
@@ -89,6 +91,11 @@ def main(
         cfg.max_context_tokens = max_context_tokens
     if time_budget_sec > 0:
         cfg.time_budget_sec = time_budget_sec
+    # Display policy: explicit CLI flag wins over env/YAML (applied last).
+    if show_thinking is not None:
+        cfg.show_thinking = show_thinking
+    if show_guard_advisory is not None:
+        cfg.show_guard_advisory = show_guard_advisory
 
     agent_instance = WorkerAgent(cfg)
 

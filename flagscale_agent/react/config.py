@@ -88,6 +88,8 @@ class AgentConfig:
     shell_env: Dict[str, str] = field(default_factory=dict)
     max_continuations: int = 200
     time_budget_sec: float = 0.0  # 0 = unset; >0 = per-turn wall-clock budget driving time warnings + wrap-up (NOT a hard kill)
+    show_thinking: bool = True  # display model thinking (⏳ spinner, 💭 label, dim streamed text); False hides it for a cleaner terminal (behavior unchanged)
+    show_guard_advisory: bool = True  # display soft guard advisory injects (🛡); block (🚫) / escalate (⚠️) verdicts are ALWAYS shown
     _config_path: Optional[str] = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -118,6 +120,23 @@ class AgentConfig:
                 self.base_url = os.environ.get("ANTHROPIC_BASE_URL")
             elif self.provider == "openai":
                 self.base_url = os.environ.get("OPENAI_BASE_URL")
+
+        # Display policy: env override beats YAML but loses to explicit CLI
+        # flags (cli.py applies its options after construction). "0"/"false"
+        # hide; any other non-empty value (incl. "1") shows. Unset → YAML or
+        # default (True) stands.
+        def _env_flag(name):
+            raw = os.environ.get(name)
+            if raw is None or raw == "":
+                return None
+            return raw.strip().lower() not in ("0", "false", "no", "off")
+
+        show_thinking_env = _env_flag("FLAGSCALE_AGENT_SHOW_THINKING")
+        if show_thinking_env is not None:
+            self.show_thinking = show_thinking_env
+        show_advisory_env = _env_flag("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY")
+        if show_advisory_env is not None:
+            self.show_guard_advisory = show_advisory_env
 
         if not self.skill_dirs:
             from flagscale_agent.react.paths import get_skill_dir
@@ -218,6 +237,20 @@ class AgentConfig:
         for k, v in data.items():
             if k in valid_fields:
                 setattr(self, k, v)
+        # Re-apply display env overrides: YAML must not resurrect a display
+        # surface the environment hides (same precedence as __post_init__).
+        def _env_flag(name):
+            raw = os.environ.get(name)
+            if raw is None or raw == "":
+                return None
+            return raw.strip().lower() not in ("0", "false", "no", "off")
+
+        show_thinking_env = _env_flag("FLAGSCALE_AGENT_SHOW_THINKING")
+        if show_thinking_env is not None:
+            self.show_thinking = show_thinking_env
+        show_advisory_env = _env_flag("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY")
+        if show_advisory_env is not None:
+            self.show_guard_advisory = show_advisory_env
         # Re-run post-init validation
         for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"):
             if var not in self.shell_env:
