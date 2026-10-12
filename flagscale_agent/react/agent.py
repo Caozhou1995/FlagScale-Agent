@@ -402,6 +402,16 @@ class WorkerAgent:
         # near the deadline refuse the next poll (adjudicate from evidence
         # already held); far from the deadline it stays fully silent.
         guard_registry.register(ReviewerDeadlineGuard(stats_fn=self._task_budget_stats))
+        # Reviewer feedback guard (completion-time gate): a reviewer-class child
+        # this session spawned that is still un-finalized blocks text-only
+        # [TASK_COMPLETE] — poll_tasks(check) it and fold its findings in first,
+        # or override naming the reviewer task_id. Reads the per-session spawn
+        # registry (spawn.record_spawn); the global ledger cannot scope to this
+        # closing session. See guard/reviewer_feedback.py.
+        from flagscale_agent.react.guard.reviewer_feedback import (
+            ReviewerFeedbackGuard)
+        guard_registry.register(ReviewerFeedbackGuard(
+            session_dir_fn=lambda: self._session_dir))
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)

@@ -73,6 +73,55 @@ MAX_CONCURRENT = 10
 # The nesting dir under a parent's session dir holding its children's nested
 # session dirs (and, since this commit, their worker.log traces).
 SUBAGENTS_DIRNAME = "subagents"
+
+# Per-session spawn registry: <session_dir>/subagents/spawned.jsonl records
+# {task_id, role, ts} for every worker THIS session spawned. The task ledger is
+# GLOBAL (ledger.py:25 — shared across sessions), so it cannot scope "my
+# un-finalized reviewers" to the session that is closing; this file can. Read by
+# ReviewerFeedbackGuard at the text-only completion path.
+SPAWN_REGISTRY_FILENAME = "spawned.jsonl"
+
+
+def record_spawn(session_dir, task_id, role):
+    """Append one spawn record to this session's registry (best-effort).
+
+    Never raises: a registry write failure must not break spawning. `role` is
+    the RESOLVED role (reviewer/re_reviewer/diverger/None) so a completion-time
+    reader can tell a reviewer-class child from an ordinary worker WITHOUT
+    re-deriving it (and without the global ledger's cross-session ambiguity).
+    """
+    if not session_dir or not task_id:
+        return
+    try:
+        p = Path(session_dir) / SUBAGENTS_DIRNAME / SPAWN_REGISTRY_FILENAME
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"task_id": task_id, "role": role or "",
+                                 "ts": time.time()}) + "\n")
+    except Exception:
+        pass
+
+
+def read_session_spawns(session_dir):
+    """Return this session's spawn records (best-effort; [] on any failure)."""
+    if not session_dir:
+        return []
+    out = []
+    try:
+        p = Path(session_dir) / SUBAGENTS_DIRNAME / SPAWN_REGISTRY_FILENAME
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("task_id"):
+                out.append(rec)
+    except Exception:
+        return []
+    return out
 # Depth cap default. The EFFECTIVE cap is read per spawn from the env key
 # FLAGSCALE_MAX_DEPTH (default DEFAULT_MAX_DEPTH) — a table-driven constant the
 # agent has no tool to raise. It is clamped into [MIN_MAX_DEPTH, HARD_MAX_DEPTH]
@@ -128,6 +177,27 @@ def _has_rev_marker(constraints: Dict[str, Any],
     return False
 
 
+def _has_task_text(inputs: Optional[List[Dict[str, Any]]]) -> bool:
+    """True when inputs carry the task statement VERBATIM: a value input
+    shaped `task_text=<non-empty body>`.
+
+    Why: a reviewer is an independent second opinion. If the spawner hands it
+    the task only as a PARAPHRASE (or worse, its own premise/conclusion), the
+    reviewer's context inherits the spawner's blind spot and audits the axis
+    the spawner already believes is right. Requiring the verbatim task text
+    forces the ground truth into the review contract.
+    """
+    for inp in inputs or []:
+        if not isinstance(inp, dict):
+            continue
+        if inp.get("kind") == "value":
+            val = str(inp.get("value", "") or "")
+            m = re.match(r"^\s*task_text\s*=\s*(.+)$", val, re.IGNORECASE | re.DOTALL)
+            if m and m.group(1).strip():
+                return True
+    return False
+
+
 def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
                           acceptance: List[Dict[str, Any]], output_ptr: str,
                           deadline_minutes: float,
@@ -167,6 +237,13 @@ def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
             "reviewer preset: inputs must carry the revision under review — "
             "add {\"kind\": \"value\", \"value\": \"rev=<git sha|mtime>\"} or "
             "constraints.rev."
+        )
+    if not _has_task_text(ins):
+        raise ContractError(
+            "reviewer preset: inputs must carry the task statement VERBATIM — "
+            "add {\"kind\": \"value\", \"value\": \"task_text=<the task's own "
+            "words>\"}. A reviewer handed only a paraphrase audits the "
+            "spawner's blind spot, not the task."
         )
 
     # deadline floor
@@ -350,6 +427,17 @@ def _render_contract(c: Contract) -> str:
             "FLAGSCALE_SESSION_ROOT/ID of the parent — recall_search the "
             "parent conversation log for prior findings and state whether "
             "each prior finding was fixed, plus your own new findings."
+        )
+        lines.append("")
+        lines.append("## Anti-substitution")
+        lines.append(
+            "The task_text input is the CONTRACT. Anything the spawner wrote "
+            "about the goal in prose is a HYPOTHESIS, not an axiom — the "
+            "spawner's framing is exactly what you exist to challenge. Audit "
+            "the task's OWN acceptance conditions, not the axis the spawner "
+            "already believes is right. If the spawner's paraphrase conflicts "
+            "with task_text, task_text WINS — and say so explicitly in your "
+            "report (that conflict is itself a finding)."
         )
     lines.append("")
     lines.append(
@@ -813,6 +901,11 @@ class SpawnWorkerTool(Tool):
         # ── 9. start the parent-side watchdog (daemon; never blocks exit) ────
         wd = _Watchdog(self._ledger, c.id, proc.pid, c.deadline_epoch)
         wd.start()
+
+        # ── 10. record in THIS session's spawn registry ─────────────────────
+        # The global ledger cannot scope "my reviewers" to the closing session;
+        # this per-session file can. Best-effort — never break the spawn.
+        record_spawn(self._session_dir, c.id, resolve_role(cons))
 
         return (
             f"spawned task {c.id} pid={proc.pid} depth={c.depth} "

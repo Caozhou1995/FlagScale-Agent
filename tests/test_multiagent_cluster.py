@@ -175,7 +175,8 @@ class TestReviewerPreset:
     def _inputs(self, tmp_path):
         d = _deliverable(tmp_path)
         return [{"kind": "path", "value": str(d)},
-                {"kind": "value", "value": "rev=abc1234"}]
+                {"kind": "value", "value": "rev=abc1234"},
+                {"kind": "value", "value": "task_text=build a widget that fits"}]
 
     def test_deadline_bumped_to_10(self, tmp_path):
         cons = self._cons(tmp_path)
@@ -219,15 +220,25 @@ class TestReviewerPreset:
         with pytest.raises(ContractError, match="rev"):
             apply_reviewer_preset(
                 "review", cons, [], str(tmp_path / "findings.md"), 5,
-                inputs=[{"kind": "path", "value": str(d)}])
+                inputs=[{"kind": "path", "value": str(d)},
+                        {"kind": "value", "value": "task_text=do the thing"}])
 
     def test_rev_via_constraints_ok(self, tmp_path):
         cons = self._cons(tmp_path, rev="abc1234")
         d = _deliverable(tmp_path)
         _, dm = apply_reviewer_preset(
             "review", cons, [], str(tmp_path / "findings.md"), 5,
-            inputs=[{"kind": "path", "value": str(d)}])
+            inputs=[{"kind": "path", "value": str(d)},
+                    {"kind": "value", "value": "task_text=do the thing"}])
         assert dm == 10
+
+    def test_missing_task_text_rejected(self, tmp_path):
+        cons = self._cons(tmp_path, rev="abc1234")
+        d = _deliverable(tmp_path)
+        with pytest.raises(ContractError, match="task_text"):
+            apply_reviewer_preset(
+                "review", cons, [], str(tmp_path / "findings.md"), 5,
+                inputs=[{"kind": "path", "value": str(d)}])
 
     def test_re_review_role_gets_preset(self, tmp_path):
         cons = self._cons(tmp_path, role=ROLE_RE_REVIEWER)
@@ -260,7 +271,8 @@ class TestInjectedAcceptanceRuns:
         acc, _ = apply_reviewer_preset(
             "review the deliverable", cons, [], ptr, 10,
             inputs=[{"kind": "path", "value": str(d)},
-                    {"kind": "value", "value": "rev=abc1234"}])
+                    {"kind": "value", "value": "rev=abc1234"},
+                    {"kind": "value", "value": "task_text=do the thing"}])
         return acc, ptr
 
     def _run_all(self, acc, cwd):
@@ -672,7 +684,8 @@ class TestSpawnIntegration:
             led, tmp_path, monkeypatch, "review the diff for bugs",
             {"writable": [str(work)]},
             inputs=[{"kind": "path", "value": str(d)},
-                    {"kind": "value", "value": "rev=abc1234"}])
+                    {"kind": "value", "value": "rev=abc1234"},
+                    {"kind": "value", "value": "task_text=review the diff for bugs"}])
         assert out.startswith("spawned"), out
         tid = out.split()[2]
         rec = led.get(tid)
