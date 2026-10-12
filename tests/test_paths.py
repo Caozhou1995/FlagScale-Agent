@@ -30,13 +30,20 @@ def test_flagscale_home_override():
             assert os.path.isdir(result)
 
 
-def test_flagscale_home_relative_path():
-    """Relative FLAGSCALE_HOME is converted to absolute."""
+def test_flagscale_home_relative_path(tmp_path, monkeypatch):
+    """Relative FLAGSCALE_HOME is converted to absolute.
+
+    The path is resolved against the current working directory, so the test
+    must chdir into a temp dir -- otherwise get_dot_flagscale_root()'s
+    os.makedirs() would create ./relative_dir inside the repo working tree.
+    """
+    monkeypatch.chdir(tmp_path)
     with patch.dict(os.environ, {"FLAGSCALE_HOME": "./relative_dir"}):
         from flagscale_agent.react.paths import get_dot_flagscale_root
         result = get_dot_flagscale_root()
         assert os.path.isabs(result)
         assert result.endswith("relative_dir")
+        assert result.startswith(str(tmp_path))
 
 
 def test_flagscale_home_empty_string_uses_default():
