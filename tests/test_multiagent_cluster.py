@@ -20,6 +20,8 @@ Behaviour under test:
              contract template acceptance.
 """
 
+import os
+import re
 import subprocess
 import uuid
 
@@ -206,6 +208,64 @@ class TestReviewerPreset:
         assert any(f"test -s {ptr}" in c for c in checks)
         assert any("check_report_completeness" in c for c in checks)
         assert all(a.get("kind") == "check_command" for a in acc)
+
+    def test_injected_completeness_cmd_uses_parent_interpreter(self, tmp_path):
+        # The completeness command runs via `sh -c` in the parent env (reunite).
+        # It must invoke sys.executable, NOT the literal token `python`: a bare
+        # `python` re-resolves on PATH and can land on an interpreter without
+        # flagscale_agent (the eval container's system python), spuriously
+        # REJECTing a complete review. Regression for that env-dependent bug.
+        import shutil as _shutil
+        import sys as _sys
+        cons = self._cons(tmp_path)
+        ptr = str(tmp_path / "findings.md")
+        (tmp_path / "findings.md").write_text(
+            "# Review\n\n## Findings\n\n| ID | Sev | Fix |\n"
+            "| --- | --- | --- |\n| F1 | high | do X |\n", encoding="utf-8")
+        acc, _ = apply_reviewer_preset(
+            "review the deliverable", cons, [], ptr, 5,
+            inputs=self._inputs(tmp_path))
+        cmd = [a["check"] for a in acc
+               if "check_report_completeness" in a["check"]][0]
+        assert _sys.executable in cmd
+        # No bare interpreter token anywhere (a literal `/usr/bin/python`
+        # prefix would slip past a startswith check).
+        assert not re.search(r"(^|\s)python3?(\s|$)", cmd), cmd
+        # Real E2E: run it under a PATH whose `python` lacks the package.
+        shim = tmp_path / "shim"
+        shim.mkdir()
+        real = _shutil.which("python3") or "/usr/bin/python3"
+        sh = shim / "python"
+        sh.write_text(f"#!/bin/sh\nexec {real} -S \"$@\"\n", encoding="utf-8")
+        sh.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{shim}:{os.path.dirname(_sys.executable)}"
+        env.pop("PYTHONPATH", None)
+        rc = subprocess.run(cmd, shell=True, env=env, cwd=str(tmp_path)).returncode
+        assert rc == 0, cmd
+
+    @pytest.mark.parametrize("dirname", ["has space", 'has"quote'])
+    def test_injected_checks_survive_shell_chars_in_path(self, tmp_path, dirname):
+        # Both injected checks run via `sh -c`. An unquoted path with a space
+        # makes /bin/sh parse `test -s /a b/f.md` as a malformed expression
+        # (rc=2), and a `"` in the path breaks the completeness check's inner
+        # quoting (unterminated string) — either is a spurious-REJECT surface.
+        # Both checks must shlex-quote every interpolated value.
+        cons = self._cons(tmp_path)
+        d = tmp_path / dirname
+        d.mkdir()
+        ptr = str(d / "findings.md")
+        (d / "findings.md").write_text(
+            "# Review\n\n| ID | Sev | Fix |\n| --- | --- | --- |\n| F1 | h | x |\n",
+            encoding="utf-8")
+        acc, _ = apply_reviewer_preset(
+            "review the deliverable", cons, [], ptr, 5,
+            inputs=[{"kind": "path", "value": ptr},
+                    {"kind": "value", "value": "rev=abc1234"},
+                    {"kind": "value", "value": "task_text=x"}])
+        for c in [a["check"] for a in acc]:
+            rc = subprocess.run(c, shell=True, cwd=str(d)).returncode
+            assert rc == 0, (c, rc)
 
     def test_missing_deliverable_input_rejected(self, tmp_path):
         cons = self._cons(tmp_path)

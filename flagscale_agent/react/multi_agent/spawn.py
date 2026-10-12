@@ -35,8 +35,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -262,17 +265,28 @@ def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
     # acceptance suggestions (91aab676): report-completeness as checks the
     # parent actually runs. The completeness item calls the SAME helper the
     # write-time gate uses (check_report_completeness) so the two can never
-    # drift apart; flagscale_agent is importable from any cwd in the parent
-    # environment (verified), so the python -c form is safe.
+    # drift apart. Run it under sys.executable — the interpreter running the
+    # parent — NOT the literal token `python`: reunite.py runs these checks
+    # via `sh -c` in the parent env, where a bare `python` is re-resolved on
+    # PATH and can land on an interpreter that lacks flagscale_agent (the eval
+    # container's system python), spuriously failing a complete review.
+    # Every interpolated value is shlex.quote-d (the interpreter, and the
+    # report path passed as argv[1] rather than baked into the -c program) so
+    # a path with spaces or quotes cannot break the shell command.
+    interp = sys.executable or shutil.which("python3") or "python3"
     existing = {(a or {}).get("check") for a in acc if isinstance(a, dict)}
+    _completeness_prog = (
+        "import sys; from flagscale_agent.react.multi_agent.contract "
+        "import check_report_completeness; p = "
+        "check_report_completeness(sys.argv[1]); "
+        "sys.exit(0 if p is None else 1)")
     injected = [
-        {"kind": "check_command", "check": f"test -s {output_ptr}"},
         {"kind": "check_command",
-         "check": f"python -c \"import sys; from "
-                  f"flagscale_agent.react.multi_agent.contract import "
-                  f"check_report_completeness; p = "
-                  f"check_report_completeness({output_ptr!r}); "
-                  f"sys.exit(0 if p is None else 1)\""},
+         "check": f"test -s {shlex.quote(output_ptr)}"},
+        {"kind": "check_command",
+         "check": f"{shlex.quote(interp)} -c "
+                  f"{shlex.quote(_completeness_prog)} "
+                  f"{shlex.quote(output_ptr)}"},
     ]
     for item in injected:
         if item["check"] not in existing:
