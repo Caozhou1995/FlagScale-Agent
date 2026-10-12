@@ -20,6 +20,7 @@ present in SYSTEM_PROMPT_STATIC (a future edit must not silently drop them).
 """
 
 from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
 
 
 def test_ambiguity_section_present():
@@ -37,6 +38,45 @@ def test_ambiguity_three_steps_present():
     assert "INTERSECTION IS EMPTY" in p
     assert "WORDING-LITERAL PRIORITY" in p
     assert "ROBUSTNESS ON THE UNAMBIGUOUS AXES" in p
+
+
+def test_hedge_feasibility_is_constructive_not_introspective():
+    """A hedge must be proven by CONSTRUCTION, not decided by introspection.
+
+    Evidence 2026-10-12: an extract-elf solver recognized the two grader
+    readings, introspected "Intersection = EMPTY ... No hedge possible. Must
+    BET." and shipped one base (reward=0), while a sibling solver that
+    CONSTRUCTED the union of both bases passed. The prompt must therefore
+    demand writing each reading's acceptance predicate and building a
+    candidate output to test the intersection — an introspected "no hedge"
+    is a hypothesis, not a finding.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "by CONSTRUCTION, not introspection" in p
+    assert "acceptance PREDICATE" in p
+    assert "build one candidate output" in p
+    # an introspected emptiness is a hypothesis; bet only after proof
+    assert 'introspected "no hedge possible" is likewise a HYPOTHESIS' in p
+    assert "constructively shown empty" in p
+
+
+def test_frame_acceptance_carries_constructive_hedge_check():
+    """The Frame step's acceptance must carry the same constructive check.
+
+    The Frame acceptance is the ENFORCED surface: it is prepended to every
+    plan and gated by the step_done evidence check. A new plan must therefore
+    be required to write each reading's acceptance predicate, build a
+    candidate, and test the intersection — betting only after it is
+    constructively shown empty.
+    """
+    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    assert "constructive hedge-feasibility" in low
+    assert "acceptance predicate" in low
+    assert "intersection" in low
+    assert "constructively shown empty" in low
+    # must not hardcode any originating task's specifics
+    assert "0x400000" not in low
+    assert "beautifulsoup" not in low
 
 
 def test_ambiguity_is_regex_free_guidance():

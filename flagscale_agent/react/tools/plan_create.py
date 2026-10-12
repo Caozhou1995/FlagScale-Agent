@@ -178,6 +178,19 @@ _FRAME_STEP_ACCEPTANCE = [
     "include a small-sample step that validates the method on the smallest "
     "meaningful input before scaling (generic 'analyze/implement/test' steps mean "
     "the class was never identified; a brute-force sweep is the tell).",
+    "Constructive hedge-feasibility (invisible grader): when the task admits 2+ "
+    "defensible readings of the GRADED output and the checker is not visible, do "
+    "NOT decide hedge feasibility by introspection — CONSTRUCT it. (1) For EACH "
+    "candidate reading, write its ACCEPTANCE PREDICATE: the concrete test that "
+    "decides whether a produced output is accepted under that reading. (2) BUILD "
+    "one candidate output and evaluate it against EVERY predicate — test whether "
+    "some single output lies in the intersection of all the acceptance sets; keep "
+    "the competing candidate artifacts until delivery so any feedback channel can "
+    "decide. (3) An introspected 'no hedge possible' is a HYPOTHESIS, not a "
+    "finding: only an intersection CONSTRUCTIVELY shown empty — with the reason it "
+    "is empty recorded — licenses betting on one reading. A feasible hedge is "
+    "routinely killed by an unproven guess, so prove emptiness before you bet. "
+    "This licenses no reading beyond the task statement.",
 ]
 
 
