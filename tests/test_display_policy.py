@@ -79,8 +79,9 @@ class TestDisplayGating:
     def test_thinking_on_starts_spinner(self, capsys):
         display.set_policy(show_thinking=True)
         display.thinking()
-        # Under pytest stdout is not a tty, so the anim thread does not run,
-        # but the state object is created (the gate is what we assert).
+        # The assertion is on the state object being created+started; the anim
+        # daemon thread writes raw ANSI to stdout (no isatty guard in _animate),
+        # so we do not assert on captured output here.
         assert display._thinking_anim is not None
         display.thinking_done()
         assert display._thinking_anim is None
