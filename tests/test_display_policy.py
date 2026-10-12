@@ -67,6 +67,19 @@ class TestDisplayGating:
         display.thinking_done()
         assert display._thinking_anim is None
 
+    def test_double_thinking_does_not_orphan_first_spinner(self):
+        # A stream that yields zero events leaves the spinner un-torn-down, so
+        # the next call must not orphan the prior _ThinkingAnim thread (it is
+        # not covered by _stop_all_spinners' teardown set).
+        display.set_policy(show_thinking=False)
+        display.thinking()
+        first = display._thinking_anim
+        display.thinking()  # no thinking_done between
+        assert display._thinking_anim is not first
+        assert first._stop.is_set() is True
+        assert first._thread.is_alive() is False
+        display.thinking_done()
+
     def test_thinking_off_hides_content_but_keeps_spinner(self, capsys):
         # policy OFF: content stays hidden (thinking_enabled False) yet the
         # spinner still starts — the two are independent.

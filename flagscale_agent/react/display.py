@@ -584,6 +584,13 @@ def thinking():
     """
     global _thinking_anim
     _stop_all_spinners()
+    # Cancel any spinner left over from a prior call that never reached
+    # thinking_done/clear (e.g. a stream that yielded zero events). It is not
+    # in _stop_all_spinners' teardown set, so without this the previous
+    # _ThinkingAnim thread would be orphaned and spin until process exit.
+    if _thinking_anim is not None:
+        _thinking_anim.cancel()
+        _thinking_anim = None
     _thinking_anim = _ThinkingAnim()
     _thinking_anim.start()
 
