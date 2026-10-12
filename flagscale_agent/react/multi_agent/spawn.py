@@ -243,7 +243,10 @@ def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
             "reviewer preset: inputs must carry the task statement VERBATIM — "
             "add {\"kind\": \"value\", \"value\": \"task_text=<the task's own "
             "words>\"}. A reviewer handed only a paraphrase audits the "
-            "spawner's blind spot, not the task."
+            "spawner's blind spot, not the task. (If you did NOT intend a "
+            "reviewer: your `goal` matched the auto-injection pattern "
+            "(review|audit) — pass an explicit ordinary role or reword the "
+            "goal so a plain worker is spawned instead of a reviewer.)"
         )
 
     # deadline floor

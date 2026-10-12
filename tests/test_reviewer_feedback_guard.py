@@ -17,8 +17,9 @@
 Contract:
 - Fires ONLY at the text-only completion path (tool_name=="" AND llm_responded).
   A tool call, or a top-of-loop scan (llm_responded=False), is never gated.
-- Blocks when a reviewer-class child THIS session spawned is still ACTIVE
-  (SPAWNING/RUNNING/REPORTED), read from <session_dir>/subagents/spawned.jsonl.
+- Blocks when a reviewer-class child THIS session spawned is not yet TERMINAL,
+  read from <session_dir>/subagents/spawned.jsonl: ACTIVE (SPAWNING/RUNNING/
+  REPORTED) or SETTLED-WITHOUT-REPORT (DEADLINE_MISSED/TERMINATED).
 - Silent when: no session_dir, registry empty/missing, ledger unreadable, the
   only children are NON-reviewer (plain/diverger), or the reviewer is terminal.
 - Override requires the reason to NAME at least one pending reviewer task_id;
@@ -34,7 +35,7 @@ from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.reviewer_feedback import ReviewerFeedbackGuard
 from flagscale_agent.react.multi_agent.contract import Contract
 from flagscale_agent.react.multi_agent.ledger import (
-    TaskLedger, DEADLINE_MISSED, DONE)
+    TaskLedger, DEADLINE_MISSED, DONE, TERMINATED)
 from flagscale_agent.react.multi_agent.spawn import record_spawn, read_session_spawns
 
 
@@ -148,6 +149,24 @@ def test_blocks_when_reviewer_deadline_missed(env):
     assert v is not None and v.action == "block" and v.overridable
     assert c.id in v.message
     assert "DEADLINE_MISSED" in v.message
+
+
+def test_blocks_when_reviewer_terminated(env):
+    # TERMINATED is the sibling of DEADLINE_MISSED — both are
+    # SETTLED_WITHOUT_REPORT (reunite.py:67, dispatch.py:98) and in neither
+    # ACTIVE_STATUSES nor TERMINAL_STATUSES. Gating only DEADLINE_MISSED would
+    # leave this twin silently ungated. RUNNING->TERMINATED is legal
+    # (ledger.py:39).
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    led.transition(c.id, "RUNNING")
+    led.transition(c.id, TERMINATED)
+    record_spawn(env["session"], c.id, "reviewer")
+    v = _guard(env).check_pre(_ctx())
+    assert v is not None and v.action == "block" and v.overridable
+    assert c.id in v.message
+    assert "TERMINATED" in v.message
 
 
 def test_silent_for_non_reviewer_children(env):

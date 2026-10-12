@@ -33,11 +33,14 @@ Design (single block, overridable):
   llm_responded — the fresh text-only [TASK_COMPLETE] path, kernel.py) so it can
   never interfere with ordinary tool execution.
 - It blocks when any reviewer-class child (role reviewer/re_reviewer) recorded
-  in THIS session's registry is still in an ACTIVE status
-  (SPAWNING/RUNNING/REPORTED). The message names the tasks and tells the parent
-  to poll_tasks(action='check') (REPORTED -> DONE/REJECTED) and fold the
-  findings into the wrap-up, or to override deliberately if the reviewer truly
-  cannot land.
+  in THIS session's registry is not yet in a TERMINAL status. Two classes:
+  * ACTIVE (SPAWNING/RUNNING/REPORTED) — poll_tasks(action='check') finalizes
+    a REPORTED reviewer (REPORTED -> DONE/REJECTED);
+  * SETTLED-WITHOUT-REPORT (DEADLINE_MISSED/TERMINATED) — the worker is gone
+    and can never reach REPORTED, so poll_tasks returns a settled verdict with
+    NO ledger transition (reunite.py:259). Polling does NOT clear these; only an
+    explicit override naming the task_id does. The message says so.
+  Both sets are in neither ACTIVE_STATUSES nor TERMINAL_STATUSES.
 - accept_override demands the reason cite at least one of those reviewer
   task_ids: a bare re-emit of [TASK_COMPLETE] never releases it, and a generic
   "done" cannot stand in for having actually handled the named reviewer.
@@ -58,13 +61,16 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 _BLOCK = (
     "[ReviewerFeedback] Task completion is gated: {n} reviewer-class worker(s) "
     "spawned by THIS session are still un-finalized — {tasks}. A reviewer that "
-    "reports and is never read is not a check, just cost. Before completing, "
-    "poll_tasks(action='check', task_id=<id>) for each (REPORTED -> DONE/"
-    "REJECTED finalizes it and runs the acceptance predicates), READ its "
-    "findings, and fold them into the wrap-up (fix what is real, state what you "
-    "refute and why). If a reviewer genuinely cannot land, override with "
-    "_override_reason naming the reviewer task_id(s) you are abandoning and why "
-    "the evidence you already hold is sufficient."
+    "reports and is never read is not a check, just cost. For a REPORTED "
+    "reviewer, poll_tasks(action='check', task_id=<id>) finalizes it (REPORTED "
+    "-> DONE/REJECTED) and runs the acceptance predicates; READ its findings and "
+    "fold them into the wrap-up (fix what is real, state what you refute and "
+    "why). A reviewer in DEADLINE_MISSED/TERMINATED is settled-without-report "
+    "(it can never reach REPORTED, so polling will NOT clear this) — its "
+    "analysis often lives only in its worker.log; sweep that log, then override "
+    "with _override_reason naming the reviewer task_id(s) you are abandoning and "
+    "why the evidence you already hold (including anything recovered from the "
+    "log) is sufficient."
 )
 
 
@@ -115,7 +121,7 @@ class ReviewerFeedbackGuard(Guard):
             from flagscale_agent.react.multi_agent.contract import (
                 ROLE_REVIEWER, ROLE_RE_REVIEWER)
             from flagscale_agent.react.multi_agent.ledger import (
-                ACTIVE_STATUSES, DEADLINE_MISSED)
+                ACTIVE_STATUSES, DEADLINE_MISSED, TERMINATED)
         except Exception:
             return []
         sd = self._session_dir()
@@ -139,14 +145,18 @@ class ReviewerFeedbackGuard(Guard):
                 continue
             if trec is None:
                 continue
-            if trec.status in ACTIVE_STATUSES or trec.status == DEADLINE_MISSED:
-                # DEADLINE_MISSED is in NEITHER ACTIVE_STATUSES nor
-                # TERMINAL_STATUSES (ledger.py:75-76): a reviewer that died of
-                # its wall-clock budget still holds an un-adjudicated report —
-                # often only in its worker.log — and poll_tasks(check) can
-                # still finalize it (check requires merely non-terminal,
-                # ledger.py:327). Silently ignoring it would repeat the exact
-                # failure this guard closes.
+            if trec.status in ACTIVE_STATUSES:
+                # REPORTED is pollable: poll_tasks(action='check') finalizes it.
+                out.append((tid, trec.status))
+            elif trec.status in (DEADLINE_MISSED, TERMINATED):
+                # SETTLED-WITHOUT-REPORT (neither ACTIVE nor TERMINAL —
+                # ledger.py:75-76). The worker is gone and can never reach
+                # REPORTED, so poll_tasks returns a settled verdict with NO
+                # ledger transition (reunite.py:259, _SETTLED_WITHOUT_REPORT);
+                # polling does NOT clear this — only an explicit override
+                # naming the task_id does. Both statuses are the same class
+                # (reunite.py:67, dispatch.py:98): including only DEADLINE_MISSED
+                # would leave the TERMINATED twin silently ungated.
                 out.append((tid, trec.status))
         return out
 
