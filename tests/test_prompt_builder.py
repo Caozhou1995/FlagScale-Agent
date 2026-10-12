@@ -936,9 +936,10 @@ class TestFrameStepDiscipline:
         # must NOT steer into the reviewer preset: apply_reviewer_preset
         # (multi_agent/spawn.py) raises ContractError unless the contract
         # carries a deliverable abs-path + rev marker, which cannot exist
-        # before framing. The wording must say NO reviewer tag.
+        # before framing. The wording must instead tag the diverger role.
         assert "reviewer contract" not in low
-        assert "no reviewer tag" in low
+        assert 'role="diverger"' in low
+        assert "leaf role" in low
         # the old discretionary escape must be gone
         assert "proposing them yourself is fine" not in low
         # trivial-task skip escape is retained

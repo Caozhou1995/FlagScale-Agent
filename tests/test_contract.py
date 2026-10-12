@@ -245,3 +245,62 @@ class TestRenderContractReviewer:
         from flagscale_agent.react.multi_agent import spawn
         src = inspect.getsource(spawn)
         assert "reviewer (bool" in src
+
+
+class TestRoleSplit:
+    """The role model splits two orthogonal classes over one role set:
+    REVIEWER-CLASS (reviewer, re_reviewer) get the preset + report gate;
+    LEAF (reviewer, re_reviewer, diverger) may NOT spawn. A diverger is a
+    leaf but NOT reviewer-class — it must skip the reviewer preset (no
+    deliverable path/rev exists before framing)."""
+
+    def test_diverger_is_a_role_but_not_reviewer_class(self):
+        from flagscale_agent.react.multi_agent.contract import (
+            is_leaf_role, is_reviewer_role, resolve_role)
+        cons = {"role": "diverger"}
+        assert resolve_role(cons) == "diverger"
+        assert is_reviewer_role(cons) is False
+        assert is_leaf_role(cons) is True
+
+    def test_reviewer_roles_are_leaf_and_reviewer_class(self):
+        from flagscale_agent.react.multi_agent.contract import (
+            is_leaf_role, is_reviewer_role, resolve_role)
+        for tag in ("reviewer", "re_reviewer"):
+            assert resolve_role({"role": tag}) == tag
+            assert is_reviewer_role({"role": tag}) is True
+            assert is_leaf_role({"role": tag}) is True
+
+    def test_ordinary_task_is_not_a_leaf(self):
+        from flagscale_agent.react.multi_agent.contract import is_leaf_role
+        assert is_leaf_role({}) is False
+        assert is_leaf_role({"reviewer": False}) is False
+
+    def test_role_spec_can_spawn_only_for_ordinary(self):
+        from flagscale_agent.react.multi_agent.contract import role_spec
+        assert role_spec({}).can_spawn is True
+        assert role_spec({"role": "diverger"}).can_spawn is False
+        assert role_spec({"role": "reviewer"}).can_spawn is False
+
+    def test_diverger_spec_skips_reviewer_preset(self):
+        from flagscale_agent.react.multi_agent.contract import role_spec
+        d = role_spec({"role": "diverger"})
+        r = role_spec({"role": "reviewer"})
+        assert d.is_review is False and d.min_minutes == 0
+        assert r.is_review is True and r.min_minutes == 10
+
+    def test_leaf_role_name_helper(self):
+        from flagscale_agent.react.multi_agent.contract import is_leaf_role_name
+        assert is_leaf_role_name("diverger") is True
+        assert is_leaf_role_name("reviewer") is True
+        assert is_leaf_role_name("") is False
+        assert is_leaf_role_name(None) is False
+
+    def test_reviewer_preset_passes_diverger_through(self, tmp_path):
+        # The diverger must NOT trigger the reviewer preset (which would raise
+        # ContractError without a deliverable path + rev marker).
+        from flagscale_agent.react.multi_agent.spawn import apply_reviewer_preset
+        cons = {"writable": [str(tmp_path)], "role": "diverger"}
+        acc, dl = apply_reviewer_preset(
+            "debate the framing", cons, [], str(tmp_path / "o.md"), 5.0)
+        assert cons.get("max_minutes") is None  # no deadline bump
+        assert dl == 5.0

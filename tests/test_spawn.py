@@ -63,6 +63,61 @@ class TestRefusals:
         out = tool.execute(**_args(tmp_path))
         assert out.startswith("spawned")
 
+    def test_leaf_role_refused(self, tmp_path, led, monkeypatch):
+        # A worker whose OWN role (stamped into FLAGSCALE_TASK_ROLE at spawn)
+        # is a LEAF (reviewer/diverger) may NOT spawn — infrastructure-enforced,
+        # independent of depth. This is the policy the reviewer/diverger helpers
+        # rely on: they are guards, not orchestrators.
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        monkeypatch.setenv("FLAGSCALE_TASK_ID", "deadbeef")
+        monkeypatch.setenv("FLAGSCALE_TASK_ROLE", "diverger")
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        assert out.startswith("ERROR")
+        assert "LEAF" in out
+        assert "may not spawn" in out
+
+    def test_reviewer_role_refused(self, tmp_path, led, monkeypatch):
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        monkeypatch.setenv("FLAGSCALE_TASK_ID", "deadbeef")
+        monkeypatch.setenv("FLAGSCALE_TASK_ROLE", "reviewer")
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        assert out.startswith("ERROR")
+        assert "LEAF" in out
+
+    def test_ordinary_worker_role_still_spawns(self, tmp_path, led, monkeypatch):
+        # An ordinary worker carries an EMPTY role -> still may delegate.
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _FakeProc())
+        monkeypatch.setenv("FLAGSCALE_TASK_ID", "deadbeef")
+        monkeypatch.setenv("FLAGSCALE_TASK_ROLE", "")
+        tool = SpawnWorkerTool(ledger=led)
+        out = tool.execute(**_args(tmp_path))
+        assert out.startswith("spawned")
+
+    def test_build_env_stamps_own_role(self, tmp_path, led):
+        # The child's role must be stamped so a leaf child can refuse ITS OWN
+        # future spawn. Un-roled contracts stamp an empty string.
+        from flagscale_agent.react.multi_agent.contract import Contract
+        work = tmp_path / "work"
+        work.mkdir()
+        c = Contract.build(
+            goal="g",
+            constraints={"writable": [str(work)], "role": "diverger"},
+            acceptance=[{"kind": "check_command", "check": "true"}],
+            output_ptr=str(work / "o.md"),
+        )
+        tool = SpawnWorkerTool(ledger=led)
+        env = tool._build_env(c)
+        assert env["FLAGSCALE_TASK_ROLE"] == "diverger"
+        c2 = Contract.build(
+            goal="g",
+            constraints={"writable": [str(work)]},
+            acceptance=[{"kind": "check_command", "check": "true"}],
+            output_ptr=str(work / "o2.md"),
+        )
+        assert tool._build_env(c2)["FLAGSCALE_TASK_ROLE"] == ""
+
     def test_depth_limit(self, tmp_path, led, monkeypatch):
         # With the cap at 1, a depth-1 process is AT the cap -> explicit refusal.
         monkeypatch.setenv("FLAGSCALE_TASK_DEPTH", "1")

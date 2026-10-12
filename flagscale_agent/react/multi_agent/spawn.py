@@ -51,6 +51,7 @@ from .contract import (
     ROLE_RE_REVIEWER,
     Contract,
     ContractError,
+    is_leaf_role,
     is_reviewer_role,
     resolve_role,
     role_spec,
@@ -274,12 +275,20 @@ def _render_contract(c: Contract) -> str:
     dl = datetime.fromtimestamp(c.deadline_epoch, tz=timezone.utc).isoformat()
     lines.append(f"## deadline (UTC): {dl}  (epoch={c.deadline_epoch})")
     lines.append("")
-    lines.append(
-        "When done you MUST call the report_result tool to report a summary. "
-        "You MAY call spawn_worker to delegate part of the work, but ONLY while "
-        "under the infrastructure depth cap; a spawn beyond the cap is refused "
-        "with an explicit error. You cannot raise the cap."
-    )
+    if is_leaf_role(cons):
+        lines.append(
+            "When done you MUST call the report_result tool to report a summary. "
+            "You are a LEAF worker: you may NOT spawn any worker (spawn_worker / "
+            "dispatch_many / resume_child are refused for your role). Do your own "
+            "work and report."
+        )
+    else:
+        lines.append(
+            "When done you MUST call the report_result tool to report a summary. "
+            "You MAY call spawn_worker to delegate part of the work, but ONLY while "
+            "under the infrastructure depth cap; a spawn beyond the cap is refused "
+            "with an explicit error. You cannot raise the cap."
+        )
     # Reviewer detection: EXPLICIT role tags, via resolve_role() — the same
     # resolver the write-time gate and the preset use, so a role-tag-only
     # contract ({"role": "re_reviewer"} with no boolean flag) gets the same
@@ -535,6 +544,11 @@ class SpawnWorkerTool(Tool):
         env = dict(os.environ)
         env["FLAGSCALE_TASK_ID"] = c.id
         env["FLAGSCALE_TASK_DEPTH"] = str(c.depth)
+        # Stamp the CHILD's own role tag (empty for an ordinary worker). The
+        # child reads this back on any spawn attempt to enforce the leaf policy
+        # below — the role a worker carries is declared at spawn time here, not
+        # re-derived from prose.
+        env["FLAGSCALE_TASK_ROLE"] = resolve_role(c.constraints) or ""
         env["FLAGSCALE_PARENT_TRACE"] = json.dumps(
             (c.parent or {}).get("parent_trace", []))
         env["FLAGSCALE_CONTRACT_PATH"] = str(self._ledger.task_dir(c.id) / "contract.prompt")
@@ -624,6 +638,25 @@ class SpawnWorkerTool(Tool):
                 own_trace = []
         except (ValueError, TypeError):
             own_trace = []
+
+        # ── 1b. leaf-role check ─────────────────────────────────────────────
+        # The reviewer and diverger are BUILT-IN helper workers: they guard a
+        # result, they never orchestrate. Both are LEAVES — a process whose own
+        # role (stamped into the env at its spawn) is a leaf may not spawn any
+        # worker. An ordinary worker carries an empty role and keeps the right
+        # to spawn (bounded by the depth cap below). This is enforced from the
+        # WORKER's OWN role, not from the parent's intent — a leaf cannot be
+        # talked into spawning by a contract goal.
+        own_role = os.environ.get("FLAGSCALE_TASK_ROLE") or ""
+        if own_role and is_leaf_role({"role": own_role}):
+            return (
+                f"ERROR: role '{own_role}' is a LEAF worker and may not spawn. "
+                "Reviewer and diverger workers are built-in helpers that report "
+                "to their parent; only an ordinary worker may delegate. This "
+                "refusal is infrastructure-enforced and cannot be overridden "
+                f"from here. role={own_role} task_id={own_task_id} "
+                f"parent_trace={own_trace}."
+            )
 
         # ── 2. depth check ──────────────────────────────────────────────────
         # The orchestrator is depth 0; the child it spawns is depth 1. A worker

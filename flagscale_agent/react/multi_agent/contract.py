@@ -46,15 +46,25 @@ from typing import Any, Dict, List, Optional
 # goal length cap ("<=400 chars, single sentence, decidable")
 GOAL_MAX_LEN = 400
 
-# ── RoleSpec — one mechanism for the reviewer role and everything it implies ──
+# ── RoleSpec — one mechanism for a role and everything it implies ──
 # A task's ROLE is derived from EXPLICIT constraint tags only (never from
 # prose-substring detection): `constraints.role` when present, else the
 # boolean `constraints.reviewer` flag. The role then governs the reviewer
-# preset (spawn side), the live-tree pointer check (parent side) and the
-# write-time report-completeness gate (worker side).
+# preset (spawn side), the live-tree pointer check (parent side), the
+# write-time report-completeness gate (worker side), AND whether the role is
+# a LEAF (forbidden from spawning further workers).
+#
+# Two orthogonal classifications over the same role set:
+#   * REVIEWER-CLASS (reviewer, re_reviewer): get the preset + report gate.
+#   * LEAF (reviewer, re_reviewer, diverger): may NOT spawn — the harness
+#     built-in helpers are guards, not orchestrators. An ordinary worker
+#     (role is None) keeps the right to spawn, bounded by the depth cap.
 ROLE_REVIEWER = "reviewer"
 ROLE_RE_REVIEWER = "re_reviewer"
-_ROLE_TAGS = (ROLE_REVIEWER, ROLE_RE_REVIEWER)
+ROLE_DIVERGER = "diverger"
+_ROLE_TAGS = (ROLE_REVIEWER, ROLE_RE_REVIEWER, ROLE_DIVERGER)
+_REVIEWER_ROLES = (ROLE_REVIEWER, ROLE_RE_REVIEWER)
+_LEAF_ROLES = (ROLE_REVIEWER, ROLE_RE_REVIEWER, ROLE_DIVERGER)
 
 # reviewer preset: a review needs room to read the artifact and finalize.
 REVIEWER_MIN_MINUTES = 10
@@ -79,31 +89,59 @@ def resolve_role(constraints: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def is_reviewer_role(constraints: Optional[Dict[str, Any]]) -> bool:
-    """True for any reviewer-class role (reviewer or re-reviewer)."""
-    return resolve_role(constraints) is not None
+    """True for any REVIEWER-CLASS role (reviewer or re-reviewer).
+
+    A diverger is a role but NOT reviewer-class — it is a leaf that must skip
+    the reviewer preset (it has no deliverable path/rev to hand over).
+    """
+    return resolve_role(constraints) in _REVIEWER_ROLES
+
+
+def is_leaf_role(constraints: Optional[Dict[str, Any]]) -> bool:
+    """True for any LEAF role — forbidden from spawning further workers."""
+    return resolve_role(constraints) in _LEAF_ROLES
+
+
+def is_leaf_role_name(role: Optional[str]) -> bool:
+    """True when a role NAME (not a constraints dict) is a LEAF role.
+
+    The worker side has only its OWN role tag from the env (no constraints
+    dict), so this name-form predicate lets it pick the leaf-aware role prefix.
+    """
+    return role in _LEAF_ROLES
 
 
 @dataclass(frozen=True)
 class RoleSpec:
-    """What a role implies, in one place, consumed by all three gates."""
+    """What a role implies, in one place, consumed by all gates."""
 
     role: Optional[str] = None
     report_gate: bool = False        # write-time completeness gate
     live_tree_check: bool = False    # verify path inputs are the LIVE tree
     min_minutes: int = 0             # preset deadline floor
+    can_spawn: bool = True           # may this role dispatch workers?
 
     @property
     def is_review(self) -> bool:
-        return self.role is not None
+        """True only for REVIEWER-CLASS roles (drives the reviewer preset)."""
+        return bool(self.role) and self.role in _REVIEWER_ROLES
 
 
 def role_spec(constraints: Optional[Dict[str, Any]]) -> RoleSpec:
-    """Derive the RoleSpec for a contract's constraints."""
+    """Derive the RoleSpec for a contract's constraints.
+
+    A normal task (no role) keeps `can_spawn=True`. Every named role is a
+    built-in helper and therefore a LEAF (`can_spawn=False`); reviewer-class
+    roles additionally get the report gate, live-tree check and deadline floor.
+    """
     role = resolve_role(constraints)
     if role is None:
         return RoleSpec()
-    return RoleSpec(role=role, report_gate=True, live_tree_check=True,
-                    min_minutes=REVIEWER_MIN_MINUTES)
+    if role in _REVIEWER_ROLES:
+        return RoleSpec(role=role, report_gate=True, live_tree_check=True,
+                        min_minutes=REVIEWER_MIN_MINUTES, can_spawn=False)
+    # diverger: a leaf, but NOT reviewer-class (no preset, no report gate).
+    return RoleSpec(role=role, can_spawn=False)
 
 
 # ── report completeness (shared by the write gate and the acceptance template) ─

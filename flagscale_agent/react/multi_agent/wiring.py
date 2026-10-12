@@ -28,8 +28,9 @@ from typing import Optional
 from flagscale_agent.react.paths import get_tasks_dir
 
 from .ledger import FAILED, RUNNING, TaskLedger
+from .contract import is_leaf_role_name
 
-# Fixed role prefix. The contract body is already the query; terse.
+# Fixed role prefix for an ORDINARY worker (may delegate under the depth cap).
 WORKER_ROLE_PREFIX = (
     "[worker role] You are a worker dispatched by a parent Agent. The contract "
     "has been injected. When done you MUST call report_result to report a "
@@ -38,10 +39,23 @@ WORKER_ROLE_PREFIX = (
     "refused with an explicit error and you cannot raise the cap.\n"
 )
 
+# Fixed role prefix for a LEAF worker (reviewer/diverger): no delegation.
+WORKER_LEAF_ROLE_PREFIX = (
+    "[worker role] You are a LEAF worker (reviewer/diverger) dispatched by a "
+    "parent Agent. The contract has been injected. When done you MUST call "
+    "report_result to report a summary. You may NOT spawn any worker "
+    "(spawn_worker / dispatch_many / resume_child are refused for your role); "
+    "do the work yourself and report.\n"
+)
+
 # Env keys injected by SpawnWorkerTool.
 TASK_ID_ENV = "FLAGSCALE_TASK_ID"
 CONTRACT_PATH_ENV = "FLAGSCALE_CONTRACT_PATH"
 OUTPUT_DIR_ENV = "FLAGSCALE_OUTPUT_DIR"
+# The worker's OWN role tag (empty for an ordinary worker). Stamped by
+# SpawnWorkerTool._build_env; read here to pick the leaf-aware role prefix and
+# by SpawnWorkerTool.execute to refuse a spawn from a leaf worker.
+TASK_ROLE_ENV = "FLAGSCALE_TASK_ROLE"
 # Env key injected by ResumeChildTool: a file holding the parent's resume message.
 # When present, the worker RE-ENTERS its existing session and treats this text as
 # the next user turn instead of the original contract.
@@ -72,6 +86,19 @@ def resolve_resume_query() -> Optional[str]:
     return text or None
 
 
+def _role_prefix_for_env() -> str:
+    """Pick the role prefix from the stamped role env (leaf vs ordinary).
+
+    `TASK_ROLE_ENV` is written by SpawnWorkerTool._build_env with the child's
+    OWN role. A leaf role (reviewer/diverger) gets the no-delegation prefix;
+    anything else (ordinary worker, unset) gets the delegating prefix.
+    """
+    env_role = os.environ.get(TASK_ROLE_ENV) or None
+    if is_leaf_role_name(env_role):
+        return WORKER_LEAF_ROLE_PREFIX
+    return WORKER_ROLE_PREFIX
+
+
 def resolve_worker_query(query: Optional[str]) -> Optional[str]:
     """Return the query the single-shot loop should run.
 
@@ -82,16 +109,17 @@ def resolve_worker_query(query: Optional[str]) -> Optional[str]:
     """
     if not is_worker():
         return query
+    prefix = _role_prefix_for_env()
     cpath = os.environ.get(CONTRACT_PATH_ENV)
     if cpath and Path(cpath).exists():
         try:
             contract_text = Path(cpath).read_text(encoding="utf-8")
         except OSError:
-            return (WORKER_ROLE_PREFIX + (query or "")).strip()
-        return WORKER_ROLE_PREFIX + contract_text
+            return (prefix + (query or "")).strip()
+        return prefix + contract_text
     # Worker but no contract file: still stamp the role so the model knows the
     # rules, even if the body is whatever the caller passed.
-    return (WORKER_ROLE_PREFIX + (query or "")).strip()
+    return (prefix + (query or "")).strip()
 
 
 def finalize_worker_if_no_report(ledger: Optional[TaskLedger] = None) -> Optional[str]:
