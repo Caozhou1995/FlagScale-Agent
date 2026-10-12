@@ -452,7 +452,15 @@ _poll_anim = None
 
 
 def _stop_all_spinners():
-    global _active_spinner, _parallel_display, _poll_anim
+    """Tear down EVERY live animated display — the single collection point.
+
+    Any spinner whose animation thread writes to stdout must be cancelled here
+    so that a caller which forgets to pair start with a matching done/clear
+    (turn_summary, interrupted, goodbye, a stream that yielded zero events)
+    never leaves an orphan daemon thread interleaving stdout writes. New
+    spinners must register their global HERE, not in an ad-hoc local cancel.
+    """
+    global _active_spinner, _parallel_display, _poll_anim, _thinking_anim
     if _active_spinner:
         _active_spinner.stop()
         _active_spinner = None
@@ -462,6 +470,9 @@ def _stop_all_spinners():
     if _poll_anim:
         _poll_anim.stop()
         _poll_anim = None
+    if _thinking_anim:
+        _thinking_anim.cancel()
+        _thinking_anim = None
 
 
 # ── Paste display ──────────────────────────────────────────────────────
@@ -583,25 +594,14 @@ def thinking():
     thinking_done/thinking_clear regardless.
     """
     global _thinking_anim
-    _stop_all_spinners()
-    # Cancel any spinner left over from a prior call that never reached
-    # thinking_done/clear (e.g. a stream that yielded zero events). It is not
-    # in _stop_all_spinners' teardown set, so without this the previous
-    # _ThinkingAnim thread would be orphaned and spin until process exit.
-    if _thinking_anim is not None:
-        _thinking_anim.cancel()
-        _thinking_anim = None
+    _stop_all_spinners()  # cancels any prior _thinking_anim (now in teardown set)
     _thinking_anim = _ThinkingAnim()
     _thinking_anim.start()
 
 
 def thinking_done():
     """Mark thinking as done — clear the line (info merged into llm_done)."""
-    global _thinking_anim
-    _stop_all_spinners()
-    if _thinking_anim:
-        _thinking_anim.cancel()
-        _thinking_anim = None
+    _stop_all_spinners()  # cancels the live _thinking_anim
 
 
 def thinking_clear():
