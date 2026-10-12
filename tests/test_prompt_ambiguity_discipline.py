@@ -272,6 +272,20 @@ def test_standard_corpus_first_rule_present():
     assert "breadth of your imagination" in p
 
 
+def test_direction_of_loss_rule_present():
+    """\"Conservative\" must be defined by the checker's loss direction, not by
+    gut caution: when the grader ignores extras and only requires coverage,
+    inclusion is conservative and omission is the only losing direction.
+
+    Evidence 2026-10-13: a solver dropped correctly-computed entries to hedge a
+    risk the scoring rule did not penalize, and fell below a coverage floor.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "Direction-of-loss rule" in p
+    assert "CHECKER's loss direction" in p
+    assert "OMISSION is the only losing direction" in p
+
+
 def test_cross_engine_and_corpus_rules_leak_no_specifics():
     """The two new rules are GENERAL posture: no task's grader, engine, or
     construct may be hardcoded."""
