@@ -79,6 +79,23 @@ def test_frame_acceptance_carries_constructive_hedge_check():
     assert "beautifulsoup" not in low
 
 
+def test_hedge_doctrine_is_synced_across_both_surfaces():
+    """The constructive-hedge doctrine must hold on BOTH surfaces at once.
+
+    The same rule lives in the enforced Frame acceptance AND the prose
+    under-specified-clause section of the static prompt. Nothing ties them:
+    an edit to one can silently drift from the other (the prompt-vs-live-
+    source drift family). Assert the load-bearing CONCEPTS appear on both,
+    so a future edit to a single surface fails loudly instead of leaving the
+    two surfaces contradicting each other.
+    """
+    frame = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    prompt = SYSTEM_PROMPT_STATIC.lower()
+    for concept in ("acceptance predicate", "shown empty"):
+        assert concept in frame, f"Frame acceptance missing {concept!r}"
+        assert concept in prompt, f"prompt missing {concept!r}"
+
+
 def test_ambiguity_is_regex_free_guidance():
     """The discipline must be an actionable procedure, not a keyword detector."""
     p = SYSTEM_PROMPT_STATIC
