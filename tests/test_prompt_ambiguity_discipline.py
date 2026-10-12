@@ -96,6 +96,26 @@ def test_hedge_doctrine_is_synced_across_both_surfaces():
         assert concept in prompt, f"prompt missing {concept!r}"
 
 
+def test_hedge_doctrine_has_no_contradictory_fallthrough():
+    """NEGATIVE assertion: the OLD contradictory bet rule must be GONE.
+
+    Evidence 2026-10-12 (independent review of commit 208fc03): the first
+    landing was ADDITIVE — it added the constructive rule but left standing
+    the introspection-era clause "if it does not [confirm], you have no hedge
+    — fall through to step 3 and bet", which licenses betting on a FAILED
+    probe (one candidate failing a probe does not show the intersection is
+    empty). Substring-presence tests stayed green while the prose contradicted
+    itself. A reframe needs a negative assertion that the old framing's
+    distinctive phrase is ABSENT, not just that the new one is present.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "fall through to step 3 and bet" not in p
+    # the probe must be ordered AFTER construction, not "First"
+    assert "First run a probe whose DESIGN INTENT" not in p
+    # and a failed probe must be framed as unproven, not as disproven
+    assert "the hedge is UNPROVEN" in p
+
+
 def test_ambiguity_is_regex_free_guidance():
     """The discipline must be an actionable procedure, not a keyword detector."""
     p = SYSTEM_PROMPT_STATIC

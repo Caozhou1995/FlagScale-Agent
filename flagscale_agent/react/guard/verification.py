@@ -175,10 +175,11 @@ If the step's requirement was UNDER-SPECIFIED — the wording admitted two
 defensible readings and the checker is invisible — do not settle it by feel. At
 this boundary, name the reading you produced against and, if a candidate output
 CLAIMED to satisfy BOTH readings, the probe output that demonstrated it — an
-unprobed hedge is not evidence; if the readings are
-mutually exclusive you are betting, so name the tie you broke (the wording the
-task EXPLICITLY grants first; otherwise the branch strongest on the axes the task
-states WITHOUT ambiguity). A reading chosen silently is the one that fails.
+unprobed hedge is not evidence — and neither is an introspected "no hedge
+possible": bet only once the intersection is CONSTRUCTIVELY shown empty. If the
+readings are mutually exclusive you are betting, so name the tie you broke (the
+wording the task EXPLICITLY grants first; otherwise the branch strongest on the
+axes the task states WITHOUT ambiguity). A reading chosen silently is the one that fails.
 
 To proceed, re-issue plan_update(step_done) with "_override_reason" naming a
 CONCRETE ANCHOR, not a summary of diligence. "I re-checked and it's correct" is
