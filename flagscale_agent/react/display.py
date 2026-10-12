@@ -361,10 +361,12 @@ def _tool_icon(name):
 
 # ── Display policy (verbosity control) ─────────────────────────────────
 # Module-level policy flags, synced once from AgentConfig by WorkerAgent
-# construction. Defaults False = concise display (thinking + soft advisory
-# hidden); enabling the policy restores the pre-policy output.
-# thinking: ⏳ spinner, 💭 label, dim streamed thinking text (render-only —
-#   the model still thinks; only the display is suppressed).
+# construction. Defaults False = concise display (thinking CONTENT + soft
+# advisory hidden); enabling the policy restores the pre-policy output.
+# thinking: 💭 label + dim streamed thinking text (render-only — the model
+#   still thinks; only the CONTENT display is suppressed). The ⏳ spinner
+#   is the "thinking mode" busy indicator and is shown UNCONDITIONALLY —
+#   it is NOT policy-controlled.
 # guard advisory: soft 🛡 inject echoes. Guard BLOCK (🚫) and ESCALATE (⚠️)
 #   verdicts are deliberately NOT policy-controlled: they explain why a tool
 #   did not run and are part of the agent's safety contract, not decoration.
@@ -573,14 +575,15 @@ class _ThinkingAnim:
 def thinking():
     """Start the ⏳ thinking spinner.
 
-    Policy-gated: when show_thinking is off, the spinner is not started, so
-    thinking_done/thinking_clear are equally silent. Spinner cleanup still
-    runs (unchanged side effect); only the visible spinner is suppressed.
+    The spinner is the "thinking mode" busy indicator and is shown
+    UNCONDITIONALLY — it is called on every LLM call (kernel.py) so it marks
+    that the model is working, independent of what is rendered. Only the
+    reasoning CONTENT (the 💭 label and the dim streamed thinking text in
+    agent.py) is gated by show_thinking. Spinner cleanup still runs via
+    thinking_done/thinking_clear regardless.
     """
     global _thinking_anim
     _stop_all_spinners()
-    if not _show_thinking:
-        return
     _thinking_anim = _ThinkingAnim()
     _thinking_anim.start()
 

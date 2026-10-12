@@ -58,10 +58,23 @@ class TestDisplayGating:
         out = capsys.readouterr().out
         assert "🚫" in out and "⚠️" in out
 
-    def test_thinking_off_starts_no_spinner(self, capsys):
+    def test_thinking_off_still_starts_spinner(self, capsys):
+        # The ⏳ spinner is the "thinking mode" busy indicator and is shown
+        # UNCONDITIONALLY; only the 💭 CONTENT is policy-gated.
         display.set_policy(show_thinking=False)
-        display.thinking()  # must be a no-op
+        display.thinking()
+        assert display._thinking_anim is not None
+        display.thinking_done()
         assert display._thinking_anim is None
+
+    def test_thinking_off_hides_content_but_keeps_spinner(self, capsys):
+        # policy OFF: content stays hidden (thinking_enabled False) yet the
+        # spinner still starts — the two are independent.
+        display.set_policy(show_thinking=False)
+        assert display.thinking_enabled() is False
+        display.thinking()
+        assert display._thinking_anim is not None
+        display.thinking_done()
 
     def test_thinking_on_starts_spinner(self, capsys):
         display.set_policy(show_thinking=True)

@@ -88,7 +88,7 @@ class AgentConfig:
     shell_env: Dict[str, str] = field(default_factory=dict)
     max_continuations: int = 200
     time_budget_sec: float = 0.0  # 0 = unset; >0 = per-turn wall-clock budget driving time warnings + wrap-up (NOT a hard kill)
-    show_thinking: bool = False  # display model thinking (⏳ spinner, 💭 label, dim streamed text); False (default) hides it for a cleaner terminal (behavior unchanged). Set True or FLAGSCALE_AGENT_SHOW_THINKING=1 to show
+    show_thinking: bool = False  # display model thinking CONTENT (💭 label, dim streamed text); False (default) hides it for a cleaner terminal. The ⏳ spinner is shown unconditionally regardless. Set True or FLAGSCALE_AGENT_SHOW_THINKING=1 to show content
     show_guard_advisory: bool = False  # display soft guard advisory injects (🛡); False (default) hides them; block (🚫) / escalate (⚠️) verdicts are ALWAYS shown. Set True or FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY=1 to show
     _config_path: Optional[str] = field(default=None, repr=False)
 
