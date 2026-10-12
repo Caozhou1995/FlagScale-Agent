@@ -47,6 +47,12 @@ _REVIEW_STEP_ACCEPTANCE = [
     "probe output whose design intent was to falsify it, or state the "
     "world-state in which the premise is false and why it is a safe bet.",
     "Name the single point most likely to fool you, and how you ruled it out.",
+    "Task tier (set at Frame) — PRICE the reviewer, do not obey a mandate. T0 → no "
+    "reviewer: self-verify and state the skip reason. T1 → at most ONE reviewer. T2 → "
+    "full reviewer. An unconditional 'spawn ONE reviewer' "
+    "over-provisions a trivial edit; the tier is the cost decision. The reviewer "
+    "demand lives in THIS fixed Review step (not at each step_done, which keeps only "
+    "the evidence gate).",
 ]
 
 
@@ -115,10 +121,24 @@ _FRAME_STEP_ACCEPTANCE = [
     "alternatives. Its findings are CLAIMS, not verdicts: reproduce-or-refute each "
     "yourself. (3) SYNTHESIZE both — issue a one-line ruling for EACH framing "
     "(yours and the worker's): adopt (then revise the plan) or reject (name WHY). "
-    "Skip only if the task is genuinely trivial (single known command, rename, "
-    "version bump) and say so. You framed this plan, so its premises are invisible "
+    "You framed this plan, so its premises are invisible "
     "to you — a wrong framing is inherited by every step downstream, and a "
     "fresh-context diverger is the one check that does not share your blind spot.",
+    "Task tier — PRICE the dispatch, do not obey it mechanically. Declare ONE tier "
+    "in plan notes; it governs BOTH the diverger dispatched HERE and the reviewer "
+    "demanded LATER at the fixed Review step. What THIS Frame step dispatches is the "
+    "DIVERGER — a PRE-artifact framing probe; a reviewer needs a FROZEN artifact and "
+    "belongs at the Review step, never here. T0 (trivial — a single-file "
+    "constant/config/naming/version "
+    "edit with no behavior change) → dispatch NO worker: do the self-divergence half, "
+    "self-verify with a compile/parse probe, and state the skip reason. T1 (moderate — "
+    "multi-file, a behavior change, or a boundary contract: "
+    "parser/permission/config/serialization/cross-call-site) → self-divergence only, no "
+    "diverger (the later reviewer cap is at most ONE reviewer). T2 (complex, "
+    "irreversible, or a cross-process contract) → full diverger + reviewer. An "
+    "unconditional 'spawn a worker' is a "
+    "mandate; a tier is a deliberate cost decision — over-provisioning a T0 wastes a "
+    "worker's whole deadline, under-provisioning a T2 ships a silent defect.",
     "Qualifier extraction: re-read the task and list EVERY qualifier (a point in "
     "time, a version, a subset, a metric definition, a named tool/model instance) "
     "as a first-class item, folding each into a step or acceptance criterion. Read "
