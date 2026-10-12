@@ -903,9 +903,10 @@ class TestKeepClimbingOptimization:
 
 
 class TestFrameStepDiscipline:
-    """The frame-step discipline (Plan section): the divergence check is NOT a
-    separate dispatch — it lives inside the plan standard template's fixed FIRST
-    step, whose acceptance carries the framing work. Task-agnostic."""
+    """The frame-step discipline (Plan section): the divergence check runs BOTH
+    halves — self-divergence AND a dispatched read-only diverger worker, then
+    synthesis — and lives inside the plan standard template's fixed FIRST step,
+    whose acceptance carries the framing work. Task-agnostic."""
 
     def _prompt(self):
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
@@ -914,7 +915,7 @@ class TestFrameStepDiscipline:
     def test_frame_step_is_fixed_first_step(self):
         p = self._prompt()
         assert "The first step of every plan is the FRAME step" in p
-        assert "not in a separate dispatch" in p
+        assert "dispatched diverger worker" in p
         assert "fixed, un-skippable part of the template" in p
 
     def test_divergence_check_lives_in_acceptance(self):
@@ -922,6 +923,20 @@ class TestFrameStepDiscipline:
         assert "better / more correct / unconsidered" in p
         assert "rule one line each" in p
         assert "adopt and revise the plan, or reject and name WHY" in p
+
+    def test_frame_step_mandates_diverger_dispatch(self):
+        # The frame step must require BOTH self-divergence AND a dispatched
+        # read-only diverger worker (fresh context), then synthesis of both —
+        # mirroring the Review step. The old text licensed skipping the worker.
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+        assert "dispatch one read-only diverger worker" in low
+        assert "fresh context" in low
+        assert "synthesize both" in low
+        # the old discretionary escape must be gone
+        assert "proposing them yourself is fine" not in low
+        # trivial-task skip escape is retained
+        assert "genuinely trivial" in low
 
     def test_why_framing_is_the_leverage_point(self):
         p = self._prompt()

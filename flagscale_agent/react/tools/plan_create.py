@@ -92,25 +92,30 @@ _RSI_STEP_ACCEPTANCE = [
 
 # The fixed FRAMING step the harness PREPENDS to EVERY plan. This is the single
 # home for the plan-framing discipline that used to be delivered as a
-# plan_create-time [Plan] inject: the divergence check, qualifier/facet
-# extraction, the wall-aware first cut, the premortem, and the
-# name-the-standard-method rule. Because it is an ordinary step with acceptance
-# criteria, the (retained) step_done evidence gate enforces it at the moment the
-# agent marks it done — one systematic place, no separate guard, no chatty
-# inject. Worked FIRST, before the agent's own steps.
+# plan_create-time [Plan] inject: the divergence check (self + dispatched
+# diverger + synthesis), qualifier/facet extraction, the wall-aware first cut,
+# the premortem, and the name-the-standard-method rule. Because it is an
+# ordinary step with acceptance criteria, the (retained) step_done evidence gate
+# enforces it at the moment the agent marks it done — one systematic place, no
+# separate guard, no chatty inject. Worked FIRST, before the agent's own steps.
 _FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
 
 _FRAME_STEP_ACCEPTANCE = [
-    "Divergence check (do this before committing to the plan): put 2-3 "
-    "genuinely different framings of the task's ORIGINAL statement on the table "
-    "— a BETTER method (faster/cheaper/simpler), a MORE CORRECT method (avoids a "
-    "risk this plan carries), or an UNCONSIDERED decomposition/reading. (A "
-    "read-only diverger worker is one way to generate them; proposing them "
-    "yourself is fine.) Issue a one-line ruling for EACH: adopt (then revise the "
-    "plan) or reject (name WHY). Skip only if the task is genuinely trivial "
-    "(single known command, rename, version bump) and say so. You framed this "
-    "plan, so its premises are invisible to you — a wrong framing is inherited by "
-    "every step downstream.",
+    "Divergence check — do BOTH halves, like the Review step. (1) YOUR OWN "
+    "deeper divergence: put 2-3 genuinely different framings of the task's "
+    "ORIGINAL statement on the table — a BETTER method (faster/cheaper/simpler), a "
+    "MORE CORRECT method (avoids a risk this plan carries), or an UNCONSIDERED "
+    "decomposition/reading. (2) DISPATCH ONE read-only diverger worker (spawn_worker "
+    "with a read-only reviewer contract) whose sole job is to debate this framing "
+    "from a FRESH context — it does not inherit your premises, which is the entire "
+    "point; pass it the task's ORIGINAL statement verbatim and let it name its own "
+    "alternatives. Its findings are CLAIMS, not verdicts: reproduce-or-refute each "
+    "yourself. (3) SYNTHESIZE both — issue a one-line ruling for EACH framing "
+    "(yours and the worker's): adopt (then revise the plan) or reject (name WHY). "
+    "Skip only if the task is genuinely trivial (single known command, rename, "
+    "version bump) and say so. You framed this plan, so its premises are invisible "
+    "to you — a wrong framing is inherited by every step downstream, and a "
+    "fresh-context diverger is the one check that does not share your blind spot.",
     "Qualifier extraction: re-read the task and list EVERY qualifier (a point in "
     "time, a version, a subset, a metric definition, a named tool/model instance) "
     "as a first-class item, folding each into a step or acceptance criterion. Read "
