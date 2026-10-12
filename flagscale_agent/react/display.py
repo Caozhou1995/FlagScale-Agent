@@ -572,13 +572,14 @@ class _ThinkingAnim:
 def thinking():
     """Start the ⏳ thinking spinner.
 
-    Policy-gated: when show_thinking is off, this is a no-op (the spinner
-    never starts, so thinking_done/thinking_clear are equally silent).
+    Policy-gated: when show_thinking is off, the spinner is not started, so
+    thinking_done/thinking_clear are equally silent. Spinner cleanup still
+    runs (unchanged side effect); only the visible spinner is suppressed.
     """
     global _thinking_anim
+    _stop_all_spinners()
     if not _show_thinking:
         return
-    _stop_all_spinners()
     _thinking_anim = _ThinkingAnim()
     _thinking_anim.start()
 

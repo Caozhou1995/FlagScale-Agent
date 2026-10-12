@@ -151,6 +151,7 @@ class CommandHandler:
         parts = user_input.split()
         if len(parts) > 1 and parts[1] == "config":
             self.agent.config.reload()
+            self.agent._sync_display_policy()
             self.agent.skill_manager.invalidate_cache()
             self.agent._refresh_system_prompt()
             print("Config and skills reloaded (no code reload).")

@@ -148,12 +148,9 @@ class WorkerAgent:
         # ── Display policy (verbosity control) ──
         # Sync config → display module once; kernel.py and the streaming loop
         # consult display.thinking_enabled()/guard_advisory_enabled() with no
-        # config plumbing. Defaults keep byte-identical output.
-        from flagscale_agent.react import display as _display_mod
-        _display_mod.set_policy(
-            show_thinking=config.show_thinking,
-            show_guard_advisory=config.show_guard_advisory,
-        )
+        # config plumbing. Defaults keep byte-identical output. Re-run this
+        # same sync after a hot config reload (commands.py /reload config).
+        self._sync_display_policy()
 
         # ── Infrastructure ──
         self.skill_manager = _skill_manager or SkillManager(config.skill_dirs)
@@ -555,6 +552,21 @@ class WorkerAgent:
             if val:
                 proxies[var.lower()] = val
         return proxies
+
+    def _sync_display_policy(self):
+        """Push the display verbosity policy from config into the display module.
+
+        kernel.py and the streaming loop read display.thinking_enabled() /
+        display.guard_advisory_enabled() with no config plumbing, so the policy
+        lives in the display module. Called at construction AND after a hot
+        config reload (commands.py /reload config), so a config edit takes
+        effect without a process restart.
+        """
+        from flagscale_agent.react import display as _display_mod
+        _display_mod.set_policy(
+            show_thinking=self.config.show_thinking,
+            show_guard_advisory=self.config.show_guard_advisory,
+        )
 
     # ── System prompt ────────────────────────────────────────────────────────
 
@@ -2190,11 +2202,12 @@ class WorkerAgent:
                             if capped_now:
                                 thinking_capped = True
                                 reasoning_only = True
-                                display._write(
-                                    display.dim(
-                                        f"\n[thinking reached {cap_budget} token cap — forcing convergence]"
+                                if display.thinking_enabled():
+                                    display._write(
+                                        display.dim(
+                                            f"\n[thinking reached {cap_budget} token cap — forcing convergence]"
+                                        )
                                     )
-                                )
                                 # Abort the stream. The kernel re-injects the
                                 # accumulated thinking as a user message with a
                                 # convergence directive, so the reasoning is

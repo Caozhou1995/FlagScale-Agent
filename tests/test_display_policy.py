@@ -238,3 +238,55 @@ class TestBehaviorNeutrality:
         # ...while the terminal echo was suppressed (capsys captured nothing).
         assert "🛡" not in capsys.readouterr().out
 
+
+
+class TestReloadResync:
+    """F1 regression: a hot config reload must re-push the display policy.
+
+    The /reload config path (commands.py) calls config.reload() then
+    agent._sync_display_policy(); without that second call a config-only
+    edit leaves the old display policy active until a full restart.
+    """
+
+    def test_sync_display_policy_pushes_config(self, monkeypatch):
+        cfg = AgentConfig()
+        cfg.show_thinking = False
+        cfg.show_guard_advisory = False
+        # Bind the unbound method to a lightweight stand-in with .config
+        class _A:
+            pass
+        a = _A()
+        a.config = cfg
+        agent_mod.WorkerAgent._sync_display_policy(a)
+        assert display.thinking_enabled() is False
+        assert display.guard_advisory_enabled() is False
+
+    def test_reload_handler_resyncs_display(self, monkeypatch, tmp_path):
+        """The /reload config handler re-syncs display after config.reload()."""
+        import flagscale_agent.react.commands as commands_mod
+
+        p = tmp_path / "c.yaml"
+        p.write_text("provider: anthropic\nmodel: m1\nshow_thinking: true\n")
+        cfg = AgentConfig.from_yaml(str(p))
+
+        synced = {"n": 0}
+
+        class _Agent:
+            def __init__(self):
+                self.config = cfg
+                self.skill_manager = type("S", (), {"invalidate_cache": lambda s: None})()
+                self._session_id = "sess"
+
+            def _sync_display_policy(self):
+                synced["n"] += 1
+                display.set_policy(show_thinking=self.config.show_thinking)
+
+            def _refresh_system_prompt(self):
+                pass
+
+        # Prepare the flipped YAML, then invoke the handler.
+        p.write_text("provider: anthropic\nmodel: m1\nshow_thinking: false\n")
+        handler = commands_mod.CommandHandler(_Agent())
+        handler._handle_reload("/reload config")
+        assert synced["n"] == 1
+        assert display.thinking_enabled() is False
