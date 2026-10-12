@@ -8,7 +8,7 @@ Covers the four acceptance cases plus the adversarial one:
   * check fails   → REPORTED → REJECTED, note carries stdout_tail
   * not ready     → pending, NO ledger mutation
   * terminal      → idempotent, returned as-is
-  * ADVERSARIAL (§1.4 rule 5 / §8 trust collapse): a worker that forges a
+  * ADVERSARIAL: a worker that forges a
     result.json claiming success BUT left the product missing must STILL be
     REJECTED — because the parent only runs the acceptance predicate itself
     (independent VERIFICATION, not re-execution) and never reads result.json.
@@ -213,7 +213,7 @@ class TestTerminalIdempotent:
 
 
 class TestAdversarial:
-    """§1.4 rule 5 / §8 trust collapse — forge a self-report, skip the product."""
+    """Adversarial trust-collapse — forge a self-report, skip the product."""
 
     def test_forged_result_json_still_rejected(self, led, tmp_path):
         c, work = _make_reported(
@@ -238,12 +238,12 @@ class TestAdversarial:
 
 
 class TestClaimDivergence:
-    """M5 acceptance closure: the parent surfaces a worker claim that disagrees
+    """Acceptance closure: the parent surfaces a worker claim that disagrees
     with the parent's own measured result — the lie is named, not silent."""
 
     def test_claim_says_pass_but_checks_fail_flags_divergence(
             self, led, tmp_path):
-        """The M5 exit smoke: a fake worker returns a false conclusion WITH
+        """Exit smoke: a fake worker returns a false conclusion WITH
         evidence; the parent rejects on evidence and flags the divergence."""
         c, work = _make_reported(
             led, tmp_path,

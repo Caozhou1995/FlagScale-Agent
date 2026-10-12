@@ -1,7 +1,7 @@
 # Copyright 2026 FlagOS Contributors
 # Licensed under the Apache License, Version 2.0
 
-"""Tests for worker-side ReportResultTool (design §2.5, M2)."""
+"""Tests for worker-side ReportResultTool."""
 
 import os
 
@@ -60,14 +60,14 @@ class TestNonWorker:
         assert out.startswith("ERROR")
 
 
-class TestINV4Writable:
+class TestWritableEnforcement:
     def test_file_outside_writable_rejected(self, led, tmp_path, monkeypatch):
         c = _make_running(led, tmp_path)
         monkeypatch.setenv("FLAGSCALE_TASK_ID", c.id)
         tool = ReportResultTool(ledger=led)
         out = tool.execute(summary="done", files_written=["/etc/hosts"])
         assert out.startswith("ERROR")
-        assert "writable" in out or "INV4" in out
+        assert "writable" in out
         # state must NOT have moved
         assert led.get(c.id).status == RUNNING
 
@@ -100,7 +100,7 @@ class TestReportedTransition:
         assert led.get(c.id).status == REPORTED
 
     def test_reported_is_not_done(self, led, tmp_path, monkeypatch):
-        """Self-report ≠ acceptance (INV3): still REPORTED, not DONE."""
+        """Self-report ≠ acceptance: still REPORTED, not DONE."""
         c = _make_running(led, tmp_path)
         monkeypatch.setenv("FLAGSCALE_TASK_ID", c.id)
         ReportResultTool(ledger=led).execute(summary="trust me")

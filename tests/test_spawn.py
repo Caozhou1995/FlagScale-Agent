@@ -71,7 +71,7 @@ class TestRefusals:
         out = tool.execute(**_args(tmp_path))
         assert out.startswith("ERROR")
         assert "depth" in out.lower()
-        assert "D10" in out
+        assert "depth limit exceeded" in out
 
     def test_concurrency_cap(self, tmp_path, led):
         # Fill the slots with active tasks.
@@ -107,7 +107,7 @@ class TestRefusals:
     def test_contract_validation_error(self, tmp_path, led):
         tool = SpawnWorkerTool(ledger=led)
         a = _args(tmp_path)
-        a["output_ptr"] = "/etc/passwd"  # outside writable (INV4)
+        a["output_ptr"] = "/etc/passwd"  # outside writable
         out = tool.execute(**a)
         assert out.startswith("ERROR")
 
@@ -129,7 +129,7 @@ class TestRecursion:
         out = tool.execute(**_args(tmp_path))
         assert out.startswith("ERROR")
         assert "depth" in out.lower()
-        assert "D10" in out
+        assert "depth limit exceeded" in out
 
     def test_env_cap_override_permits_deeper(self, tmp_path, led, monkeypatch):
         # FLAGSCALE_MAX_DEPTH=3 permits a depth-2 worker to spawn a depth-3 child.
@@ -201,7 +201,7 @@ class TestSpawnEnvAndTty:
         assert captured["kwargs"]["start_new_session"] is True
         assert captured["kwargs"]["stderr"] == subprocess.STDOUT
 
-        # R1: argv carries ONLY the contract path + time budget, not the text.
+        # argv carries ONLY the contract path + time budget, not the text.
         # Order matters: typer requires OPTIONS BEFORE the positional `query`,
         # else it errors "No such command '--time-budget-sec'".
         assert captured["argv"][0] == "flagscale-agent"

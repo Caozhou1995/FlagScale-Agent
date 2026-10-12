@@ -112,7 +112,7 @@ class Verdict:
     claim: Optional[Dict[str, Any]] = None
     # True when the claim's goal_met disagrees with the parent's measured result
     # (claim says success but checks failed, or claim says failure but checks
-    # passed). This is the M5 acceptance-closure signal: a lying worker cannot
+    # passed). This is the acceptance-closure signal: a lying worker cannot
     # hide, because the parent's own re-run is the verdict and the mismatch is
     # named.
     claim_divergence: bool = False

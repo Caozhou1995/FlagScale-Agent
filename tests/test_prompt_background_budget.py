@@ -289,8 +289,8 @@ class TestMultiAgentGuidance:
             "cwd", "knowledge", "skills", "tools"}
 
     def test_documents_controlled_recursion_and_tree_constraints(self):
-        # M6/M7 landed after the section was written: depth cap (controlled
-        # recursion), the GLOBAL concurrency gate, nested sessions, adoption.
+        # Depth cap (controlled recursion), the GLOBAL concurrency gate, nested
+        # sessions, and adoption landed after the section was written.
         low = SYSTEM_PROMPT_STATIC.lower()
         assert "max_depth" in low and "depth limit exceeded" in low
         assert "max_concurrent" in low

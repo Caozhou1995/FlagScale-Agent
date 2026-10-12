@@ -1,7 +1,7 @@
 # Copyright 2026 FlagOS Contributors
 # Licensed under the Apache License, Version 2.0
 
-"""Tests for worker-side wiring helpers (design §2.6, M2)."""
+"""Tests for worker-side wiring helpers."""
 
 import os
 

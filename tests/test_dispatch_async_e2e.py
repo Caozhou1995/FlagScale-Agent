@@ -144,7 +144,7 @@ def test_async_dispatch_returns_control_immediately(
     # Bounded note, pointer-shaped output.
     assert len(failed[0]["note"]) <= 200
     assert all(r["output_ptr"].endswith("out.md") for r in recs)
-    # All D9 slots freed by the background judge loop.
+    # All concurrency slots freed by the background judge loop.
     assert led.active_ids() == []
 
 

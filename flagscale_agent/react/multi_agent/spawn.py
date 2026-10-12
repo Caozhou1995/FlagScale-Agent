@@ -236,7 +236,7 @@ def _render_contract(c: Contract) -> str:
     """Render a contract into a self-sufficient worker prompt.
 
     Contains goal + constraints + acceptance + inputs + output_ptr + deadline +
-    task_id — and NOTHING of the parent session's history (design §2.2).
+    task_id — and NOTHING of the parent session's history.
     """
     cons = c.constraints or {}
     lines: List[str] = []
@@ -358,7 +358,7 @@ def _render_contract(c: Contract) -> str:
 
 
 class _Watchdog(threading.Thread):
-    """Parent-side, daemon liveness watcher for one spawned worker (design §2.3).
+    """Parent-side, daemon liveness watcher for one spawned worker.
 
     A purely observational thread: it never touches the REPL, never blocks
     process exit (daemon=True), and only writes to the ledger + kills the
@@ -417,7 +417,7 @@ class _Watchdog(threading.Thread):
                     try:
                         self._ledger.transition(
                             self._task_id, DEADLINE_MISSED,
-                            note="deadline exceeded; worker killed (INV5)",
+                            note="deadline exceeded; worker killed",
                         )
                     except LedgerError:
                         pass
@@ -612,7 +612,7 @@ class SpawnWorkerTool(Tool):
                 output_ptr: str = "", deadline_minutes: float = 0,
                 task_plan: Any = None, _env: Optional[Dict[str, str]] = None,
                 **kwargs) -> str:
-        # ── 1. role probe (INV1) ─────────────────────────────────────────────
+        # ── 1. role probe ───────────────────────────────────────────────────
         # A worker's env carries FLAGSCALE_TASK_ID; the parent's does not. This
         # is a PROBE, not a refusal: being a worker no longer forbids spawning —
         # the depth cap below does. We read the id to build the parent chain and
@@ -625,7 +625,7 @@ class SpawnWorkerTool(Tool):
         except (ValueError, TypeError):
             own_trace = []
 
-        # ── 2. depth check (D10) ─────────────────────────────────────────────
+        # ── 2. depth check ──────────────────────────────────────────────────
         # The orchestrator is depth 0; the child it spawns is depth 1. A worker
         # at depth d may spawn a child at depth d+1 only while d < max_depth.
         max_depth = _effective_max_depth()
@@ -635,7 +635,7 @@ class SpawnWorkerTool(Tool):
             cur_depth = 0
         if cur_depth >= max_depth:
             return (
-                f"ERROR: depth limit exceeded (D10). current depth={cur_depth}, "
+                f"ERROR: depth limit exceeded. current depth={cur_depth}, "
                 f"MAX_DEPTH={max_depth}; a process at depth {cur_depth} cannot "
                 "spawn (the cap is infrastructure-enforced and cannot be raised "
                 f"from here). parent_trace={own_trace}."
@@ -646,19 +646,19 @@ class SpawnWorkerTool(Tool):
         # parent is the last element; the whole chain makes the tree auditable.
         child_trace = own_trace + ([own_task_id] if own_task_id else [])
 
-        # ── 3. concurrency check (D9) ────────────────────────────────────────
+        # ── 3. concurrency check ─────────────────────────────────────────────
         try:
             active = self._ledger.active_ids()
         except Exception as e:  # ledger unreadable
             return f"ERROR: failed to read the ledger: {e}"
         if len(active) >= MAX_CONCURRENT:
             return (
-                f"ERROR: concurrency slots full (D9). active={len(active)} >= "
+                f"ERROR: concurrency slots full. active={len(active)} >= "
                 f"MAX_CONCURRENT={MAX_CONCURRENT}; current tasks: "
                 f"{', '.join(active)}. Reclaim finished tasks with poll_tasks first."
             )
 
-        # ── 4. build + validate the contract (INV2: content-addressed id) ────
+        # ── 4. build + validate the contract (content-addressed id) ────
         cons = dict(constraints or {})
         try:
             dm = float(deadline_minutes)
@@ -701,7 +701,7 @@ class SpawnWorkerTool(Tool):
         except ContractError as e:
             return f"ERROR: contract validation failed: {e}"
 
-        # ── 5. create the ledger entry (INV2 dedup) ──────────────────────────
+        # ── 5. create the ledger entry (content-addressed dedup) ─────────────
         try:
             tdir = self._ledger.create(c, check_inputs_exist=True)
         except DuplicateTask as e:
@@ -713,7 +713,7 @@ class SpawnWorkerTool(Tool):
         except ContractError as e:
             return f"ERROR: contract validation failed: {e}"
 
-        # ── 6. R1: long contract goes to a FILE; argv carries only the path ──
+        # ── 6. long contract goes to a FILE; argv carries only the path ──
         contract_path = Path(tdir) / "contract.prompt"
         try:
             contract_path.write_text(_render_contract(c), encoding="utf-8")

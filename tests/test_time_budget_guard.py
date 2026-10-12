@@ -377,7 +377,7 @@ class TestTimeBudgetGateCopy:
         assert "memory_write()" in v.message
         assert "survival-range test" in v.message
 
-    # --- D1: 75% checklist ----
+    # --- 75% checklist ----
     def test_75_action_checklist(self):
         v = self._post(78.0)
         assert v is not None and v.reason == "time_budget_75pct"
@@ -386,7 +386,7 @@ class TestTimeBudgetGateCopy:
         assert "No new lines" in v.message
         assert "not refining" in v.message
 
-    # --- D1: 50% default actions ----
+    # --- 50% default actions ----
     def test_50_default_actions(self):
         v = self._post(55.0)
         assert v is not None and v.reason == "time_budget_50pct"

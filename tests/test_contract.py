@@ -1,7 +1,7 @@
 # Copyright 2026 FlagOS Contributors
 # Licensed under the Apache License, Version 2.0
 
-"""Tests for the multi-agent Contract (design §1.1/§1.3)."""
+"""Tests for the multi-agent Contract."""
 
 import os
 import time
@@ -81,7 +81,7 @@ class TestValidate:
             _mk(tmp_path, output_ptr="relative/out.json").validate()
 
     def test_output_ptr_outside_writable_rejected_inv4(self, tmp_path):
-        # INV4: output_ptr must live inside constraints.writable
+        # output_ptr must live inside constraints.writable
         with pytest.raises(ContractError):
             _mk(tmp_path, output_ptr="/etc/evil.json").validate()
 

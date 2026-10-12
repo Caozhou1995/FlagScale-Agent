@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for LongTimeShellGuard — foreground sleep/timeout >30s blocking (M1)."""
+"""Tests for LongTimeShellGuard — foreground sleep/timeout >30s blocking."""
 
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.longtimeshell import (

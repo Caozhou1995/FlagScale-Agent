@@ -239,7 +239,7 @@ def _dispatch_many_blocking(
 # anything else while workers run. We flip the default to ASYNC: dispatch_many
 # returns a handle IMMEDIATELY (control returns to the agent) while a background
 # daemon thread runs the exact same fill-slot + poll + judge loop. The thread
-# keeps judging REPORTED tasks (which still occupy a D9 slot) so all N tasks
+# keeps judging REPORTED tasks (which still occupy a concurrency slot) so all N tasks
 # eventually run and every slot is freed. The parent retrieves the bounded
 # PointerRecords with a later dispatch_many(action='poll') call — mirroring
 # shell(background=true) + shell_jobs(poll).
@@ -516,7 +516,7 @@ def dispatch_many(
     """ASYNC by default: launch N workers in the background, return a handle.
 
     The background daemon thread runs the SAME bounded fan-out (≤ degree
-    concurrent, ≥ N tasks scheduled), judging each REPORTED task so D9 slots
+    concurrent, ≥ N tasks scheduled), judging each REPORTED task so concurrency slots
     recycle. Returns the handle immediately so the parent keeps control. Retrieve
     the bounded PointerRecords with a later `poll_dispatch(dispatch_id)`.
 

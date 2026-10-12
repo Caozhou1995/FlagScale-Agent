@@ -1,7 +1,7 @@
 # Copyright 2026 FlagOS Contributors
 # Licensed under the Apache License, Version 2.0
 
-"""Tests for the multi-agent TaskLedger (design §1.2)."""
+"""Tests for the multi-agent TaskLedger."""
 
 import os
 import shutil

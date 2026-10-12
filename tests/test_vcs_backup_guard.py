@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for VcsBackupGuard — targeted interception of destructive git ops (M1)."""
+"""Tests for VcsBackupGuard — targeted interception of destructive git ops."""
 
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.vcs_backup import VcsBackupGuard

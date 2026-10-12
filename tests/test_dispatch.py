@@ -167,7 +167,7 @@ def test_degree_is_clamped_to_cap(led, tmp_path):
     specs = [_spec(i, tmp_path) for i in range(4)]
     dispatch_many_blocking(specs, degree=99, spawn=spawn, ledger=led,
                            poll_interval=0.01, max_wait_s=30)
-    # Never exceeds the D9 hard cap, even when asked for more.
+    # Never exceeds the hard concurrency cap, even when asked for more.
     assert spawn.max_live <= MAX_CONCURRENT
 
 
@@ -176,7 +176,7 @@ def test_no_active_tasks_left_after_dispatch(led, tmp_path):
     specs = [_spec(i, tmp_path) for i in range(3)]
     dispatch_many_blocking(specs, degree=2, spawn=spawn, ledger=led,
                            poll_interval=0.01, max_wait_s=30)
-    # Judging each REPORTED task freed every D9 slot.
+    # Judging each REPORTED task freed every slot.
     assert led.active_ids() == []
 
 

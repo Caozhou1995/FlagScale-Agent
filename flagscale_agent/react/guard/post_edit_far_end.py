@@ -115,7 +115,7 @@ class PostEditFarEndGuard(Guard):
     # or environment propagation. Mock-based unit tests systematically miss the
     # real contract bugs here (argv order, env/fd/cwd passing), because mocking
     # Popen replaces the very boundary under test. When detected, nudge toward a
-    # real (non-mocked) subprocess E2E. Evidence: M2's 27 mocked tests all passed
+    # real (non-mocked) subprocess E2E. Evidence: 27 mocked tests all passed
     # while two real integration bugs (typer argv order, tasks-dir propagation)
     # were only caught by the real-subprocess E2E.
     _BOUNDARY_SIGNALS = (

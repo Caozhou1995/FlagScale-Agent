@@ -15,7 +15,7 @@
 """Worker-side wiring helpers.
 
 Keeps the changes to agent.py minimal and testable: three small functions that
-the agent calls, plus the fixed role prefix (D7). Nothing here spawns; nothing
+the agent calls, plus the fixed role prefix. Nothing here spawns; nothing
 here touches the REPL.
 """
 
@@ -29,7 +29,7 @@ from flagscale_agent.react.paths import get_tasks_dir
 
 from .ledger import FAILED, RUNNING, TaskLedger
 
-# D7 — fixed role prefix. The contract body is already the query; terse.
+# Fixed role prefix. The contract body is already the query; terse.
 WORKER_ROLE_PREFIX = (
     "[worker role] You are a worker dispatched by a parent Agent. The contract "
     "has been injected. When done you MUST call report_result to report a "
@@ -75,7 +75,7 @@ def resolve_resume_query() -> Optional[str]:
 def resolve_worker_query(query: Optional[str]) -> Optional[str]:
     """Return the query the single-shot loop should run.
 
-    The CLI's positional arg is only a PATH (R1: long contracts go to a file,
+    The CLI's positional arg is only a PATH (long contracts go to a file,
     argv carries the path). When we're a worker and a contract file is present,
     read it and prepend the fixed role prefix. Otherwise pass the caller's
     query through untouched (normal interactive / single-shot behaviour).

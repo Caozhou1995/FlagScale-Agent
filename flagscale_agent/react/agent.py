@@ -498,7 +498,7 @@ class WorkerAgent:
 
         # ── Multi-agent: spawn a worker ──────────────────────────────────────
         # spawn_worker is always registered: its OWN execute() refuses when the
-        # env carries FLAGSCALE_TASK_ID (INV1), so a worker holding the tool can
+        # env carries FLAGSCALE_TASK_ID, so a worker holding the tool can
         # never use it — the refusal is the invariant, not the registry.
         self.tool_registry.register(SpawnWorkerTool(session_dir=self._session_dir))
         # resume_child is the parent<->child dialogue channel: continue a
@@ -523,7 +523,7 @@ class WorkerAgent:
         # ASYNC by default: it starts the fan-out on a background thread and
         # returns a dispatch_id at once; the parent polls with action='poll'
         # until state='complete' (wait=true = legacy blocking mode).
-        # Parent-only — a worker cannot fan out (INV1/D10).
+        # Parent-only — a worker cannot fan out.
         if not is_worker():
             self.tool_registry.register(
                 DispatchManyTool(session_dir=self._session_dir))
@@ -1481,7 +1481,7 @@ class WorkerAgent:
         if getattr(self, "_startup_guard", None) is not None:
             self._startup_guard.set_single_shot(True)
         self._inject_context()
-        # Worker mode: the CLI positional arg is a contract PATH (R1); resolve
+        # Worker mode: the CLI positional arg is a contract PATH; resolve
         # to the full contract text + role prefix before the loop sees it.
         query = resolve_worker_query(query)
         self.history.append({"role": "user", "content": query})
