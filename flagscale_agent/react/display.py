@@ -368,8 +368,8 @@ def _tool_icon(name):
 #   verdicts are deliberately NOT policy-controlled: they explain why a tool
 #   did not run and are part of the agent's safety contract, not decoration.
 
-_show_thinking = True
-_show_guard_advisory = True
+_show_thinking = False
+_show_guard_advisory = False
 
 
 def set_policy(show_thinking=None, show_guard_advisory=None):

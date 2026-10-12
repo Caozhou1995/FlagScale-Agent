@@ -33,9 +33,9 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def _reset_display_policy():
-    display.set_policy(show_thinking=True, show_guard_advisory=True)
+    display.set_policy(show_thinking=False, show_guard_advisory=False)
     yield
-    display.set_policy(show_thinking=True, show_guard_advisory=True)
+    display.set_policy(show_thinking=False, show_guard_advisory=False)
 
 
 class TestDisplayGating:
@@ -83,9 +83,19 @@ class TestDisplayGating:
 
 
 class TestConfigEnvOverride:
-    def test_defaults_show(self, monkeypatch):
+    def test_defaults_hide(self, monkeypatch):
+        # Default is OFF (cleaner terminal) — thinking + advisory hidden unless
+        # explicitly enabled via env/YAML/CLI.
         monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_THINKING", raising=False)
         monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY", raising=False)
+        c = AgentConfig(provider="anthropic", model="m1")
+        assert c.show_thinking is False
+        assert c.show_guard_advisory is False
+
+    def test_env_can_enable_from_default_off(self, monkeypatch):
+        # The OFF default must be overridable OFF->ON via each explicit channel.
+        monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_THINKING", "1")
+        monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY", "1")
         c = AgentConfig(provider="anthropic", model="m1")
         assert c.show_thinking is True
         assert c.show_guard_advisory is True

@@ -26,6 +26,15 @@ def strip_ansi(text):
     return re.sub(r'\033\[[0-9;]*m', '', text)
 
 
+@pytest.fixture(autouse=True)
+def _enable_advisory_display():
+    # These tests exercise guard_inject FORMATTING; the advisory display is now
+    # OFF by default, so force it on for this module and restore after.
+    display.set_policy(show_guard_advisory=True)
+    yield
+    display.set_policy(show_guard_advisory=False)
+
+
 class TestGuardDisplayFunctions:
     """Test guard display functions have visible icons."""
 
