@@ -235,3 +235,48 @@ def test_minimal_uncertainty_leaks_no_grader_or_posture_hardcode():
     assert not re.search(r"&[a-zA-Z]+;", low), "Frame acceptance leaked an HTML entity literal"
     assert not re.search(r"0x[0-9a-fA-F]{4,}", low), "Frame acceptance leaked a hex address"
 
+
+def test_cross_engine_differential_rule_present():
+    """A defensive property judged by a DIFFERENT engine than the one you
+    implement against must treat the consumer's parse path as the oracle.
+
+    Evidence 2026-10-13: a sanitizer implemented against a stdlib HTML parser
+    passed a self-built corpus and a preservation test, yet failed a
+    browser-based oracle on a construct the two engines parse differently —
+    the implementation's own parser had been taken as the oracle. The prompt
+    must therefore instruct enumerating documented differential constructs
+    between the two engines and validating through the consumer side, or
+    taking the conservative branch when preserving could leave a hazard live.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "Cross-engine differential" in p
+    assert "your own parser is NOT the oracle" in p
+    assert "CONSUMER's parse path" in p
+    assert "conservative branch" in p
+
+
+def test_standard_corpus_first_rule_present():
+    """When the hazard class has a published standard corpus, run THAT rather
+    than a self-built one: a self-built corpus only covers what the author
+    already imagined.
+
+    Evidence 2026-10-13: a solver's all-green self-built corpus missed the
+    single construct that failed the hidden oracle. The rule must state that
+    an all-green local result certifies the breadth of the author's
+    imagination, not coverage of the hazard.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "Standard-corpus first" in p
+    assert "published standard corpus" in p
+    assert "self-built corpus" in p
+    assert "breadth of your imagination" in p
+
+
+def test_cross_engine_and_corpus_rules_leak_no_specifics():
+    """The two new rules are GENERAL posture: no task's grader, engine, or
+    construct may be hardcoded."""
+    p = SYSTEM_PROMPT_STATIC
+    for bad in ("BeautifulSoup", "html.parser", "selenium", "chrome"):
+        assert bad not in p, f"prompt leaked {bad!r}"
+    assert not re.search(r"0x[0-9a-fA-F]{4,}", p), "prompt leaked a hex address"
+
