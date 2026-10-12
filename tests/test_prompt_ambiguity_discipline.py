@@ -294,3 +294,20 @@ def test_cross_engine_and_corpus_rules_leak_no_specifics():
         assert bad not in p, f"prompt leaked {bad!r}"
     assert not re.search(r"0x[0-9a-fA-F]{4,}", p), "prompt leaked a hex address"
 
+
+
+def test_ambiguity_of_parse_and_paired_preservation_rules_present():
+    """A hazard classification is only as strong as the parser judging it, and a
+    byte-unchanged requirement is a second gate that fights the removal gate.
+
+    Evidence 2026-10-13: a sanitizer judged hazard constructs with its own
+    tolerant parser, missed lexical quote/comment boundary break-outs that the
+    consumer engine read as live, and separately altered already-clean input
+    through a span-reassembly path the grader normalised differently.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "Ambiguity-of-parse rule" in p
+    assert "MOST dangerous reading" in p
+    assert "LEXICAL level" in p
+    assert "Paired-preservation rule" in p
+    assert "grader's OWN" in p or "grader\\'s OWN" in p
