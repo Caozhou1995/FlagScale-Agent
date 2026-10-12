@@ -125,7 +125,7 @@ class TestWalkIsBounded:
 
 class TestHeartbeatNotStarved:
     def test_concurrent_thread_progresses_during_slow_walk(self, monkeypatch):
-        # Simulate the caffe -j256 scenario: a slow per-proc read (disk-bound)
+        # Simulate the heavy parallel build (-j256) scenario: a slow per-proc read (disk-bound)
         # over a large tree. The GIL-yield in the walk must let a concurrent
         # "heartbeat" thread tick while the walk runs. Without the yield, a
         # tight C-bound loop would starve the other thread.

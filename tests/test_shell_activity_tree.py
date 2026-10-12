@@ -15,8 +15,7 @@
 """Integration test: the activity string handed to the LLM health judge must
 report WHOLE-TREE CPU% and memory, not the parent-only snapshot.
 
-Regression for insight/flagscale_agent/health_parent_only_cpu_mem_rootcause:
-a launcher/wrapper parent (bash sleep, a training driver forking workers) reads
+Regression: a launcher/wrapper parent (bash sleep, a training driver forking workers) reads
 ~0% CPU and ~2 MB RSS on its own while children saturate cores and use GBs. The
 old activity string surfaced those parent-only numbers, so the judge repeatedly
 reported "CPU is 0% with only 2 MB memory" and false-flagged healthy jobs.

@@ -137,13 +137,13 @@ Delivery-time traps (fresh reload, backup+rollback, exact-contents,
 byte-immutability, noisy margin) are enforced at completion — do not carry them into acceptance.
 """
 
-# NOTE: The plan_create qualifier-extraction reminder (_PLAN_CONSTRAINT_REMINDER)
-# was moved to plan.py (_QUALIFIER_EXTRACTION). Reason: it belongs at the
-# plan-framing moment, which PlanGuard owns. Keeping it here as a separate
-# Timing -1 block caused guard override_reason cross-talk — PlanGuard's
-# single-shot block trains the agent to pass _override_reason, which then
-# silently satisfied this guard's block too, so it never actually fired.
-# See plan.py check_pre and pitfall/flagscale_agent/guard_override_crosstalk.
+# NOTE: The framing-time reminders (qualifier extraction, pre-mortem, wall-aware
+# first cut, divergence check) lived in plan.py as inject blocks, then were
+# consolidated into the fixed FIRST plan step's acceptance criteria
+# (_FRAME_STEP_ACCEPTANCE in tools/plan_create.py). Reason: injecting on
+# plan_create caused guard override_reason cross-talk — PlanGuard's single-shot
+# block trained the agent to pass _override_reason, which then silently
+# satisfied other guards' blocks too, so they never actually fired.
 
 _BATCH_STEP_DONE_BLOCK = """[VerificationGuard] Batch update marks a step done — same bar as a single step_done.
 

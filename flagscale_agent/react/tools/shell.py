@@ -98,7 +98,7 @@ class _HealthSampler:
     a fresh bounded daemon thread every check_interval; each blocked for
     minutes, they PILED UP (dozens of abandoned threads all hammering /proc,
     contending for the GIL), and the main heartbeat starved for minutes
-    (observed: an 8-minute heartbeat gap during a compcert build).
+    (observed: an 8-minute heartbeat gap during a large build).
 
     This sampler runs exactly ONE thread for the whole command. It samples,
     stores the latest result + timestamp under a lock, then sleeps. The main

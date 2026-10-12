@@ -49,10 +49,10 @@ class TestDetectOutputAnomalies:
         assert result['repeated_errors'] is False
 
     def test_cc1plus_oom_signature_detected(self):
-        # REGRESSION (pitfall/flagscale_agent/shell_oom_cgroup_blindspot):
+        # REGRESSION:
         # the kernel OOM-killer reaps cc1plus and g++ reports it as the line
         # below. The old oom_indicators list missed this, so an OOM build
-        # looked healthy. This is the EXACT caffe-cifar-10 build.log signature.
+        # looked healthy. This is the exact build.log signature.
         output = (
             "[ 45%] Building CXX object caffe.dir/layer_factory.cpp.o\n"
             "g++: fatal error: Killed signal terminated program cc1plus\n"
@@ -89,7 +89,7 @@ class TestDetectOutputAnomalies:
 
 class TestCgroupMemPressure:
     """
-    pitfall/flagscale_agent/shell_oom_cgroup_blindspot: in a container psutil
+    In a container psutil
     reports the HOST RAM, so system_mem_pressure never fires while a build
     OOM-thrashes inside a small cgroup slice. The probe must prefer cgroup
     accounting and fall back to host only when there is no enforced limit.
@@ -161,7 +161,7 @@ class TestShouldKillProcess:
     def test_child_drop_alone_does_not_kill(self):
         # REDESIGN (support B): a child-count drop with NO OOM evidence
         # (killed_count=0, no memory pressure) is normal worker convergence,
-        # NOT OOM. This is the caffe-cifar-10 false-kill case: 5→2 workers
+        # NOT OOM. This is the false-kill case: 5→2 workers
         # exiting normally must not be convicted.
         should_kill, reason = should_kill_process(
             elapsed_seconds=120,

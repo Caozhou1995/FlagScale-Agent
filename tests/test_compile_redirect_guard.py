@@ -53,7 +53,7 @@ class TestCompileRedirectGuard:
         'unset HTTP_PROXY && eval $(opam env) && opam install pkg1 pkg2 -y > /tmp/opam_install2.log 2>&1; echo "EXIT: $?"',
         # `env -u VAR ...` prefix must NOT let the build slip past the guard: the
         # env branch has to consume its own -u unset pairs before the driver.
-        # Seen live on compcert running invisible to the monitor.
+        # Running invisible to the monitor.
         'env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy opam install coq.8.16.1 menhir --switch=compcert -y 2>&1 | tail -30; echo "EXIT: $?"',
         "env -u HTTP_PROXY make -j8 | tail",
         "env -i opam install coq -y | tail -20",
@@ -148,7 +148,7 @@ class TestCompileRedirectGuard:
         assert "which" in msg
 
     def test_message_caps_parallelism_absolutely(self):
-        # Regression (caffe -j256): the memory-bounded formula alone does NOT
+        # Regression: the memory-bounded formula alone does NOT
         # cap J on a big host (256 cores / ~1TB RAM passes the memory cap with a
         # huge J). 256 heavy compilers thrash cache/BW and spawn a process tree
         # that starves the monitor. The message must add an ABSOLUTE cap on top
@@ -165,8 +165,7 @@ class TestCompileRedirectGuard:
         assert "thrash" in low or "bandwidth" in low or "starve" in low
 
     def test_message_makes_parallelism_cgroup_aware(self):
-        # Regression (pitfall/flagscale_agent/shell_oom_cgroup_blindspot, caffe
-        # -j32 OOM): inside a container `nproc` and /proc/meminfo report the HOST
+        # Regression: inside a container `nproc` and /proc/meminfo report the HOST
         # (256 cores / 909GB) even when the cgroup caps the process at 1 CPU /
         # 2GB. The old formula read only the host and picked -j32, forking 32
         # cc1plus that the kernel OOM-killed. The message's shell formula must
@@ -208,7 +207,7 @@ class TestCompileRedirectGuard:
         assert "opam" not in msg.lower()
 
     def test_message_advises_overlapping_independent_steps(self):
-        """Regression (insight/tbench/caffe_timeout_rootcause_budget_exhaustion):
+        """Regression:
         the build and a dependency-free download/install were run SERIALLY, so the
         download idled behind the ~8min build and burned the per-task budget. The
         block message must steer toward overlapping the background build with the

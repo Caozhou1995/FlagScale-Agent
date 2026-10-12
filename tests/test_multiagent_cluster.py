@@ -5,16 +5,16 @@
 pointer check, auto-injected reviewer role tag, and the report-completeness
 gate — one mechanism across multi_agent files.
 
-Proposals under test:
-  [81c81515] reviewer preset: deadline >=10min; inputs must carry the
+Behaviour under test:
+  reviewer preset: deadline >=10min; inputs must carry the
              deliverable abs path + rev; acceptance forces a non-empty
              findings.md with a per-finding table; re-review role that only
              verifies diff fixes.
-  [76b18db8] review contracts verify input pointers are the LIVE tree (the
+  review contracts verify input pointers are the LIVE tree (the
              location the running system actually imports).
-  [b56f8276] spawn auto-injects constraints.reviewer=true on a review goal;
+  spawn auto-injects constraints.reviewer=true on a review goal;
              suppression keyed on the EXPLICIT role tag, never prose.
-  [91aab676 + fa9b99a4] report-completeness gate: >=1 finding or an explicit
+  report-completeness gate: >=1 finding or an explicit
              'no findings' line, no dangling '(IN PROGRESS' header; enforced
              at WRITE time in report_result.py and mirrored in the reviewer
              contract template acceptance.
@@ -304,7 +304,7 @@ class TestInjectedAcceptanceRuns:
             assert rc != 0, c
 
     def test_skeleton_table_fails_completeness_cmd(self, tmp_path):
-        # F2 (reviewer round): header+separator rows with zero data rows must
+        # Header+separator rows with zero data rows must
         # fail the injected completeness command, not just the Python gate.
         acc, ptr = self._acc(tmp_path)
         (tmp_path / "findings.md").write_text(
@@ -317,7 +317,7 @@ class TestInjectedAcceptanceRuns:
             rc = subprocess.run(c, shell=True, cwd=str(tmp_path)).returncode
             assert rc != 0, c
 class TestLiveTreePointerCheck:
-    """[76b18db8] Review contracts must verify input pointers are the LIVE
+    """Review contracts must verify input pointers are the LIVE
     tree — the location the CURRENT process actually imports. Recorded
     failure: the review targeted a stale package copy while the harness
     imported the real one, so the first diff pass read the wrong file."""
@@ -402,7 +402,7 @@ class TestCompletenessHelpers:
         assert not report_has_findings("")
 
     def test_table_skeleton_is_not_a_finding(self):
-        # F2 (reviewer round): header + separator rows with no data row must
+        # Header + separator rows with no data row must
         # NOT count as findings — otherwise a zero-finding skeleton passes.
         assert not report_has_findings("| ID | Sev | Fix |\n| --- | --- | --- |")
         assert not report_has_findings("| --- | --- |")
@@ -420,7 +420,7 @@ class TestCompletenessHelpers:
         assert has_no_findings_line(
             "## Findings\n\nNo findings — the diff is clean.")
         assert not has_no_findings_line("findings table follows")
-        # F3 (reviewer round): 'no findings' echoed inside guidance prose
+        # 'no findings' echoed inside guidance prose
         # must NOT satisfy the check — line-anchored, markdown-prefix aware.
         assert not has_no_findings_line(
             "...or state 'no findings', then finalize")
@@ -460,7 +460,7 @@ class TestCompletenessHelpers:
 
 
 class TestReportResultCompletenessGate:
-    """[fa9b99a4] At WRITE time in report_result.py: a reviewer-role task
+    """At WRITE time in report_result.py: a reviewer-role task
     whose output report fails the completeness check gets the report_result
     call REJECTED with guidance to finalize; the task stays RUNNING."""
 
@@ -562,7 +562,7 @@ class TestRenderRoleLines:
         assert "verify ONLY that each previously reported" in text
 
     def test_role_tag_only_render_gets_discipline(self, tmp_path):
-        # F1 (reviewer round): a contract that carries ONLY the explicit role
+        # A contract that carries ONLY the explicit role
         # tag (reviewer flag false/absent) must still get the full reviewer
         # discipline render — resolve_role, not the boolean flag, is the gate.
         c = _reviewer_contract(
@@ -573,7 +573,7 @@ class TestRenderRoleLines:
         assert "RE-REVIEW ROLE" in text
 
     def test_reviewer_render_has_completeness_expectation(self, tmp_path):
-        # [91aab676] the completeness check belongs in the reviewer contract
+        # the completeness check belongs in the reviewer contract
         # template as an acceptance suggestion.
         c = _reviewer_contract(tmp_path)
         text = _render_contract(c)
@@ -591,7 +591,7 @@ class TestRenderRoleLines:
         assert "## Reviewer discipline" not in text
 
     def test_reviewer_render_pins_file_revision(self, tmp_path):
-        # prop_0d6be3ee: a file path input must be stamped with its exact
+        # A file path input must be stamped with its exact
         # bytes' fingerprint so the reviewer detects a worktree edited AFTER
         # dispatch (diff-of-diffs, avoiding false findings on a stale snapshot).
         c = _reviewer_contract(tmp_path)

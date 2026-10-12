@@ -96,7 +96,7 @@ def _is_review_goal(goal: str) -> bool:
 
 
 def maybe_auto_inject_reviewer(goal: str, constraints: Dict[str, Any]) -> None:
-    """[b56f8276] Auto-inject `constraints.reviewer = True` for a review goal.
+    """Auto-inject `constraints.reviewer = True` for a review goal.
 
     Injected IN PLACE, and only when the caller left no explicit role tag:
     presence of either `reviewer` or `role` (whatever its value, including
@@ -109,52 +109,6 @@ def maybe_auto_inject_reviewer(goal: str, constraints: Dict[str, Any]) -> None:
         return
     if _is_review_goal(goal):
         constraints["reviewer"] = True
-
-
-# A diverger goal asks for ALTERNATIVE FRAMINGS of the task — the
-# independent-proposer counterpart to a review (review → "am I wrong?",
-# diverger → "did I think narrowly?"). Kept deliberately SPECIFIC: a goal
-# that merely mentions "different approaches" in passing is a normal task,
-# and mis-tagging it would wrongly exempt that worker from the parent-side
-# diverger-dispatch demand. Matching vocabulary = the harness's own diverger
-# contract wording (prompt.py), plus the literal role word.
-_DIVERGER_GOAL_RE = re.compile(
-    r"\b(divergers?|re-?fram\w*|(?:different|alternative|other|new) framings?)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_diverger_goal(goal: str) -> bool:
-    """True when the goal reads like a diverger task (propose alternative
-    framings). Word-bounded; distinct from a review goal."""
-    return bool(_DIVERGER_GOAL_RE.search(goal or ""))
-
-
-def maybe_auto_inject_diverger(goal: str, constraints: Dict[str, Any]) -> None:
-    """Auto-inject `constraints.diverger = True` for a diverger goal.
-
-    Symmetric to `maybe_auto_inject_reviewer`, but a SEPARATE tag on purpose:
-    a diverger is NOT a reviewer-class role and must NOT enter the reviewer
-    preset — that preset demands a deliverable-path + rev marker input and
-    raises the deadline floor to 10 minutes, whereas the diverger is a
-    ~3-minute read-only proposer with no revision under review. The tag is
-    read by PlanGuard (`_self_is_review_or_diverge_worker`) to exempt a
-    diverger worker from the parent-side diverger-DISPATCH block — closing the
-    "只有非reviewer和diverger才这样" exemption's diverger half, which a
-    reviewer-class tag alone could not (a diverger goal does not match
-    `_REVIEW_GOAL_RE`).
-
-    Injected IN PLACE, and only when the caller left no explicit role tag:
-    presence of `diverger`, `reviewer`, or `role` (whatever the value)
-    suppresses injection — the explicit tag is the only suppression signal.
-    """
-    if not isinstance(constraints, dict):
-        return
-    if ("diverger" in constraints or "reviewer" in constraints
-            or "role" in constraints):
-        return
-    if _is_diverger_goal(goal):
-        constraints["diverger"] = True
 
 
 def _has_rev_marker(constraints: Dict[str, Any],
@@ -178,7 +132,7 @@ def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
                           deadline_minutes: float,
                           inputs: Optional[List[Dict[str, Any]]] = None,
                           ) -> tuple:
-    """[81c81515 + 91aab676] Apply the reviewer preset to a spawn request.
+    """Apply the reviewer preset to a spawn request.
 
     For a reviewer-class role:
       * raise ContractError unless `inputs` carry the deliverable abs path
@@ -715,15 +669,10 @@ class SpawnWorkerTool(Tool):
         cons.setdefault("max_minutes", dm)
 
         # ── 4b. RoleSpec: auto-inject + reviewer preset (before freezing) ────
-        # [b56f8276] auto-inject the explicit reviewer tag for a review goal
+        # auto-inject the explicit reviewer tag for a review goal
         # (an explicit `reviewer`/`role` tag suppresses injection).
         maybe_auto_inject_reviewer(goal, cons)
-        # Same mechanism for the diverger role: tag a diverger goal with a
-        # SEPARATE `diverger` flag (never `reviewer`, which would wrongly enter
-        # the reviewer preset). Exempts the diverger worker from PlanGuard's
-        # parent-side diverger-dispatch block.
-        maybe_auto_inject_diverger(goal, cons)
-        # [81c81515 + 91aab676] apply the preset: deliverable+rev inputs,
+        # apply the preset: deliverable+rev inputs,
         # deadline floor, acceptance-completeness injection.
         try:
             acceptance_list, dm = apply_reviewer_preset(

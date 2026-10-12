@@ -104,7 +104,7 @@ def _quote_mask(text: str) -> list[bool]:
 
 def _substitution_spans(text: str) -> list[tuple[int, int, str]]:
     """(start, end, body) of RUNTIME command substitutions — unquoted
-    ``$(...)`` and backticks only. Single-quoted (F2/F3) never substitutes;
+    ``$(...)`` and backticks only. Single-quoted never substitutes;
     inside double quotes they DO."""
     spans: list[tuple[int, int, str]] = []
     mask = _quote_mask(text)
@@ -383,7 +383,7 @@ def _units(command: str, depth: int = 0):
     """Yield each token list that would RUN. Statement segments (after
     keyword/group/wrapper head reduction), ``bash -c`` bodies, and command
     substitutions (they execute at runtime even inside double quotes).
-    Heredoc body semantics (F1): quoted delimiter = literal data; unquoted
+    Heredoc body semantics: quoted delimiter = literal data; unquoted
     = data, but unquoted ``$(...)`` still runs; a body piped into a shell
     is fully re-lexed (fail-closed)."""
     if depth > _MAX_DEPTH:
@@ -557,7 +557,7 @@ def _m_filter_repo(toks):
     invocation. A path argument that merely contains the text
     (``/tmp/--analyze.txt``) does not start with ``--analyze`` and never
     exempts; a later ``git filter-repo --analyze`` segment cannot whitewash an
-    earlier rewriting segment (F1). A longer ``--analyze*`` word is an
+    earlier rewriting segment. A longer ``--analyze*`` word is an
     unrecognized option — git aborts before doing anything, so it is harmless
     (upstream sanity-check refuses --analyze combined with rewriting options).
     """
@@ -588,7 +588,7 @@ def _m_reflog_destroy(toks):
 
 def _m_gc_prune_now(toks):
     """``git gc --prune`` keeps the default 2-week grace — same damage class
-    as bare ``git gc``; only the immediate ``--prune=now`` destroys now (F2)."""
+    as bare ``git gc``; only the immediate ``--prune=now`` destroys now."""
     return toks[1:2] == ["gc"] and "--prune=now" in toks[2:]
 
 

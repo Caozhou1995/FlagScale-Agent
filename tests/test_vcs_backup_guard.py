@@ -47,9 +47,9 @@ DESTRUCTIVE = [
     "git reflog expire --expire=now --all",                     # destroys the recovery net
     "git reflog delete HEAD@{1}",
     "git gc --prune=now",                                       # immediate object prune
-    # F1: a --analyze-looking FILE ARGUMENT must not exempt the rewrite
+    # A --analyze-looking FILE ARGUMENT must not exempt the rewrite
     "git filter-repo --replace-text /tmp/--analyze.txt --force",
-    # F1: a read-only analyze chained AFTER a rewrite exempts nothing
+    # A read-only analyze chained AFTER a rewrite exempts nothing
     "git filter-repo --replace-text r.txt --force; git filter-repo --analyze",
     "git filter-repo --replace-text r.txt --force && git filter-repo --analyze",
     # bodies that run at runtime: bash -c and command substitution
@@ -84,11 +84,11 @@ SAFE = [
     "git reflog show",
     "git gc",                                                   # default 2-week grace prune
     "git gc --auto",
-    # F2: bare/valued --prune keeps the default grace (only --prune=now is
+    # A bare/valued --prune keeps the default grace (only --prune=now is
     # immediate) — same damage class as bare `git gc`
     "git gc --prune",
     "git gc --prune=2.weeks.ago",
-    # F3: a mention inside grep/echo does not RUN git
+    # A mention inside grep/echo does not RUN git
     "grep -n 'git-filter-repo' README.md",
     "echo 'run git gc --prune=now to compress'",
     'echo "never run git reflog expire"',

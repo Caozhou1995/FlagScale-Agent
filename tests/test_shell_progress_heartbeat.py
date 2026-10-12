@@ -139,7 +139,7 @@ class TestIdleHangKill:
 class TestHealthJudgeBounded:
     """A stalled health-judge LLM call must not freeze the monitor loop.
 
-    Regression for the compcert case: the synchronous no-timeout judge call ran
+    Regression: the synchronous no-timeout judge call ran
     inside the loop BEFORE the heartbeat display, so a wedged gateway suppressed
     the heartbeat for ~12 minutes. The fix wraps the judge in a bounded thread.
     """
@@ -256,7 +256,7 @@ import time as _time
 
 
 class TestHeartbeatNeverStarvedBySlowHealth:
-    """Reproduce the compcert 8-minute heartbeat gap and prove it's fixed.
+    """Reproduce the 8-minute heartbeat gap and prove it's fixed.
 
     Root cause (old design): the monitor loop called get_process_health on its
     OWN thread every check_interval. Under a giant build tree a single /proc

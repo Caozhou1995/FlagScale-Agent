@@ -1,7 +1,6 @@
-"""Regression tests for the blind-review findings on async dispatch_many.
+"""Regression tests for async dispatch_many.
 
-Each test pins ONE confirmed finding so it cannot silently regress. Findings
-that were REFUTED (F4/F5/F7/F9) are covered by the existing suite.
+Each test pins ONE behaviour so it cannot silently regress.
 """
 import json
 import os

@@ -291,68 +291,44 @@ class TestConstraintGuidanceBlockedComputation:
     task-specific noun leaks in. The old mode-I 'no-progress run' bullet was
     deleted (compute-as-defined guidance retired), so no test asserts it."""
 
-    def test_qualifier_reminder_separates_subject_from_boundary(self):
+    def test_qualifier_extraction_lives_in_frame_step(self):
         # Regression: a task asked for the best model "as of" a past date; the
-        # agent did solid work on the subject (correct benchmark, correct metric)
-        # but silently dropped the time qualifier and answered from the current
-        # full snapshot — the run completed and returned a confident, out-of-bounds
-        # answer. The qualifier guidance now lives in _QUALIFIER_EXTRACTION in
-        # plan.py (delivered at plan-framing time via PlanGuard, not post) and must
-        # name qualifiers (time point / version / subset / metric definition) as
-        # first-class constraints and forbid substituting most-available/current data.
-        from flagscale_agent.react.guard.plan import _QUALIFIER_EXTRACTION
-        low = _QUALIFIER_EXTRACTION.lower()
-        # separates the subject/thing-to-produce from its bounding qualifier
-        assert "subject" in low and "qualifier" in low
+        # agent did solid work on the subject but silently dropped the time
+        # qualifier and answered from the current full snapshot — a confident,
+        # out-of-bounds answer. The qualifier guidance now lives as one criterion
+        # of the plan standard template's fixed FRAME step (tools/plan_create.py
+        # `_FRAME_STEP_ACCEPTANCE`), worked FIRST and enforced by the retained
+        # plan step_done evidence gate — one systematic home, no separate inject.
+        # It must name qualifiers (point in time / version / subset / metric
+        # definition) as first-class items and demand reading each boundary in
+        # the direction the task MEANS, not the convenient one.
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+        assert "qualifier" in low
         # names qualifier categories in the abstract, not any task-specific value
         assert "point in time" in low
         assert "version" in low
         assert "subset" in low
-        # the danger: work completes and yields a confident yet out-of-bounds answer
-        assert "confident answer" in low
-        # forbids letting the most available / most current data stand in
-        assert "most available" in low or "most up-to-date data" in low
-        # must fold qualifiers into the plan while framing, not after
-        assert "plan" in low
-        # a qualifier is verified by an unfakeable external grader, not self-report:
-        # declaring done does not move the scored verdict; unmet qualifier => FAIL
-        assert "machine-verified" in low or "machine-checked" in low
-        assert "byte-for-byte" in low
-        assert "fail" in low
+        # read each boundary in the direction the task MEANS, not the
+        # convenient one (the "newest is best" trap)
+        assert "boundary" in low
+        assert "convenient" in low
+        assert "the direction the task" in low
+        # silent drop => a nearby question the task never asked
+        assert "silently" in low
         # must not hardcode the originating task's specifics
         assert "august" not in low
         assert "mteb" not in low
 
-    def test_qualifier_reminder_demands_correct_interpretation_not_just_extraction(self):
-        # Regression: the block forced the agent to extract the time qualifier into
-        # the plan, but the agent then read a past-point time bound as "data recent
-        # enough" and used the latest snapshot — extracting a qualifier is not the
-        # same as reading its boundary in the direction the task means. Guidance
-        # must demand interpreting the boundary, name the "newest/most available is
-        # best" bias as the trap, and flag the two-way ambiguity of a time bound
-        # (state at a past point vs state now). Stays task-agnostic and must NOT
-        # quote the originating task's phrasing (e.g. "as of") — that reads like
-        # leaderboard-gaming rather than general guidance.
-        from flagscale_agent.react.guard.plan import _QUALIFIER_EXTRACTION
-        low = _QUALIFIER_EXTRACTION.lower()
-        # extraction is only half — must read the boundary the task means
-        assert "only half" in low
-        assert "boundary" in low
-        # state each qualifier's meaning before building on it
-        assert "in your own words" in low
-        # names the convenience/recency bias as the failure mode
-        assert "convenient" in low
-        assert "newest" in low or "most available is best" in low
-        # a time bound is two-way: state at a past point vs state now
-        assert "bound on time" in low
-        assert "as it stood at a" in low
-        assert "the state right now" in low
-        assert "came later out of scope" in low
-        # must not default to the freshest data
-        assert "most up-to-date data" in low
-        # still no task specifics AND no verbatim task phrasing that reads as gaming
+    def test_qualifier_boundary_read_is_first_class(self):
+        # The frame step must fold qualifiers INTO the plan (a step or an
+        # acceptance criterion), not leave extraction as a head-only act — and
+        # stay task-agnostic (no verbatim task phrasing that reads as gaming).
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+        assert "folding each into a step" in low
+        assert "acceptance criterion" in low
         assert "as of" not in low
-        assert "august" not in low
         assert "scandinavian" not in low
 
     def test_qualifier_content_moved_out_of_acceptance_guidance(self):

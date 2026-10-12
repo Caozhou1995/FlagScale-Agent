@@ -151,7 +151,7 @@ class TestNotReady:
 
 
 class TestSettledWithoutReport:
-    """Regression for F1: DEADLINE_MISSED / TERMINATED must be settled, not
+    """Regression: DEADLINE_MISSED / TERMINATED must be settled, not
     pending-forever. The watchdog writes DEADLINE_MISSED and the worker can
     never reach REPORTED, so polling must terminate with passed=False."""
 

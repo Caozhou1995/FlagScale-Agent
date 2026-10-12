@@ -92,7 +92,7 @@ class TestNoTrigger:
 class TestPerCommand:
     def test_fires_on_every_matching_command(self):
         # Design: no per-turn latch — each matching command is an independent
-        # hallucination risk and gets its own reminder (user decision 20260914).
+        # hallucination risk and gets its own reminder (user decision).
         g = IpPortGuard()
         for _ in range(3):
             v = g.check_post(_shell("ssh -p 22 root@192.0.2.10 hostname"))

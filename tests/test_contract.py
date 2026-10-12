@@ -86,7 +86,7 @@ class TestValidate:
             _mk(tmp_path, output_ptr="/etc/evil.json").validate()
 
     def test_symlink_escape_rejected_inv4(self, tmp_path):
-        # Regression for F2: a symlink inside writable pointing OUTSIDE it must
+        # Regression: a symlink inside writable pointing OUTSIDE it must
         # not be accepted. normpath alone passed this; realpath must reject it.
         writable = tmp_path / "w"
         writable.mkdir()

@@ -101,7 +101,7 @@ class TestBatchedFirstTurnLeak:
     """Regression: a BATCH of shell calls in one turn must NOT let later calls
     slip past the backup gate once the first is blocked.
 
-    Root cause (extract-elf task, 2026-08-27): the LLM emitted two shells in one
+    Root cause: the LLM emitted two shells in one
     assistant turn (`file a.out`, `readelf -h a.out`). kernel.py runs check_pre
     per tool_call in order. The old guard set _first_shell_seen=True on the first
     block, so the SECOND shell got a None verdict and executed unguarded — the

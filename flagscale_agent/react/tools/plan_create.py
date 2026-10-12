@@ -90,6 +90,62 @@ _RSI_STEP_ACCEPTANCE = [
 ]
 
 
+# The fixed FRAMING step the harness PREPENDS to EVERY plan. This is the single
+# home for the plan-framing discipline that used to be delivered as a
+# plan_create-time [Plan] inject: the divergence check, qualifier/facet
+# extraction, the wall-aware first cut, the premortem, and the
+# name-the-standard-method rule. Because it is an ordinary step with acceptance
+# criteria, the (retained) step_done evidence gate enforces it at the moment the
+# agent marks it done — one systematic place, no separate guard, no chatty
+# inject. Worked FIRST, before the agent's own steps.
+_FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
+
+_FRAME_STEP_ACCEPTANCE = [
+    "Divergence check (do this before committing to the plan): put 2-3 "
+    "genuinely different framings of the task's ORIGINAL statement on the table "
+    "— a BETTER method (faster/cheaper/simpler), a MORE CORRECT method (avoids a "
+    "risk this plan carries), or an UNCONSIDERED decomposition/reading. (A "
+    "read-only diverger worker is one way to generate them; proposing them "
+    "yourself is fine.) Issue a one-line ruling for EACH: adopt (then revise the "
+    "plan) or reject (name WHY). Skip only if the task is genuinely trivial "
+    "(single known command, rename, version bump) and say so. You framed this "
+    "plan, so its premises are invisible to you — a wrong framing is inherited by "
+    "every step downstream.",
+    "Qualifier extraction: re-read the task and list EVERY qualifier (a point in "
+    "time, a version, a subset, a metric definition, a named tool/model instance) "
+    "as a first-class item, folding each into a step or acceptance criterion. Read "
+    "each boundary in the direction the task MEANS, not the convenient one (a "
+    "time bound selects the state as it stood then, not the newest data; a version "
+    "pin selects that instance's documented usage). A dropped qualifier silently "
+    "answers a nearby question the task never asked.",
+    "Facet manifest: write the qualifiers to a manifest file (e.g. "
+    "analysis/facets.md; state the path in this plan), each entry pinned to the "
+    "task's OWN words — quote the line. Three sections: (1) FORM conventions left "
+    "open (format, units, field order, naming) — pin ONE supported by the task "
+    "text; (2) reference artifacts the task NAMES — quote verbatim; (3) is the "
+    "task's example the GRADED instance? Do not read beyond the task statement or "
+    "guess the grader. Reuse this manifest at close-out instead of re-scraping the "
+    "conversation.",
+    "Wall-aware first cut: order steps so a minimal but complete, scorable "
+    "deliverable lands at the required path within the time wall BEFORE scaling "
+    "up, then refine in place (write-through — never rewrite from scratch, so the "
+    "best version so far is always on disk). Price every expensive step against the "
+    "wall; if the full version overruns, the minimal version IS the deliverable. If "
+    "several plausible paths exist and you cannot tell which is right, make this "
+    "first plan a PORTFOLIO: a discriminating micro-experiment per candidate whose "
+    "every outcome rules one in or out, then a step on the survivor.",
+    "Premortem on the workspace: if reference artifacts are present (expected_*/"
+    "golden/reference files), diff your own convention against them BEFORE "
+    "inventing one; if a test/verify harness is present, USE it as the grader, run "
+    "it early and after every change — a hand-rolled check that shadows it doubles "
+    "the cost and can still miss the contract.",
+    "Standard-method first: name the problem CLASS and its STANDARD METHOD, and "
+    "include a small-sample step that validates the method on the smallest "
+    "meaningful input before scaling (generic 'analyze/implement/test' steps mean "
+    "the class was never identified; a brute-force sweep is the tell).",
+]
+
+
 class PlanCreateTool(Tool):
     name = "plan_create"
     description = (
@@ -205,11 +261,18 @@ class PlanCreateTool(Tool):
         if not normalized:
             return "ERROR: At least one step is required."
 
-        # Harness-appended FIXED steps — the plan standard template. The last two
-        # steps of every plan are: review (protects THIS deliverable) then RSI
-        # (protects the HARNESS, for FUTURE tasks). Their acceptance carries the
-        # completion-time verification content that previously lived in terminal
-        # gates. Appended AFTER the agent's own steps so it works them last.
+        # Harness-appended FIXED steps — the plan standard template. The FIRST
+        # step frames the plan (divergence check + qualifier/facet extraction +
+        # wall-aware first cut + premortem + standard-method), and the LAST two
+        # are review (protects THIS deliverable) then RSI (protects the HARNESS,
+        # for FUTURE tasks). Their acceptance carries the framing-time and
+        # completion-time discipline that previously lived in plan_create/step_done
+        # gates. The frame step is PREPENDED so the agent works it first; review
+        # and RSI are APPENDED so it works them last.
+        normalized.insert(0, {
+            "title": _FRAME_STEP_TITLE,
+            "acceptance": list(_FRAME_STEP_ACCEPTANCE),
+        })
         normalized.append({
             "title": _REVIEW_STEP_TITLE,
             "acceptance": list(_REVIEW_STEP_ACCEPTANCE),
@@ -226,12 +289,13 @@ class PlanCreateTool(Tool):
             return (
                 "Plan created.\n\n"
                 "NOTE: this is the FlagScale-Agent Plan STANDARD TEMPLATE. The harness "
-                "has appended two fixed final steps to your plan — Review "
-                "(self-check + reviewer) then RSI (recursive self-improvement). "
-                "Work the steps IN ORDER and complete them last, providing "
-                "verification evidence for each acceptance criterion. Both fixed "
-                "steps are SKIPPABLE with a reasonable reason, but do not skip them "
-                "silently.\n\n"
+                "has prepended one fixed FIRST step and appended two fixed final steps: "
+                "Frame (divergence check + qualifier/facet extraction + wall-aware first "
+                "cut + premortem + standard-method) → your steps → Review (self-check + "
+                "reviewer) → RSI (recursive self-improvement). Work the steps IN ORDER "
+                "and provide verification evidence for each acceptance criterion. All "
+                "fixed steps are SKIPPABLE with a reasonable reason, but do not skip "
+                "them silently.\n\n"
                 f"{self._plan.summary()}"
             )
         except Exception as e:

@@ -991,7 +991,7 @@ class WorkerAgent:
 
         return "\n".join(parts)
 
-    # ── Mechanical state injection for hard reset (prop_770ca778) ─────────────
+    # ── Mechanical state injection for hard reset ─────────────────────────────
     # A hard reset otherwise relies on the MODEL's own summary prose, which is
     # unverified and can silently drop the task's identity. These helpers
     # re-inject the load-bearing state VERBATIM (not a model paraphrase) so the

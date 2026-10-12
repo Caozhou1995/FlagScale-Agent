@@ -71,8 +71,9 @@ class TestPlanCreateToolStructuredSteps:
         )
         assert "Plan created" in result
         plan = tp.get_active()
-        assert plan["steps"][0]["acceptance"] == ["A1", "A2"]
-        assert plan["steps"][1]["acceptance"] == ["B1"]
+        # The fixed FRAME step is prepended at index 0; agent steps shift +1.
+        assert plan["steps"][1]["acceptance"] == ["A1", "A2"]
+        assert plan["steps"][2]["acceptance"] == ["B1"]
 
     def test_mixed_steps(self, plan_dir):
         tp = TaskPlan(plan_dir)
@@ -86,8 +87,8 @@ class TestPlanCreateToolStructuredSteps:
         )
         assert "Plan created" in result
         plan = tp.get_active()
-        assert plan["steps"][0]["acceptance"] == ["A1"]
-        assert plan["steps"][1]["acceptance"] == []
+        assert plan["steps"][1]["acceptance"] == ["A1"]
+        assert plan["steps"][2]["acceptance"] == []
 
     def test_backward_compatible_string_steps(self, plan_dir):
         tp = TaskPlan(plan_dir)
@@ -95,8 +96,8 @@ class TestPlanCreateToolStructuredSteps:
         result = tool.execute(title="Test", steps=["A", "B"])
         assert "Plan created" in result
         plan = tp.get_active()
-        assert plan["steps"][0]["title"] == "A"
-        assert plan["steps"][0]["acceptance"] == []
+        assert plan["steps"][1]["title"] == "A"
+        assert plan["steps"][1]["acceptance"] == []
 
     def test_dict_without_title_fails(self, plan_dir):
         tp = TaskPlan(plan_dir)

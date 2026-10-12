@@ -1,7 +1,7 @@
 """
 Bug C regression test: phantom override crosstalk.
 
-Reproduces the circuit-fibsqrt failure mode — agent writes an override reason for
+Reproduces the phantom-override failure mode — agent writes an override reason for
 guard A (e.g. NetworkResilience/knowledge_skill), but when the tool runs it's the
 agent's first shell command, BackupGuard fires for the first time, sorts ahead of A
 by priority, and silently consumes A's reason (BackupGuard.accept_override accepts

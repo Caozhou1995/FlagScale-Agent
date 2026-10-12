@@ -7,7 +7,7 @@ SECTION_ORDER = [ln for ln in SYSTEM_PROMPT_STATIC.splitlines() if ln.startswith
 
 
 class TestPromptSectionStructure:
-    """Structure regression (user review 20260914): the Dashboard section was
+    """Structure regression: the Dashboard section was
     demoted to a '###' under Tool Guide, splitting the tool list; the ORDER
     bullet was 4-space indented, so CommonMark glued it into the OVERLAP item
     as a continuation line."""
@@ -40,7 +40,7 @@ class TestBackgroundToolGuidance:
         assert "shell_jobs" in low
 
     def test_no_stale_timeout_escalation_numbers(self):
-        # 20260914 压缩重写: 旧文案的 300s→900s 超时升级示例已过时
+        # 压缩重写: 旧文案的 300s→900s 超时升级示例已过时
         # (guard 实际硬门是 60s), 指针指向 guard 常量而非复述数字。
         low = SYSTEM_PROMPT_STATIC.lower()
         assert "300s" not in low
@@ -49,7 +49,7 @@ class TestBackgroundToolGuidance:
 
     def test_background_bullets_stay_compressed(self):
         # 防回胖: 两条 bullet 合计不得超过 2500 字符
-        # (20260914 压缩后实测 1872, 增补元认知枚举后 ~2212)。
+        # (压缩后实测 1872, 增补元认知枚举后 ~2212)。
         lines = SYSTEM_PROMPT_STATIC.splitlines()
         bullets = [ln for ln in lines if ln.startswith("- Long-running commands")
                    or ln.startswith("- Backgrounding only pays")]
@@ -57,7 +57,7 @@ class TestBackgroundToolGuidance:
         assert sum(len(b) for b in bullets) < 2500
 
     def test_wait_time_covers_metacognitive_work(self):
-        # 用户 doctrine (20260914): 等待期的 useful work 不止准备下游步骤,
+        # 用户 doctrine: 等待期的 useful work 不止准备下游步骤,
         # 还包括复盘之前/总结现在(memory)/规划未来(计划)/重审当下(前提)。
         low = SYSTEM_PROMPT_STATIC.lower()
         assert "recap what the last steps taught you" in low
@@ -99,8 +99,7 @@ class TestBackgroundToolGuidance:
         assert "health-monitored" in low or "health monitored" in low
 
     def test_discourages_long_blind_wait_prefers_short(self):
-        # Regression (insight/tbench/caffe_timeout_rootcause_budget_exhaustion,
-        # fasttext trace jobs/2026-09-04__19-34-14): the agent escalated blind
+        # Regression: the agent escalated blind
         # blocking waits (300s->900s->900s) while dependent work was un-prepared,
         # then discovered a fatal output-size cap AFTER the run. The prompt must:
         low = SYSTEM_PROMPT_STATIC.lower()
@@ -157,8 +156,7 @@ class TestTimeBudgetGuidance:
         assert "in parallel" in low or "other real work" in low
 
     def test_overlaps_independent_expensive_steps(self):
-        # Regression (insight/tbench/caffe_timeout_rootcause_budget_exhaustion):
-        # a build and an independent dataset download were run serially, wasting
+        # Regression: a build and an independent dataset download were run serially, wasting
         # budget. The prompt must teach mapping the dependency graph and running
         # dependency-free expensive steps CONCURRENTLY (build + download + install),
         # not queued one after another.
@@ -180,7 +178,7 @@ class TestTimeBudgetGuidance:
         assert "cifar" not in low
 
     def test_fans_out_independent_experiments(self):
-        # Regression (insight/tbench/fasttext_blind_wait_discipline): a search
+        # Regression: a search
         # that retrained variants ONE AT A TIME wasted budget. The prompt must
         # teach fanning out many same-kind independent runs (sweep/seeds/configs)
         # as concurrent background jobs — a distinct axis from step-overlap.
@@ -207,8 +205,7 @@ class TestTimeBudgetGuidance:
         assert "caffe" not in low
 
     def test_orders_independent_steps_longest_riskiest_first(self):
-        # Regression (insight/tbench/caffe_critical_path_and_antifabrication):
-        # concurrency alone was not enough — the agent ran apt+build first and
+        # Regression: concurrency alone was not enough — the agent ran apt+build first and
         # only reached the proxy-blocked dataset download 8 minutes in, leaving no
         # budget to find a working mirror. The prompt must teach launching the
         # LONGEST and RISKIEST independent step (a network/proxy download) FIRST,
@@ -228,8 +225,7 @@ class TestTimeBudgetGuidance:
         assert "cifar" not in low
 
     def test_forbids_fabricating_required_input(self):
-        # Regression (insight/tbench/caffe_critical_path_and_antifabrication):
-        # when the dataset download failed, the agent SYNTHESIZED fake data
+        # Regression: when the dataset download failed, the agent SYNTHESIZED fake data
         # (random arrays / sine-pattern) to make the pipeline run, silently
         # swapping an accuracy-gated task for an unmeasurable one. The prompt
         # must classify fabricating a required input as manufacturing the
@@ -387,7 +383,7 @@ class TestExpectationViolationAttribution:
         # SYSTEM_PROMPT_STATIC is .format()-rendered by the builder with the
         # fixed kwargs cwd/knowledge/skills/tools. Any literal { or } added by
         # an edit raises KeyError/IndexError at prompt-build time (the {N}
-        # regression, 20260914).
+        # regression).
         import re
         line = self.obs_line()
         assert not re.search(r"[{}]", line), line[:80]

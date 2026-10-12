@@ -28,8 +28,8 @@ import psutil
 # blocking read()s. On a disk saturated by the build, one full walk can take
 # minutes, and while the sampler thread grinds through it the main heartbeat
 # thread cannot get a GIL time-slice — so the heartbeat starves (observed: a
-# 644s gap during a caffe -j256 build even though the sampler was already a
-# single background thread). Capping the walk bounds per-sample cost regardless
+# 644s gap during a heavy parallel build (-j256) even though the sampler was
+# already a single background thread). Capping the walk bounds per-sample cost regardless
 # of tree size: the liveness signal (tree-wide cpu_time/io deltas) stays
 # representative from a large sample, and num_children still reports the true
 # total via len() before truncation.

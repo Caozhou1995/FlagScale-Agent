@@ -184,7 +184,7 @@ class ReportResultTool(Tool):
                     "the allowed directories."
                 )
 
-        # ── 2b. [fa9b99a4] write-time completeness gate (reviewer roles) ─────
+        # ── 2b. write-time completeness gate (reviewer roles) ────────────────
         # A reviewer-class task whose output report is unfinished (empty, a
         # dangling '(IN PROGRESS' header, or no finding and no explicit
         # 'no findings' line) is REJECTED here, with guidance — the task stays

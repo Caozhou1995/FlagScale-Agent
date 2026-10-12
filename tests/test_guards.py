@@ -163,79 +163,44 @@ class TestContextPressureGuard:
 class TestPlanGuard:
     def test_allows_plan_tools(self):
         g = PlanGuard()
-        # First plan_create is the plan-framing moment: PlanGuard injects the
-        # qualifier-extraction reminder once (never blocks). It is advisory —
-        # the tool still proceeds.
-        ctx = _ctx("plan_create", {})
-        result = g.check_pre(ctx)
-        assert result is not None
-        assert result.action == "inject"
-        assert result.reason == "qualifier_extraction"
-        # A later plan_create is a RE-framing: BOTH demands re-inject — each
-        # framing deserves the qualification and divergence checks (user
-        # ruling 2026-09-23: a re-framing's premises are as unexamined).
-        from flagscale_agent.react.guard.plan import _DIVERGER_INJECT
-        again = g.check_pre(_ctx("plan_create", {}))
-        assert again is not None and again.action == "inject"
-        assert _DIVERGER_INJECT in again.message
+        # plan_create is now a plain pass-through: the framing discipline is
+        # delivered by the plan's fixed FIRST step, not by an inject here.
+        assert g.check_pre(_ctx("plan_create", {})) is None
         assert g.check_pre(_ctx("plan_update", {})) is None
         assert g.check_pre(_ctx("plan_status", {})) is None
 
-    def test_planframing_injects_problem_class_selfcheck(self):
-        """Plan-framing injection must pose the P1 self-check questions — name the
-        known problem CLASS and its STANDARD METHOD — not just remind to plan.
-        These have external referents (a class name, an established technique):
-        being unable to answer is the signal the agent has not understood yet."""
-        g = PlanGuard()
-        result = g.check_pre(_ctx("plan_create", {}))
-        assert result is not None and result.action == "inject"
-        m = result.message.lower()
+    def test_frame_step_frames_the_problem_class(self):
+        """The fixed FRAME step must pose the P1 self-check — name the known
+        problem CLASS and its STANDARD METHOD — not just remind to plan. These
+        have external referents (a class name, an established technique): being
+        unable to answer is the signal the agent has not understood yet."""
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        m = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
         assert "class" in m
         assert "standard method" in m or "standard technique" in m
         # must flag the brute-force tell as the sign the class is still hidden
         assert "brute" in m or "enumeration" in m
 
-    def test_planframing_injects_tool_instance_doc_reminder(self):
-        """Plan-framing injection must remind that a qualifier pinning a concrete
-        tool instance (version/revision/named model) requires consulting THAT
-        instance's own documentation before writing the call — the mteb-retrieve
-        failure mode (generic API applied to a specific instance with its own
-        usage rules → silently wrong output). This lives in the qualifier-extraction
-        gate on purpose: it is a plan-framing concern, sharing one override channel,
-        not a content-matching block guard."""
-        g = PlanGuard()
-        result = g.check_pre(_ctx("plan_create", {}))
-        assert result is not None and result.action == "inject"
-        m = result.message.lower()
-        # names the instance-vs-category distinction and the consult-docs action
+    def test_frame_step_demands_instance_documentation(self):
+        """The frame step must remind that a qualifier pinning a concrete tool
+        instance (version/revision/named model) requires consulting THAT
+        instance's own documented usage before writing the call — the
+        generic-API-applied-to-a-specific-instance failure mode."""
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        m = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
         assert "instance" in m
-        assert "documentation" in m or "readme" in m or "model card" in m
-        # flags the silent-wrong-output trap of the generic API shortcut
+        assert "documented" in m or "documentation" in m or "readme" in m
         assert "generic" in m
-        # near/far: consulting the doc is not enough — must APPLY what it says.
-        # Guards the deeper mteb-retrieve failure (agent read the doc, saw the
-        # requirement, then skipped it as "not explicitly asked"). Assert the
-        # reminder covers the apply-half, not just the consult-half.
-        assert "near half" in m and "far half" in m
-        assert "apply" in m
-        # the reminder must be generic in FORM — not tied to one failure shape
-        # (e.g. only "add a prefix"). It should frame the requirement as taking
-        # ANY form, so the phrasing must not hardcode a single mechanism.
-        assert "any form" in m
 
-    def test_planframing_injects_small_sample_step(self):
-        """Plan-framing injection must prompt the agent to include a small-sample
-        validation step in the plan — validate method on the smallest meaningful
-        input before scaling to the full task. This catches wrong method choices
-        early and gives a time estimate for full-task completion."""
-        g = PlanGuard()
-        result = g.check_pre(_ctx("plan_create", {}))
-        assert result is not None and result.action == "inject"
-        m = result.message.lower()
-        assert "small-sample" in m
-        assert "smallest meaningful input" in m
-        assert "time estimate" in m or "estimate" in m
-        assert "10-100x" in m  # cost of debugging at full scale vs small scale
+    def test_frame_step_demands_small_sample_step(self):
+        """The frame step must prompt a small-sample validation step — validate
+        the method on the smallest meaningful input before scaling to the full
+        task, to catch wrong method choices early."""
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        m = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+        assert "smallest" in m
+        assert "sample" in m
+        assert "before scaling" in m
 
     def test_reminds_at_threshold(self):
         g = PlanGuard(task_plan=None)
@@ -408,7 +373,7 @@ class TestPlanGuardNoNagAfterPlanComplete:
         assert r.reason == "single_shot_plan_required"
 
     def test_failed_plan_create_does_not_discharge_obligation(self):
-        # F1 regression: a plan_create whose execution FAILED (exception wrapper,
+        # Regression: a plan_create whose execution FAILED (exception wrapper,
         # guard block, or the tool's own "ERROR: ...") frames no plan, so it must
         # NOT set _plan_ever_created — otherwise a mere ATTEMPT silently disables
         # the single-shot no-plan block for the rest of the run.
@@ -732,47 +697,17 @@ class TestTrainingMonitorGuard:
 
 
 class TestWallAwareFirstPlan:
-    def test_planframing_injects_wall_aware_demand(self):
-        g = PlanGuard()
-        result = g.check_pre(_ctx("plan_create", {}))
-        assert result is not None and result.action == "inject"
-        m = result.message.lower()
-        assert "minimal verifiable version" in m
+    def test_frame_step_carries_wall_aware_demand(self):
+        # The wall-aware first cut now lives as one criterion of the plan
+        # standard template's fixed FRAME step (tools/plan_create.py), not a
+        # PlanGuard plan_create inject.
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        m = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+        assert "minimal but complete" in m
         assert "write-through" in m
-        assert "replace" in m
+        assert "before scaling" in m
 
-    def test_wall_block_reads_env_minutes(self, monkeypatch):
-        from flagscale_agent.react.guard.plan import _wall_aware_block
-        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "900")
-        b = _wall_aware_block()
-        assert "15 minutes" in b
-        assert "minimal verifiable version" in b.lower()
-
-    def test_wall_block_generic_without_env(self, monkeypatch):
-        from flagscale_agent.react.guard.plan import _wall_aware_block
-        monkeypatch.delenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", raising=False)
-        b = _wall_aware_block()
-        assert "minimal verifiable version" in b.lower()
-        assert "Time wall:" not in b
-
-    def test_wall_block_malformed_env_degrades(self, monkeypatch):
-        from flagscale_agent.react.guard.plan import _wall_aware_block
-        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "abc")
-        b = _wall_aware_block()
-        assert "Time wall:" not in b
-        assert "minimal verifiable version" in b.lower()
-
-    def test_wall_block_in_plan_create_inject(self, monkeypatch):
-        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "600")
-        g = PlanGuard()
-        v = g.check_pre(_ctx("plan_create", {}))
-        assert v is not None and v.action == "inject"
-        assert "10 minutes" in v.message
-
-    def test_wall_block_in_write_file_gate(self, monkeypatch):
-        monkeypatch.setenv("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "600")
-        g = PlanGuard(task_plan=None, single_shot=True)
-        v = g.check_pre(_ctx("write_file", {"path": "/tmp/x.txt"}))
-        assert v is not None and v.action == "block"
-        assert "10 minutes" in v.message
-        assert "minimal verifiable version" in v.message.lower()
+    def test_wall_aware_portfolio_survives(self):
+        from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+        m = " ".join(_FRAME_STEP_ACCEPTANCE)
+        assert "PORTFOLIO" in m

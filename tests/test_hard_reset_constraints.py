@@ -14,7 +14,7 @@
 
 """Guards the hard-reset summary against dropping task constraints.
 
-Root cause (pov-ray rerun 2026-08-23): auto-compaction summarized TASK/
+Root cause: auto-compaction summarized TASK/
 PROGRESS/STATE/NEXT/CONTEXT but NOT the negative constraints (approaches
 already ruled out). After compaction the agent re-inferred the task from
 leftover files and reverted to a degraded approach it had already rejected

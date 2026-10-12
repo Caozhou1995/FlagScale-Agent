@@ -169,7 +169,7 @@ class TestCollectAllNoLeak:
 
 
 class TestCompcertSequenceNoDeadlock:
-    """End-to-end: the real guards from the compcert trajectory no longer deadlock.
+    """End-to-end: the real guards from a live trajectory no longer deadlock.
 
     Original failure: `make --version | head` was mis-flagged by CompileRedirectGuard
     (Bug A), the agent overrode it, retries counted toward the single-shot early gate,

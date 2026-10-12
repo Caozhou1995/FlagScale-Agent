@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the hard-reset MECHANICAL STATE injection (prop_770ca778).
+"""Tests for the hard-reset MECHANICAL STATE injection.
 
 A hard reset replaces the conversation with a MODEL-generated summary, which is
-unverified and can silently drop the task's identity (the pov-ray regression
-that motivated test_hard_reset_constraints.py). These tests cover the
+unverified and can silently drop the task's identity. These tests cover the
 harness-side fix: the continuation message re-injects load-bearing state
 VERBATIM — (1) the original task text, (2) the active plan, (3) the memory keys
 touched this session — ahead of the model summary, and degrades safely if any
@@ -122,7 +121,7 @@ class TestMechanicalBlockRealAgent:
         assert task in first_user["content"]
 
     def test_header_reset_number_matches_persisted_count(self, tmp_path):
-        """F3 regression: _build_continuation_message runs BEFORE hard_reset()
+        """Regression: _build_continuation_message runs BEFORE hard_reset()
         increments _reset_count, so the header must label the reset being built
         (#1 on the first reset), agreeing with the persisted reset_count."""
         agent = _make_agent(tmp_path)
@@ -210,7 +209,7 @@ class TestMechanicalBlockCaps:
         assert out == real_task
 
     def test_task_starting_with_marker_prefix_is_kept(self, tmp_path):
-        """F1 regression: a REAL task that merely starts with '[Context Hard Reset'
+        """Regression: a REAL task that merely starts with '[Context Hard Reset'
         (e.g. it quotes an earlier reset paste) must NOT be skipped as a
         continuation."""
         agent = _make_agent(tmp_path)
@@ -221,7 +220,7 @@ class TestMechanicalBlockCaps:
         assert agent._mech_original_task() == task
 
     def test_single_marker_task_not_lost(self, tmp_path):
-        """F1 regression: if the ONLY user turn starts with the marker prefix but
+        """Regression: if the ONLY user turn starts with the marker prefix but
         is not the harness header, it must still be returned (not lost)."""
         agent = _make_agent(tmp_path)
         agent.history.set_system_prompt("sys")
@@ -230,7 +229,7 @@ class TestMechanicalBlockCaps:
         assert agent._mech_original_task() == task
 
     def test_none_content_user_turn_skipped(self, tmp_path):
-        """F2 regression: a user turn with content=None must be skipped, not
+        """Regression: a user turn with content=None must be skipped, not
         leaked as the literal string 'None'."""
         agent = _make_agent(tmp_path)
         agent.history.set_system_prompt("sys")

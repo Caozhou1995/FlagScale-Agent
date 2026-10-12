@@ -61,7 +61,7 @@ class TestTaskBudgetBlock:
         assert "not a kill criterion" in low or "never kill" in low
 
     def test_budget_block_does_not_steer_the_approach(self):
-        # Regression (insight/tbench/fasttext_fzron4y_monitor_claim_refuted): the
+        # Regression: the
         # judge must NOT recommend switching methods/method-classes or otherwise
         # decide HOW the agent drives — that is the agent's call. The fuel gauge
         # reports fuel; it does not grab the wheel.

@@ -902,35 +902,31 @@ class TestKeepClimbingOptimization:
             assert marker in blk, marker
 
 
-class TestDivergerDispatchAfterPlanCreate:
-    """The Diverger re-emphasis (Plan section): ONE diverger worker must be
-    dispatched immediately after EVERY plan_create() — handed the ORIGINAL task
-    statement, it proposes genuinely different framings (ideas only), and the
-    parent rules on each. Re-arms when the plan is re-framed. Task-agnostic."""
+class TestFrameStepDiscipline:
+    """The frame-step discipline (Plan section): the divergence check is NOT a
+    separate dispatch — it lives inside the plan standard template's fixed FIRST
+    step, whose acceptance carries the framing work. Task-agnostic."""
 
     def _prompt(self):
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
         return SYSTEM_PROMPT_STATIC
 
-    def test_dispatch_after_every_plan_create(self):
+    def test_frame_step_is_fixed_first_step(self):
         p = self._prompt()
-        assert "Dispatch the Diverger the moment a plan exists" in p
-        assert "Immediately after EVERY plan_create()" in p
+        assert "The first step of every plan is the FRAME step" in p
+        assert "not in a separate dispatch" in p
+        assert "fixed, un-skippable part of the template" in p
 
-    def test_ideas_only_and_parent_rulings(self):
+    def test_divergence_check_lives_in_acceptance(self):
         p = self._prompt()
-        assert "ideas only, no verdicts, no ranking" in p
-        assert "adopt" in p and "reject" in p
-        assert "An unruled alternative is an unexamined premise" in p
+        assert "better / more correct / unconsidered" in p
+        assert "rule one line each" in p
+        assert "adopt and revise the plan, or reject and name WHY" in p
 
     def test_why_framing_is_the_leverage_point(self):
         p = self._prompt()
         assert "cheapest to fix and hardest to see" in p
         assert "every later check inherits that blindness" in p
-
-    def test_rearms_on_reframe(self):
-        p = self._prompt()
-        assert "new plan, new dispatch" in p
 
     def test_task_agnostic_no_leak(self):
         low = " ".join(self._prompt().lower().split())

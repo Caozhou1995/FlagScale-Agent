@@ -235,11 +235,11 @@ def test_acceptance_guidance_covers_all_inputs_and_generalization():
         shutil.rmtree(d)
 
 
-def test_plan_guard_qualifier_inject_fires_for_plain_steps():
-    """The qualifier-extraction reminder now lives in PlanGuard and fires on the
-    first plan_create regardless of whether steps carry acceptance — a subject can
-    be qualified even without acceptance criteria. It is an inject (advisory), and
-    carries the qualifier message, not the acceptance-quality guidance."""
+def test_plan_guard_does_not_inject_qualifier_reminder():
+    """The qualifier-extraction reminder no longer lives in PlanGuard — the
+    plan_create-time [Plan] inject was removed. PlanGuard.check_pre is now a
+    pass-through for plan tools; the qualifier discipline lives in the fixed
+    FRAME step's acceptance criteria instead."""
     from flagscale_agent.react.guard.plan import PlanGuard
 
     guard = PlanGuard()
@@ -247,11 +247,19 @@ def test_plan_guard_qualifier_inject_fires_for_plain_steps():
         tool_name="plan_create",
         tool_args={"title": "T", "steps": ["plain step", "another"]},
     )
-    v = guard.check_pre(ctx)
-    assert v is not None
-    assert v.action == "inject"
-    assert v.reason == "qualifier_extraction"
-    low = v.message.lower()
-    assert "qualifier" in low
-    # acceptance-quality guidance must NOT be bundled in (that is VerificationGuard)
-    assert "observable" not in low
+    assert guard.check_pre(ctx) is None
+
+
+def test_frame_step_carries_qualifier_extraction():
+    """The fixed FRAME step's acceptance carries the qualifier-extraction
+    discipline — the new single home for what was a PlanGuard plan_create
+    inject. It must prompt listing every qualifier and reading each boundary
+    in the direction the task MEANS."""
+    from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
+
+    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    assert "qualifier extraction" in low
+    assert "the direction the task means" in low
+    assert "a point in time" in low
+    assert "a subset" in low
+    assert "a named tool/model instance" in low

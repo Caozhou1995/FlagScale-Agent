@@ -64,7 +64,7 @@ _COMPILE_TOKENS = (
 # NB: the `env` branch must eat its OWN options (`-u VAR` unset pairs, `-i`,
 # `VAR=val` assignments); otherwise `env -u HTTP_PROXY opam install ...` slips
 # past the whole guard (the `-u` breaks the match right after `env `), and a
-# `... | tail` build then runs invisible to the monitor. Seen live on compcert.
+# `... | tail` build then runs invisible to the monitor.
 _WRAPPER = (
     r"(?:sudo\s+|[A-Za-z_][A-Za-z0-9_]*=\S+\s+|"
     r"env(?:\s+(?:-[A-Za-z]+\s+\S+|-[A-Za-z]+|[A-Za-z_][A-Za-z0-9_]*=\S+))*\s+|"

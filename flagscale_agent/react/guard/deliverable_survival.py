@@ -16,7 +16,7 @@
 
 Fires after a destructive command SUCCEEDED (tool_result shows the command
 ran) and demands the agent re-verify that its deliverables still exist at
-their delivery paths. Evidence class (2026-10-07): an agent killed its own
+their delivery paths. Observed failure mode: an agent killed its own
 shell with a self-matching `pkill -f` pattern mid-run — every earlier verified
 state (solution file on disk) was destroyed with the process, and the agent's
 belief that "the deliverable exists" was never re-checked before it claimed

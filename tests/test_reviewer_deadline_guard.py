@@ -83,7 +83,7 @@ def _stats(remaining, budget=1800.0):
             "remaining": remaining, "pct": 100.0 * (budget - remaining) / budget}
 
 
-# ── F1: override contract enforcement (report file + quote) ──────────────────
+# ── override contract enforcement (report file + quote) ──────────────────────
 
 def test_override_accepts_real_report_and_quote(ledger_env, tmp_path):
     g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(250))
@@ -145,7 +145,7 @@ def test_blocked_l2_poll_cannot_self_release(ledger_env, tmp_path):
         None) is True
 
 
-# ── F2: streak counts only polls taken while the budget is thin ──────────────
+# ── streak counts only polls taken while the budget is thin ──────────────────
 
 def test_unarmed_polls_do_not_accumulate_streak(ledger_env):
     g = ReviewerDeadlineGuard(stats_fn=lambda: _stats(900))  # floor=300: not armed

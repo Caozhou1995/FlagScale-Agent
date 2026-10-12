@@ -262,7 +262,7 @@ class TestMeasuredChecks:
         assert "stray" in v.message  # names the fix: the brace pair
 
     def test_missing_prompt_constant_reports_render_failure(self, guard, tmp_path):
-        # F1 regression (reviewer-confirmed): a removed/renamed prompt constant
+        # Regression: a removed/renamed prompt constant
         # is PROVABLE runtime breakage (prompt_builder imports both names at
         # startup) — it must be REPORTED, not swallowed as an env error.
         d = tmp_path / "flagscale_agent" / "react"
@@ -289,7 +289,7 @@ class TestMeasuredChecks:
         assert "measured now: PASS" in v.message
 
     def test_foreign_prompt_path_not_probed(self, guard, tmp_path):
-        # F3 regression: the anchor must sit at a path-separator boundary —
+        # Regression: the anchor must sit at a path-separator boundary —
         # /x/notflagscale_agent/react/prompt.py is NOT a repo prompt file and
         # must not trigger the render probe (no RENDER FAILED even with a
         # brace that would break a prompt template).
@@ -392,7 +392,7 @@ class TestMeasuredChecks:
 
 
 class TestCitationDrift:
-    """prop_60077fda: an edit that shifts a file's line count must warn that any
+    """An edit that shifts a file's line count must warn that any
     held `file:line` anchor to that file may now be stale (the recorded failure:
     a doc body cited :1102/:620 that later edits moved to :1126/:623)."""
 

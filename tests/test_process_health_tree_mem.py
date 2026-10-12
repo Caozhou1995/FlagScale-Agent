@@ -14,8 +14,7 @@
 
 """Test process health tree-wide memory accounting.
 
-Regression test for insight/flagscale_agent/health_parent_only_cpu_mem_rootcause:
-get_process_health used to report only the PARENT process RSS (e.g. ~2MB for a
+Regression test: get_process_health used to report only the PARENT process RSS (e.g. ~2MB for a
 bash wrapper) even while its children used gigabytes, causing the LLM judge to
 repeatedly (mis)report "CPU is 0% with only 2 MB memory" and false-flag healthy
 launcher/wrapper jobs as hung. memory_mb now sums RSS across the walked tree.

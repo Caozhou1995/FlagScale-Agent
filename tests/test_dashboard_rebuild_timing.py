@@ -1,6 +1,6 @@
 """Regression tests: system prompt must NOT be rebuilt on every tool round.
 
-Cache regression root cause (2026-10-07): the dashboard lives at the tail of
+Cache regression root cause: the dashboard lives at the tail of
 the system prompt, AFTER the anthropic provider's cache breakpoint on the
 static section (split at DASHBOARD_TEMPLATE's "\\n---\\n[" separator). An
 intra-turn rebuild changed those bytes on every request, invalidating the

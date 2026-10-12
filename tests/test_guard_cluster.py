@@ -25,8 +25,9 @@ Covers five defects discovered by source analysis + run evidence:
      silent stall and kills the job).
   4. StartupGuard/ResearchPhase did not accept memory_read/recall_search as
      a research pass (internal knowledge retrieval is an info-gain act).
-  5. Reviewer/diverger demand suppression keyed on a PROSE substring of the
-     rendered contract instead of the structured constraints.reviewer flag.
+  5. (removed) Reviewer/diverger demand suppression: the PlanGuard plan_create
+     inject and the diverger dispatch gate are gone — the plan-framing and
+     reviewer disciplines now live in the plan standard template's fixed steps.
 """
 
 import json
@@ -38,7 +39,6 @@ import pytest
 
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
-from flagscale_agent.react.guard.plan import _self_is_diverger_worker
 from flagscale_agent.react.guard.startup import (
     ResearchPhase,
     _RESEARCH_TOOLS,
@@ -226,21 +226,4 @@ class TestSleepProbe:
             stderr_chunks=[], start=time.time() - 999)
         tick = tool._health_tick(job)
         assert tick["kill"] is True, "past the quiet budget, normal kill resumes"
-
-
-# --------------------------------------------------------------------------
-# Fix 5 — suppression keyed on structured constraints.reviewer, not prose
-# --------------------------------------------------------------------------
-
-def _make_contract(tmp_path, monkeypatch, reviewer, prompt_body, diverger=None):
-    task_dir = tmp_path / "task_x"
-    task_dir.mkdir(exist_ok=True)
-    (task_dir / "contract.prompt").write_text(prompt_body, encoding="utf-8")
-    cons = {"reviewer": reviewer, "writable": []}
-    if diverger is not None:
-        cons["diverger"] = diverger
-    (task_dir / "contract.json").write_text(
-        json.dumps({"constraints": cons}), encoding="utf-8")
-    monkeypatch.setenv(TASK_ID_ENV, "task_x")
-    monkeypatch.setenv(CONTRACT_PATH_ENV, str(task_dir / "contract.prompt"))
 

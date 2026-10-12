@@ -279,7 +279,7 @@ class AgentKernel:
                         # and each retry is already bounded by the cap itself
                         # (~cap_budget thinking tokens per call). Budgeting it
                         # like a genuine empty output killed real runs: e.g.
-                        # fibsqrt 2026-09-08 09:36 — cap fired 4x in one turn,
+                        # Observed: cap fired 4x in one turn,
                         # retries 1/3..3/3 exhausted the shared budget, and the
                         # 4th cap-trip stopped the trial (reward 0) with the
                         # full solution design sitting in the discarded

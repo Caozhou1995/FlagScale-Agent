@@ -938,7 +938,7 @@ class TestPromptIntegrity:
 
     def test_method_switch_cannot_retarget_easier_goal(self):
         """Method-switch must not be usable to disguise lowering the bar /
-        substituting a reachable target for the constrained one (pov-ray class)."""
+        substituting a reachable target for the constrained one."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
         assert "change HOW you solve the problem the task set — never WHAT problem that is" in SYSTEM_PROMPT_STATIC
         assert "wearing the vocabulary of Principle 3 as a disguise" in SYSTEM_PROMPT_STATIC
@@ -953,8 +953,7 @@ class TestPromptIntegrity:
 
     def test_established_constraint_must_be_durable(self):
         """A load-bearing constraint must be written to memory immediately so it
-        survives context eviction (build-pov-ray class: agent held the 2.2
-        constraint 19min, lost it to eviction, reverted to the rejected 3.7)."""
+        survives context eviction."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
         assert "This list must be DURABLE, not held in working context" in SYSTEM_PROMPT_STATIC
         assert "re-inferring \"what was I even asked to do?\" from environmental scraps" in SYSTEM_PROMPT_STATIC
