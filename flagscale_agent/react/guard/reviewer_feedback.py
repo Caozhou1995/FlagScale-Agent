@@ -114,7 +114,8 @@ class ReviewerFeedbackGuard(Guard):
             from flagscale_agent.react.multi_agent.spawn import read_session_spawns
             from flagscale_agent.react.multi_agent.contract import (
                 ROLE_REVIEWER, ROLE_RE_REVIEWER)
-            from flagscale_agent.react.multi_agent.ledger import ACTIVE_STATUSES
+            from flagscale_agent.react.multi_agent.ledger import (
+                ACTIVE_STATUSES, DEADLINE_MISSED)
         except Exception:
             return []
         sd = self._session_dir()
@@ -138,7 +139,14 @@ class ReviewerFeedbackGuard(Guard):
                 continue
             if trec is None:
                 continue
-            if trec.status in ACTIVE_STATUSES:
+            if trec.status in ACTIVE_STATUSES or trec.status == DEADLINE_MISSED:
+                # DEADLINE_MISSED is in NEITHER ACTIVE_STATUSES nor
+                # TERMINAL_STATUSES (ledger.py:75-76): a reviewer that died of
+                # its wall-clock budget still holds an un-adjudicated report —
+                # often only in its worker.log — and poll_tasks(check) can
+                # still finalize it (check requires merely non-terminal,
+                # ledger.py:327). Silently ignoring it would repeat the exact
+                # failure this guard closes.
                 out.append((tid, trec.status))
         return out
 

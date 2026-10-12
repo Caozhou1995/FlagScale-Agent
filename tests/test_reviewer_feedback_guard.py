@@ -33,7 +33,8 @@ import pytest
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.reviewer_feedback import ReviewerFeedbackGuard
 from flagscale_agent.react.multi_agent.contract import Contract
-from flagscale_agent.react.multi_agent.ledger import TaskLedger, DONE
+from flagscale_agent.react.multi_agent.ledger import (
+    TaskLedger, DEADLINE_MISSED, DONE)
 from flagscale_agent.react.multi_agent.spawn import record_spawn, read_session_spawns
 
 
@@ -129,6 +130,24 @@ def test_silent_when_reviewer_terminal(env):
     led.transition(c.id, DONE)
     record_spawn(env["session"], c.id, "reviewer")
     assert _guard(env).check_pre(_ctx()) is None
+
+
+def test_blocks_when_reviewer_deadline_missed(env):
+    # DEADLINE_MISSED is in NEITHER ACTIVE_STATUSES nor TERMINAL_STATUSES
+    # (ledger.py:75-76): a reviewer that died of its wall-clock budget still
+    # holds an un-adjudicated report (often only in worker.log) — the gate
+    # must NOT silently ignore it. RUNNING->DEADLINE_MISSED is a legal
+    # transition (ledger.py:81).
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    led.transition(c.id, "RUNNING")
+    led.transition(c.id, DEADLINE_MISSED)
+    record_spawn(env["session"], c.id, "reviewer")
+    v = _guard(env).check_pre(_ctx())
+    assert v is not None and v.action == "block" and v.overridable
+    assert c.id in v.message
+    assert "DEADLINE_MISSED" in v.message
 
 
 def test_silent_for_non_reviewer_children(env):
