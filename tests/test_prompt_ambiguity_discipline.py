@@ -18,6 +18,7 @@ in the static system prompt.
 This is prompt-only guidance, so the test asserts the load-bearing clauses are
 present in SYSTEM_PROMPT_STATIC (a future edit must not silently drop them).
 """
+import re
 
 from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
@@ -43,10 +44,10 @@ def test_ambiguity_three_steps_present():
 def test_hedge_feasibility_is_constructive_not_introspective():
     """A hedge must be proven by CONSTRUCTION, not decided by introspection.
 
-    Evidence 2026-10-12: an extract-elf solver recognized the two grader
-    readings, introspected "Intersection = EMPTY ... No hedge possible. Must
-    BET." and shipped one base (reward=0), while a sibling solver that
-    CONSTRUCTED the union of both bases passed. The prompt must therefore
+    Evidence 2026-10-12: a solver recognized the two grader readings,
+    introspected "Intersection = EMPTY ... No hedge possible. Must
+    BET." and shipped one reading (reward=0), while a sibling solver that
+    CONSTRUCTED the superset covering both readings passed. The prompt must therefore
     demand writing each reading's acceptance predicate and building a
     candidate output to test the intersection — an introspected "no hedge"
     is a hypothesis, not a finding.
@@ -75,7 +76,7 @@ def test_frame_acceptance_carries_constructive_hedge_check():
     assert "intersection" in low
     assert "constructively shown empty" in low
     # must not hardcode any originating task's specifics
-    assert "0x400000" not in low
+    assert not re.search(r"0x[0-9a-fA-F]{4,}", low), "Frame acceptance leaked a hex address"
     assert "beautifulsoup" not in low
 
 
@@ -130,6 +131,45 @@ def test_pre_existing_dominance_clause_preserved():
     assert "Dropped-constraint ledger" in p
 
 
+def test_hedge_names_both_shapes_intersection_and_union():
+    """The hedge doctrine must name BOTH hedge shapes, not only the intersection.
+
+    Evidence 2026-10-12: a solver under an extras-ignoring reference matcher
+    (a reference key absent from the output is skipped, not penalised) made a
+    UNION/SUPERSET the winning hedge — but the intersection-only framing
+    called the union "impossible" and the agent bet on one base and scored
+    0.00%. The rule must therefore
+    present the union/superset shape alongside the intersection, and require
+    emptiness to be shown under BOTH before betting.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "UNION / SUPERSET" in p
+    assert "IGNORES output it did not ask for" in p
+    assert "under BOTH shapes" in p
+
+
+def test_frame_acceptance_names_both_hedge_shapes():
+    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    assert "union / superset" in low
+    assert "ignores output" in low
+    assert "both shapes" in low
+
+
+def test_hedge_doctrine_no_longer_excludes_the_union_shape():
+    """NEGATIVE assertion: the intersection-EXCLUSIVE phrasing must be GONE.
+
+    The pre-fix rule said a hedge is real "iff a single output passes them all"
+    and licensed emitting "from the intersection" only — wording that rules out
+    the unpenalised-extras superset. Substring-presence tests stayed green while
+    the prose excluded the shape that actually won. A reframe needs a negative
+    assertion that the superseded exclusive phrasing is absent.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "may you emit from the intersection" not in p
+    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    assert "only an intersection constructively shown empty" not in low
+
+
 def test_no_grader_oracle_leak_in_prompt():
     """HARD CONSTRAINT: authored harness content must never leak a task's grader.
 
@@ -145,3 +185,53 @@ def test_no_grader_oracle_leak_in_prompt():
     assert "html.parser" not in p
     # a verbatim task-text grant quoted as an example
     assert "except for normalization that may occur" not in p
+
+
+def test_minimal_uncertainty_posture_present_both_surfaces():
+    """When the grader is invisible AND the goal under-determined, the agent
+    must minimise INTRODUCED uncertainty — a posture, not a fixed rule.
+
+    Evidence 2026-10-12 (two consecutive failed runs on an HTML-preservation
+    task): given a "preserve" instruction whose graded form was
+    under-determined, both agents
+    re-serialized the HTML (pretty-print / entity re-encode) — adding an
+    untestable transformation and failing identically. The lesson is not
+    "always preserve bytes" but "do not add what you cannot check". It must
+    be anchored on BOTH the prose and the enforced Frame acceptance.
+    """
+    p = SYSTEM_PROMPT_STATIC
+    assert "MINIMAL-UNCERTAINTY DEFAULT" in p
+    assert "do not add what you cannot check" in p
+    # it is a POSTURE, with preserve as one instance — not a fixed rule
+    assert "POSTURE, not a fixed rule" in p
+    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    assert "minimal-uncertainty default" in low
+    assert "do not add what you cannot check" in low
+    assert "posture, not a fixed rule" in low
+
+
+def test_minimal_uncertainty_is_self_observable():
+    """The posture must come with a grader-free self-check (diff vs required
+    form/input; every difference traces to an explicit requirement)."""
+    p = SYSTEM_PROMPT_STATIC
+    assert "Self-observable test (no grader needed)" in p
+    assert "must trace to an explicit task requirement" in p
+    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    assert "self-observable test" in low
+    assert "trace to an explicit task requirement" in low
+
+
+def test_minimal_uncertainty_leaks_no_grader_or_posture_hardcode():
+    """HARD: the new content must not leak a task's grader, and must not
+    hardcode the originating task's specifics (it is a general posture)."""
+    p = SYSTEM_PROMPT_STATIC
+    assert "BeautifulSoup" not in p
+    assert "html.parser" not in p
+    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    for bad in ("beautifulsoup", "html.parser", "retry"):
+        assert bad not in low, f"Frame acceptance leaked {bad!r}"
+    # generic guards: the general posture must carry no re-serialization
+    # artifact (HTML entity literal) and no concrete address constant
+    assert not re.search(r"&[a-zA-Z]+;", low), "Frame acceptance leaked an HTML entity literal"
+    assert not re.search(r"0x[0-9a-fA-F]{4,}", low), "Frame acceptance leaked a hex address"
+
