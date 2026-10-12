@@ -933,6 +933,12 @@ class TestFrameStepDiscipline:
         assert "dispatch one read-only diverger worker" in low
         assert "fresh context" in low
         assert "synthesize both" in low
+        # must NOT steer into the reviewer preset: apply_reviewer_preset
+        # (multi_agent/spawn.py) raises ContractError unless the contract
+        # carries a deliverable abs-path + rev marker, which cannot exist
+        # before framing. The wording must say NO reviewer tag.
+        assert "reviewer contract" not in low
+        assert "no reviewer tag" in low
         # the old discretionary escape must be gone
         assert "proposing them yourself is fine" not in low
         # trivial-task skip escape is retained
