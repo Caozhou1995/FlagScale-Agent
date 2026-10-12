@@ -917,9 +917,10 @@ class TestFrameStepDiscipline:
         assert "The first step of every plan is the FRAME step" in p
         assert "dispatched diverger worker" in p
         # the step stays fixed/always-prepended, but the WORKER dispatch is now
-        # tier-priced (T2), not an unconditional mandate
+        # a deliberate trade-off (benefit vs time budget), not an unconditional
+        # mandate and not a memorized tier label
         assert "a fixed part of the template rather than an optional afterthought" in p
-        assert "for T2, a dispatched diverger worker" in p
+        assert "when the framing is worth a fresh set of eyes" in p
 
     def test_divergence_check_lives_in_acceptance(self):
         p = self._prompt()
@@ -928,14 +929,14 @@ class TestFrameStepDiscipline:
         assert "adopt and revise the plan, or reject and name WHY" in p
 
     def test_frame_step_prices_diverger_dispatch(self):
-        # The frame step requires BOTH self-divergence AND, for a T2 task, a
-        # dispatched read-only diverger worker (fresh context), then synthesis
-        # of both — mirroring the Review step. The dispatch is TIER-PRICED
-        # (T0/T1 do the self-half only); an unconditional mandate would waste a
-        # worker's deadline on a trivial edit.
+        # The frame step requires BOTH self-divergence AND a dispatched
+        # read-only diverger worker (fresh context), then synthesis of both —
+        # mirroring the Review step. The dispatch is a DELIBERATE TRADE-OFF
+        # (know the diverger's benefit, price it against the time budget); an
+        # unconditional mandate would waste a worker's deadline on a trivial edit.
         from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
         low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
-        assert "dispatch one read-only diverger worker" in low
+        assert "read-only diverger worker" in low
         assert "fresh context" in low
         assert "synthesize both" in low
         # must NOT steer into the reviewer preset: apply_reviewer_preset
@@ -947,11 +948,10 @@ class TestFrameStepDiscipline:
         assert "leaf role" in low
         # the old discretionary escape must be gone
         assert "proposing them yourself is fine" not in low
-        # the tier gate replaces the old ad-hoc "genuinely trivial" escape
-        assert "task tier" in low
-        assert "t0" in low and "t1" in low and "t2" in low
-        assert "dispatch no worker" in low
-        assert "at most one reviewer" in low
+        # the decision is now a benefit-vs-time-budget trade-off, not a tier label
+        assert "a deliberate trade-off, not a mandate" in low
+        assert "benefit" in low and "time budget" in low
+        assert "state the decision and why" in low
 
     def test_why_framing_is_the_leverage_point(self):
         p = self._prompt()

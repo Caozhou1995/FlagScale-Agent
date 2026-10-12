@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The reviewer/diverger dispatch demand is TIER-PRICED, not unconditional.
+"""The reviewer/diverger dispatch is a CONSCIOUS TRADE-OFF, not unconditional.
 
 The plan's fixed Frame step used to order a diverger UNCONDITIONALLY, and the
 reviewer demand used to read as if it fired at every step_done, so a trivial
-2-line edit was over-provisioned. The gate now lives in the two acceptance
-blocks (tools/plan_create.py) and the two prompt-level demand sites
-(react/prompt.py): the agent declares a task tier (T0/T1/T2) and the tier
-decides how many workers (if any) are dispatched — a deliberate cost decision,
-not template compliance. The reviewer demand is anchored at the plan's FIXED
+2-line edit was over-provisioned. A later revision priced the dispatch by an
+abstract T0/T1/T2 "task tier", but that grading was opaque — a reader could not
+tell what tier a task was without memorizing the definitions. The gate now asks
+the agent to WEIGH the worker's BENEFIT against its TIME-BUDGET COST and DECIDE,
+stating the decision either way — no tier label to memorize. The demand lives in
+the two acceptance blocks (tools/plan_create.py) and the two prompt-level demand
+sites (react/prompt.py). The reviewer demand is anchored at the plan's FIXED
 Review step, NOT at each step_done.
 """
 
@@ -37,44 +39,58 @@ def _norm(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-class TestTierGateInAcceptanceBlocks:
-    def test_frame_acceptance_carries_task_tier(self):
-        low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
-        assert "task tier" in low
-        # all three tiers named
-        for token in ("t0", "t1", "t2"):
-            assert f" {token} " in f" {low} ", f"tier {token} missing"
-        # T0 = no worker; T1 = at most one reviewer; T2 = full
-        assert "dispatch no worker" in low
-        assert "at most one reviewer" in low
-        assert "full diverger + reviewer" in low
+def _no_tier_label(low: str) -> None:
+    """No abstract T0/T1/T2 grading may survive in the shipped text."""
+    assert "task tier" not in low
+    for token in ("t0", "t1", "t2"):
+        assert not re.search(r"\b" + token + r"\b", low), f"tier token {token} leaked"
 
-    def test_review_acceptance_carries_task_tier(self):
+
+class TestTradeoffGateInAcceptanceBlocks:
+    def test_frame_acceptance_names_the_tradeoff(self):
+        low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
+        assert "a deliberate trade-off, not a mandate" in low
+        assert "benefit" in low
+        assert "time budget" in low
+        assert "state the decision and why" in low
+        _no_tier_label(low)
+
+    def test_review_acceptance_names_the_tradeoff(self):
         low = _norm(" ".join(_REVIEW_STEP_ACCEPTANCE))
-        assert "task tier" in low
-        assert "no reviewer" in low or "no " in low
-        assert "at most one reviewer" in low
+        assert "a deliberate trade-off, not a mandate" in low
+        assert "benefit" in low
+        assert "time budget" in low
+        assert "state the decision and why" in low
+        _no_tier_label(low)
 
-    def test_frame_tier_prices_the_diverger_not_mandates(self):
+    def test_benefit_and_cost_are_both_spelled_out(self):
+        # the agent must know WHY a worker is worth it, and WHAT it costs
         low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
-        # the old unconditional "spawn a worker" mandate is reframed
-        assert "price the dispatch, do not obey it mechanically" in low
-        assert "declare one tier in plan notes" in low
+        assert "before any artifact exists" in low  # diverger benefit
+        assert "whole deadline" in low  # cost
+        lo_r = _norm(" ".join(_REVIEW_STEP_ACCEPTANCE))
+        assert "fresh context" in lo_r  # reviewer benefit
+        assert "whole deadline" in lo_r  # cost
 
 
-class TestTierGateInPrompt:
-    def test_reviewer_demand_is_priced_by_tier(self):
+class TestTradeoffGateInPrompt:
+    def test_reviewer_demand_is_a_tradeoff(self):
         p = _norm(SYSTEM_PROMPT_STATIC)
-        assert "priced by task tier, not unconditional" in p
-        assert "declare the task's tier in plan notes" in p
+        assert "a deliberate trade-off, not an unconditional mandate" in p
+        assert "know the reviewer's benefit" in p
+        assert "price it against your time budget" in p
 
-    def test_frame_diverger_demand_is_t2_only(self):
+    def test_diverger_demand_is_a_tradeoff(self):
         p = _norm(SYSTEM_PROMPT_STATIC)
-        assert "for t2, a dispatched diverger worker" in p
+        assert "know the diverger's benefit" in p
+        assert "price it against your time budget" in p
+
+    def test_no_tier_label_in_prompt(self):
+        _no_tier_label(_norm(SYSTEM_PROMPT_STATIC))
 
 
 class TestFrameAcceptanceLinksStillPresent:
-    """The tier gate must not remove the frame-step discipline it lives beside."""
+    """The trade-off gate must not remove the frame-step discipline beside it."""
 
     def test_diverger_role_tagging_preserved(self):
         low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
@@ -100,29 +116,22 @@ class TestRoleOrderSeparation:
 
     def test_frame_step_dispatches_diverger_not_reviewer(self):
         low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
-        # Frame names what IT dispatches: the diverger (pre-artifact probe)
         assert "what this frame step dispatches is the diverger" in low
-        # and says a reviewer needs a FROZEN artifact at the fixed Review step
         assert "a reviewer needs a frozen artifact" in low
         assert "belongs at the review step" in low
 
     def test_reviewer_line_keeps_diverger_out(self):
         p = _norm(SYSTEM_PROMPT_STATIC)
-        # the reviewer-demand line points the diverger elsewhere (Frame),
-        # not inline in the reviewer tier text
         assert "the diverger is a frame-time dispatch" in p
         assert "not here" in p
 
     def test_order_documented_as_frame_then_fixed_review_step(self):
         p = _norm(SYSTEM_PROMPT_STATIC)
-        # Frame half sequenced before the reviewer half, and the reviewer is
-        # anchored at the plan's FIXED Review step — not at each step_done.
         assert "divergence at the frame step" in p
         assert "reviewer at the plan's fixed review step" in p
         assert "not fired at every step_done" in p
 
     def test_frame_and_review_roles_are_time_separated(self):
         p = _norm(SYSTEM_PROMPT_STATIC)
-        # the two roles are explicitly placed at DIFFERENT times, not conflated
         assert "diverger at frame" in p
         assert "reviewer at the fixed review step" in p
