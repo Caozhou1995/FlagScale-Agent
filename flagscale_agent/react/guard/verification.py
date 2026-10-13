@@ -608,13 +608,18 @@ not-applicable), or a structured object naming the graded artifact:
        from the task, not invention), and a real "acceptance_test" (a command
        that decides whether an output is accepted under that reading).
   • "hedge": object with "shape" one of union|intersection|none. For
-       union/intersection: a real "output" + real "evidence" + "extras_direction"
-       (union valid only under "ignored"; intersection only under "penalized").
+       union/intersection: a real "output" + "extras_direction" (union valid only
+       under "ignored"; intersection only under "penalized") + an OBSERVED
+       "evidence" = {"command": "<what you ran>", "observed": "<the RAW output it
+       produced>"} whose "observed" text is FOUND in this session's tool results.
        For "none": "if_none" is required.
-  • "if_none": object with a real "why_intersection_empty", a NON-EMPTY
-       "readings_rejected" list (each a real "reading" + real "evidence" — an
-       independent artifact, not suspicion), and real bet_on/bet_loses_when/
-       why_safe.
+  • "if_none": object with a real "why_intersection_empty", an OBSERVED
+       "union_attempt" = {"command": "<the union you actually built/ran>",
+       "observed": "<its RAW output>"} (you may NOT declare the union empty from
+       introspection — you must have CONSTRUCTED the union output and RUN it), a
+       NON-EMPTY "readings_rejected" list (each a real "reading" + a "source"
+       quoting the task + an OBSERVED "evidence" {command, observed}), and real
+       bet_on/bet_loses_when/why_safe.
 Re-issue the step_done with a corrected `deliverable_reading` field."""
 
 _READING_NOT_GROUNDED = """[VerificationGuard] A reading is NOT grounded in the task text.
@@ -632,16 +637,17 @@ _HEDGE_UNPROVEN = """[VerificationGuard] The hedge is not PROVEN.
 Under an invisible grader you must either CONSTRUCT a single output safe under
 every reading, or prove none exists — by introspection you cannot.
 
-  • shape "union"/"intersection": "output" and "evidence" must be REAL (the
-    actual output that lies in every reading's acceptance set, plus the command
-    and its raw output that shows it does), and "extras_direction" must be a
-    real ignored|penalized. Shape↔direction must match: union is a hedge ONLY
-    when extras are IGNORED; intersection is valid when extras are PENALIZED.
-  • shape "none": you must supply "if_none" with a real why_intersection_empty,
-    a NON-EMPTY readings_rejected list (each rejected reading carrying an
-    INDEPENDENT evidence artifact — never suspicion), and real bet_on/
-    bet_loses_when/why_safe. An introspected "no hedge possible" is a
-    hypothesis: a hedge is empty only when shown so under BOTH shapes.
+  • shape "union"/"intersection": "output" must be REAL, "extras_direction" a
+    real ignored|penalized (shape↔direction must match: union only under
+    IGNORED, intersection under PENALIZED), and "evidence" must be an OBSERVED
+    {command, observed} pair whose "observed" text the harness can FIND in this
+    session's tool results — a hedge you ASSERTED but never ran is not a hedge.
+  • shape "none": "if_none" must carry a real why_intersection_empty, an
+    OBSERVED "union_attempt" (the union you CONSTRUCTED and RAN — an introspected
+    "no hedge possible" is a hypothesis, and is refused until the union was
+    actually built and its result seen), a NON-EMPTY readings_rejected list
+    (each rejected reading carrying a "source" quote AND an OBSERVED evidence
+    {command, observed}), and real bet_on/bet_loses_when/why_safe.
 
 Re-issue with a PROVEN hedge, or a complete "if_none" proving emptiness."""
 
@@ -668,7 +674,62 @@ def _task_text_groundable(task_text: str) -> bool:
     return True
 
 
-def _check_deliverable_reading_field(dr, task_text: str = ""):
+def _observed_corpus(messages, full_log=None) -> str:
+    """Normalized concatenation of every tool-result text the session produced.
+
+    This is the NON-FORGEABLE evidence source: a probe/hedge claim must paste an
+    observation the harness can find here, so an asserted-but-never-run falsifier
+    is rejected. `full_log` (the append-only audit log) is preferred when given —
+    it survives eviction; `messages` (the live window) is the fallback. Returns
+    None when NO source was supplied (unavailable -> caller skips the check);
+    returns "" when a source existed but held no tool-result text.
+    """
+    src = full_log if full_log else messages
+    if not src:
+        return ""
+    parts = []
+    for m in src:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role == "tool" and isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    parts.append(str(b.get("content", "")))
+        elif role == "user" and isinstance(content, str) and content.startswith("tool_results"):
+            parts.append(content)
+    return _normalize_for_grounding(" \n ".join(parts))
+
+
+def _evidence_observed(ev, corpus) -> bool:
+    """True when `ev` carries an observation actually present in the session.
+
+    `ev` is a dict {"command": ..., "observed": ...}; the `observed` text must
+    appear (whitespace/case-insensitive) inside `corpus` — the tool-result text
+    the harness recorded. STRUCTURAL validity is checked first and always: a
+    missing/mis-shaped evidence is False regardless of corpus. Only the
+    corpus-MEMBERSHIP test fails open when `corpus is None` (the source was
+    unavailable, so we cannot check — never block on what we cannot see).
+    `corpus == ""` means the source existed but held nothing, so nothing can be
+    observed and the claim fails. Returns False for any non-dict/missing shape.
+    """
+    if not isinstance(ev, dict):
+        return False
+    obs = ev.get("observed")
+    if not _is_real_str(obs):
+        return False
+    n = _normalize_for_grounding(obs)
+    if not n:
+        return False
+    if corpus is None:
+        return True  # shape OK but we cannot verify membership -> fail-open
+    return n in corpus
+
+
+def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = None):
     """Unconditional structured gate for the fixed `deliverable_reading` field.
 
     `dr` is the raw value of ``tool_args['deliverable_reading']``. Returns a
@@ -759,11 +820,16 @@ def _check_deliverable_reading_field(dr, task_text: str = ""):
         )
     shape = str(hedge.get("shape") or "").strip().lower()
     if shape in ("union", "intersection"):
-        if not (_is_real_str(hedge.get("output"))
-                and _is_real_str(hedge.get("evidence"))):
+        if not _is_real_str(hedge.get("output")):
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_unproven",
+                category="verification_required",
+            )
+        if not _evidence_observed(hedge.get("evidence"), observed):
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_evidence_unobserved",
                 category="verification_required",
             )
         extras = str(hedge.get("extras_direction") or "").strip().lower()
@@ -793,6 +859,18 @@ def _check_deliverable_reading_field(dr, task_text: str = ""):
                 reason="hedge_unproven",
                 category="verification_required",
             )
+        # An introspected "no hedge possible" is a HYPOTHESIS, not a finding:
+        # to claim the union is EMPTY the agent must have CONSTRUCTED the union
+        # output and RUN it — `union_attempt` must carry an observation present
+        # in the session's real tool-result stream. This refuses the retry13
+        # reasoning ("can't hedge; I'll take the principled reading") until the
+        # hedge was really tried and its result seen.
+        if not _evidence_observed(if_none.get("union_attempt"), observed):
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_union_unattempted",
+                category="verification_required",
+            )
         rej = if_none.get("readings_rejected")
         if not isinstance(rej, list) or not rej:
             return GuardVerdict.block(
@@ -803,11 +881,19 @@ def _check_deliverable_reading_field(dr, task_text: str = ""):
         for e in rej:
             if not (isinstance(e, dict)
                     and _is_real_str(e.get("reading"))
-                    and _is_real_str(e.get("source"))
-                    and _is_real_str(e.get("evidence"))):
+                    and _is_real_str(e.get("source"))):
                 return GuardVerdict.block(
                     message=_HEDGE_UNPROVEN,
                     reason="hedge_unproven",
+                    category="verification_required",
+                )
+            # A rejected candidate's "evidence" must be an OBSERVED artifact,
+            # not a sentence: a fabricated rejection cannot manufacture an empty
+            # intersection if the rejection itself had to be run.
+            if not _evidence_observed(e.get("evidence"), observed):
+                return GuardVerdict.block(
+                    message=_HEDGE_UNPROVEN,
+                    reason="hedge_rejection_unobserved",
                     category="verification_required",
                 )
             # A rejected candidate carries the SAME provenance requirement as
@@ -855,9 +941,14 @@ class VerificationGuard(Guard):
     name = "verification"
     priority = 55
     
-    def __init__(self, plan=None, proposals=None, task_text_fn=None):
+    def __init__(self, plan=None, proposals=None, task_text_fn=None,
+                 full_log_fn=None):
         self._plan = plan
         self._proposals = proposals
+        # Callable returning the append-only full message log (the eviction-proof
+        # source of real tool-result text for observed-evidence checks). None =>
+        # fall back to the live window (ctx.messages).
+        self._full_log_fn = full_log_fn
         # Callable returning the session's original task text verbatim (the
         # grounding source for a deliverable_reading's `source` quotes). None or
         # an unavailable/truncated result => grounding is skipped (fail-open).
@@ -974,7 +1065,8 @@ class VerificationGuard(Guard):
                 if bad is not None:
                     return bad
                 bad = _check_deliverable_reading_field(
-                    ctx.tool_args.get("deliverable_reading"), self._task_text())
+                    ctx.tool_args.get("deliverable_reading"), self._task_text(),
+                    self._observed(ctx))
                 if bad is not None:
                     return bad
                 return None
@@ -1028,7 +1120,8 @@ class VerificationGuard(Guard):
                     if bad is not None:
                         return bad
                     bad = _check_deliverable_reading_field(
-                        ctx.tool_args.get("deliverable_reading"), self._task_text())
+                        ctx.tool_args.get("deliverable_reading"), self._task_text(),
+                        self._observed(ctx))
                     if bad is not None:
                         return bad
 
@@ -1090,6 +1183,27 @@ class VerificationGuard(Guard):
             return str(self._task_text_fn() or "")
         except Exception:
             return ""
+
+    def _observed(self, ctx) -> "str | None":
+        """Normalized corpus of this session's REAL tool-result text, or None.
+
+        This is the non-forgeable evidence source for probe/hedge claims: a claim
+        whose `observed` paste is not found here was never actually produced.
+        Prefers the append-only full log (survives eviction); falls back to the
+        live message window. Returns None only when BOTH sources are unavailable,
+        which makes the evidence check fail-open (never block on what we cannot
+        see).
+        """
+        full_log = None
+        try:
+            if self._full_log_fn is not None:
+                full_log = self._full_log_fn()
+        except Exception:
+            full_log = None
+        msgs = getattr(ctx, "messages", None)
+        if not msgs and not full_log:
+            return None
+        return _observed_corpus(msgs or [], full_log)
 
     def _step_status(self, step_id) -> str | None:
         """Return the status of a step in the active plan, or None if unknown.

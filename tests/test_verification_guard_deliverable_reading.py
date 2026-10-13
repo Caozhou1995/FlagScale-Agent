@@ -101,7 +101,8 @@ def test_grounded_reading_with_union_hedge_passes():
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED],
-              "hedge": {"shape": "union", "output": "...", "evidence": "$ cmd -> ok",
+              "hedge": {"shape": "union", "output": "...",
+                        "evidence": {"command": "cmd", "observed": "ok"},
                         "extras_direction": "ignored"}}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
@@ -129,7 +130,8 @@ def test_grounding_skipped_when_task_unavailable():
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [{"reading": "r", "source": "NOT IN TASK", "acceptance_test": "x"}],
-              "hedge": {"shape": "union", "output": "a", "evidence": "b",
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": "o"},
                         "extras_direction": "ignored"}}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
@@ -141,7 +143,8 @@ def test_missing_acceptance_test_blocks():
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [{"reading": "r", "source": "Do not alter the formatting"}],
-              "hedge": {"shape": "union", "output": "a", "evidence": "b",
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": "o"},
                         "extras_direction": "ignored"}}
         v = guard.check_pre(_ctx(dr))
         assert v is not None and v.reason == "deliverable_reading_malformed"
@@ -156,7 +159,8 @@ def test_union_under_penalized_blocks():
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED],
-              "hedge": {"shape": "union", "output": "a", "evidence": "b",
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": "o"},
                         "extras_direction": "penalized"}}
         v = guard.check_pre(_ctx(dr))
         assert v is not None and v.reason == "hedge_shape_mismatch"
@@ -171,7 +175,8 @@ def test_intersection_under_ignored_passes():
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED],
-              "hedge": {"shape": "intersection", "output": "a", "evidence": "b",
+              "hedge": {"shape": "intersection", "output": "a",
+                        "evidence": {"command": "c", "observed": "o"},
                         "extras_direction": "ignored"}}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
@@ -220,9 +225,11 @@ def test_none_shape_complete_passes():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED], "hedge": {"shape": "none"},
               "if_none": {"why_intersection_empty": "mutually exclusive bases",
+                          "union_attempt": {"command": "c", "observed": "o"},
                           "readings_rejected": [{"reading": "flat offset",
                                                  "source": "Do not alter the formatting",
-                                                 "evidence": "ref output uses VA"}],
+                                                 "evidence": {"command": "c",
+                                                              "observed": "o"}}],
                           "bet_on": "seg VA", "bet_loses_when": "grader uses flat",
                           "why_safe": "ref proves VA"}}
         assert guard.check_pre(_ctx(dr)) is None
@@ -238,12 +245,13 @@ def test_rejected_without_evidence_blocks():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED], "hedge": {"shape": "none"},
               "if_none": {"why_intersection_empty": "exclusive",
+                          "union_attempt": {"command": "c", "observed": "o"},
                           "readings_rejected": [{"reading": "flat offset",
                                                  "source": "Do not alter the formatting"}],
                           "bet_on": "seg VA", "bet_loses_when": "flat",
                           "why_safe": "ref"}}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "hedge_unproven"
+        assert v is not None and v.reason == "hedge_rejection_unobserved"
     finally:
         shutil.rmtree(d)
 
@@ -256,9 +264,11 @@ def test_rejected_ungrounded_blocks():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED], "hedge": {"shape": "none"},
               "if_none": {"why_intersection_empty": "exclusive",
+                          "union_attempt": {"command": "c", "observed": "o"},
                           "readings_rejected": [{"reading": "flat offset",
                                                  "source": "INVENTED SOURCE",
-                                                 "evidence": "ref"}],
+                                                 "evidence": {"command": "c",
+                                                              "observed": "o"}}],
                           "bet_on": "seg VA", "bet_loses_when": "flat",
                           "why_safe": "ref"}}
         v = guard.check_pre(_ctx(dr))
@@ -280,5 +290,152 @@ def test_batch_done_requires_field():
                            override_reason="rechecked each done step")
         v = guard.check_pre(ctx)
         assert v is not None and v.reason == "deliverable_reading_missing"
+    finally:
+        shutil.rmtree(d)
+
+
+# --- observed-evidence arms: a claim must paste text the harness can find in the
+#     session's REAL tool results; an asserted-but-never-run falsifier is blocked.
+
+def _ctx_obs(dr, msgs, verification=("proof A1",)):
+    return GuardContext(
+        tool_name="plan_update",
+        tool_args={"action": "step_done", "step_id": 1,
+                   "verification": list(verification),
+                   "convention": {"name": "none"},
+                   "deliverable_reading": dr},
+        messages=msgs,
+    )
+
+
+def _corpus(text):
+    return [{"role": "tool", "content": text}]
+
+
+OBSERVED_LINE = "found 698 addresses coverage 92.9%"
+
+
+def test_union_hedge_with_observed_evidence_passes():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "...",
+                        "evidence": {"command": "python -c c",
+                                     "observed": OBSERVED_LINE},
+                        "extras_direction": "ignored"}}
+        assert guard.check_pre(_ctx_obs(dr, _corpus("x\n" + OBSERVED_LINE + "\ny"))) is None
+    finally:
+        shutil.rmtree(d)
+
+
+def test_union_hedge_with_fabricated_evidence_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "...",
+                        "evidence": {"command": "c",
+                                     "observed": "a made-up line 12345 zzz"},
+                        "extras_direction": "ignored"}}
+        v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_evidence_unobserved"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_union_hedge_with_missing_evidence_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "...",
+                        "extras_direction": "ignored"}}
+        v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_evidence_unobserved"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_union_hedge_evidence_failopen_when_corpus_unavailable():
+    """No message window and no full log -> cannot check -> fail-open (no block)."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "...",
+                        "evidence": {"command": "c", "observed": "whatever"},
+                        "extras_direction": "ignored"}}
+        assert guard.check_pre(_ctx(dr)) is None
+    finally:
+        shutil.rmtree(d)
+
+
+def _none_dr(if_none):
+    return {"deliverable": "out.json", "grader_visible": False,
+            "readings": [GROUNDED],
+            "hedge": {"shape": "none", "output": None, "evidence": None,
+                      "extras_direction": "ignored"},
+            "if_none": if_none}
+
+
+def test_none_shape_requires_union_attempt():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        v = guard.check_pre(_ctx_obs(_none_dr({
+            "why_intersection_empty": "readings differ",
+            "readings_rejected": [{"reading": "r", "source": GROUNDED["source"],
+                                   "evidence": {"command": "c",
+                                                "observed": OBSERVED_LINE}}],
+            "bet_on": "a", "bet_loses_when": "b", "why_safe": "c"}),
+            _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_union_unattempted"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_none_shape_fabricated_union_attempt_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        v = guard.check_pre(_ctx_obs(_none_dr({
+            "why_intersection_empty": "readings differ",
+            "union_attempt": {"command": "c", "observed": "never ran zzz"},
+            "readings_rejected": [{"reading": "r", "source": GROUNDED["source"],
+                                   "evidence": {"command": "c",
+                                                "observed": OBSERVED_LINE}}],
+            "bet_on": "a", "bet_loses_when": "b", "why_safe": "c"}),
+            _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_union_unattempted"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_none_shape_with_observed_union_attempt_passes():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = _none_dr({
+            "why_intersection_empty": "readings differ",
+            "union_attempt": {"command": "python -c c", "observed": OBSERVED_LINE},
+            "readings_rejected": [{"reading": "r", "source": GROUNDED["source"],
+                                   "evidence": {"command": "c",
+                                                "observed": OBSERVED_LINE}}],
+            "bet_on": "a", "bet_loses_when": "b", "why_safe": "c"})
+        assert guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE))) is None
+    finally:
+        shutil.rmtree(d)
+
+
+def test_rejected_entry_fabricated_evidence_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        v = guard.check_pre(_ctx_obs(_none_dr({
+            "why_intersection_empty": "readings differ",
+            "union_attempt": {"command": "c", "observed": OBSERVED_LINE},
+            "readings_rejected": [{"reading": "r", "source": GROUNDED["source"],
+                                   "evidence": {"command": "c",
+                                                "observed": "invented qqq"}}],
+            "bet_on": "a", "bet_loses_when": "b", "why_safe": "c"}),
+            _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_rejection_unobserved"
     finally:
         shutil.rmtree(d)
