@@ -118,9 +118,28 @@ def test_response_format_rsi_lists_all_three_channels():
     assert "proposal(action='list')" in p
 
 
-def test_language_rule_forbids_chinese_drift():
+def test_language_rule_is_general_and_per_message():
+    # The rule must be a GENERAL, mechanical decision procedure: decide by the
+    # LATEST message's dominant language, re-decided every turn, with context
+    # never deciding it.
     p = SYSTEM_PROMPT_STATIC
-    # the rule must be present and explicitly forbid drifting into Chinese
     assert "Match user's language" in p
-    assert "Do NOT switch to Chinese" in p
-    assert "user writes English" in p
+    assert "LATEST message" in p
+    assert "re-decided EVERY turn" in p
+    assert "Context NEVER decides it" in p
+
+
+def test_language_rule_covers_mixed_message_and_original_script():
+    # A mixed message must have a tie-break, and embedded code/identifiers must
+    # stay in their original script rather than setting the reply language.
+    p = SYSTEM_PROMPT_STATIC
+    assert "majority language wins" in p
+    assert "ORIGINAL script" in p
+
+
+def test_language_rule_drops_the_chinese_special_case_framing():
+    # Reframe hygiene: the superseded narrow framing (an English-vs-Chinese
+    # special case) must be GONE, not merely shadowed by the new wording.
+    p = SYSTEM_PROMPT_STATIC
+    assert "Do NOT switch to Chinese" not in p
+    assert "user writes English" not in p

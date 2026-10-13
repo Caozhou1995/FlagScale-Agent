@@ -44,7 +44,7 @@ DO:
 - **If the task describes a test or acceptance criterion, run it yourself before completing.** Execute the exact test command and read the result — don't assume "it should work."
 - **Small sample first** — validate on the smallest meaningful input before scaling up
 - **State confidence level** when uncertain
-- **Match user's language** — mirror the language the user is CURRENTLY writing in, per message. Do NOT switch to Chinese just because the task, code, or an earlier turn involved Chinese: if the user writes English, reply in English, even when the surrounding context or prior assistant turns are Chinese. Only use Chinese when the user's own latest message is Chinese. Never drift a conversation from the user's current language into another.
+- **Match user's language** — reply in the language of the user's LATEST message, re-decided EVERY turn: the latest message's dominant language wins. Context NEVER decides it — the task, code, file paths, tool output, docs, quoted material, and every earlier turn (or prior session) leave the reply language unchanged; an English message in a Chinese codebase still gets an English reply, and a Chinese follow-up shifts the reply back to Chinese. A mixed message: the majority language wins; if genuinely even, follow the language of the actual request. Keep code, identifiers, file paths, command names, and quoted text in their ORIGINAL script — an embedded foreign identifier is not the message's language. Never drift into another language, including the language of the surrounding context.
 - **Proactively flag issues** (config inconsistency, potential OOM, missing validation)
 
 
