@@ -210,6 +210,20 @@ done, you re-checked the result against what that step was supposed to satisfy.
 If a step deserves real evidence, mark it via plan_update(step_done, verification=[...])
 individually rather than folding it into a batch."""
 
+_COMPLETION_WITH_UNFINISHED_STEPS = """[VerificationGuard] You are declaring the task complete while plan step(s) {steps} are still open.
+
+A plan marks the checkpoints where your results were to be verified. Completing with steps
+unfinished skips the record that shows each result was checked against what it was meant to
+satisfy — the same obligation plan_update(action="complete") already refuses to skip.
+
+Do ONE of these, then complete again:
+  • Close the steps: plan_update(action="step_done", step_id=<n>, verification=[...]) for each.
+    That call carries the fixed convention / deliverable_reading declarations — the record of
+    the decisive reading you shipped under. Mark a genuinely-obsolete step skipped instead.
+  • If the remaining steps truly do not apply, re-issue this completion with an
+    "_override_reason" naming which steps you are abandoning and why that is safe.
+"""
+
 _STEP_DONE_RECHECK_REMINDER = """[VerificationGuard] Before this step is marked done — check your premises once.
 
 The last point where a wrong turn is cheap to catch. Verification is not
@@ -979,6 +993,39 @@ class VerificationGuard(Guard):
         # the retained plan step_done evidence gate (Timing 1 below), so the
         # terminal completion gates are removed.
 
+        # Completion-boundary arm: a text-only [TASK_COMPLETE] must obey the same
+        # closure rule plan_update(action="complete") already enforces
+        # (plan.py: "Cannot complete plan: N step(s) not finished"). Without this
+        # the two completion routes are inconsistent: an agent under deadline
+        # pressure can skip every plan_update entirely and declare done, so the
+        # fixed convention / deliverable_reading record — the declaration of the
+        # decisive reading it shipped under — is never written. The gate is
+        # reachable two ways, matching the existing plan_update route: either
+        # close the steps (each step_done then runs Timing 1's fixed-field check)
+        # or override with a claim; both make the reason explicit.
+        #
+        # Fired ONLY on the completion-path consultation: tool_name=="" AND the
+        # sentinel came from THIS iteration's fresh LLM output
+        # (llm_responded=True). The top-of-loop check_pre also runs with
+        # tool_name=="" every iteration to catch stale completions out of
+        # history; requiring llm_responded keeps THIS arm off that stale scan.
+        if ctx.tool_name == "" and ctx.llm_responded:
+            # Only a [TASK_COMPLETE] claims the work is DONE; [NEED_USER_INPUT]
+            # is the opposite (the agent is stuck and asking) and must never be
+            # blocked by a closure rule. Distinguish via the trailing sentinel on
+            # the fresh assistant text.
+            if trailing_sentinel((ctx.assistant_text or "").rstrip()) == "[TASK_COMPLETE]":
+                unfinished = self._unfinished_steps()
+                if unfinished and not ctx.override_reason.strip():
+                    return GuardVerdict.block(
+                        message=_COMPLETION_WITH_UNFINISHED_STEPS.format(
+                            steps=", ".join(str(s) for s in unfinished),
+                        ),
+                        reason="completion_with_unfinished_steps",
+                        category="verification_required",
+                    )
+            return None
+
         # Timing 0: acceptance is frozen once a step leaves "pending".
         # Once implementation has begun, letting the criteria change means the
         # standard can be contaminated by the outcome — verification would no
@@ -1204,6 +1251,29 @@ class VerificationGuard(Guard):
         if not msgs and not full_log:
             return None
         return _observed_corpus(msgs or [], full_log)
+
+    def _unfinished_steps(self) -> list:
+        """Return the ids of steps in the active plan NOT yet done/skipped.
+
+        Mirrors _step_status's permissive contract: no plan or a failed lookup
+        yields [] so the completion arm does not block when state is unknown.
+        A "pending" step that was never started COUNTS as unfinished — the same
+        rule plan_update(action="complete") already enforces (plan.py refuses on
+        any status not in done/skipped). Blocking here is therefore consistent
+        with the tool route, not a new obligation.
+        """
+        if not self._plan:
+            return []
+        try:
+            plan_data = self._plan.get_active()
+            if not plan_data:
+                return []
+            return [
+                s.get("id") for s in plan_data.get("steps", [])
+                if s.get("status") not in ("done", "skipped")
+            ]
+        except Exception:
+            return []
 
     def _step_status(self, step_id) -> str | None:
         """Return the status of a step in the active plan, or None if unknown.
