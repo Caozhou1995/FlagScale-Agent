@@ -119,6 +119,40 @@ class PlanUpdateTool(Tool):
                     "forbidden)."
                 ),
             },
+            "deliverable_reading": {
+                "type": "object",
+                "description": (
+                    "REQUIRED on EVERY step_done (fixed field — not optional). State "
+                    "whether THIS step emits a graded artifact and, when the grader is "
+                    "NOT visible, the readings you produced against. No silent omission: "
+                    "pass {\"deliverable\": \"none\"} when this step emits no graded "
+                    "artifact. When it does emit one and you CAN run the grader, pass "
+                    "{\"deliverable\": \"<path>\", \"grader_visible\": true}. When it does "
+                    "and the grader is NOT visible — the case this exists for — you MUST "
+                    "enumerate the readings the task admits, ground each in the task text, "
+                    "and CONSTRUCT a hedge (or prove none exists): "
+                    "{\"deliverable\": \"<path>\", \"grader_visible\": false, "
+                    "\"readings\": [{\"reading\": ..., \"source\": \"<VERBATIM quote from "
+                    "the task text>\", \"acceptance_test\": \"<command deciding acceptance "
+                    "under it>\"}], \"hedge\": {\"shape\": \"union|intersection|none\", "
+                    "\"output\": <for union/intersection: the REAL output safe under EVERY "
+                    "reading (a string); for none: None>, \"evidence\": <for "
+                    "union/intersection: the REAL command + raw output proving it; for "
+                    "none: None>, \"extras_direction\": "
+                    "\"ignored|penalized\"}, \"if_none\": {\"why_intersection_empty\": ..., "
+                    "\"readings_rejected\": [{\"reading\": ..., \"evidence\": \"<independent "
+                    "artifact that rejected it>\"}], \"bet_on\": ..., \"bet_loses_when\": ..., "
+                    "\"why_safe\": ...}}. Rules the guard enforces: each reading's `source` "
+                    "must appear VERBATIM in the task text (an ungrounded reading is "
+                    "blocked — the reading must come from the task, not invention); a "
+                    "union hedge is valid ONLY under extras_direction=ignored, an "
+                    "intersection ONLY under penalized; hedge=union|intersection needs a "
+                    "REAL output + evidence; hedge=none needs if_none with a real "
+                    "why_intersection_empty, a non-empty readings_rejected list (each with "
+                    "INDEPENDENT evidence — never suspicion), and real bet_on/"
+                    "bet_loses_when/why_safe. Missing field = malformed = blocked."
+                ),
+            },
             "acceptance": {
                 "type": "array",
                 "items": {"type": "string"},

@@ -34,6 +34,7 @@ def _ctx(convention, verification=("proof A1",)):
             "action": "step_done",
             "step_id": 1,
             "verification": list(verification),
+            "deliverable_reading": {"deliverable": "none"},
             "convention": convention,
         },
     )
@@ -235,6 +236,7 @@ def test_no_acceptance_still_needs_override_reason():
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={"action": "step_done", "step_id": 1,
+                       "deliverable_reading": {"deliverable": "none"},
                        "convention": {"name": "none"}},
         )
         v = guard.check_pre(ctx)

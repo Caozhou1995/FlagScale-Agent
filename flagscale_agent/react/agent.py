@@ -428,7 +428,7 @@ class WorkerAgent:
         # Verification discipline guard — now keeps ONLY the plan step_done
         # evidence gate; the terminal completion gates moved into the plan's
         # fixed review step (tools/plan_create.py). Re-enabled.
-        guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals))
+        guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals, task_text_fn=lambda: self._mech_original_task() + "\n\n" + self._mech_last_user_turn()))
 
         deps = KernelDeps(
             provider=self.provider,

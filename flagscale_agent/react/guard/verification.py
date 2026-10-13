@@ -536,6 +536,308 @@ def _check_convention_field(conv):
     return None
 
 
+# ---- Deliverable reading-analysis: forces a CONSTRUCTED reading of the graded
+# output at the decision point (the step that emits the graded artifact) ----
+# The failure this closes: under an INVISIBLE grader the agent picks ONE reading
+# of the graded output (e.g. "pack by file offset" vs "pack by segment VA"),
+# self-verifies against its OWN oracle, and ships — because nothing forced it to
+# ENUMERATE the readings the task admits and CONSTRUCT an output safe under all
+# of them (or prove none exists with independent evidence). The convention gate
+# above covers the step's technical convention; it does NOT force the
+# grader-acceptance READING.
+#
+# The field is FIXED and REQUIRED on every step_done (no marker, no regex, no
+# opt-in — a silent omission is impossible; "none" is an explicit owned claim):
+#   {"deliverable": "none"}                            # no graded artifact
+#   {"deliverable": "<path>", "grader_visible": true}  # visible -> just run it
+#   {"deliverable": "<path>", "grader_visible": false,
+#    "readings": [{"reading": ..., "source": "<verbatim task quote>",
+#                  "acceptance_test": "<cmd deciding acceptance under it>"}],
+#    "hedge": {"shape": union|intersection|none, "output": ..., "evidence": ...,
+#              "extras_direction": ignored|penalized},
+#    "if_none": {"why_intersection_empty": ...,
+#                "readings_rejected": [{"reading":..., "evidence":...}],
+#                "bet_on": ..., "bet_loses_when": ..., "why_safe": ...}}
+# Each reading's `source` must appear VERBATIM in the task text (grounding: the
+# reading must come from the task, not invention). A union hedge is valid only
+# under extras=ignored; intersection only under extras=penalized. If no hedge
+# exists the agent must name the rejected readings WITH independent evidence.
+_DELIVERABLE_READING_MISSING = """[VerificationGuard] Every step_done must carry the fixed `deliverable_reading` field.
+
+State, on the record, whether THIS step emits a graded artifact and — when the
+grader is NOT visible — the readings you produced against. This is mandatory on
+EVERY step_done (a silent omission is impossible; `{"deliverable": "none"}` is
+an explicit owned claim). One fixed shape:
+
+  # this step emits no graded artifact:
+  deliverable_reading={"deliverable": "none"}
+
+  # this step emits a graded artifact and the grader IS visible — you can run it:
+  deliverable_reading={"deliverable": "<path>", "grader_visible": true}
+
+  # this step emits a graded artifact and the grader is NOT visible — you MUST
+  # enumerate the readings the task admits, ground each in the task text, and
+  # CONSTRUCT a hedge (or prove none exists):
+  deliverable_reading={
+    "deliverable": "<path>",
+    "grader_visible": false,
+    "readings": [{"reading": "<one defensible reading>",
+                  "source": "<verbatim quote from the task text>",
+                  "acceptance_test": "<command that decides acceptance under it>"}],
+    "hedge": {"shape": "union|intersection|none", "output": "<for union/intersection: the REAL output safe under EVERY reading; for none: None>",
+              "evidence": "<for union/intersection: the REAL command + raw output proving it; for none: None>",
+              "extras_direction": "ignored|penalized"},
+    "if_none": {"why_intersection_empty": "<why no single output can satisfy all>",
+                "readings_rejected": [{"reading": "<a reading you dropped>", "evidence": "<independent artifact that rejected it>"}],
+                "bet_on": "<the reading you bet on>", "bet_loses_when": "<world-state where it loses>",
+                "why_safe": "<why betting is safe>"}
+  }
+
+Missing field = malformed = BLOCKED. See the spec for the sub-rules."""
+
+_DELIVERABLE_READING_MALFORMED = """[VerificationGuard] The `deliverable_reading` declaration is malformed.
+
+`deliverable_reading` must be either `{"deliverable": "none"}` (explicit
+not-applicable), or a structured object naming the graded artifact:
+  • "deliverable": a real path/name, or the literal "none";
+  • "grader_visible": required and must be a real boolean (true|false);
+       - true  -> the analysis is skipped; run the grader instead.
+       - false -> "readings" AND "hedge" become mandatory (see below).
+  • "readings": non-empty list; every entry needs a real "reading", a real
+       "source" (a VERBATIM quote from the task text — the reading must come
+       from the task, not invention), and a real "acceptance_test" (a command
+       that decides whether an output is accepted under that reading).
+  • "hedge": object with "shape" one of union|intersection|none. For
+       union/intersection: a real "output" + real "evidence" + "extras_direction"
+       (union valid only under "ignored"; intersection only under "penalized").
+       For "none": "if_none" is required.
+  • "if_none": object with a real "why_intersection_empty", a NON-EMPTY
+       "readings_rejected" list (each a real "reading" + real "evidence" — an
+       independent artifact, not suspicion), and real bet_on/bet_loses_when/
+       why_safe.
+Re-issue the step_done with a corrected `deliverable_reading` field."""
+
+_READING_NOT_GROUNDED = """[VerificationGuard] A reading is NOT grounded in the task text.
+
+The `source` of each reading must appear VERBATIM (whitespace/case-insensitive)
+in the task statement. A reading whose source you cannot quote from the task is
+not one of the task's readings — it is invention, and an invented reading cannot
+be the basis for a hedge or a bet.
+
+Re-issue with "source" set to an exact quote from the task text that supports the
+reading (or drop the reading)."""
+
+_HEDGE_UNPROVEN = """[VerificationGuard] The hedge is not PROVEN.
+
+Under an invisible grader you must either CONSTRUCT a single output safe under
+every reading, or prove none exists — by introspection you cannot.
+
+  • shape "union"/"intersection": "output" and "evidence" must be REAL (the
+    actual output that lies in every reading's acceptance set, plus the command
+    and its raw output that shows it does), and "extras_direction" must be a
+    real ignored|penalized. Shape↔direction must match: union is a hedge ONLY
+    when extras are IGNORED; intersection is valid when extras are PENALIZED.
+  • shape "none": you must supply "if_none" with a real why_intersection_empty,
+    a NON-EMPTY readings_rejected list (each rejected reading carrying an
+    INDEPENDENT evidence artifact — never suspicion), and real bet_on/
+    bet_loses_when/why_safe. An introspected "no hedge possible" is a
+    hypothesis: a hedge is empty only when shown so under BOTH shapes.
+
+Re-issue with a PROVEN hedge, or a complete "if_none" proving emptiness."""
+
+
+def _normalize_for_grounding(s: str) -> str:
+    """Whitespace-collapsed, lowercased form for verbatim grounding checks."""
+    return " ".join(str(s).split()).lower()
+
+
+def _task_text_groundable(task_text: str) -> bool:
+    """True when the task text can ground a verbatim quote.
+
+    Fail-open when the harness could not recover the task text ("(unavailable…")
+    or when it was truncated at the cap ("…[truncated]"): the guard must not
+    block a reading it simply cannot check against. Structural checks still run.
+    """
+    t = (task_text or "").strip()
+    if not t:
+        return False
+    if "(unavailable" in t:
+        return False
+    if "...[truncated]" in t:
+        return False
+    return True
+
+
+def _check_deliverable_reading_field(dr, task_text: str = ""):
+    """Unconditional structured gate for the fixed `deliverable_reading` field.
+
+    `dr` is the raw value of ``tool_args['deliverable_reading']``. Returns a
+    GuardVerdict.block when missing/malformed, else None. Mechanical only: no
+    regex, no marker; every step_done carries the field. The grading READING is
+    the agent's to CONSTRUCT — this checks the construction exists and is
+    grounded, not that it is semantically right (honest ceiling).
+    """
+    if dr is None:
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MISSING,
+            reason="deliverable_reading_missing",
+            category="verification_required",
+        )
+    if isinstance(dr, str):
+        # The string form is the explicit not-applicable token — ONLY the
+        # literal "none" (any case). A blank/"n/a"/"null" string is NOT an
+        # owned declaration; it must NAME the deliverable or be malformed.
+        if dr.strip().lower() == "none":
+            return None
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MALFORMED,
+            reason="deliverable_reading_malformed",
+            category="verification_required",
+        )
+    if not isinstance(dr, dict):
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MALFORMED,
+            reason="deliverable_reading_malformed",
+            category="verification_required",
+        )
+    deliverable = dr.get("deliverable")
+    if isinstance(deliverable, str) and deliverable.strip().lower() == "none":
+        return None
+    if not _is_real_str(deliverable):
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MALFORMED,
+            reason="deliverable_reading_malformed",
+            category="verification_required",
+        )
+    gv = dr.get("grader_visible")
+    if not isinstance(gv, bool):
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MALFORMED,
+            reason="deliverable_reading_malformed",
+            category="verification_required",
+        )
+    if gv:
+        return None
+    readings = dr.get("readings")
+    if not isinstance(readings, list) or not readings:
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MALFORMED,
+            reason="deliverable_reading_malformed",
+            category="verification_required",
+        )
+    groundable = _task_text_groundable(task_text)
+    for r in readings:
+        if not isinstance(r, dict):
+            return GuardVerdict.block(
+                message=_DELIVERABLE_READING_MALFORMED,
+                reason="deliverable_reading_malformed",
+                category="verification_required",
+            )
+        if not (_is_real_str(r.get("reading"))
+                and _is_real_str(r.get("source"))
+                and _is_real_str(r.get("acceptance_test"))):
+            return GuardVerdict.block(
+                message=_DELIVERABLE_READING_MALFORMED,
+                reason="deliverable_reading_malformed",
+                category="verification_required",
+            )
+        if groundable and (
+            _normalize_for_grounding(r.get("source"))
+            not in _normalize_for_grounding(task_text)
+        ):
+            return GuardVerdict.block(
+                message=_READING_NOT_GROUNDED,
+                reason="reading_not_grounded",
+                category="verification_required",
+            )
+    hedge = dr.get("hedge")
+    if not isinstance(hedge, dict):
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MALFORMED,
+            reason="deliverable_reading_malformed",
+            category="verification_required",
+        )
+    shape = str(hedge.get("shape") or "").strip().lower()
+    if shape in ("union", "intersection"):
+        if not (_is_real_str(hedge.get("output"))
+                and _is_real_str(hedge.get("evidence"))):
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_unproven",
+                category="verification_required",
+            )
+        extras = str(hedge.get("extras_direction") or "").strip().lower()
+        if extras not in ("ignored", "penalized"):
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_unproven",
+                category="verification_required",
+            )
+        if shape == "union" and extras == "penalized":
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_shape_mismatch",
+                category="verification_required",
+            )
+    elif shape == "none":
+        if_none = dr.get("if_none")
+        if not isinstance(if_none, dict):
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_unproven",
+                category="verification_required",
+            )
+        if not _is_real_str(if_none.get("why_intersection_empty")):
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_unproven",
+                category="verification_required",
+            )
+        rej = if_none.get("readings_rejected")
+        if not isinstance(rej, list) or not rej:
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_unproven",
+                category="verification_required",
+            )
+        for e in rej:
+            if not (isinstance(e, dict)
+                    and _is_real_str(e.get("reading"))
+                    and _is_real_str(e.get("source"))
+                    and _is_real_str(e.get("evidence"))):
+                return GuardVerdict.block(
+                    message=_HEDGE_UNPROVEN,
+                    reason="hedge_unproven",
+                    category="verification_required",
+                )
+            # A rejected candidate carries the SAME provenance requirement as
+            # an accepted reading: its source must quote the task verbatim, so a
+            # fabricated rejection cannot manufacture an empty intersection.
+            if groundable and (
+                _normalize_for_grounding(e.get("source"))
+                not in _normalize_for_grounding(task_text)
+            ):
+                return GuardVerdict.block(
+                    message=_READING_NOT_GROUNDED,
+                    reason="reading_not_grounded",
+                    category="verification_required",
+                )
+        for k in ("bet_on", "bet_loses_when", "why_safe"):
+            if not _is_real_str(if_none.get(k)):
+                return GuardVerdict.block(
+                    message=_HEDGE_UNPROVEN,
+                    reason="hedge_unproven",
+                    category="verification_required",
+                )
+    else:
+        return GuardVerdict.block(
+            message=_DELIVERABLE_READING_MALFORMED,
+            reason="deliverable_reading_malformed",
+            category="verification_required",
+        )
+    return None
+
+
 class VerificationGuard(Guard):
     """Requires verification evidence when marking steps complete.
     
@@ -553,9 +855,13 @@ class VerificationGuard(Guard):
     name = "verification"
     priority = 55
     
-    def __init__(self, plan=None, proposals=None):
+    def __init__(self, plan=None, proposals=None, task_text_fn=None):
         self._plan = plan
         self._proposals = proposals
+        # Callable returning the session's original task text verbatim (the
+        # grounding source for a deliverable_reading's `source` quotes). None or
+        # an unavailable/truncated result => grounding is skipped (fail-open).
+        self._task_text_fn = task_text_fn
         self._post_recovery = False
         self._recovery_reminded = False
         self._acceptance_guidance_given = False
@@ -667,6 +973,10 @@ class VerificationGuard(Guard):
                 bad = _check_convention_field(ctx.tool_args.get("convention"))
                 if bad is not None:
                     return bad
+                bad = _check_deliverable_reading_field(
+                    ctx.tool_args.get("deliverable_reading"), self._task_text())
+                if bad is not None:
+                    return bad
                 return None
 
             # Timing 1b: batch action marking any step done bypasses the per-step
@@ -717,6 +1027,10 @@ class VerificationGuard(Guard):
                     bad = _check_convention_field(ctx.tool_args.get("convention"))
                     if bad is not None:
                         return bad
+                    bad = _check_deliverable_reading_field(
+                        ctx.tool_args.get("deliverable_reading"), self._task_text())
+                    if bad is not None:
+                        return bad
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:
@@ -761,6 +1075,21 @@ class VerificationGuard(Guard):
                     if isinstance(s, dict) and s.get("acceptance"):
                         return True
         return False
+
+    def _task_text(self) -> str:
+        """Original task text for grounding a deliverable_reading's `source`.
+
+        Reads through the caller-supplied callable (agent.py binds
+        _mech_original_task). Fail-open: any error, or a None/absent callable,
+        yields "" and the grounding check is skipped — the guard must not block
+        a reading it cannot check.
+        """
+        if self._task_text_fn is None:
+            return ""
+        try:
+            return str(self._task_text_fn() or "")
+        except Exception:
+            return ""
 
     def _step_status(self, step_id) -> str | None:
         """Return the status of a step in the active plan, or None if unknown.
