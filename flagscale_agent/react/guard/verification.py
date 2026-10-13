@@ -1012,11 +1012,25 @@ class VerificationGuard(Guard):
         if ctx.tool_name == "" and ctx.llm_responded:
             # Only a [TASK_COMPLETE] claims the work is DONE; [NEED_USER_INPUT]
             # is the opposite (the agent is stuck and asking) and must never be
-            # blocked by a closure rule. Distinguish via the trailing sentinel on
-            # the fresh assistant text.
-            if trailing_sentinel((ctx.assistant_text or "").rstrip()) == "[TASK_COMPLETE]":
+            # blocked by a closure rule. Mirror the kernel's EXACT completion
+            # predicate (kernel.py:378: `trailing == "[TASK_COMPLETE]" or
+            # has_override_completion(text)`) — a text-only completion has two
+            # shapes, and testing only the trailing one would leak the override
+            # form (marker + inline `_override_reason:` line, where text follows
+            # the marker so trailing_sentinel returns None).
+            _text = (ctx.assistant_text or "").rstrip()
+            _is_task_complete = (
+                trailing_sentinel(_text) == "[TASK_COMPLETE]"
+                or has_override_completion(_text)
+            )
+            if _is_task_complete:
                 unfinished = self._unfinished_steps()
-                if unfinished and not ctx.override_reason.strip():
+                # Release through the SAME override bar the tool route uses
+                # (registry -> owner.accept_override; base default = reason
+                # longer than 5 chars), so the text and tool completion routes
+                # enforce an identically strong bar rather than any non-empty
+                # string.
+                if unfinished and not self.accept_override(ctx.override_reason, ctx):
                     return GuardVerdict.block(
                         message=_COMPLETION_WITH_UNFINISHED_STEPS.format(
                             steps=", ".join(str(s) for s in unfinished),
@@ -1269,7 +1283,7 @@ class VerificationGuard(Guard):
             if not plan_data:
                 return []
             return [
-                s.get("id") for s in plan_data.get("steps", [])
+                s.get("id", i) for i, s in enumerate(plan_data.get("steps", []))
                 if s.get("status") not in ("done", "skipped")
             ]
         except Exception:

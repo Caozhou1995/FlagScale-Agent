@@ -120,3 +120,59 @@ def test_tool_path_arm_inert():
         assert g.check_pre(_ctx("ok", tool_name="plan_update")) is None
     finally:
         _close(d)
+
+
+# ── override-FORM completion (kernel's SECOND completion shape) ──────────────
+# The kernel accepts `trailing == "[TASK_COMPLETE]" or has_override_completion(t)`
+# (kernel.py:378). The override form has text after the marker, so trailing_sentinel
+# returns None; the arm must test the SAME predicate or this form leaks.
+
+def test_tc_override_form_with_reason_releases():
+    """Marker + inline _override_reason line with a substantive reason releases.
+
+    On the real path the kernel parses the inline reason (kernel._extract_text_override)
+    and puts it on ctx.override_reason before consulting the guard, so the arm sees a
+    populated reason. Here we supply that as the override kwarg."""
+    d, plan = _plan_with_statuses(["pending"])
+    try:
+        g = VerificationGuard(plan=plan)
+        text = "[TASK_COMPLETE]\n_override_reason: remaining step is obsolete now"
+        assert g.check_pre(_ctx(text, override="remaining step is obsolete now")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_override_form_empty_reason_blocks():
+    """Marker + _override_reason with NO text must still block (the leak F1)."""
+    d, plan = _plan_with_statuses(["pending"])
+    try:
+        g = VerificationGuard(plan=plan)
+        for text in ("[TASK_COMPLETE]\n_override_reason:",
+                     "[TASK_COMPLETE]\n_override_reason:   "):
+            v = g.check_pre(_ctx(text))
+            assert v is not None and v.reason == "completion_with_unfinished_steps"
+    finally:
+        _close(d)
+
+
+def test_tc_override_bar_matches_tool_route():
+    """A too-short override (<6 chars) must NOT release the text route — the same
+    bar accept_override applies on the tool route."""
+    d, plan = _plan_with_statuses(["pending"])
+    try:
+        g = VerificationGuard(plan=plan)
+        v = g.check_pre(_ctx("[TASK_COMPLETE]", override="ok"))
+        assert v is not None and v.reason == "completion_with_unfinished_steps"
+    finally:
+        _close(d)
+
+
+def test_unfinished_steps_id_fallback():
+    """A step dict without an 'id' must not render 'None' in the block message."""
+    d, plan = _plan_with_statuses(["pending"])
+    try:
+        g = VerificationGuard(plan=plan)
+        ids = g._unfinished_steps()
+        assert all(i is not None for i in ids), ids
+    finally:
+        _close(d)
