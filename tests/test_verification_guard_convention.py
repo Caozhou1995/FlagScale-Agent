@@ -138,3 +138,56 @@ def test_multiline_entry_with_trailing_text_still_matches():
         assert guard.check_pre(_ctx([multi])) is None
     finally:
         shutil.rmtree(d)
+
+
+# --- regression tests for boundaries the first review pass exposed -----------
+
+
+def test_pipe_in_probe_command_passes():
+    """A REAL probe command often contains a shell pipeline; the value must not
+    be truncated at the first `|` (regression: F5 false-reject)."""
+    d, guard = _guard_with_step(["convention-check: derived base"])
+    try:
+        line = ("convention-check: example=0x400000 | delivered=0x0 | conflict=yes | "
+                "probe=cat a.out | wc -l | probe_output=5")
+        assert guard.check_pre(_ctx([line])) is None
+    finally:
+        shutil.rmtree(d)
+
+
+def test_pipe_in_probe_output_passes():
+    """Raw probe output may itself contain `|` (e.g. `|`-separated fields)."""
+    d, guard = _guard_with_step(["convention-check: derived base"])
+    try:
+        line = ("convention-check: example=a | delivered=b | conflict=no | "
+                "probe=nm x | probe_output=0000 T foo | bar")
+        assert guard.check_pre(_ctx([line])) is None
+    finally:
+        shutil.rmtree(d)
+
+
+def test_conflict_yes_with_na_probe_blocks():
+    """`n/a` (not just literal `None`) must not satisfy the real-probe rule."""
+    d, guard = _guard_with_step(["convention-check: derived base"])
+    try:
+        line = ("convention-check: example=a | delivered=b | conflict=yes | "
+                "probe=n/a | probe_output=n/a")
+        v = guard.check_pre(_ctx([line]))
+        assert v is not None and v.action == "block"
+        assert v.reason == "convention_check_conflict_without_probe"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_duplicate_field_blocks():
+    """A repeated field must not let an empty first occurrence be overwritten
+    (regression: F6 empty-field bypass)."""
+    d, guard = _guard_with_step(["convention-check: derived base"])
+    try:
+        line = ("convention-check: example= | delivered=x | conflict=no | "
+                "probe=p | probe_output=o | example=a")
+        v = guard.check_pre(_ctx([line]))
+        assert v is not None and v.action == "block"
+        assert v.reason == "convention_check_duplicate_field"
+    finally:
+        shutil.rmtree(d)

@@ -235,6 +235,21 @@ The goal: avoid propagating stale assumptions into new work."""
 _CONVENTION_MARKER = "convention-check"
 _CONVENTION_FIELDS = ("example", "delivered", "conflict", "probe", "probe_output")
 _CONVENTION_LINE_RE = re.compile(r"convention-check[ \t]*:[ \t]*([^\n]*)", re.IGNORECASE)
+# Field bodies are delimited by the NEXT known field marker, NOT by a bare `|`,
+# so a field VALUE may itself contain `|` (a shell pipeline in `probe`, a raw
+# `|` in `probe_output`). Longest name first so `probe_output` never matches as
+# `probe`.
+_CONVENTION_FIELD_RE = re.compile(
+    r"(?:^|[ \t|])(probe_output|probe|example|delivered|conflict)[ \t]*=",
+    re.IGNORECASE,
+)
+# Spellings an agent might use to mean "no value". `None` is the ONLY legal
+# no-value token; any of these in probe/probe_output under conflict=yes means
+# the "probe must be real" rule is being evaded (a deliberate lie, which the
+# guard cannot and does not prevent — see honest ceiling above).
+_CONVENTION_NO_VALUE = frozenset(
+    {"none", "n/a", "na", "n.a.", "null", "nil", "-", "--", ""}
+)
 
 _CONVENTION_MISSING = """[VerificationGuard] This step is tagged `convention-check` but carries no declaration.
 
@@ -284,16 +299,29 @@ def _check_convention(acceptance, verification):
             reason="convention_check_missing",
             category="verification_required",
         )
+    # Split the body into fields by their NAME markers, so a value may itself
+    # contain `|` (a pipeline in `probe`, a raw `|` in `probe_output`).
+    marks = list(_CONVENTION_FIELD_RE.finditer(line))
     fields = {}
-    for part in line.split("|"):
-        if "=" not in part:
+    for i, mk in enumerate(marks):
+        key = mk.group(1).lower()
+        start = mk.end()
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(line)
+        val = line[start:end].strip().strip("|").strip()
+        if key in fields:
             return GuardVerdict.block(
                 message=_CONVENTION_MALFORMED,
-                reason="convention_check_malformed",
+                reason="convention_check_duplicate_field",
                 category="verification_required",
             )
-        k, v = part.split("=", 1)
-        fields[k.strip().lower()] = v.strip()
+        fields[key] = val
+    if not marks:
+        # No field markers at all — the line is not a `name=value` declaration.
+        return GuardVerdict.block(
+            message=_CONVENTION_MALFORMED,
+            reason="convention_check_malformed",
+            category="verification_required",
+        )
     for f in _CONVENTION_FIELDS:
         if f not in fields:
             return GuardVerdict.block(
@@ -316,8 +344,8 @@ def _check_convention(acceptance, verification):
             category="verification_required",
         )
     if conflict == "yes" and (
-        fields["probe"].lower() == "none"
-        or fields["probe_output"].lower() == "none"
+        fields["probe"].lower() in _CONVENTION_NO_VALUE
+        or fields["probe_output"].lower() in _CONVENTION_NO_VALUE
     ):
         return GuardVerdict.block(
             message=_CONVENTION_MALFORMED,
