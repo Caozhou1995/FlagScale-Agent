@@ -49,6 +49,14 @@ Design (single block, overridable):
 - accept_override demands the reason cite at least one of those reviewer
   task_ids: a bare re-emit of [TASK_COMPLETE] never releases it, and a generic
   "done" cannot stand in for having actually handled the named reviewer.
+- An accepted override is DURABLE: the named task_ids are persisted to
+  <session>/subagents/adjudicated.jsonl (spawn.record_adjudication) and
+  _live_reviewers filters them out on every later turn. Without this a
+  SETTLED-WITHOUT-REPORT reviewer — which has no terminal ledger status to
+  reach — would be re-listed on EVERY completion turn, forcing the agent to
+  re-pass an override forever (an infinite leash). The file, not an extra field
+  on the append-only spawned.jsonl, so recording an adjudication can never
+  rewrite the spawn registry.
 
 Fail-silent rules (a guard must never break the run):
 - No session_dir / registry unreadable -> silent.
@@ -65,7 +73,7 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 _BLOCK = (
     "[ReviewerFeedback] Task completion is gated: {n} reviewer-class worker(s) "
-    "spawned by THIS session are still un-finalized — {tasks}. A reviewer that "
+    "spawned by THIS session are still un-adjudicated — {tasks}. A reviewer that "
     "reports and is never read is not a check, just cost. For a REPORTED "
     "reviewer, poll_tasks(action='check', task_id=<id>) finalizes it (REPORTED "
     "-> DONE/REJECTED) and runs the acceptance predicates; READ its findings and "
@@ -75,7 +83,8 @@ _BLOCK = (
     "analysis often lives only in its worker.log; sweep that log, then override "
     "with _override_reason naming the reviewer task_id(s) you are abandoning and "
     "why the evidence you already hold (including anything recovered from the "
-    "log) is sufficient."
+    "log) is sufficient. An accepted override SETTLES the named reviewer "
+    "permanently — you will not be re-asked."
 )
 
 
@@ -122,7 +131,8 @@ class ReviewerFeedbackGuard(Guard):
         lookup fails (fail-silent).
         """
         try:
-            from flagscale_agent.react.multi_agent.spawn import read_session_spawns
+            from flagscale_agent.react.multi_agent.spawn import (
+                read_session_spawns, read_adjudications)
             from flagscale_agent.react.multi_agent.contract import (
                 ROLE_REVIEWER, ROLE_RE_REVIEWER)
             from flagscale_agent.react.multi_agent.ledger import (
@@ -136,6 +146,12 @@ class ReviewerFeedbackGuard(Guard):
         ledger = self._ledger_obj()
         if ledger is None:
             return []
+        # Task_ids this session has ALREADY adjudicated (released via a prior
+        # override). Persisted in <session>/subagents/adjudicated.jsonl so the
+        # release survives across turns AND across a process restart — without
+        # it a SETTLED-WITHOUT-REPORT reviewer is re-listed every completion
+        # turn forever (the ledger has no terminal status to move to).
+        adjudicated = read_adjudications(sd)
         out = []
         for rec in read_session_spawns(sd):
             role = rec.get("role") or ""
@@ -143,6 +159,8 @@ class ReviewerFeedbackGuard(Guard):
                 continue
             tid = rec.get("task_id")
             if not tid:
+                continue
+            if tid in adjudicated:
                 continue
             try:
                 trec = ledger.get(tid)
@@ -213,7 +231,27 @@ class ReviewerFeedbackGuard(Guard):
             # Nothing pending anymore (e.g. the parent polled it to terminal
             # between the block and the override turn): nothing to gate.
             return True
+        matched = []
         for tid, _ in live:
             if re.search(r"\b" + re.escape(tid) + r"\b", reason):
-                return True
-        return False
+                matched.append(tid)
+        if not matched:
+            return False
+        # Persist the adjudication so this explicit abandonment SETTLES the
+        # reviewer permanently: the next completion turn (and any process
+        # restart) reads it back and no longer lists the task_id. A write FAILURE
+        # must NOT be reported as success — the block message promises the agent
+        # it will not be re-asked, so if the marker did not land we reject the
+        # override and let the gate stand (fail-closed), rather than accept and
+        # silently re-block next turn.
+        try:
+            from flagscale_agent.react.multi_agent.spawn import (
+                record_adjudication, read_adjudications)
+            sd = self._session_dir()
+            for tid in matched:
+                record_adjudication(sd, tid)
+            persisted = read_adjudications(sd)
+        except Exception:
+            return False
+        # Only release if every named tid actually persisted.
+        return all(tid in persisted for tid in matched)

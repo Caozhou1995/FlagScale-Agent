@@ -33,6 +33,12 @@ _STEP_ID_RE = re.compile(r'(?:step[_\s]?)?#?(\d+)', re.IGNORECASE)
 
 def _parse_step_id(raw) -> int | None:
     """Parse step_id from various LLM formats: 1, "1", "step_1", "step 2", etc."""
+    # A bool IS an int in Python; reject it explicitly so the handler and the
+    # guard's `_normalize_step_id` agree. Otherwise `step_id=True` would mark
+    # step 1 done while the guard normalizes it to None (acceptance-less), a
+    # silent bypass of the Mode-1 acceptance-evidence gate.
+    if isinstance(raw, bool):
+        return None
     if isinstance(raw, int):
         return raw
     if isinstance(raw, float):
@@ -78,6 +84,41 @@ class PlanUpdateTool(Tool):
                 "items": {"type": "string"},
                 "description": "Verification evidence for step_done: what was checked, test results, output samples.",
             },
+            "convention": {
+                "type": "object",
+                "description": (
+                    "REQUIRED on EVERY step_done (fixed field — not optional). Declare "
+                    "the derived convention THIS step's output rests on (a base, a stride, "
+                    "a key space, a normalisation, a default, a serialisation) — or state "
+                    "explicitly that none does. The field has ONE fixed shape; the only "
+                    "thing you choose is `name`. If no derived convention governs the step, "
+                    "pass {\"name\": \"none\"} (an explicit not-applicable declaration — "
+                    "never omit the field). If one DOES govern the output, you MUST NAME it "
+                    "AND carry a FALSIFIER (a real probe OR a proved hedge) — a bare name "
+                    "with neither is blocked. Pass "
+                    "{\"name\": <the convention you derived>, "
+                    "\"example\": <task's example value or None>, "
+                    "\"delivered\": <your delivered value or None>, \"conflict\": "
+                    "\"yes\"|\"no\"|\"None\", \"probe\": <command or None>, "
+                    "\"probe_output\": <raw output or None>, \"hedge\": "
+                    "\"intersection\"|\"union\"|None, \"hedge_output\": <the single output "
+                    "that lies in EVERY reading's acceptance set, or None>, "
+                    "\"extras_direction\": \"ignored\"|\"penalized\"|None, \"rejected\": <a "
+                    "candidate reading you deleted/rejected or None>, \"rejected_evidence\": "
+                    "<independent artifact that justified the rejection, or None>}. There is "
+                    "NO `derived` boolean — the trigger is the name itself, so a step cannot "
+                    "be classified away from the gate. Rules: a named convention is "
+                    "admissible ONLY with (a) REAL probe + probe_output "
+                    "(a command + output that could have refuted the reading), OR (b) a proved "
+                    "hedge — hedge one of intersection|union, a REAL hedge_output, and "
+                    "extras_direction naming how the checker treats extra output (union is "
+                    "valid only when extras are IGNORED; intersection when they are "
+                    "PENALIZED). conflict=\"yes\" also requires REAL probe and probe_output; "
+                    "naming a `rejected` candidate requires a REAL `rejected_evidence` (an "
+                    "independent artifact — removing a candidate on suspicion alone is "
+                    "forbidden)."
+                ),
+            },
             "acceptance": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -100,6 +141,17 @@ class PlanUpdateTool(Tool):
                         "step_id": {"type": "integer"},
                         "status": {"type": "string", "enum": ["done", "doing", "skipped"]},
                         "notes": {"type": "string"},
+                        "verification": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Per-step evidence (required for a done item whose "
+                                "step has acceptance criteria — same bar as a single "
+                                "step_done). One entry per criterion, each carrying "
+                                "the observed value vs the criterion. Ignored for "
+                                "doing/skipped items."
+                            ),
+                        },
                     },
                     "required": ["step_id", "status"],
                 },
@@ -205,7 +257,10 @@ class PlanUpdateTool(Tool):
                     if status == "skipped":
                         self._plan.skip_step(sid, u.get("notes", ""))
                     else:
-                        self._plan.update_step(sid, status_map[status], u.get("notes", ""))
+                        self._plan.update_step(
+                            sid, status_map[status], u.get("notes", ""),
+                            verification=u.get("verification"),
+                        )
             else:
                 return f"ERROR: Unknown action '{action}'."
             # thinking may accompany any action (e.g. step_done + updated model).

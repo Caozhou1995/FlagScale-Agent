@@ -411,7 +411,7 @@ class WorkerAgent:
         # already held); far from the deadline it stays fully silent.
         guard_registry.register(ReviewerDeadlineGuard(stats_fn=self._task_budget_stats))
         # Reviewer feedback guard (completion-time gate): a reviewer-class child
-        # this session spawned that is still un-finalized blocks text-only
+        # this session spawned that is still un-adjudicated blocks text-only
         # [TASK_COMPLETE] — poll_tasks(check) it and fold its findings in first,
         # or override naming the reviewer task_id. Reads the per-session spawn
         # registry (spawn.record_spawn); the global ledger cannot scope to this

@@ -255,3 +255,101 @@ def test_override_accepts_reason_naming_task_id(env):
 def test_override_accepts_when_nothing_pending(env):
     # Nothing live anymore (parent already finalized between block and override).
     assert _guard(env).accept_override("reviewer handled already", _ctx()) is True
+
+
+# ── durable adjudication (no per-turn re-block) ──────────────────────────────
+
+def test_override_settles_reviewer_so_no_reblock(env):
+    # The core defect: a SETTLED-WITHOUT-REPORT reviewer has no terminal ledger
+    # status to reach, so without persistence the gate re-lists it EVERY turn.
+    # An accepted override must SETTLE it — the next check_pre is silent.
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    led.transition(c.id, "RUNNING")
+    led.transition(c.id, DEADLINE_MISSED)
+    record_spawn(env["session"], c.id, "reviewer")
+    g = _guard(env)
+    assert g.check_pre(_ctx()) is not None
+    assert g.accept_override(
+        f"abandoning reviewer {c.id} after sweeping its worker.log", _ctx()) is True
+    assert g.check_pre(_ctx()) is None  # no re-block
+
+
+def test_adjudication_is_durable_across_new_guard_instance(env):
+    # A fresh guard object (process-restart proxy) must read the persisted
+    # adjudication back — otherwise the release would not survive a restart.
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    led.transition(c.id, "RUNNING")
+    led.transition(c.id, TERMINATED)
+    record_spawn(env["session"], c.id, "reviewer")
+    _guard(env).accept_override(f"dropping {c.id}, evidence held", _ctx())
+    g2 = ReviewerFeedbackGuard(
+        session_dir_fn=lambda: env["session"], ledger=led)
+    assert g2.check_pre(_ctx()) is None
+
+
+def test_generic_override_does_not_persist_and_still_blocks(env):
+    # FALSIFIER: an override that does NOT name the task_id must neither be
+    # accepted nor persist any adjudication — the block must survive it.
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    led.transition(c.id, "RUNNING")
+    led.transition(c.id, DEADLINE_MISSED)
+    record_spawn(env["session"], c.id, "reviewer")
+    g = _guard(env)
+    assert g.accept_override("reviewer handled, moving on", _ctx()) is False
+    assert g.check_pre(_ctx()) is not None  # still gated
+    from flagscale_agent.react.multi_agent.spawn import read_adjudications
+    assert read_adjudications(env["session"]) == set()
+
+
+def test_adjudication_registry_roundtrip(tmp_path):
+    from flagscale_agent.react.multi_agent.spawn import (
+        record_adjudication, read_adjudications)
+    sd = str(tmp_path / "s")
+    assert read_adjudications(sd) == set()
+    record_adjudication(sd, "t1")
+    record_adjudication(sd, "t1")  # dedup
+    record_adjudication(sd, "t2")
+    assert read_adjudications(sd) == {"t1", "t2"}
+    assert read_adjudications(None) == set()
+    record_adjudication(None, "x")   # never raises
+    record_adjudication(sd, None)    # never raises
+
+
+def test_block_message_says_un_adjudicated(env):
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    led.transition(c.id, "RUNNING")
+    led.transition(c.id, DEADLINE_MISSED)
+    record_spawn(env["session"], c.id, "reviewer")
+    v = _guard(env).check_pre(_ctx())
+    assert "un-adjudicated" in v.message
+    assert "un-finalized" not in v.message
+
+
+def test_override_fails_closed_when_persistence_fails(env, monkeypatch):
+    # F1: the message promises "you will not be re-asked", so an override must
+    # NOT report success unless the adjudication actually PERSISTED. A write
+    # failure => reject the override (fail-closed) so the block does not vanish
+    # and silently re-appear, contradicting the promise.
+    led = env["ledger"]
+    c = _contract(env["session"], "rev", reviewer=True)
+    led.create(c)
+    led.transition(c.id, "RUNNING")
+    led.transition(c.id, DEADLINE_MISSED)
+    record_spawn(env["session"], c.id, "reviewer")
+    g = _guard(env)
+
+    def _boom(*a, **k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(
+        "flagscale_agent.react.multi_agent.spawn.record_adjudication", _boom)
+    assert g.accept_override(f"abandoning {c.id}", _ctx()) is False
+    assert g.check_pre(_ctx()) is not None  # still gated, not silently released

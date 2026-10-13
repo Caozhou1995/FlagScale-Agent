@@ -53,6 +53,38 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
 from flagscale_agent.react.display import has_override_completion, trailing_sentinel
 
+# Mirrors plan_update._parse_step_id: the handler accepts "1", "step_1",
+# "step 2", etc. and normalizes to an int before mutating the plan. The guard
+# MUST normalize identically, or a string id ("step_1") misses the plan lookup
+# (step.get("id") == 1 fails), the lookup falls back to permissive, and the
+# gate is bypassed while the handler still marks the step done.
+_STEP_ID_RE = re.compile(r"(?:step[_\s]?)?#?(\d+)", re.IGNORECASE)
+
+
+def _normalize_step_id(raw) -> int | None:
+    """Normalize a step id the SAME way the plan_update tool does.
+
+    Returns an int for any accepted form (1, "1", "step_1", "step 2", "Step #3"),
+    else None. The guard's lookups use this so what the guard checks is exactly
+    the step the handler will mutate.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    if isinstance(raw, str):
+        s = raw.strip()
+        try:
+            return int(s)
+        except ValueError:
+            pass
+        m = _STEP_ID_RE.search(s)
+        if m:
+            return int(m.group(1))
+    return None
+
 
 def _contract_constraints() -> dict:
     """The spawned worker's `constraints` block, read from the structured
@@ -145,6 +177,30 @@ byte-immutability, noisy margin) are enforced at completion — do not carry the
 # block trained the agent to pass _override_reason, which then silently
 # satisfied other guards' blocks too, so they never actually fired.
 
+_BATCH_STEP_DONE_NO_EVIDENCE_BLOCK = """[VerificationGuard] Batch marks step {step_id} done, but that step has acceptance criteria and the batch carried no evidence for it.
+
+A batch update that flips a step to "done" commits the SAME claim as a single
+step_done — so it must clear the SAME bar. For a step that HAS acceptance
+criteria, that bar is a non-empty `verification` list (Mode 1). A batch item
+that omits it is the silent hole this check closes: the step reaches "done"
+with nothing recording that it met its criteria.
+
+This step's criteria:
+{acceptance}
+
+For EACH done item whose step has acceptance, pass the per-step evidence in the
+batch item itself:
+
+  plan_update(action="batch", updates=[
+      {{"step_id": 1, "status": "done", "verification": ["<criterion> — observed: ...; expected: ...; gap: ..."]}},
+      {{"step_id": 2, "status": "done", "verification": [...]}},
+  ])
+
+Or mark such a step individually:
+  plan_update(action="step_done", step_id=1, verification=[...])
+
+Non-done items (doing/skipped) need no evidence."""
+
 _BATCH_STEP_DONE_BLOCK = """[VerificationGuard] Batch update marks a step done — same bar as a single step_done.
 
 Marking done in bulk must not skip the verification each step would otherwise require.
@@ -216,33 +272,38 @@ The goal: avoid propagating stale assumptions into new work."""
 
 # ---- Convention-check: a SHAPE-only gate on a derived-convention declaration ----
 # The harness cannot judge whether a value is SEMANTICALLY right (it has no
-# oracle), but it CAN refuse to accept a step SILENTLY. When a step's acceptance
-# is tagged `convention-check`, the verification must carry ONE declaration line
-# naming the task's example value vs the value actually delivered, and — when the
-# two conflict — the raw output of a probe that justified the delivered value.
+# oracle), but it CAN refuse to accept a step SILENTLY.
 #
-# Field grammar (exactly 5 fields, fixed order):
-#   convention-check: example=<v> | delivered=<v> | conflict=<yes|no> | probe=<v> | probe_output=<v>
-#   * every field must be present AND non-empty;
-#   * `None` is the ONLY legal token for "genuinely no value" — an empty field or
-#     a missing field is a block, because the whole point is to make "nothing" an
-#     explicit declaration instead of a silent omission;
-#   * conflict=yes requires probe and probe_output to be real (non-None).
+# The declaration is a FIXED, REQUIRED structured field on every step_done —
+# NOT a text tag that must appear in acceptance. The previous design was
+# opt-in: it fired only when a step's acceptance literally contained the
+# marker `convention-check`, and nothing ever added that marker automatically,
+# so an agent that failed to RECOGNISE it rested on a derived convention never
+# triggered the gate — exactly the agent that most needed it.
+# The design after that replaced the marker with a required field, but kept a
+# self-declared `derived` boolean as the trigger: it fired only when the agent
+# declared `derived=true`, so an agent whose load-bearing convention WAS the
+# uncertain thing could declare the step `{"derived": false}` and skip the
+# falsifier — the exact retry11 escape (agent log L1554: "Actually the mapping
+# is derived, but step5's criterion is format validation. derived:false is
+# fine."). A self-classifying trigger is dodgeable by construction.
 #
-# Honest ceiling: this does NOT verify the values are true. A dishonest agent can
-# still fill the fields wrongly. It only downgrades "silently ignores the rule" to
-# "must declare on the record, and must lie deliberately to defeat it".
-_CONVENTION_MARKER = "convention-check"
-_CONVENTION_FIELDS = ("example", "delivered", "conflict", "probe", "probe_output")
-_CONVENTION_LINE_RE = re.compile(r"convention-check[ \t]*:[ \t]*([^\n]*)", re.IGNORECASE)
-# Field bodies are delimited by the NEXT known field marker, NOT by a bare `|`,
-# so a field VALUE may itself contain `|` (a shell pipeline in `probe`, a raw
-# `|` in `probe_output`). Longest name first so `probe_output` never matches as
-# `probe`.
-_CONVENTION_FIELD_RE = re.compile(
-    r"(?:^|[ \t|])(probe_output|probe|example|delivered|conflict)[ \t]*=",
-    re.IGNORECASE,
-)
+# The corrected design removes the boolean. The `convention` object is a FIXED
+# shape whose ONLY discriminator is the convention's NAME — the thing the agent
+# must state, and that it cannot classify away:
+#   • `{"name": "none"}` (or the bare string "none") is the explicit
+#     not-applicable declaration — a recorded, owned act, not a silent skip.
+#   • `{"name": "<a real convention name>", ...}` is a NAMED convention and
+#     MUST carry a falsifier (a real probe OR a proved hedge).
+# There is no `derived` key: the old shape `{"derived": false}` has no `name`
+# and therefore BLOCKS, so the retry11 reasoning has no expressible form — the
+# agent must either NAME the convention (and is then forced to falsify it) or
+# write `"none"` (a visible claim on the record). "Not applicable" remains an
+# explicit act; naming remains the un-dodgeable trigger.
+#
+# Honest ceiling: this does NOT verify the values are true. A dishonest agent
+# can still fill the fields wrongly. It only downgrades "silently ignores the
+# rule" to "must declare on the record, and must lie deliberately to defeat it".
 # Spellings an agent might use to mean "no value". `None` is the ONLY legal
 # no-value token; any of these in probe/probe_output under conflict=yes means
 # the "probe must be real" rule is being evaded (a deliberate lie, which the
@@ -251,107 +312,227 @@ _CONVENTION_NO_VALUE = frozenset(
     {"none", "n/a", "na", "n.a.", "null", "nil", "-", "--", ""}
 )
 
-_CONVENTION_MISSING = """[VerificationGuard] This step is tagged `convention-check` but carries no declaration.
 
-A step whose acceptance is tagged `convention-check` asserts that the deliverable\
-s correctness rests on a convention you DERIVED (a base, a stride, a key space, a
-normalisation, a default) rather than one the task text states. You must declare,
-in ONE verification entry, this exact line (5 fields, fixed order):
+def _is_real_str(v):
+    """A REAL evidence string: a non-empty ``str`` that is not a no-value token.
 
-  convention-check: example=<val> | delivered=<val> | conflict=<yes|no> | probe=<cmd> | probe_output=<out>
+    Non-strings (list / dict / int / bool) are NOT real — a probe must be an
+    actual COMMAND string, its output an actual TEXT, a hedge_output an actual
+    result. ``str(v)`` coercion would let a container/int masquerade as evidence
+    (a falsifier that was never an observed command), so the type is checked
+    BEFORE the emptiness test. ``""`` (and whitespace) is in the no-value set.
+    """
+    return isinstance(v, str) and v.strip().lower() not in _CONVENTION_NO_VALUE
 
-Rules — none of the 5 fields may be left empty; if a field genuinely has no value,
-write `None` (that is the ONLY legal way to say "no value"). When the task's
-example and your delivered value disagree (conflict=yes), probe and probe_output
-MUST be real: the command you ran and its raw output. This is a shape check — it
-does not judge whether your value is right, only that you put the comparison and
-its evidence on the record instead of skipping it."""
+_CONVENTION_MISSING = """[VerificationGuard] Every step_done must carry the fixed `convention` field.
 
-_CONVENTION_MALFORMED = """[VerificationGuard] The `convention-check` declaration is malformed.
+Declare the convention THIS step's output rests on — a base, a stride, a key
+space, a normalisation, a serialisation, a default — that you DERIVED rather
+than one the task text states. This is mandatory on EVERY step_done. The field
+is ONE fixed shape; the only thing you choose is the `name`:
 
-Expected exactly five `name=value` fields separated by ` | `:
+  # no derived convention governs this step's output:
+  convention={"name": "none"}
 
-  convention-check: example=<val> | delivered=<val> | conflict=<yes|no> | probe=<cmd> | probe_output=<out>
+  # a derived convention DOES govern the output — you MUST then carry a
+  # FALSIFIER (a real probe OR a proved hedge), because a bare single reading
+  # is exactly how an ambiguous convention gets committed wrongly:
+  convention={
+    "name": "address key space",
+    "example": "<the task's own example value, or None>",
+    "delivered": "<the value you actually delivered, or None>",
+    "conflict": "yes|no|None",
+    "probe": "<command whose output DISCRIMINATES the reading, or None>",
+    "probe_output": "<raw output of that command, or None>",
+    "hedge": "intersection|union|None",
+    "hedge_output": "<the single output that satisfies EVERY reading, or None>",
+    "extras_direction": "ignored|penalized|None",
+    "rejected": "<a candidate reading/implementation you DELETED or rejected, or None>",
+    "rejected_evidence": "<independent artifact that rejected it, or None>"
+  }
 
-Every field must be present and NON-EMPTY; write `None` for a field that genuinely
-has no value. `conflict` must be one of yes / no / None. When conflict=yes, both
-probe and probe_output must be real (not `None`). Re-issue with the corrected line."""
+There is no `derived` key. Either you write `{"name": "none"}` (an explicit,
+owned claim that no derived convention governs this step) or you NAME the
+convention — and a named convention is admissible only with one of:
+  (a) a REAL probe AND probe_output (a command + output that could have refuted
+      the reading and did not); or
+  (b) a proved HEDGE — hedge one of intersection/union, a REAL hedge_output (the
+      single output that lies in every reading's acceptance set), and
+      extras_direction naming how the checker treats output it did not ask for
+      (ignored|penalized) — because the hedge SHAPE is valid only under the
+      matching direction.
+A bare name with neither a probe nor a hedge is BLOCKED. When conflict="yes",
+probe and probe_output must be REAL (not None). When `rejected` names a
+candidate, `rejected_evidence` must be an INDEPENDENT artifact (a reference
+output, the task-spec text, a differential-probe result) — removing a candidate
+on suspicion alone is forbidden, because when extras are unpenalised INCLUSION
+is the conservative branch and omission is the only losing direction.
+This is a shape check — it does not judge whether your value is right, only that
+the convention is named and its falsifier is on the record instead of skipped."""
+
+_CONVENTION_MALFORMED = """[VerificationGuard] The `convention` declaration is malformed.
+
+`convention` must be either the explicit not-applicable form
+(`{"name": "none"}`, or the string "none"), or a structured object with a real
+`"name"` you DERIVED plus the required context fields example/delivered/conflict
+(all keys must be present; write `None` for a field with genuinely no value):
+  • name a non-empty string other than "none";
+  • conflict one of yes / no / None;
+  • probe and probe_output REAL (not None) when conflict is "yes";
+  • rejected_evidence REAL (not None) whenever `rejected` names a candidate;
+  • a FALSIFIER for a NAMED convention: EITHER probe+probe_output REAL, OR a
+    complete hedge (hedge one of intersection/union, hedge_output REAL,
+    extras_direction one of ignored/penalized).
+There is no `derived` key. Write `{"name": "none"}` if this step genuinely
+rests on no derived convention.
+Re-issue the step_done with a corrected `convention` field."""
+
+_CONVENTION_NO_FALSIFIER = """[VerificationGuard] A convention was NAMED with NO falsifier — a bare single
+reading with neither a real probe nor a proved hedge.
+
+Naming a derived convention is the claim that an ambiguous choice was made; the
+claim is admissible only when you carry evidence that could have REFUTED the
+reading and did not. Add ONE of:
+
+  1. A real discriminating PROBE — a command whose output distinguishes your
+     reading from its rival, and its raw output:
+       "probe": "readelf -S new.o | grep -A1 LOAD",  "probe_output": "<raw>"
+     (`conflict` is "yes" when that probe shows the example value and your
+     delivered value differ — keep it honest.)
+
+  2. A PROVED HEDGE — the single output that lies in EVERY candidate reading's
+     acceptance set, plus how the checker treats output it did not ask for:
+       "hedge": "union",            (or "intersection")
+       "hedge_output": "<the one output satisfying all readings, with its result>",
+       "extras_direction": "ignored"  (or "penalized")
+     Shape↔direction must match: "union"/superset is valid only when extras are
+     IGNORED; "intersection" is valid when extras are PENALIZED. An introspected
+     "no hedge possible" is a hypothesis — a hedge is empty only when shown so
+     under BOTH shapes.
+
+A probe or hedge whose value is None/"None" does not count — that is the silent
+skip this gate exists to stop. Re-issue the step_done with a real falsifier, or
+write `{"name": "none"}` if this step genuinely rests on no derived convention."""
 
 
-def _check_convention(acceptance, verification):
-    """Shape-only gate for a `convention-check`-tagged step.
+def _check_convention_field(conv):
+    """Unconditional structured gate for the fixed `convention` declaration.
+
+    `conv` is the raw value of ``tool_args['convention']`` — the harness now
+    requires it on EVERY step_done, so there is no marker/tag and no regex.
 
     Returns a GuardVerdict.block when the declaration is missing or malformed,
-    else None. Returns None when the step carries no `convention-check` tag, so
-    untagged steps are unaffected.
+    else None. The explicit not-applicable form ({"name": "none"} or the string
+    "none") passes: that is a recorded decision, not a silent skip. There is NO
+    `derived` boolean — the trigger is the NAME itself, so a step whose output
+    rests on a derived convention cannot be classified away from the gate.
     """
-    if not any(_CONVENTION_MARKER in str(a).lower() for a in acceptance):
-        return None
-    line = None
-    for entry in verification:
-        m = _CONVENTION_LINE_RE.search(str(entry))
-        if m:
-            line = m.group(1)
-            break
-    if line is None:
+    # Missing entirely — the whole point of the fixed field is that "nothing"
+    # must be an EXPLICIT declaration, never a silent omission.
+    if conv is None:
         return GuardVerdict.block(
             message=_CONVENTION_MISSING,
-            reason="convention_check_missing",
+            reason="convention_declaration_missing",
             category="verification_required",
         )
-    # Split the body into fields by their NAME markers, so a value may itself
-    # contain `|` (a pipeline in `probe`, a raw `|` in `probe_output`).
-    marks = list(_CONVENTION_FIELD_RE.finditer(line))
-    fields = {}
-    for i, mk in enumerate(marks):
-        key = mk.group(1).lower()
-        start = mk.end()
-        end = marks[i + 1].start() if i + 1 < len(marks) else len(line)
-        val = line[start:end].strip().strip("|").strip()
-        if key in fields:
-            return GuardVerdict.block(
-                message=_CONVENTION_MALFORMED,
-                reason="convention_check_duplicate_field",
-                category="verification_required",
-            )
-        fields[key] = val
-    if not marks:
-        # No field markers at all — the line is not a `name=value` declaration.
+    # The string form is the explicit not-applicable token.
+    if isinstance(conv, str):
+        if conv.strip().lower() in _CONVENTION_NO_VALUE:
+            return None
         return GuardVerdict.block(
             message=_CONVENTION_MALFORMED,
-            reason="convention_check_malformed",
+            reason="convention_declaration_malformed",
             category="verification_required",
         )
-    for f in _CONVENTION_FIELDS:
-        if f not in fields:
+    if not isinstance(conv, dict):
+        return GuardVerdict.block(
+            message=_CONVENTION_MALFORMED,
+            reason="convention_declaration_malformed",
+            category="verification_required",
+        )
+    name = conv.get("name")
+    # Explicit not-applicable — the ONE owned claim that lets a step skip the gate.
+    # ONLY the literal token "none" (any case) is accepted here. Every OTHER
+    # no-value spelling ("", "  ", "n/a", "null", "nil", "-", ...) is NOT a
+    # declaration of not-applicable — it is a forgotten/blank name, which must
+    # NAME the convention (or the step is malformed). Using the wide
+    # _CONVENTION_NO_VALUE set here would silently downgrade such a name to
+    # "not applicable" and re-open the very escape this gate closes.
+    if isinstance(name, str) and name.strip().lower() == "none":
+        return None
+    # A NAMED convention must be a real string. This is the trigger: there is no
+    # `derived` boolean to classify the step away from the gate — either the
+    # agent writes the name of the convention its output rests on, or "none".
+    if not _is_real_str(name):
+        return GuardVerdict.block(
+            message=_CONVENTION_MALFORMED,
+            reason="convention_missing_field",
+            category="verification_required",
+        )
+    for f in ("example", "delivered", "conflict"):
+        if f not in conv:
             return GuardVerdict.block(
                 message=_CONVENTION_MALFORMED,
-                reason="convention_check_malformed",
+                reason="convention_missing_field",
                 category="verification_required",
             )
-    for f in _CONVENTION_FIELDS:
-        if fields[f] == "":
-            return GuardVerdict.block(
-                message=_CONVENTION_MALFORMED,
-                reason="convention_check_empty_field",
-                category="verification_required",
-            )
-    conflict = fields["conflict"].lower()
+    conflict = str(conv.get("conflict")).strip().lower()
     if conflict not in ("yes", "no", "none"):
         return GuardVerdict.block(
             message=_CONVENTION_MALFORMED,
-            reason="convention_check_bad_conflict",
+            reason="convention_bad_conflict",
             category="verification_required",
         )
-    if conflict == "yes" and (
-        fields["probe"].lower() in _CONVENTION_NO_VALUE
-        or fields["probe_output"].lower() in _CONVENTION_NO_VALUE
-    ):
+    if conflict == "yes":
+        if not (_is_real_str(conv.get("probe")) and _is_real_str(conv.get("probe_output"))):
+            return GuardVerdict.block(
+                message=_CONVENTION_MALFORMED,
+                reason="convention_conflict_without_probe",
+                category="verification_required",
+            )
+    # A NAMED convention must carry a FALSIFIER: a real probe OR a proved hedge.
+    # A bare single reading with neither is exactly how an ambiguous convention
+    # (base locked to an example, serialisation guessed under an invisible grader)
+    # gets committed wrongly — so it is blocked, not merely discouraged. This is
+    # the STRUCTURAL teeth: the agent must CONSTRUCT a falsifier the guard checks,
+    # not state a sentence it may drop.
+    has_probe = _is_real_str(conv.get("probe")) and _is_real_str(conv.get("probe_output"))
+    hedge = str(conv.get("hedge") or "").strip().lower()
+    extras = str(conv.get("extras_direction") or "").strip().lower()
+    has_hedge = (
+        hedge in ("intersection", "union")
+        and _is_real_str(conv.get("hedge_output"))
+        and extras in ("ignored", "penalized")
+    )
+    if not (has_probe or has_hedge):
         return GuardVerdict.block(
-            message=_CONVENTION_MALFORMED,
-            reason="convention_check_conflict_without_probe",
+            message=_CONVENTION_NO_FALSIFIER,
+            reason="convention_no_falsifier",
             category="verification_required",
         )
+    # A hedge's SHAPE must match the direction it declares. A superset ("union")
+    # is a hedge ONLY when the checker IGNORES extras — a union declared under
+    # "penalized" is self-contradictory (exactly the retry9 reasoning: "extras
+    # count" -> reject the union). Reject the contradiction rather than accept a
+    # hedge that cannot hold.
+    if hedge == "union" and extras == "penalized":
+        return GuardVerdict.block(
+            message=_CONVENTION_NO_FALSIFIER,
+            reason="convention_hedge_shape_mismatch",
+            category="verification_required",
+        )
+    # Removing a candidate reading is the exact action that cost retry9: it must
+    # be backed by an INDEPENDENT artifact, never by an invented penalty rule.
+    # `False`/empty-list/None all mean "no candidate named" — a bool is NOT a
+    # candidate reading, so only a real string triggers the evidence demand.
+    rejected = conv.get("rejected")
+    if not isinstance(rejected, bool) and _is_real_str(rejected):
+        if not _is_real_str(conv.get("rejected_evidence")):
+            return GuardVerdict.block(
+                message=_CONVENTION_MALFORMED,
+                reason="convention_rejected_without_evidence",
+                category="verification_required",
+            )
     return None
 
 
@@ -456,18 +637,7 @@ class VerificationGuard(Guard):
                     self._step_done_recheck_reminded = True
                 
                 # Get step's acceptance criteria if plan is available
-                acceptance = []
-                if self._plan and step_id:
-                    try:
-                        plan_data = self._plan.get_active()
-                        if plan_data:
-                            for step in plan_data.get("steps", []):
-                                if step.get("id") == step_id:
-                                    acceptance = step.get("acceptance", [])
-                                    break
-                    except Exception:
-                        # If plan lookup fails, fall back to simple check
-                        pass
+                acceptance = self._step_acceptance(step_id)
                 
                 # Mode 1: Step has acceptance → require verification list
                 if acceptance:
@@ -480,14 +650,6 @@ class VerificationGuard(Guard):
                             reason="step_done_with_acceptance_no_verification",
                             category="verification_required"
                         )
-                    # Has verification — shape-check the convention declaration
-                    # when the step is tagged `convention-check`.
-                    bad = _check_convention(acceptance, verification)
-                    if bad is not None:
-                        return bad
-                    # Has verification, allow.
-                    return None
-                
                 # Mode 2: No acceptance (simple step) → require override_reason
                 else:
                     if not override_reason:
@@ -496,8 +658,16 @@ class VerificationGuard(Guard):
                             reason="step_done_no_verification",
                             category="verification_required"
                         )
-                    # Has override_reason, allow.
-                    return None
+
+                # The convention declaration is a FIXED, REQUIRED field on EVERY
+                # step_done — no tag, no regex, no opt-in. "Not applicable" is
+                # itself an explicit declaration ({"name": "none"} or "none"),
+                # so a silent omission is impossible. Runs AFTER the mode checks
+                # so the agent first supplies its evidence, then the declaration.
+                bad = _check_convention_field(ctx.tool_args.get("convention"))
+                if bad is not None:
+                    return bad
+                return None
 
             # Timing 1b: batch action marking any step done bypasses the per-step
             # step_done gate above (action=="batch", not "step_done"). A batch done
@@ -516,6 +686,37 @@ class VerificationGuard(Guard):
                         reason="batch_step_done_no_verification",
                         category="verification_required",
                     )
+                # Per-item evidence (Mode 1 parity): a batch item that flips a
+                # step to "done" commits the SAME claim as a single step_done, so
+                # if that step HAS acceptance criteria it must carry the same
+                # non-empty `verification` evidence. Without this, the batch path
+                # skips Mode 1 entirely — the hole the evidence check exists to
+                # close. Runs BEFORE the convention check so the agent first
+                # supplies evidence, then the declaration (mirrors step_done).
+                for u in updates:
+                    if not (isinstance(u, dict) and u.get("status") == "done"):
+                        continue
+                    sid = u.get("step_id")
+                    acceptance = self._step_acceptance(sid)
+                    item_verification = u.get("verification") or []
+                    if acceptance and not item_verification:
+                        return GuardVerdict.block(
+                            message=_BATCH_STEP_DONE_NO_EVIDENCE_BLOCK.format(
+                                step_id=sid,
+                                acceptance="\n".join(f"  • {a}" for a in acceptance),
+                            ),
+                            reason="batch_step_done_with_acceptance_no_verification",
+                            category="verification_required",
+                        )
+                # The convention declaration is a FIXED, REQUIRED field on ANY
+                # claim of "done" — including a batch that marks a step done. A
+                # batch done commits the same claim as a single step_done, so the
+                # same declaration is mandatory here; otherwise the batch path is
+                # the silent hole the convention field exists to close.
+                if has_done:
+                    bad = _check_convention_field(ctx.tool_args.get("convention"))
+                    if bad is not None:
+                        return bad
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:
@@ -570,16 +771,43 @@ class VerificationGuard(Guard):
         """
         if not self._plan or not step_id:
             return None
+        norm = _normalize_step_id(step_id)
+        if norm is None:
+            return None
         try:
             plan_data = self._plan.get_active()
             if not plan_data:
                 return None
             for step in plan_data.get("steps", []):
-                if step.get("id") == step_id:
+                if step.get("id") == norm:
                     return step.get("status")
         except Exception:
             return None
         return None
+
+    def _step_acceptance(self, step_id) -> list:
+        """Return a step's acceptance criteria, or [] if none/unknown.
+
+        Mirrors _step_status's permissive contract: no plan, no step_id, or a
+        failed lookup yields [] so the caller does not block on unknown state.
+        Used by the batch arm to apply Mode-1 (evidence required when a step has
+        acceptance) to each done item, exactly as the single-step path does.
+        """
+        if not self._plan or not step_id:
+            return []
+        norm = _normalize_step_id(step_id)
+        if norm is None:
+            return []
+        try:
+            plan_data = self._plan.get_active()
+            if not plan_data:
+                return []
+            for step in plan_data.get("steps", []):
+                if step.get("id") == norm:
+                    return step.get("acceptance", []) or []
+        except Exception:
+            return []
+        return []
 
     def notify_recovery(self):
         """Called by hard_reset logic to signal recovery."""

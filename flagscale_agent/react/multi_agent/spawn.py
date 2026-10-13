@@ -80,7 +80,7 @@ SUBAGENTS_DIRNAME = "subagents"
 # Per-session spawn registry: <session_dir>/subagents/spawned.jsonl records
 # {task_id, role, ts} for every worker THIS session spawned. The task ledger is
 # GLOBAL (ledger.py:25 — shared across sessions), so it cannot scope "my
-# un-finalized reviewers" to the session that is closing; this file can. Read by
+# un-adjudicated reviewers" to the session that is closing; this file can. Read by
 # ReviewerFeedbackGuard at the text-only completion path.
 SPAWN_REGISTRY_FILENAME = "spawned.jsonl"
 
@@ -125,6 +125,62 @@ def read_session_spawns(session_dir):
     except Exception:
         return []
     return out
+
+
+# Per-session ADJUDICATION registry: <session_dir>/subagents/adjudicated.jsonl
+# records {task_id, ts} for every reviewer-class child whose gate has been
+# EXPLICITLY released by an override. Without it, a SETTLED-WITHOUT-REPORT
+# reviewer (DEADLINE_MISSED/TERMINATED) is re-listed by ReviewerFeedbackGuard on
+# EVERY completion turn — the ledger has no terminal status to move to
+# (reunite.py _SETTLED_WITHOUT_REPORT) and a fresh process cannot know the
+# override already happened. A separate file (not an extra field on the
+# append-only spawned.jsonl) so recording an adjudication never rewrites — and
+# can never truncate — the spawn registry.
+ADJUDICATION_REGISTRY_FILENAME = "adjudicated.jsonl"
+
+
+def record_adjudication(session_dir, task_id):
+    """Mark one reviewer task_id as adjudicated for this session (best-effort).
+
+    Never raises: a registry write failure must not break the completion path.
+    """
+    if not session_dir or not task_id:
+        return
+    try:
+        p = Path(session_dir) / SUBAGENTS_DIRNAME / ADJUDICATION_REGISTRY_FILENAME
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"task_id": task_id, "ts": time.time()}) + "\n")
+    except Exception:
+        pass
+
+
+def read_adjudications(session_dir):
+    """Return the set of adjudicated task_ids for this session (best-effort).
+
+    Missing/unreadable registry -> empty set (an un-adjudicated reviewer stays
+    gated, which is the fail-safe direction).
+    """
+    if not session_dir:
+        return set()
+    out = set()
+    try:
+        p = Path(session_dir) / SUBAGENTS_DIRNAME / ADJUDICATION_REGISTRY_FILENAME
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("task_id"):
+                out.add(rec["task_id"])
+    except Exception:
+        return set()
+    return out
+
+
 # Depth cap default. The EFFECTIVE cap is read per spawn from the env key
 # FLAGSCALE_MAX_DEPTH (default DEFAULT_MAX_DEPTH) — a table-driven constant the
 # agent has no tool to raise. It is clamped into [MIN_MAX_DEPTH, HARD_MAX_DEPTH]

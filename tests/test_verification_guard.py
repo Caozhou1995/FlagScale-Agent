@@ -14,10 +14,13 @@
 
 """Tests for VerificationGuard — requires verification evidence before step_done."""
 
+import tempfile
+
 import pytest
 
 from flagscale_agent.react.guard.verification import VerificationGuard
 from flagscale_agent.react.guard import GuardContext
+from flagscale_agent.react.plan import TaskPlan
 
 
 class TestVerificationGuard:
@@ -44,7 +47,7 @@ class TestVerificationGuard:
         assert verdict.reason == "step_done_no_verification"
 
     def test_allows_step_done_with_override_reason(self):
-        """step_done with _override_reason should pass."""
+        """step_done with _override_reason AND the fixed convention field passes."""
         guard = VerificationGuard()
         
         ctx = GuardContext(
@@ -52,7 +55,8 @@ class TestVerificationGuard:
             tool_args={
                 "action": "step_done",
                 "step_id": 3,
-                "_override_reason": "grep shows no conflicts, files parseable"
+                "_override_reason": "grep shows no conflicts, files parseable",
+                "convention": {"name": "none"},
             },
             override_reason="grep shows no conflicts, files parseable"
         )
@@ -142,6 +146,7 @@ class TestVerificationGuard:
                 "action": "step_done",
                 "step_id": 1,
                 "_override_reason": "re-read criteria, re-examined premises",
+                "convention": {"name": "none"},
             },
             override_reason="re-read criteria, re-examined premises",
         )
@@ -372,11 +377,32 @@ class TestBatchStepDoneGate:
                 "action": "batch",
                 "updates": [{"step_id": 1, "status": "done"}],
                 "_override_reason": reason,
+                "convention": {"name": "none"},
             },
             override_reason=reason,
         )
         verdict = guard.check_pre(ctx)
         assert verdict is None
+
+    def test_batch_with_done_missing_convention_blocked(self):
+        # A batch that marks a step done commits the SAME claim as a single
+        # step_done, so the fixed convention field is mandatory here too —
+        # otherwise the batch path is the silent hole the field closes.
+        guard = VerificationGuard()
+        reason = "each done step re-checked against its acceptance, outputs read"
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{"step_id": 1, "status": "done"}],
+                "_override_reason": reason,
+            },
+            override_reason=reason,
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "convention_declaration_missing"
 
     def test_batch_without_done_passes_freely(self):
         guard = VerificationGuard()
@@ -407,4 +433,152 @@ class TestBatchStepDoneGate:
         verdict = guard.check_pre(ctx)
         assert verdict is not None
         assert verdict.reason == "batch_step_done_no_verification"
+
+
+class TestBatchStepDoneEvidence:
+    """Timing 1b extension: a batch done item for a step that HAS acceptance
+    criteria must carry per-item `verification` evidence — the SAME Mode-1 bar a
+    single step_done clears. Without it, batch skips Mode 1 and is a silent hole."""
+
+    def _guard_with_plan(self, acceptance):
+        plan = TaskPlan(tempfile.mkdtemp())
+        plan.create("T", [{"title": "S1", "acceptance": acceptance}])
+        guard = VerificationGuard(plan=plan)
+        guard._step_done_recheck_reminded = True
+        return guard
+
+    def test_batch_done_acceptance_without_evidence_blocked(self):
+        guard = self._guard_with_plan(["A1", "A2"])
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{"step_id": 1, "status": "done"}],
+                "_override_reason": "re-checked against each acceptance criterion",
+                "convention": {"name": "none"},
+            },
+            override_reason="re-checked against each acceptance criterion",
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.action == "block"
+        assert verdict.reason == "batch_step_done_with_acceptance_no_verification"
+        assert "A1" in verdict.message
+
+    def test_batch_done_acceptance_with_evidence_passes(self):
+        guard = self._guard_with_plan(["A1"])
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{
+                    "step_id": 1,
+                    "status": "done",
+                    "verification": ["A1 — observed x; expected x; gap: match"],
+                }],
+                "_override_reason": "re-checked against each acceptance criterion",
+                "convention": {"name": "none"},
+            },
+            override_reason="re-checked against each acceptance criterion",
+        )
+        assert guard.check_pre(ctx) is None
+
+    def test_batch_done_no_acceptance_no_evidence_passes(self):
+        # A step without acceptance has no Mode-1 requirement; the batch item
+        # needs no evidence for it (parity with single step_done Mode 2).
+        plan = TaskPlan(tempfile.mkdtemp())
+        plan.create("T", [{"title": "plain"}])
+        guard = VerificationGuard(plan=plan)
+        guard._step_done_recheck_reminded = True
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{"step_id": 1, "status": "done"}],
+                "_override_reason": "simple step, no criteria",
+                "convention": {"name": "none"},
+            },
+            override_reason="simple step, no criteria",
+        )
+        assert guard.check_pre(ctx) is None
+
+    def test_batch_mixed_done_evidence_missing_blocks(self):
+        # One done item has acceptance + no evidence → block; doing item ignored.
+        plan = TaskPlan(tempfile.mkdtemp())
+        plan.create("T", [
+            {"title": "S1", "acceptance": ["A1"]},
+            {"title": "S2"},
+        ])
+        guard = VerificationGuard(plan=plan)
+        guard._step_done_recheck_reminded = True
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [
+                    {"step_id": 1, "status": "done"},
+                    {"step_id": 2, "status": "doing"},
+                ],
+                "_override_reason": "progress update",
+                "convention": {"name": "none"},
+            },
+            override_reason="progress update",
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.reason == "batch_step_done_with_acceptance_no_verification"
+
+    def test_batch_done_stores_verification_in_plan(self):
+        # The handler must pass per-item evidence through to the plan, not just
+        # satisfy the gate — otherwise the recorded step has no evidence.
+        from flagscale_agent.react.tools.plan_update import PlanUpdateTool
+        plan = TaskPlan(tempfile.mkdtemp())
+        plan.create("T", [{"title": "S1", "acceptance": ["A1"]}])
+        tool = PlanUpdateTool(plan)
+        tool.execute(
+            action="batch",
+            updates=[{"step_id": 1, "status": "done",
+                      "verification": ["A1 — observed x; expected x"]}],
+            convention={"name": "none"},
+            _override_reason="ok",
+        )
+        step = [s for s in plan.get_active()["steps"] if s["id"] == 1][0]
+        assert step["status"] == "done"
+        assert step["verification"] == ["A1 — observed x; expected x"]
+
+    def test_batch_done_string_step_id_still_blocked(self):
+        # The handler normalizes "step_1" → 1, so the guard must too — else a
+        # string id misses the plan lookup, falls back to permissive, and the
+        # gate is bypassed while the handler still marks the step done.
+        guard = self._guard_with_plan(["A1"])
+        for sid in ("step_1", "1", "step 1", "Step #1"):
+            ctx = GuardContext(
+                tool_name="plan_update",
+                tool_args={
+                    "action": "batch",
+                    "updates": [{"step_id": sid, "status": "done"}],
+                    "_override_reason": "re-checked",
+                    "convention": {"name": "none"},
+                },
+                override_reason="re-checked",
+            )
+            verdict = guard.check_pre(ctx)
+            assert verdict is not None, f"{sid!r} bypassed the gate"
+            assert verdict.reason == "batch_step_done_with_acceptance_no_verification"
+
+    def test_single_step_done_string_step_id_still_blocked(self):
+        # Regression: the pre-existing single-step Mode-1 gate had the same
+        # string-id bypass; normalization closes it here too.
+        guard = self._guard_with_plan(["A1"])
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "step_done",
+                "step_id": "step_1",
+                "convention": {"name": "none"},
+            },
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None
+        assert verdict.reason == "step_done_with_acceptance_no_verification"
 

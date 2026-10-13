@@ -98,7 +98,8 @@ def test_step_with_acceptance_passes_with_verification():
             tool_args={
                 "action": "step_done",
                 "step_id": 1,
-                "verification": ["Proof A1", "Proof A2"]
+                "verification": ["Proof A1", "Proof A2"],
+                "convention": {"name": "none"},
             }
         )
         
@@ -145,7 +146,8 @@ def test_step_without_acceptance_passes_with_override():
             tool_args={
                 "action": "step_done",
                 "step_id": 1,
-                "_override_reason": "checked, all good"
+                "_override_reason": "checked, all good",
+                "convention": {"name": "none"},
             },
             override_reason="checked, all good"
         )
@@ -178,7 +180,8 @@ def test_backward_compatibility():
         tool_args={
             "action": "step_done",
             "step_id": 1,
-            "_override_reason": "verified"
+            "_override_reason": "verified",
+            "convention": {"name": "none"},
         },
         override_reason="verified"
     )

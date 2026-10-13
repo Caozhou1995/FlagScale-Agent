@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """Regression tests for the fixed plan tail (review → RSI) and the prompt
-changes that accompany it: the Response Format's two-section close and the
-language-mirroring rule.
+changes that accompany it: the Response Format's three-section close, the
+language-mirroring rule, and the explicit Language element.
 
 A future edit must not silently drop the RSI step, reorder the tail, or weaken
 the language rule back into an over-emphasis on Chinese.
@@ -105,6 +105,33 @@ def test_response_format_has_task_and_rsi_sections():
     assert "## Response Format" in p
     assert "Task result" in p
     assert "RSI result" in p
+
+
+def test_response_format_has_explicit_language_element():
+    # The Response Format must open with a visible Language section (parallel to
+    # the Task/RSI sections) so the reply-language decision is a required output
+    # component, not an implicit habit. It must NAME the language and point at
+    # the latest human-authored message as the evidence.
+    p = SYSTEM_PROMPT_STATIC
+    assert "**Language**" in p
+    assert "three clear sections" in p
+    assert "one-line declaration of the language" in p
+    assert "LATEST human-authored message" in p
+    # Reframe hygiene: the superseded two-section framing must be GONE, not merely
+    # shadowed by the new wording (a presence-only test misses a reframe).
+    assert "two clear sections" not in p
+    # Ordering: Language must be item 1 — BEFORE the Task and RSI sections. A
+    # presence-only check would still pass if the block were moved below RSI, so
+    # pin the position (the numbered labels make the ordering machine-checkable).
+    assert p.index("**Language**") < p.index("2. **Task result**")
+    assert p.index("2. **Task result**") < p.index("3. **RSI result**")
+
+
+def test_response_format_language_element_does_not_authorize_switching():
+    # Naming the language is a reporting duty; it must NOT become a licence to
+    # change the reply language by the agent's own initiative.
+    p = SYSTEM_PROMPT_STATIC
+    assert "does not license changing the reply language by your own initiative" in p
 
 
 def test_response_format_rsi_lists_all_three_channels():
