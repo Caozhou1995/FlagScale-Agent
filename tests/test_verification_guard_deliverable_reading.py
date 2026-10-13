@@ -42,7 +42,8 @@ def _ctx(dr, verification=("proof A1",)):
 
 GROUNDED = {"reading": "file offset base 0",
             "source": "Every 4-byte word in a PT_LOAD segment must appear",
-            "acceptance_test": "pytest t.py"}
+            "acceptance_test": "pytest t.py",
+            "normalized_side": "reference"}
 
 
 # --- the field fires UNCONDITIONALLY ----
@@ -129,7 +130,7 @@ def test_grounding_skipped_when_task_unavailable():
     d, guard = _guard_with_step(["A1"], "(unavailable: no user turn found in full log)")
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
-              "readings": [{"reading": "r", "source": "NOT IN TASK", "acceptance_test": "x"}],
+              "readings": [{"reading": "r", "source": "NOT IN TASK", "acceptance_test": "x", "normalized_side": "reference"}],
               "hedge": {"shape": "union", "output": "a",
                         "evidence": {"command": "c", "observed": "o"},
                         "extras_direction": "ignored"}}
@@ -447,5 +448,75 @@ def test_rejected_entry_fabricated_evidence_blocks():
             "bet_on": "a", "bet_loses_when": "b", "why_safe": "c"}),
             _corpus(OBSERVED_LINE)))
         assert v is not None and v.reason == "hedge_rejection_unobserved"
+    finally:
+        shutil.rmtree(d)
+
+
+# --- direction-of-comparison: at least one strictly-asymmetric reading ---
+
+def _union_hedge():
+    return {"shape": "union", "output": "...",
+            "evidence": {"command": "cmd", "observed": "ok"},
+            "extras_direction": "ignored"}
+
+
+def test_all_symmetric_readings_block():
+    """The retry16 trap: a reading set that is ALL 'both' is direction-blind."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        r = dict(GROUNDED, normalized_side="both")
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [r, dict(r)], "hedge": _union_hedge()}
+        v = guard.check_pre(_ctx(dr))
+        assert v is not None and v.reason == "reading_direction_uniform"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_missing_normalized_side_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        r = {"reading": "r", "source": GROUNDED["source"], "acceptance_test": "x"}
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [r], "hedge": _union_hedge()}
+        v = guard.check_pre(_ctx(dr))
+        assert v is not None and v.reason == "reading_direction_missing"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_invalid_normalized_side_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        r = dict(GROUNDED, normalized_side="symmetric")
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [r], "hedge": _union_hedge()}
+        v = guard.check_pre(_ctx(dr))
+        assert v is not None and v.reason == "reading_direction_missing"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_asymmetric_side_passes():
+    """A reference-only (strictest) reading alongside a symmetric one passes."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, normalized_side="reference"),
+                           dict(GROUNDED, normalized_side="both")],
+              "hedge": _union_hedge()}
+        assert guard.check_pre(_ctx(dr)) is None
+    finally:
+        shutil.rmtree(d)
+
+
+def test_neither_side_passes():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, normalized_side="neither"),
+                           dict(GROUNDED, normalized_side="candidate")],
+              "hedge": _union_hedge()}
+        assert guard.check_pre(_ctx(dr)) is None
     finally:
         shutil.rmtree(d)

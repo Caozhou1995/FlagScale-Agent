@@ -675,6 +675,28 @@ every reading, or prove none exists — by introspection you cannot.
 
 Re-issue with a PROVEN hedge, or a complete "if_none" proving emptiness."""
 
+_READING_DIRECTION_BLIND = """[VerificationGuard] The reading set is DIRECTION-BLIND.
+
+Each reading declares `normalized_side` — WHICH SIDE the checker normalizes
+before comparing (one of: reference, candidate, both, neither). A set of readings
+that ALL declare "both" cannot distinguish the candidate forms the checker
+actually accepts: a symmetric comparison normalizes BOTH sides, so a byte-exact
+output and a canonical-form output both pass it, while the real checker may
+normalize only ONE side and reject the other form. This is exactly how a
+self-oracle green-washes the wrong serialization.
+
+You MUST include at least one reading whose direction is STRICTLY ASYMMETRIC —
+"reference" (normalize the reference, compare the candidate RAW) or "neither"
+(byte-exact). The reference-only direction is the STRICTEST: normalization is
+idempotent, so any output that passes "normalize(reference) == candidate_raw"
+also passes every weaker direction (both / candidate) — an output surviving the
+strictest predicate is the conservative branch, and one that fails it is the
+form your symmetric oracle hid.
+
+Re-issue with `normalized_side` on EVERY reading (real value in
+reference|candidate|both|neither) and at least one reading using reference or
+neither."""
+
 
 def _normalize_for_grounding(s: str) -> str:
     """Whitespace-collapsed, lowercased form for verbatim grounding checks."""
@@ -811,6 +833,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             category="verification_required",
         )
     groundable = _task_text_groundable(task_text)
+    has_asymmetric_direction = False
     for r in readings:
         if not isinstance(r, dict):
             return GuardVerdict.block(
@@ -835,6 +858,28 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 reason="reading_not_grounded",
                 category="verification_required",
             )
+        # Direction-of-comparison: WHICH SIDE the checker normalizes. A set whose
+        # readings are ALL symmetric ("both") cannot discriminate the output forms
+        # the checker accepts — a symmetric self-oracle green-washes a byte-exact
+        # vs canonical-form difference. A real reading set must carry at least one
+        # STRICTLY ASYMMETRIC direction (reference|neither): normalize(reference)
+        # == candidate_raw is the strictest predicate, so an output surviving it
+        # also survives both/candidate — the conservative branch.
+        side = str(r.get("normalized_side") or "").strip().lower()
+        if side not in ("reference", "candidate", "both", "neither"):
+            return GuardVerdict.block(
+                message=_READING_DIRECTION_BLIND,
+                reason="reading_direction_missing",
+                category="verification_required",
+            )
+        if side in ("reference", "neither"):
+            has_asymmetric_direction = True
+    if not has_asymmetric_direction:
+        return GuardVerdict.block(
+            message=_READING_DIRECTION_BLIND,
+            reason="reading_direction_uniform",
+            category="verification_required",
+        )
     hedge = dr.get("hedge")
     if not isinstance(hedge, dict):
         return GuardVerdict.block(
