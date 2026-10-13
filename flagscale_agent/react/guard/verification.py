@@ -213,6 +213,120 @@ The goal: avoid propagating stale assumptions into new work."""
 # Fires at most once (independent of the first gate) so it stays a checkpoint.
 
 # Argument markers: method-defence vocabulary the litmus names explicitly. Their
+
+# ---- Convention-check: a SHAPE-only gate on a derived-convention declaration ----
+# The harness cannot judge whether a value is SEMANTICALLY right (it has no
+# oracle), but it CAN refuse to accept a step SILENTLY. When a step's acceptance
+# is tagged `convention-check`, the verification must carry ONE declaration line
+# naming the task's example value vs the value actually delivered, and — when the
+# two conflict — the raw output of a probe that justified the delivered value.
+#
+# Field grammar (exactly 5 fields, fixed order):
+#   convention-check: example=<v> | delivered=<v> | conflict=<yes|no> | probe=<v> | probe_output=<v>
+#   * every field must be present AND non-empty;
+#   * `None` is the ONLY legal token for "genuinely no value" — an empty field or
+#     a missing field is a block, because the whole point is to make "nothing" an
+#     explicit declaration instead of a silent omission;
+#   * conflict=yes requires probe and probe_output to be real (non-None).
+#
+# Honest ceiling: this does NOT verify the values are true. A dishonest agent can
+# still fill the fields wrongly. It only downgrades "silently ignores the rule" to
+# "must declare on the record, and must lie deliberately to defeat it".
+_CONVENTION_MARKER = "convention-check"
+_CONVENTION_FIELDS = ("example", "delivered", "conflict", "probe", "probe_output")
+_CONVENTION_LINE_RE = re.compile(r"convention-check[ \t]*:[ \t]*([^\n]*)", re.IGNORECASE)
+
+_CONVENTION_MISSING = """[VerificationGuard] This step is tagged `convention-check` but carries no declaration.
+
+A step whose acceptance is tagged `convention-check` asserts that the deliverable\
+s correctness rests on a convention you DERIVED (a base, a stride, a key space, a
+normalisation, a default) rather than one the task text states. You must declare,
+in ONE verification entry, this exact line (5 fields, fixed order):
+
+  convention-check: example=<val> | delivered=<val> | conflict=<yes|no> | probe=<cmd> | probe_output=<out>
+
+Rules — none of the 5 fields may be left empty; if a field genuinely has no value,
+write `None` (that is the ONLY legal way to say "no value"). When the task's
+example and your delivered value disagree (conflict=yes), probe and probe_output
+MUST be real: the command you ran and its raw output. This is a shape check — it
+does not judge whether your value is right, only that you put the comparison and
+its evidence on the record instead of skipping it."""
+
+_CONVENTION_MALFORMED = """[VerificationGuard] The `convention-check` declaration is malformed.
+
+Expected exactly five `name=value` fields separated by ` | `:
+
+  convention-check: example=<val> | delivered=<val> | conflict=<yes|no> | probe=<cmd> | probe_output=<out>
+
+Every field must be present and NON-EMPTY; write `None` for a field that genuinely
+has no value. `conflict` must be one of yes / no / None. When conflict=yes, both
+probe and probe_output must be real (not `None`). Re-issue with the corrected line."""
+
+
+def _check_convention(acceptance, verification):
+    """Shape-only gate for a `convention-check`-tagged step.
+
+    Returns a GuardVerdict.block when the declaration is missing or malformed,
+    else None. Returns None when the step carries no `convention-check` tag, so
+    untagged steps are unaffected.
+    """
+    if not any(_CONVENTION_MARKER in str(a).lower() for a in acceptance):
+        return None
+    line = None
+    for entry in verification:
+        m = _CONVENTION_LINE_RE.search(str(entry))
+        if m:
+            line = m.group(1)
+            break
+    if line is None:
+        return GuardVerdict.block(
+            message=_CONVENTION_MISSING,
+            reason="convention_check_missing",
+            category="verification_required",
+        )
+    fields = {}
+    for part in line.split("|"):
+        if "=" not in part:
+            return GuardVerdict.block(
+                message=_CONVENTION_MALFORMED,
+                reason="convention_check_malformed",
+                category="verification_required",
+            )
+        k, v = part.split("=", 1)
+        fields[k.strip().lower()] = v.strip()
+    for f in _CONVENTION_FIELDS:
+        if f not in fields:
+            return GuardVerdict.block(
+                message=_CONVENTION_MALFORMED,
+                reason="convention_check_malformed",
+                category="verification_required",
+            )
+    for f in _CONVENTION_FIELDS:
+        if fields[f] == "":
+            return GuardVerdict.block(
+                message=_CONVENTION_MALFORMED,
+                reason="convention_check_empty_field",
+                category="verification_required",
+            )
+    conflict = fields["conflict"].lower()
+    if conflict not in ("yes", "no", "none"):
+        return GuardVerdict.block(
+            message=_CONVENTION_MALFORMED,
+            reason="convention_check_bad_conflict",
+            category="verification_required",
+        )
+    if conflict == "yes" and (
+        fields["probe"].lower() == "none"
+        or fields["probe_output"].lower() == "none"
+    ):
+        return GuardVerdict.block(
+            message=_CONVENTION_MALFORMED,
+            reason="convention_check_conflict_without_probe",
+            category="verification_required",
+        )
+    return None
+
+
 class VerificationGuard(Guard):
     """Requires verification evidence when marking steps complete.
     
@@ -338,6 +452,11 @@ class VerificationGuard(Guard):
                             reason="step_done_with_acceptance_no_verification",
                             category="verification_required"
                         )
+                    # Has verification — shape-check the convention declaration
+                    # when the step is tagged `convention-check`.
+                    bad = _check_convention(acceptance, verification)
+                    if bad is not None:
+                        return bad
                     # Has verification, allow.
                     return None
                 
