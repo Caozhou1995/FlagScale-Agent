@@ -126,7 +126,7 @@ def test_language_rule_is_general_and_per_message():
     assert "Match user's language" in p
     assert "LATEST message" in p
     assert "re-decided EVERY turn" in p
-    assert "Context NEVER decides it" in p
+    assert "NEVER decides or changes it" in p
 
 
 def test_language_rule_covers_mixed_message_and_original_script():
@@ -143,3 +143,22 @@ def test_language_rule_drops_the_chinese_special_case_framing():
     p = SYSTEM_PROMPT_STATIC
     assert "Do NOT switch to Chinese" not in p
     assert "user writes English" not in p
+
+
+def test_language_rule_has_no_paraphrased_switch_prohibition():
+    # F5: the negative check must catch a PARAPHRASE of the old prohibition,
+    # not only the two exact strings. Match the semantic class.
+    import re
+    p = SYSTEM_PROMPT_STATIC
+    assert not re.search(r"switch\s+to\s+(Chinese|English|[A-Z][a-z]+ese)", p), \
+        "a switch-to-<language> prohibition remnant is present"
+
+
+def test_language_rule_resolves_the_ambiguities():
+    # F1/F2/F3/F6: the rule must settle the tie-break, define "message", and
+    # define a fallback — otherwise the new procedure is still under-specified.
+    p = SYSTEM_PROMPT_STATIC
+    assert "the clause that asks for the action" in p  # F2 tie-break
+    assert "human-authored turn" in p  # F3 "message" defined
+    assert "no natural language at all" in p  # F6 fallback
+    assert "on your own initiative" in p  # F1 self-contradiction removed
