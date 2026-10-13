@@ -663,6 +663,16 @@ every reading, or prove none exists — by introspection you cannot.
     (each rejected reading carrying a "source" quote AND an OBSERVED evidence
     {command, observed}), and real bet_on/bet_loses_when/why_safe.
 
+  • DIRECTION-OF-LOSS (why the union was rejected): "if_none" must declare a real
+    "extras_direction" (ignored|penalized) — how the checker treats output it did
+    NOT ask for — and, when the task text is readable, an
+    "extras_direction_source" that quotes the clause VERBATIM. Discarding the
+    union is only valid if the task penalizes EXTRA output: a clause that
+    penalizes only INCORRECT VALUES does NOT penalize extra PRESENCE — a union
+    whose values are all correct survives it, so it is NOT a reason to drop the
+    union. Do not cite a value clause as if it were a presence clause; quote the
+    clause that actually penalizes extra addresses, or the union stands.
+
 Re-issue with a PROVEN hedge, or a complete "if_none" proving emptiness."""
 
 
@@ -885,6 +895,38 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 reason="hedge_union_unattempted",
                 category="verification_required",
             )
+        # Direction-of-loss: rejecting the built union is valid only if the task
+        # penalizes EXTRA output. A clause that penalizes only INCORRECT VALUES
+        # does not penalize extra PRESENCE — a union whose values are all correct
+        # is safe under it, so discarding that union on a value-clause throws away
+        # the only conservative branch. The direction is a claim about the checker
+        # and must be declared AND, when the task text is available, grounded in a
+        # verbatim quote — an ungrounded direction is how a fabricated "extras are
+        # penalized" silently kills the union. (The message states the rule; this
+        # is the structural obligation: name the direction, quote its clause.)
+        xdir = str(if_none.get("extras_direction") or "").strip().lower()
+        if xdir not in ("ignored", "penalized"):
+            return GuardVerdict.block(
+                message=_HEDGE_UNPROVEN,
+                reason="hedge_extras_direction_undeclared",
+                category="verification_required",
+            )
+        if groundable:
+            if not _is_real_str(if_none.get("extras_direction_source")):
+                return GuardVerdict.block(
+                    message=_HEDGE_UNPROVEN,
+                    reason="hedge_extras_direction_unquoted",
+                    category="verification_required",
+                )
+            if (
+                _normalize_for_grounding(if_none.get("extras_direction_source"))
+                not in _normalize_for_grounding(task_text)
+            ):
+                return GuardVerdict.block(
+                    message=_READING_NOT_GROUNDED,
+                    reason="reading_not_grounded",
+                    category="verification_required",
+                )
         rej = if_none.get("readings_rejected")
         if not isinstance(rej, list) or not rej:
             return GuardVerdict.block(

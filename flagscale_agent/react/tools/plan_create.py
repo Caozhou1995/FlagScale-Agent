@@ -193,7 +193,15 @@ _FRAME_STEP_ACCEPTANCE = [
     "neither is BLOCKED by the guard (convention_no_falsifier) — a `union` hedge "
     "under `extras_direction=penalized` is self-contradictory and blocked too. "
     "This is the un-droppable form of hedge-feasibility: the mechanism the agent "
-    "CONSTRUCTS is checked, not a sentence it may ignore.",
+    "CONSTRUCTS is checked, not a sentence it may ignore. Direction-of-loss: when "
+    "you reject the union you CONSTRUCTED, `if_none` must DECLARE a real "
+    "`extras_direction` (ignored|penalized) and, when the task text is readable, an "
+    "`extras_direction_source` that quotes the clause VERBATIM. Discarding the "
+    "union is valid ONLY if the task penalizes EXTRA output — a clause that "
+    "penalizes only INCORRECT VALUES does NOT penalize extra PRESENCE, so a union "
+    "whose values are all correct survives it and is NOT a reason to drop the "
+    "union. Citing a value clause as if it were a presence clause discards the "
+    "conservative branch.",
     "Deliverable reading-analysis (STRUCTURAL, enforced by the guard): the "
     "fixed, REQUIRED field `deliverable_reading` on EVERY step_done. The "
     "`convention` field covers the step's TECHNICAL convention (a base/stride); "

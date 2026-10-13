@@ -225,6 +225,8 @@ def test_none_shape_complete_passes():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED], "hedge": {"shape": "none"},
               "if_none": {"why_intersection_empty": "mutually exclusive bases",
+                          "extras_direction": "ignored",
+                          "extras_direction_source": "Do not alter the formatting.",
                           "union_attempt": {"command": "c", "observed": "o"},
                           "readings_rejected": [{"reading": "flat offset",
                                                  "source": "Do not alter the formatting",
@@ -245,6 +247,8 @@ def test_rejected_without_evidence_blocks():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED], "hedge": {"shape": "none"},
               "if_none": {"why_intersection_empty": "exclusive",
+                          "extras_direction": "ignored",
+                          "extras_direction_source": "Do not alter the formatting.",
                           "union_attempt": {"command": "c", "observed": "o"},
                           "readings_rejected": [{"reading": "flat offset",
                                                  "source": "Do not alter the formatting"}],
@@ -264,6 +268,8 @@ def test_rejected_ungrounded_blocks():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED], "hedge": {"shape": "none"},
               "if_none": {"why_intersection_empty": "exclusive",
+                          "extras_direction": "ignored",
+                          "extras_direction_source": "Do not alter the formatting.",
                           "union_attempt": {"command": "c", "observed": "o"},
                           "readings_rejected": [{"reading": "flat offset",
                                                  "source": "INVENTED SOURCE",
@@ -372,6 +378,10 @@ def test_union_hedge_evidence_failopen_when_corpus_unavailable():
 
 
 def _none_dr(if_none):
+    if "extras_direction" not in if_none:
+        if_none = {**if_none,
+                   "extras_direction": "ignored",
+                   "extras_direction_source": "Do not alter the formatting."}
     return {"deliverable": "out.json", "grader_visible": False,
             "readings": [GROUNDED],
             "hedge": {"shape": "none", "output": None, "evidence": None,
