@@ -51,7 +51,11 @@ _FALLBACK_HINT = "re-read the edited region and confirm it landed as intended"
 
 # Checks the guard MEASURES itself after a successful edit (same <path>
 # placeholder as _TYPE_HINTS). Plain validity checks for every known type; the
-# prompt-bearing case is handled separately by _render_probe().
+# prompt-bearing case is handled separately by _render_probe(). The
+# structured-text types of _ROUNDTRIP_EXTS are ALL covered here too (xml/csv/
+# html parse = their validity check; the round-trip stability probe rides on
+# top of a PASS) — a type in _ROUNDTRIP_EXTS but NOT here would silently skip
+# the measurement loop below.
 _RUN_HINTS = {
     ".py": ["python", "-m", "py_compile", "<path>"],
     ".json": ["python", "-c", "import json,sys; json.load(open(sys.argv[1]))", "<path>"],
@@ -59,6 +63,10 @@ _RUN_HINTS = {
     ".yml": ["python", "-c", "import yaml,sys; yaml.safe_load(open(sys.argv[1]))", "<path>"],
     ".toml": ["python", "-c", "import tomllib,sys; tomllib.load(open(sys.argv[1],'rb'))", "<path>"],
     ".sh": ["bash", "-n", "<path>"],
+    ".xml": ["python", "-c", "import xml.etree.ElementTree as ET,sys; ET.parse(sys.argv[1])", "<path>"],
+    ".csv": ["python", "-c", "import csv,sys; list(csv.reader(open(sys.argv[1])))", "<path>"],
+    ".html": ["python", "-c", "import sys; sys.argv[1] and open(sys.argv[1],'rb').read()", "<path>"],
+    ".htm": ["python", "-c", "import sys; sys.argv[1] and open(sys.argv[1],'rb').read()", "<path>"],
 }
 
 # Render probe: exec the edited prompt-carrying file, then render the prompt
@@ -79,6 +87,73 @@ _RENDER_PROBE = (
     "except AttributeError as _e:\n"
     "    print('PROBE-CONST-MISSING', _e); sys.exit(3)\n"
     "print('render-ok')\n"
+)
+
+# Round-trip stability probe (prop_086f15d4): a MEASURED (not requested)
+# observation for structured-text deliverables. For a file whose extension
+# maps to a stdlib parser, the probe parses the file, re-serializes it with
+# the SAME library's canonical serializer, and compares bytes:
+#   parse -> canonical re-serialize -> byte-equal?
+# A file that already sits in its library's canonical form round-trips
+# byte-identically (and the re-serialization is idempotent); a file whose
+# form drifted (whitespace, quoting, key order, indentation) DIFFERS. This
+# is an observation, never a gate: a DIFFERS verdict does NOT mean the file
+# is wrong — the consumer may normalize — but it is the ACTION-time signal
+# that the written bytes are not canonical, reported right after the edit.
+# Type-agnostic by construction: the trigger is the file EXTENSION only.
+_ROUNDTRIP_PROBE = (
+    "import csv, io, json, sys\n"
+    "from pathlib import Path\n"
+    "import xml.etree.ElementTree as ET\n"
+    "\n"
+    "path = Path(sys.argv[1]); ext = path.suffix.lower(); raw = path.read_bytes()\n"
+    "text = raw.decode('utf-8', errors='replace')\n"
+    "RT = 'ROUND-TRIP IDEMPOTENT'; DIFF = 'ROUND-TRIP DIFFERS'\n"
+    "\n"
+    "def _json():\n"
+    "    obj = json.loads(text)\n"
+    "    return json.dumps(obj, sort_keys=True, indent=2, ensure_ascii=False)\n"
+    "\n"
+    "def _yaml():\n"
+    "    import yaml\n"
+    "    return yaml.safe_dump(yaml.safe_load(text), sort_keys=True)\n"
+    "\n"
+    "def _toml():\n"
+    "    import tomllib, tomli_w  # tomli_w optional\n"
+    "    return tomli_w.dumps(tomllib.loads(text))\n"
+    "\n"
+    "def _xml():\n"
+    "    root = ET.fromstring(text)\n"
+    "    ET.indent(root)\n"
+    "    return ET.tostring(root, encoding='unicode')\n"
+    "\n"
+    "def _csv():\n"
+    "    rows = list(csv.reader(io.StringIO(text)))\n"
+    "    buf = io.StringIO(); csv.writer(buf, lineterminator='\\n').writerows(rows)\n"
+    "    return buf.getvalue()\n"
+    "\n"
+    "_GEN = {'.json': _json, '.yaml': _yaml, '.yml': _yaml, '.toml': _toml,\n"
+    "        '.xml': _xml, '.csv': _csv}\n"
+    "gen = _GEN.get(ext)\n"
+    "if gen is None:\n"
+    "    sys.exit(0)\n"
+    "try:\n"
+    "    canon = gen()\n"
+    "except Exception:\n"
+    "    sys.exit(0)  # parse failure is the validity check's job, not ours\n"
+    "if canon is None:\n"
+    "    sys.exit(0)\n"
+    "same = (canon == text) or (canon.encode('utf-8') == raw)\n"
+    "print(RT if same else DIFF)\n"
+)
+
+# Extensions the round-trip probe understands (kept in sync with _ROUNDTRIP_PROBE).
+# HTML is deliberately ABSENT: the stdlib has no lossless HTML canonicalizer and
+# binding a third-party parser as the canonical oracle would name a grader
+# parser inside a harness module (the no-grader-oracle-leak constraint) — for
+# HTML, not measurable is the honest verdict.
+_ROUNDTRIP_EXTS = (
+    ".json", ".yaml", ".yml", ".toml", ".xml", ".csv",
 )
 # Files that CARRY the prompt templates. Match is anchored at a path-separator
 # boundary (see _is_prompt_file) so unrelated trees whose names merely END
@@ -377,7 +452,56 @@ class PostEditFarEndGuard(Guard):
                 render_failure = cls._render_probe(path)
                 if render_failure:
                     return render_failure
+            # prop_086f15d4: after the validity check PASSes, a structured
+            # text file ALSO gets the measured round-trip stability probe.
+            # Advisory only — a DIFFERS verdict is an observation (the
+            # consumer may normalize), never a gate. The validity line is
+            # KEPT: the two measurements are independent observations
+            # (does it parse? / is it canonical?), so the inject carries
+            # both. Silent (no extra line) when the probe cannot run: its
+            # own exit-0-means-unmeasurable contract.
+            if lower.endswith(_ROUNDTRIP_EXTS):
+                roundtrip = cls._roundtrip_probe(path)
+                if roundtrip:
+                    return f"measured now: PASS — {roundtrip}"
             return "measured now: PASS"
+        return None
+
+    @classmethod
+    def _roundtrip_probe(cls, path: str) -> str | None:
+        """Run the canonical round-trip stability measurement in a subprocess.
+
+        Returns the measurement line ("measured now: round-trip ...") for the
+        inject, or None when there is nothing to report: the extension has no
+        round-trip generator, the probe environment cannot run it (missing
+        optional serializer), or the probe timed out — an environment that
+        cannot check is not evidence the file drifted, so stay silent instead
+        of reporting a false DIFFERS. Never raises; advisory-only by contract.
+        """
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", _ROUNDTRIP_PROBE, path],
+                capture_output=True,
+                text=True,
+                timeout=_RUN_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        stdout = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            # Non-zero exit = parse failure (validity's domain) or a broken
+            # environment; both are unmeasurable here, stay silent.
+            return None
+        if "ROUND-TRIP IDEMPOTENT" in stdout:
+            return "measured now: round-trip IDEMPOTENT (bytes are canonical)"
+        if "ROUND-TRIP DIFFERS" in stdout:
+            return (
+                "measured now: round-trip DIFFERS — the written bytes are NOT "
+                "the parser's canonical form (form drift: whitespace/quoting/"
+                "key order/indentation). Observation, not a gate: if the task "
+                "or its checker requires canonical form, re-serialize now "
+                "(one edit away); if it preserves bytes, ignore this line."
+            )
         return None
 
     @staticmethod

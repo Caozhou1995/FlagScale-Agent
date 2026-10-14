@@ -391,6 +391,85 @@ class TestMeasuredChecks:
         assert r is None  # healthy file: render OK, no false RENDER FAILED
 
 
+class TestRoundtripMeasurement:
+    """prop_086f15d4: a structured-text edit carries a MEASURED canonical
+    round-trip observation (parse -> canonical re-serialize -> byte-compare)
+    appended to the validity measurement. Real subprocesses, no mocking —
+    the boundary under test is the measurement itself."""
+
+    def test_drifted_json_reports_differs(self, guard, tmp_path):
+        # compact json is VALID (parses) but NOT the canonical form
+        # (sort_keys + indent=2) -> the measured round-trip line must name
+        # the drift.
+        p = tmp_path / "drift.json"
+        p.write_text('{"a": 1}', encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Wrote 8 chars to {p}"))
+        assert v is not None
+        assert "measured now: PASS" in v.message  # validity observation kept
+        assert "round-trip DIFFERS" in v.message  # stability observation
+        assert "Observation, not a gate" in v.message  # advisory contract
+
+    def test_canonical_json_reports_idempotent(self, guard, tmp_path):
+        # The library's own canonical form round-trips byte-identically.
+        import json
+        p = tmp_path / "canon.json"
+        p.write_text(json.dumps({"a": 1}, sort_keys=True, indent=2),
+                     encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Wrote 8 chars to {p}"))
+        assert v is not None
+        assert "measured now: PASS" in v.message
+        assert "round-trip IDEMPOTENT" in v.message
+
+    def test_drifted_xml_reports_differs_canonical_xml_idempotent(
+            self, guard, tmp_path):
+        # Two-form check on a second format: flat xml drifts, indented xml
+        # is canonical (ET.indent) — the observation tracks FORM, not format.
+        flat = tmp_path / "flat.xml"
+        flat.write_text("<root><a>1</a><b>2</b></root>", encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(flat),
+                                  result=f"Wrote 8 chars to {flat}"))
+        assert v is not None and "round-trip DIFFERS" in v.message
+        ind = tmp_path / "ind.xml"
+        ind.write_text("<root>\n  <a>1</a>\n  <b>2</b>\n</root>", encoding="utf-8")
+        v2 = guard.check_post(_ctx(path=str(ind),
+                                   result=f"Wrote 8 chars to {ind}"))
+        assert v2 is not None and "round-trip IDEMPOTENT" in v2.message
+
+    def test_broken_json_stays_silent_on_roundtrip(self, guard, tmp_path):
+        # A parse failure is the VALIDITY check's finding; the round-trip
+        # probe must stay silent (no misleading stability line on an
+        # unparseable file).
+        p = tmp_path / "bad.json"
+        p.write_text("{not json", encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Wrote 9 chars to {p}"))
+        assert v is not None
+        assert "measured now: FAILED" in v.message
+        assert "round-trip" not in v.message
+
+    def test_non_structured_type_has_no_roundtrip_line(self, guard, tmp_path):
+        # .py and .md keep the OLD behavior: py path -> plain PASS; unknown
+        # type -> no measurement line at all. The trigger is extension-based.
+        p = tmp_path / "code.py"
+        p.write_text("V = 1\n", encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "measured now: PASS" in v.message
+        assert "round-trip" not in v.message
+        m = tmp_path / "note.md"
+        m.write_text("# hi\n", encoding="utf-8")
+        v2 = guard.check_post(_ctx(path=str(m), result=f"Successfully edited {m}"))
+        assert v2 is not None and "measured now" not in v2.message
+
+    def test_inject_only_contract_preserved(self, guard, tmp_path):
+        # The round-trip observation must NEVER change the guard's verdict
+        # class: inject-only, priority 70, check_pre still None.
+        p = tmp_path / "drift.json"
+        p.write_text('{"a": 1}', encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Wrote 8 chars to {p}"))
+        assert v is not None and v.action == "inject"
+        assert guard.check_pre(_ctx(path=str(p))) is None
+
+
 class TestCitationDrift:
     """An edit that shifts a file's line count must warn that any
     held `file:line` anchor to that file may now be stale (the recorded failure:
