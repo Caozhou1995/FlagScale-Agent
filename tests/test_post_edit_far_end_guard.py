@@ -232,6 +232,69 @@ class TestFormContractNudge:
         assert "git status --short" in v.message
 
 
+class TestSerializationDirectionNudge:
+    """A .py that parses+re-serializes a structured text format (HTML/XML) must
+    be nudged about the SERIALIZATION DIRECTION: a one-sided checker compares
+    normalize(reference) against the RAW candidate, so byte-preserving fails
+    where canonical re-serialization passes. Gated to parser libraries only —
+    an exact-value (JSON) source must NOT get this line."""
+
+    def _write(self, tmp_path, name, body):
+        p = tmp_path / name
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_bs4_source_gets_direction_nudge(self, guard, tmp_path):
+        p = self._write(tmp_path, "filter.py",
+                        "from bs4 import BeautifulSoup\n"
+                        "soup = BeautifulSoup(open('x.html').read(), 'html.parser')\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None
+        assert "SERIALIZATION DIRECTION" in v.message
+        assert "RAW candidate" in v.message
+        # names the safe branch explicitly
+        assert "canonical" in v.message
+
+    def test_html_parser_signal_alone_fires(self, guard, tmp_path):
+        p = self._write(tmp_path, "h.py",
+                        "from html.parser import HTMLParser\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "SERIALIZATION DIRECTION" in v.message
+
+    def test_lxml_signal_fires(self, guard, tmp_path):
+        p = self._write(tmp_path, "l.py", "import lxml.html\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "SERIALIZATION DIRECTION" in v.message
+
+    def test_json_source_does_not_get_direction_nudge(self, guard, tmp_path):
+        # Exact-value format: no normalization dimension, so NO direction nudge
+        # (regression bound — must not push an exact-equality task off its path).
+        p = self._write(tmp_path, "j.py",
+                        "import json\nd = json.load(open('x.json'))\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "SERIALIZATION DIRECTION" not in v.message
+
+    def test_plain_source_does_not_get_direction_nudge(self, guard, tmp_path):
+        p = self._write(tmp_path, "plain.py", "def add(a, b):\n    return a + b\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "SERIALIZATION DIRECTION" not in v.message
+
+    def test_non_py_never_reads_for_direction(self, guard, tmp_path):
+        p = self._write(tmp_path, "note.md", "BeautifulSoup and html.parser\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "SERIALIZATION DIRECTION" not in v.message
+
+    def test_missing_file_silent_not_crash(self, guard):
+        v = guard.check_post(_ctx(path="/no/such/dir/x.py",
+                                  result="Successfully edited /no/such/dir/x.py"))
+        assert v is not None and "SERIALIZATION DIRECTION" not in v.message
+
+    def test_direction_nudge_preserves_base_reminder(self, guard, tmp_path):
+        p = self._write(tmp_path, "f.py", "from bs4 import BeautifulSoup\n")
+        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
+        assert v is not None and "valid-for-type" in v.message
+
+
 class TestMeasuredChecks:
     """Measurement upgrade: the guard RUNS the cheap validity check itself and
     reports the measured PASS/FAIL in the inject (user-approved design).
