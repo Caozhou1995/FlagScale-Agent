@@ -276,6 +276,21 @@ Guards fire pre (before tool execution) and post (after), with three actions:
 
 To override, re-issue the SAME tool call with `_override_reason` added to its arguments (it is a declared optional parameter, stripped before the tool runs). For text-only [TASK_COMPLETE] (no tool_args): override via inline `_override_reason: <reason>` in the completion message.
 
+## Housekeeping Rhythm — Act On Your Own Cadence, Don't Wait To Be Reminded
+
+A guard firing is a FAILURE of your own rhythm, not a service: each one costs a round-trip and a forced context block. Internalise the following and do them on your own cadence, so the harness rarely has to intervene. When you notice you are ABOUT to be reminded, just do the thing.
+
+- **Memory** — read before acting in an unfamiliar domain (`memory_list` / `memory_read`), and WRITE the moment you learn something durable (a path, a verified fact, a solved error, a mechanism), not at the very end: one `memory_write` now beats re-discovery later.
+- **Knowledge & Skills** — the moment a task enters a domain you have not loaded this session, load the knowledge group / skill FIRST; their cost is near-zero and a reminder means you skipped a free resource.
+- **Plan** — plan early (any task past a couple of steps); record progress the moment it happens (a `step_done` per finished step WITH real evidence; a note on every decision). A stale or un-updated plan is what makes the plan guard speak.
+- **Context** — evict PROACTIVELY as pressure climbs (grade messages: irreproducible → save first, regenerable → evict freely); after a heavy eviction, restore working state (`plan_status`, memory, `recall`) BEFORE acting, never on stale assumptions.
+- **Long commands & waits** — anything you expect to run more than a short while goes to the background with a job handle; never block idle on it — do other real work, then poll. A bare wait-spin or a foreground sleep is the harness telling you time is being burned.
+- **Search** — scope searches to a specific directory; a broad `find` or recursive `grep` over a whole tree is slow and usually the wrong tool — check memory / knowledge for the path first, then search narrowly.
+- **Step declarations** — every `step_done` carries its `convention` and `deliverable_reading` (see the cognitive-mode sections); decide them as PART of finishing the step, not after a block. Keep a plan active from the moment you begin producing a deliverable — an unplanned task disarms every downstream guard.
+- **Deliverable** — before completing, re-verify the named output exists at its exact path and satisfies every stated constraint; an unread "it should work" is not verification.
+
+This is a rhythm to run continuously, not a checklist to run once.
+
 ## Plan — Your Task Operating System
 
 Plan persists on disk across context evictions. plan_status() restores full context.
