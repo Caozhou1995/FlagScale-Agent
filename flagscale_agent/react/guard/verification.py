@@ -210,6 +210,21 @@ done, you re-checked the result against what that step was supposed to satisfy.
 If a step deserves real evidence, mark it via plan_update(step_done, verification=[...])
 individually rather than folding it into a batch."""
 
+_COMPLETION_NO_GRADED_READING = """[VerificationGuard] You are declaring the task complete, but no GRADED READING of your deliverable was ever declared.
+
+The `deliverable_reading` field is a FIXED declaration on every step_done — and
+`{"deliverable": "none"}` is a claim that there is NO graded artifact. If this
+task DOES grade an artifact (its text is available to ground a reading), that
+claim is unsupported until you have actually enumerated the readings the checker
+may apply and run the acceptance test on the output you are shipping.
+
+Before completing: on a step_done, declare `deliverable_reading` as a real object
+naming the graded artifact, its `readings` (each with the exact `source` quote,
+the `acceptance_test`, and the `normalized_side` the checker compares on), and the
+`hedge` you ran — OR, if this task genuinely grades nothing you can name, re-issue
+this completion with an `_override_reason` stating why.
+"""
+
 _COMPLETION_WITH_UNFINISHED_STEPS = """[VerificationGuard] You are declaring the task complete while plan step(s) {steps} are still open.
 
 A plan marks the checkpoints where your results were to be verified. Completing with steps
@@ -783,6 +798,21 @@ def _evidence_observed(ev, corpus) -> bool:
     return n in corpus
 
 
+def _declares_graded_reading(dr) -> bool:
+    """True when `dr` is a REAL (non-none) deliverable_reading declaration.
+
+    The not-applicable opt-out (`{"deliverable": "none"}` or the string
+    "none") is an explicit claim that there is NO graded artifact; it returns
+    False here. Any other dict that named a deliverable is a real declaration.
+    """
+    if not isinstance(dr, dict):
+        return False
+    deliverable = dr.get("deliverable")
+    if isinstance(deliverable, str) and deliverable.strip().lower() == "none":
+        return False
+    return _is_real_str(deliverable)
+
+
 def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = None):
     """Unconditional structured gate for the fixed `deliverable_reading` field.
 
@@ -1097,6 +1127,11 @@ class VerificationGuard(Guard):
         self._recovery_reminded = False
         self._acceptance_guidance_given = False
         self._step_done_recheck_reminded = False
+        # Per-RUN: True once a REAL (non-none) deliverable_reading was declared
+        # and passed the gate. The completion-boundary arm reads it to force a
+        # graded-reading declaration before [TASK_COMPLETE] when none was ever
+        # made — closing the opt-out (`{"deliverable": "none"}`) bypass.
+        self._graded_reading_seen = False
 
     def reset_turn(self):
         """Reset per-turn state on a new user message — clears the step_done
@@ -1162,6 +1197,24 @@ class VerificationGuard(Guard):
                             steps=", ".join(str(s) for s in unfinished),
                         ),
                         reason="completion_with_unfinished_steps",
+                        category="verification_required",
+                    )
+                # Graded-reading obligation at the boundary: the deliverable_read-
+                # ing gate is otherwise OPT-OUTABLE — `{"deliverable": "none"}`
+                # satisfies it without any reading enumerated, so an agent can
+                # close every step on an ungrounded opt-out and never confront
+                # the reading the checker applies. When the task text is retriev-
+                # able (groundable) and no REAL reading was declared this run,
+                # require one before the task may be declared done. Overridable:
+                # a genuinely un-graded task closes with a reason on record.
+                if (
+                    not self._graded_reading_seen
+                    and _task_text_groundable(self._task_text())
+                    and not self.accept_override(ctx.override_reason, ctx)
+                ):
+                    return GuardVerdict.block(
+                        message=_COMPLETION_NO_GRADED_READING,
+                        reason="completion_without_graded_reading",
                         category="verification_required",
                     )
             return None
@@ -1251,11 +1304,13 @@ class VerificationGuard(Guard):
                 bad = _check_convention_field(ctx.tool_args.get("convention"))
                 if bad is not None:
                     return bad
+                dr = ctx.tool_args.get("deliverable_reading")
                 bad = _check_deliverable_reading_field(
-                    ctx.tool_args.get("deliverable_reading"), self._task_text(),
-                    self._observed(ctx))
+                    dr, self._task_text(), self._observed(ctx))
                 if bad is not None:
                     return bad
+                if _declares_graded_reading(dr):
+                    self._graded_reading_seen = True
                 return None
 
             # Timing 1b: batch action marking any step done bypasses the per-step
@@ -1306,11 +1361,13 @@ class VerificationGuard(Guard):
                     bad = _check_convention_field(ctx.tool_args.get("convention"))
                     if bad is not None:
                         return bad
+                    dr = ctx.tool_args.get("deliverable_reading")
                     bad = _check_deliverable_reading_field(
-                        ctx.tool_args.get("deliverable_reading"), self._task_text(),
-                        self._observed(ctx))
+                        dr, self._task_text(), self._observed(ctx))
                     if bad is not None:
                         return bad
+                    if _declares_graded_reading(dr):
+                        self._graded_reading_seen = True
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:

@@ -176,3 +176,110 @@ def test_unfinished_steps_id_fallback():
         assert all(i is not None for i in ids), ids
     finally:
         _close(d)
+
+
+# ── completion-boundary GRADED-READING arm ──────────────────────────────────
+# The deliverable_reading gate is otherwise opt-outable: `{"deliverable": "none"}`
+# satisfies it with no reading enumerated. The completion arm forces at least one
+# REAL reading before [TASK_COMPLETE] when the task text is groundable.
+
+def _ctx_tc(text, override="", task_text="Read /app/x and write /app/y."):
+    """ctx for the text-completion path with a groundable task text bound."""
+    return _ctx(text, override=override), task_text
+
+
+def _guard_with_task(plan, task_text):
+    return VerificationGuard(plan=plan, task_text_fn=lambda: task_text)
+
+
+def test_tc_no_graded_reading_blocks():
+    """A [TASK_COMPLETE] with all steps done but no real deliverable_reading ever
+    declared must block (the opt-out bypass)."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        v = g.check_pre(_ctx("[TASK_COMPLETE]"))
+        assert v is not None and v.reason == "completion_without_graded_reading", v
+    finally:
+        _close(d)
+
+
+def test_tc_graded_reading_seen_passes():
+    """Once a REAL reading was declared (flag set), completion passes."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_graded_reading_override_releases():
+    """A substantive override releases the graded-reading arm."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        assert g.check_pre(
+            _ctx("[TASK_COMPLETE]", override="genuinely ungraded task, no artifact")
+        ) is None
+    finally:
+        _close(d)
+
+
+def test_tc_ungroundable_task_fails_open():
+    """When the harness could not recover the task text, the arm must not block."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "(unavailable) task text not recovered")
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_truncated_task_fails_open():
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "some task ...[truncated]")
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_empty_task_fails_open():
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "")
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_no_task_text_fn_fails_open():
+    """task_text_fn is optional (None) -> fail-open."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = VerificationGuard(plan=plan)
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_need_user_input_not_blocked_by_graded_arm():
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        assert g.check_pre(_ctx("[NEED_USER_INPUT]")) is None
+    finally:
+        _close(d)
+
+
+def test_declares_graded_reading_predicate():
+    """Unit-test the predicate: none-opt-out is False; a real name is True."""
+    from flagscale_agent.react.guard.verification import _declares_graded_reading
+    assert _declares_graded_reading({"deliverable": "none"}) is False
+    assert _declares_graded_reading({"deliverable": "  None "}) is False
+    assert _declares_graded_reading("none") is False
+    assert _declares_graded_reading(None) is False
+    assert _declares_graded_reading({}) is False
+    assert _declares_graded_reading({"deliverable": "/app/y"}) is True
