@@ -584,3 +584,75 @@ def test_non_string_normalized_side_is_malformed():
             assert v is not None and v.reason == "deliverable_reading_malformed", bad
         finally:
             shutil.rmtree(d)
+
+
+# --- awareness must be NON-WAIVABLE by prose (not merely prompted) ---
+# The direction blocks are released ONLY by the concrete corrective action
+# (declare a real normalized_side / a one-sided or all-neither set), never by an
+# _override_reason. This is what converts "occasionally aware" into "structurally
+# forced aware" — the observed failure was filter-js retry19, where the
+# reading_direction_uniform block FIRED and was then OVERRIDDEN with prose.
+
+def test_direction_uniform_block_is_non_overridable():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        r = dict(GROUNDED, normalized_side="both")
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [r, dict(r)], "hedge": _union_hedge()}
+        v = guard.check_pre(_ctx(dr))
+        assert v is not None and v.reason == "reading_direction_uniform"
+        assert v.overridable is False, "direction-blind block must be non-overridable"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_direction_missing_block_is_non_overridable():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        r = {"reading": "r", "source": GROUNDED["source"], "acceptance_test": "x"}
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [r], "hedge": _union_hedge()}
+        v = guard.check_pre(_ctx(dr))
+        assert v is not None and v.reason == "reading_direction_missing"
+        assert v.overridable is False
+    finally:
+        shutil.rmtree(d)
+
+
+def test_prose_override_does_not_release_direction_block():
+    """End-to-end through the registry: a prose _override_reason authored for the
+    direction block must NOT release it (the pre-change behaviour released it)."""
+    from flagscale_agent.react.guard import GuardRegistry
+
+    def _reg_ctx(dr, override):
+        c = _ctx(dr)
+        c.override_reason = override
+        return c
+
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        reg = GuardRegistry()
+        reg.register(guard)
+        r = dict(GROUNDED, normalized_side="both")
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [r, dict(r)], "hedge": _union_hedge()}
+        v1 = reg.check_pre(_reg_ctx(dr, ""))          # surfaces the block
+        v2 = reg.check_pre(_reg_ctx(dr, "trust me, it is verified"))  # prose override
+        assert v1 is not None and v1.reason == "reading_direction_uniform"
+        assert v2 is not None and v2.reason == "reading_direction_uniform", \
+            "prose override must NOT release the non-overridable direction block"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_corrective_action_releases_direction_requirement():
+    """The concrete corrective action — a one-sided direction — satisfies the
+    direction requirement (the block was never about rewarding prose)."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, normalized_side="reference")],
+              "hedge": _union_hedge()}
+        assert guard.check_pre(_ctx(dr)) is None
+    finally:
+        shutil.rmtree(d)

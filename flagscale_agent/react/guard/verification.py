@@ -726,7 +726,12 @@ hid.
 
 Re-issue with `normalized_side` on EVERY reading (real value in
 reference|candidate|both|neither) and at least one reading using reference or
-candidate (or make every reading "neither" if no normalization is involved)."""
+candidate (or make every reading "neither" if no normalization is involved).
+
+This block is NOT released by an `_override_reason`: declaring the direction is
+the ONLY exit. A prose reason does not substitute for the declaration — the
+requirement is structural precisely so awareness of the right output form is not
+waivable by an unactioned sentence."""
 
 
 def _normalize_for_grounding(s: str) -> str:
@@ -938,10 +943,15 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         # normalization dimension and is left admissible.
         raw_side = r.get("normalized_side")
         if raw_side is None:
+            # A missing direction on ANY reading is the decisive awareness gap:
+            # released only by the concrete corrective action (declare a real
+            # normalized_side on every reading), never by a prose override. See
+            # the class-level note on the direction blocks below.
             return GuardVerdict.block(
                 message=_READING_DIRECTION_BLIND,
                 reason="reading_direction_missing",
                 category="verification_required",
+                overridable=False,
             )
         if not _is_real_str(raw_side):
             return GuardVerdict.block(
@@ -955,6 +965,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_READING_DIRECTION_BLIND,
                 reason="reading_direction_missing",
                 category="verification_required",
+                overridable=False,
             )
         # One reading has ONE direction: the same (reading, source) may not be
         # re-declared with a different normalized_side. Without this, an agent
@@ -989,6 +1000,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             message=_READING_DIRECTION_BLIND,
             reason="reading_direction_uniform",
             category="verification_required",
+            overridable=False,
         )
     hedge = dr.get("hedge")
     if not isinstance(hedge, dict):
