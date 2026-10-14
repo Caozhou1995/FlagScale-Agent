@@ -31,16 +31,29 @@ def test_housekeeping_section_present():
     assert "don't wait to be reminded" in SYSTEM_PROMPT_STATIC.lower()
 
 
+def _housekeeping_section() -> str:
+    """The Housekeeping Rhythm section, sliced from its H2 up to the next H2.
+
+    The assertions below MUST be scoped to this slice: every probe token also
+    occurs elsewhere in the 490+-line prompt, so a whole-prompt ``in`` check is
+    vacuously green — it passes even if the entire section is deleted.
+    """
+    match = re.search(r"## Housekeeping Rhythm.*?(?=\n## )", SYSTEM_PROMPT_STATIC, re.S)
+    assert match, "Housekeeping Rhythm section not found"
+    return match.group(0).lower()
+
+
 def test_housekeeping_covers_every_recurring_guard_domain():
-    low = SYSTEM_PROMPT_STATIC.lower()
-    # each domain a recurring guard force-reminds; the prompt must lead on it
+    # each domain a recurring guard force-reminds; the section must lead on it.
+    # Scoped to the section slice so deleting the section FAILS this test.
+    low = _housekeeping_section()
     for concept in (
         "memory",           # MemoryDiscipline
         "knowledge",        # KnowledgeSkill
         "plan",             # PlanUpdate
-        "evict",            # ContextPressure
+        "evict",            # ContextPressure (context-pressure relief)
         "background",       # LongTimeShell / ShellJobsWait
-        "scope",            # FindGuard
+        "scope",            # FindGuard (scoped search — token is "scope", not "find")
         "step_done",        # VerificationGuard convention/deliverable_reading
         "deliverable",      # DeliverableSurvival / completion verify
     ):
