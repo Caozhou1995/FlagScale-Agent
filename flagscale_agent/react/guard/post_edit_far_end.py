@@ -126,20 +126,6 @@ class PostEditFarEndGuard(Guard):
     # real source keeps these signals within the first chunk.
     _BOUNDARY_READ_LIMIT = 512 * 1024
 
-    # Signals that a Python source READS and WRITES a structured text format
-    # through a parser library — HTML/XML. Such a transform has a NORMALIZATION
-    # dimension: parse-then-reserialize is not byte-preserving, so the checker
-    # may normalize ONE side of its comparison (e.g. parse the reference and
-    # compare it to the RAW candidate) rather than both. A byte-preserving
-    # output then fails even though it looks "more faithful". Gated to
-    # normalization-BEARING parser libraries (HTML/XML), NOT exact-value
-    # formats like JSON, so an exact-equality task is never nudged toward a
-    # canonical re-serialization.
-    _STRUCTURE_PARSE_SIGNALS = (
-        "BeautifulSoup", "bs4", "html.parser", "html5lib", "lxml",
-        "xml.etree", "minidom", "ElementTree", "HTMLParser",
-    )
-
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         return None  # Inject-only: never blocks or escalates
 
@@ -238,20 +224,6 @@ class PostEditFarEndGuard(Guard):
                 "  · PROCESS BOUNDARY (subprocess/env): mock-based unit tests cannot "
                 "catch argv order, env/fd/cwd passing — run at least one REAL "
                 "(non-mocked) subprocess E2E before declaring done."
-            )
-        if cls._transforms_structured_text(path):
-            lines.append(
-                "  · SERIALIZATION DIRECTION — this file parses+re-serializes a "
-                "structured text format (HTML/XML). A byte-preserving writer and a "
-                "canonical re-serializer are NOT equivalent under a one-sided checker: "
-                "the grader may normalize ONE side only (e.g. parse(reference) and "
-                "compare it to the RAW candidate), so a byte-exact output FAILS while "
-                "canonical output passes — even though byte-preserving looks 'more "
-                "faithful'. Before committing the output form, ask: which side does the "
-                "checker normalize? When the task text sanctions normalization (e.g. "
-                "'except normalization that may occur during parsing'), the canonical "
-                "form is the safe branch. If both forms are defensible, prefer the one "
-                "that survives normalize(one-side) == other-raw."
             )
         if drift:
             lines.append(drift)
@@ -468,26 +440,3 @@ class PostEditFarEndGuard(Guard):
         except OSError:
             return False
         return any(sig in text for sig in cls._BOUNDARY_SIGNALS)
-
-    @classmethod
-    def _transforms_structured_text(cls, path: str) -> bool:
-        """True if this file READS and WRITES a structured text format via a
-        parser library (HTML/XML) — a normalization-bearing transform.
-
-        Such a transform has a SERIALIZATION DIRECTION: the checker may compare
-        parse(reference) against the RAW candidate, so a byte-preserving writer
-        fails where a canonical re-serialization passes. Gated to HTML/XML
-        parser signals only — an exact-value format (JSON) has no normalization
-        dimension and must not be nudged toward re-serialization.
-
-        Reads the file at the exact edited path; silent on any read failure
-        (inject-only guard must never raise).
-        """
-        if not path.endswith(".py"):
-            return False
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                text = fh.read(cls._BOUNDARY_READ_LIMIT)
-        except OSError:
-            return False
-        return any(sig in text for sig in cls._STRUCTURE_PARSE_SIGNALS)
