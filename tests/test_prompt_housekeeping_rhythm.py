@@ -34,9 +34,11 @@ def test_housekeeping_section_present():
 def _housekeeping_section() -> str:
     """The Housekeeping Rhythm section, sliced from its H2 up to the next H2.
 
-    The assertions below MUST be scoped to this slice: every probe token also
-    occurs elsewhere in the 490+-line prompt, so a whole-prompt ``in`` check is
-    vacuously green — it passes even if the entire section is deleted.
+    The assertions below MUST be scoped to this slice: a whole-prompt ``in``
+    check is vacuously green — it can pass even if the entire section is deleted
+    — so the load-bearing clauses are asserted against this slice, not the whole
+    prompt. (Some probes are additionally unique to the section, but uniqueness
+    is not relied on.)
     """
     match = re.search(r"## Housekeeping Rhythm.*?(?=\n## )", SYSTEM_PROMPT_STATIC, re.S)
     assert match, "Housekeeping Rhythm section not found"
@@ -62,7 +64,7 @@ def test_housekeeping_covers_every_recurring_guard_domain():
 
 def test_housekeeping_frames_guard_as_last_resort():
     """A guard firing must be framed as YOUR rhythm failing, not a service."""
-    low = SYSTEM_PROMPT_STATIC.lower()
+    low = _housekeeping_section()
     assert "a guard firing is a failure of your own rhythm" in low
     assert "on your own cadence" in low
 
@@ -82,6 +84,12 @@ def test_housekeeping_pre_states_read_back_before_declaring():
     assert "declared reading == delivered artifact" in low
     assert "re-read the actual bytes" in low
     assert "unsettled premise" in low
+    # Negative binding: assert the doctrine is NOT self-contradicted. A reframe
+    # that keeps the tokens but inverts the meaning (e.g. "ship it anyway") must
+    # FAIL — token presence alone would pass on inverted doctrine.
+    assert "not a licence to ship" in low
+    assert "ship it anyway" not in low
+    assert "may ship" not in low
 
 
 def test_housekeeping_leaks_no_grader_or_specifics():
