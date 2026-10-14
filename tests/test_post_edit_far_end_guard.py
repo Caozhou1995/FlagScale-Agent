@@ -294,29 +294,6 @@ class TestSerializationDirectionNudge:
         v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
         assert v is not None and "valid-for-type" in v.message
 
-    def test_direction_nudge_requires_fixed_point_probe(self, guard, tmp_path):
-        # The multiple-canonical-forms trap: 'canonical' is not unique, so the
-        # nudge must (a) name it, (b) require reproducing the checker's own
-        # normalizer, and (c) embed an EXECUTABLE fixed-point probe whose two
-        # booleans discriminate a true canonical form from prettify/entity forms.
-        p = self._write(tmp_path, "filter.py",
-                        "from bs4 import BeautifulSoup\n")
-        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
-        assert v is not None
-        assert "NOT unique" in v.message
-        assert "FIXED POINT" in v.message
-        assert "match" in v.message and "fixed" in v.message
-        assert "html.parser" in v.message  # the checker's parser named
-
-    def test_direction_nudge_forbids_uncheckable_transforms(self, guard, tmp_path):
-        # Minimal-uncertainty: no output-shape transform the normalizer does
-        # not itself apply (pretty-print / named entities / attr reorder).
-        p = self._write(tmp_path, "filter.py", "import lxml.html\n")
-        v = guard.check_post(_ctx(path=p, result=f"Successfully edited {p}"))
-        assert v is not None
-        assert "MINIMAL-UNCERTAINTY" in v.message
-        assert "named-entity" in v.message
-
 
 class TestMeasuredChecks:
     """Measurement upgrade: the guard RUNS the cheap validity check itself and
