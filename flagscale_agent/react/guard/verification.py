@@ -736,9 +736,13 @@ def _task_text_groundable(task_text: str) -> bool:
     t = (task_text or "").strip()
     if not t:
         return False
-    if "(unavailable" in t:
+    # Positional markers, matching the producer exactly: the unavailable form
+    # is the WHOLE text ("(unavailable: ...)"), the truncation marker is an
+    # ENDING ("...\n...[truncated]"). A mere substring occurrence inside real
+    # task text must NOT disable the check.
+    if t.startswith("(unavailable"):
         return False
-    if "...[truncated]" in t:
+    if t.endswith("...[truncated]"):
         return False
     return True
 
@@ -809,6 +813,14 @@ def _declares_graded_reading(dr) -> bool:
         return False
     deliverable = dr.get("deliverable")
     if isinstance(deliverable, str) and deliverable.strip().lower() == "none":
+        return False
+    # A `grader_visible: True` claim short-circuits the readings requirement
+    # upstream (_check_deliverable_reading_field returns before checking
+    # readings/hedge), so it enumerates NO graded reading. It therefore must NOT
+    # satisfy the completion arm -- otherwise the arm is opt-outable again via a
+    # self-asserted visibility. A genuinely visible grader still closes through
+    # the arm's override, with the reason on record.
+    if dr.get("grader_visible") is True:
         return False
     return _is_real_str(deliverable)
 

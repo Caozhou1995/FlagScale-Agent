@@ -283,3 +283,45 @@ def test_declares_graded_reading_predicate():
     assert _declares_graded_reading(None) is False
     assert _declares_graded_reading({}) is False
     assert _declares_graded_reading({"deliverable": "/app/y"}) is True
+
+
+def test_declares_graded_reading_rejects_grader_visible_claim():
+    """A `grader_visible: True` claim enumerates NO reading (it short-circuits the
+    readings/hedge requirement upstream), so it must NOT satisfy the completion arm
+    — otherwise a self-asserted visibility re-opens the opt-out."""
+    from flagscale_agent.react.guard.verification import _declares_graded_reading
+    assert _declares_graded_reading(
+        {"deliverable": "/app/y", "grader_visible": True}) is False
+    # A visible grader still closes through the override, so a real reading with
+    # grader_visible=False (or absent) remains a valid declaration.
+    assert _declares_graded_reading(
+        {"deliverable": "/app/y", "grader_visible": False}) is True
+
+
+def test_tc_grader_visible_claim_still_blocks():
+    """End-to-end: a gv=True claim without a real reading must not set the flag,
+    so [TASK_COMPLETE] still blocks."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        assert g._graded_reading_seen is False
+        v = g.check_pre(_ctx("[TASK_COMPLETE]"))
+        assert v is not None and v.reason == "completion_without_graded_reading", v
+    finally:
+        _close(d)
+
+
+def test_tc_task_text_containing_marker_still_groundable():
+    """Positional marker matching: real task text that merely CONTAINS '(unavailable'
+    or '...[truncated]' as a substring must remain groundable — only the producer's
+    exact whole-text form disables the arm."""
+    from flagscale_agent.react.guard.verification import _task_text_groundable
+    # Whole-text unavailable / ending-truncation forms -> not groundable.
+    assert _task_text_groundable("(unavailable) task text not recovered") is False
+    assert _task_text_groundable("some task ...[truncated]") is False
+    assert _task_text_groundable("") is False
+    # A substring occurrence inside real text -> still groundable.
+    assert _task_text_groundable(
+        "the log shows '(unavailable' as a literal token") is True
+    assert _task_text_groundable(
+        "quote ...[truncated] appears mid-sentence here") is True
