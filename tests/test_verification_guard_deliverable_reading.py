@@ -502,8 +502,8 @@ def test_asymmetric_side_passes():
     d, guard = _guard_with_step(["A1"], TASK)
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
-              "readings": [dict(GROUNDED, normalized_side="reference"),
-                           dict(GROUNDED, normalized_side="both")],
+              "readings": [dict(GROUNDED, reading="reading A", normalized_side="reference"),
+                           dict(GROUNDED, reading="reading B", normalized_side="both")],
               "hedge": _union_hedge()}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
@@ -514,9 +514,41 @@ def test_neither_side_passes():
     d, guard = _guard_with_step(["A1"], TASK)
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
-              "readings": [dict(GROUNDED, normalized_side="neither"),
-                           dict(GROUNDED, normalized_side="candidate")],
+              "readings": [dict(GROUNDED, reading="reading A", normalized_side="neither"),
+                           dict(GROUNDED, reading="reading B", normalized_side="candidate")],
               "hedge": _union_hedge()}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
         shutil.rmtree(d)
+
+
+def test_conflicting_normalized_side_blocks():
+    """The SAME reading re-declared with a different direction is deception:
+    an agent padding an all-'both' set with a duplicate 'reference' entry to
+    fake asymmetry must be blocked (reviewer F2/F3)."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, normalized_side="both"),
+                           dict(GROUNDED, normalized_side="both"),
+                           dict(GROUNDED, normalized_side="reference")],
+              "hedge": _union_hedge()}
+        v = guard.check_pre(_ctx(dr))
+        assert v is not None and v.reason == "reading_direction_conflict"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_non_string_normalized_side_is_malformed():
+    """A present-but-non-string normalized_side is malformed, not merely
+    'missing' (reviewer F4 — the str() coercion hid a type error)."""
+    for bad in (["reference"], 1, True, {"x": "reference"}):
+        d, guard = _guard_with_step(["A1"], TASK)
+        try:
+            dr = {"deliverable": "out.json", "grader_visible": False,
+                  "readings": [dict(GROUNDED, normalized_side=bad)],
+                  "hedge": _union_hedge()}
+            v = guard.check_pre(_ctx(dr))
+            assert v is not None and v.reason == "deliverable_reading_malformed", bad
+        finally:
+            shutil.rmtree(d)

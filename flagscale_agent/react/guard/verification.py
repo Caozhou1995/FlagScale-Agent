@@ -566,7 +566,8 @@ def _check_convention_field(conv):
 #   {"deliverable": "<path>", "grader_visible": true}  # visible -> just run it
 #   {"deliverable": "<path>", "grader_visible": false,
 #    "readings": [{"reading": ..., "source": "<verbatim task quote>",
-#                  "acceptance_test": "<cmd deciding acceptance under it>"}],
+#                  "acceptance_test": "<cmd deciding acceptance under it>",
+#                  "normalized_side": "reference|candidate|both|neither"}],
 #    "hedge": {"shape": union|intersection|none, "output": ..., "evidence": ...,
 #              "extras_direction": ignored|penalized},
 #    "if_none": {"why_intersection_empty": ...,
@@ -597,7 +598,8 @@ an explicit owned claim). One fixed shape:
     "grader_visible": false,
     "readings": [{"reading": "<one defensible reading>",
                   "source": "<verbatim quote from the task text>",
-                  "acceptance_test": "<command that decides acceptance under it>"}],
+                  "acceptance_test": "<command that decides acceptance under it>",
+                  "normalized_side": "reference|candidate|both|neither"}],
     "hedge": {"shape": "union|intersection|none", "output": "<for union/intersection: the REAL output safe under EVERY reading; for none: None>",
               "evidence": "<for union/intersection: the REAL command + raw output proving it; for none: None>",
               "extras_direction": "ignored|penalized"},
@@ -619,8 +621,14 @@ not-applicable), or a structured object naming the graded artifact:
        - false -> "readings" AND "hedge" become mandatory (see below).
   • "readings": non-empty list; every entry needs a real "reading", a real
        "source" (a VERBATIM quote from the task text — the reading must come
-       from the task, not invention), and a real "acceptance_test" (a command
-       that decides whether an output is accepted under that reading).
+       from the task, not invention), a real "acceptance_test" (a command
+       that decides whether an output is accepted under that reading), and a
+       real "normalized_side" (reference|candidate|both|neither — WHICH SIDE
+       the checker normalizes before comparing). At least one reading must be
+       STRICTLY ASYMMETRIC (reference|neither); a reading set that is all
+       "both" cannot discriminate the output forms the checker accepts. The
+       SAME reading (same "reading"+"source") must not appear twice with
+       CONFLICTING normalized_side — one reading has one direction.
   • "hedge": object with "shape" one of union|intersection|none. For
        union/intersection: a real "output" + "extras_direction" (union valid only
        under "ignored"; intersection only under "penalized") + an OBSERVED
@@ -834,6 +842,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         )
     groundable = _task_text_groundable(task_text)
     has_asymmetric_direction = False
+    seen_direction = {}
     for r in readings:
         if not isinstance(r, dict):
             return GuardVerdict.block(
@@ -865,13 +874,43 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         # STRICTLY ASYMMETRIC direction (reference|neither): normalize(reference)
         # == candidate_raw is the strictest predicate, so an output surviving it
         # also survives both/candidate — the conservative branch.
-        side = str(r.get("normalized_side") or "").strip().lower()
+        raw_side = r.get("normalized_side")
+        if raw_side is None:
+            return GuardVerdict.block(
+                message=_READING_DIRECTION_BLIND,
+                reason="reading_direction_missing",
+                category="verification_required",
+            )
+        if not _is_real_str(raw_side):
+            return GuardVerdict.block(
+                message=_DELIVERABLE_READING_MALFORMED,
+                reason="deliverable_reading_malformed",
+                category="verification_required",
+            )
+        side = raw_side.strip().lower()
         if side not in ("reference", "candidate", "both", "neither"):
             return GuardVerdict.block(
                 message=_READING_DIRECTION_BLIND,
                 reason="reading_direction_missing",
                 category="verification_required",
             )
+        # One reading has ONE direction: the same (reading, source) may not be
+        # re-declared with a different normalized_side. Without this, an agent
+        # could pad an all-"both" set with a spurious duplicate carrying
+        # "reference" to satisfy the asymmetry requirement while the real
+        # readings stay symmetric — the deception this gate exists to stop.
+        key = (
+            _normalize_for_grounding(r.get("reading")),
+            _normalize_for_grounding(r.get("source")),
+        )
+        prev = seen_direction.get(key)
+        if prev is not None and prev != side:
+            return GuardVerdict.block(
+                message=_DELIVERABLE_READING_MALFORMED,
+                reason="reading_direction_conflict",
+                category="verification_required",
+            )
+        seen_direction[key] = side
         if side in ("reference", "neither"):
             has_asymmetric_direction = True
     if not has_asymmetric_direction:
