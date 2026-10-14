@@ -67,6 +67,23 @@ def test_housekeeping_frames_guard_as_last_resort():
     assert "on your own cadence" in low
 
 
+def test_housekeeping_pre_states_read_back_before_declaring():
+    """The section must lead on the declared-reading == delivered-artifact invariant.
+
+    That invariant is the (B)-class failure the deliverable_reading guard can only
+    catch after the fact: a capable agent REASONS the correct output form, then
+    ships an artifact that quietly contradicts it (or records a doubt and ships
+    anyway). The doctrine belongs here — prompt-level, so the agent acts on its
+    own cadence — and is asserted SCOPED to the section slice so deleting it
+    fails this test rather than passing on a whole-prompt substring hit.
+    """
+    low = _housekeeping_section()
+    assert "read-back" in low
+    assert "declared reading == delivered artifact" in low
+    assert "re-read the actual bytes" in low
+    assert "unsettled premise" in low
+
+
 def test_housekeeping_leaks_no_grader_or_specifics():
     """GENERAL posture: no task's grader, engine, or construct may be hardcoded."""
     p = SYSTEM_PROMPT_STATIC
