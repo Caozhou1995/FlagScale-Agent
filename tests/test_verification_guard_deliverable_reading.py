@@ -656,3 +656,33 @@ def test_corrective_action_releases_direction_requirement():
         assert guard.check_pre(_ctx(dr)) is None
     finally:
         shutil.rmtree(d)
+
+
+def test_hedge_arm_block_is_non_overridable():
+    """The real retry15 instance released the HEDGE arm with prose after the
+    agent had CONSTRUCTED the union (a value-clause cited as a presence-clause).
+    Every block in the deliverable_reading gate is now non-overridable."""
+    from flagscale_agent.react.guard import GuardRegistry
+
+    def _reg_ctx(dr, override):
+        c = _ctx(dr)
+        c.override_reason = override
+        return c
+
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        reg = GuardRegistry()
+        reg.register(guard)
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, normalized_side="reference")],
+              "hedge": {"shape": "none"}}          # incomplete if_none
+        v1 = reg.check_pre(_reg_ctx(dr, ""))
+        v2 = reg.check_pre(_reg_ctx(
+            dr, "the example fixes only the FORM of the base; penalize-wrong-values "
+                "makes union inadmissible"))
+        assert v1 is not None and v1.reason == "hedge_unproven"
+        assert v1.overridable is False, "hedge arm must be non-overridable"
+        assert v2 is not None, "prose override must NOT release the hedge block"
+    finally:
+        shutil.rmtree(d)
+

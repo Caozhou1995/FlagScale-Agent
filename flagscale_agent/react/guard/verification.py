@@ -858,6 +858,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             message=_DELIVERABLE_READING_MISSING,
             reason="deliverable_reading_missing",
             category="verification_required",
+        overridable=False,
         )
     if isinstance(dr, str):
         # The string form is the explicit not-applicable token — ONLY the
@@ -869,12 +870,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             message=_DELIVERABLE_READING_MALFORMED,
             reason="deliverable_reading_malformed",
             category="verification_required",
+        overridable=False,
         )
     if not isinstance(dr, dict):
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
             reason="deliverable_reading_malformed",
             category="verification_required",
+        overridable=False,
         )
     deliverable = dr.get("deliverable")
     if isinstance(deliverable, str) and deliverable.strip().lower() == "none":
@@ -884,6 +887,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             message=_DELIVERABLE_READING_MALFORMED,
             reason="deliverable_reading_malformed",
             category="verification_required",
+        overridable=False,
         )
     gv = dr.get("grader_visible")
     if not isinstance(gv, bool):
@@ -891,6 +895,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             message=_DELIVERABLE_READING_MALFORMED,
             reason="deliverable_reading_malformed",
             category="verification_required",
+        overridable=False,
         )
     if gv:
         return None
@@ -900,6 +905,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             message=_DELIVERABLE_READING_MALFORMED,
             reason="deliverable_reading_malformed",
             category="verification_required",
+        overridable=False,
         )
     groundable = _task_text_groundable(task_text)
     has_onesided_direction = False
@@ -911,6 +917,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_DELIVERABLE_READING_MALFORMED,
                 reason="deliverable_reading_malformed",
                 category="verification_required",
+            overridable=False,
             )
         if not (_is_real_str(r.get("reading"))
                 and _is_real_str(r.get("source"))
@@ -919,6 +926,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_DELIVERABLE_READING_MALFORMED,
                 reason="deliverable_reading_malformed",
                 category="verification_required",
+            overridable=False,
             )
         if groundable and (
             _normalize_for_grounding(r.get("source"))
@@ -928,6 +936,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_READING_NOT_GROUNDED,
                 reason="reading_not_grounded",
                 category="verification_required",
+            overridable=False,
             )
         # Direction-of-comparison: WHICH SIDE the checker normalizes. A set that
         # asserts a normalization (any side other than "neither") must carry at
@@ -958,6 +967,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_DELIVERABLE_READING_MALFORMED,
                 reason="deliverable_reading_malformed",
                 category="verification_required",
+            overridable=False,
             )
         side = raw_side.strip().lower()
         if side not in ("reference", "candidate", "both", "neither"):
@@ -982,6 +992,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_DELIVERABLE_READING_MALFORMED,
                 reason="reading_direction_conflict",
                 category="verification_required",
+            overridable=False,
             )
         seen_direction[key] = side
         if side in ("reference", "candidate"):
@@ -1008,6 +1019,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             message=_DELIVERABLE_READING_MALFORMED,
             reason="deliverable_reading_malformed",
             category="verification_required",
+        overridable=False,
         )
     shape = str(hedge.get("shape") or "").strip().lower()
     if shape in ("union", "intersection"):
@@ -1016,12 +1028,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_unproven",
                 category="verification_required",
+            overridable=False,
             )
         if not _evidence_observed(hedge.get("evidence"), observed):
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_evidence_unobserved",
                 category="verification_required",
+            overridable=False,
             )
         extras = str(hedge.get("extras_direction") or "").strip().lower()
         if extras not in ("ignored", "penalized"):
@@ -1029,12 +1043,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_unproven",
                 category="verification_required",
+            overridable=False,
             )
         if shape == "union" and extras == "penalized":
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_shape_mismatch",
                 category="verification_required",
+            overridable=False,
             )
     elif shape == "none":
         if_none = dr.get("if_none")
@@ -1043,12 +1059,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_unproven",
                 category="verification_required",
+            overridable=False,
             )
         if not _is_real_str(if_none.get("why_intersection_empty")):
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_unproven",
                 category="verification_required",
+            overridable=False,
             )
         # An introspected "no hedge possible" is a HYPOTHESIS, not a finding:
         # to claim the union is EMPTY the agent must have CONSTRUCTED the union
@@ -1061,6 +1079,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_union_unattempted",
                 category="verification_required",
+            overridable=False,
             )
         # Direction-of-loss: rejecting the built union is valid only if the task
         # penalizes EXTRA output. A clause that penalizes only INCORRECT VALUES
@@ -1077,6 +1096,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_extras_direction_undeclared",
                 category="verification_required",
+            overridable=False,
             )
         if groundable:
             if not _is_real_str(if_none.get("extras_direction_source")):
@@ -1084,6 +1104,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     message=_HEDGE_UNPROVEN,
                     reason="hedge_extras_direction_unquoted",
                     category="verification_required",
+                overridable=False,
                 )
             if (
                 _normalize_for_grounding(if_none.get("extras_direction_source"))
@@ -1093,6 +1114,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     message=_READING_NOT_GROUNDED,
                     reason="reading_not_grounded",
                     category="verification_required",
+                overridable=False,
                 )
         rej = if_none.get("readings_rejected")
         if not isinstance(rej, list) or not rej:
@@ -1100,6 +1122,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 message=_HEDGE_UNPROVEN,
                 reason="hedge_unproven",
                 category="verification_required",
+            overridable=False,
             )
         for e in rej:
             if not (isinstance(e, dict)
@@ -1109,6 +1132,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     message=_HEDGE_UNPROVEN,
                     reason="hedge_unproven",
                     category="verification_required",
+                overridable=False,
                 )
             # A rejected candidate's "evidence" must be an OBSERVED artifact,
             # not a sentence: a fabricated rejection cannot manufacture an empty
@@ -1118,6 +1142,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     message=_HEDGE_UNPROVEN,
                     reason="hedge_rejection_unobserved",
                     category="verification_required",
+                overridable=False,
                 )
             # A rejected candidate carries the SAME provenance requirement as
             # an accepted reading: its source must quote the task verbatim, so a
@@ -1130,6 +1155,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     message=_READING_NOT_GROUNDED,
                     reason="reading_not_grounded",
                     category="verification_required",
+                overridable=False,
                 )
         for k in ("bet_on", "bet_loses_when", "why_safe"):
             if not _is_real_str(if_none.get(k)):
@@ -1137,12 +1163,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     message=_HEDGE_UNPROVEN,
                     reason="hedge_unproven",
                     category="verification_required",
+                overridable=False,
                 )
     else:
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
             reason="deliverable_reading_malformed",
             category="verification_required",
+        overridable=False,
         )
     return None
 
