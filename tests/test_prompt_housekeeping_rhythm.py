@@ -105,3 +105,35 @@ def test_housekeeping_adds_no_new_placeholder():
     """The section must not add a .format placeholder (only cwd/knowledge/skills/tools)."""
     assert set(re.findall(r"{([a-z_]+)}", SYSTEM_PROMPT_STATIC)) == {
         "cwd", "knowledge", "skills", "tools"}
+
+
+def test_housekeeping_pre_states_canonical_round_trip():
+    """The section must lead on canonical-serializer-over-hand-rolled-transform.
+
+    Generic (no engine literal): a hand-rolled lexical transformer that edits raw
+    text spans passes in-sample inputs and silently corrupts preserved regions on a
+    held-out corpus; a standard parser + canonical re-serializer makes 'untouched
+    regions stay unchanged' a structural property. Asserted SCOPED to the section
+    slice so deletion fails this test.
+    """
+    low = _housekeeping_section()
+    assert "canonical round-trip" in low
+    assert "canonical serializer" in low
+    assert "hand-rolled" in low
+    # negative binding (F1): the doctrine must forbid the hand-rolled transform, not
+    # merely mention it — an inverted rewrite ("prefer a hand-rolled transformer") must
+    # fail.
+    assert "do not hand-roll a lexical transformer" in low
+    assert "do hand-roll" not in low
+    assert "prefer a hand-rolled" not in low
+
+
+def test_housekeeping_pre_states_held_out_corpus():
+    """The section must lead on 'your own examples are not a held-out test set'."""
+    low = _housekeeping_section()
+    assert "held-out test set" in low
+    assert "broad" in low
+    # negative binding (F1): in-sample-only validation is forbidden, not optional —
+    # an inverted rewrite ("in-sample validation is sufficient") must fail.
+    assert "in-sample-only validation is not evidence" in low
+    assert "in-sample validation is sufficient" not in low
