@@ -452,7 +452,7 @@ def test_rejected_entry_fabricated_evidence_blocks():
         shutil.rmtree(d)
 
 
-# --- direction-of-comparison: at least one strictly-asymmetric reading ---
+# --- direction-of-comparison: at least one ONE-SIDED reading (unless all-neither) ---
 
 def _union_hedge():
     return {"shape": "union", "output": "...",
@@ -498,7 +498,7 @@ def test_invalid_normalized_side_blocks():
 
 
 def test_asymmetric_side_passes():
-    """A reference-only (strictest) reading alongside a symmetric one passes."""
+    """A one-sided (reference) reading alongside a symmetric one passes."""
     d, guard = _guard_with_step(["A1"], TASK)
     try:
         dr = {"deliverable": "out.json", "grader_visible": False,
