@@ -591,3 +591,58 @@ class TestBatchStepDoneEvidence:
         assert verdict is not None
         assert verdict.reason == "step_done_with_acceptance_no_verification"
 
+    def test_batch_nested_declaration_is_read(self):
+        # A batch item that flips a step to done commits the SAME claim as a
+        # single step_done, and the NATURAL place to write it is ON the item.
+        # The guard must read each done item's OWN convention/deliverable_reading
+        # (falling back to top level), not only the top-level fields — otherwise a
+        # REAL nested declaration is silently unread and every fixed-field gate
+        # (incl. the direction gate) is bypassed. Reproduces the retry18 filter-js
+        # evasion: top-level absent, declaration nested, gate never fired.
+        guard = self._guard_with_plan(["A1"])
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{
+                    "step_id": 1, "status": "done",
+                    "verification": ["A1 — observed x"],
+                    "convention": {"name": "none"},
+                    # real graded reading nested in the ITEM, uniform direction
+                    "deliverable_reading": {
+                        "deliverable": "/app/out",
+                        "grader_visible": False,
+                        "readings": [{
+                            "reading": "r", "source": "s",
+                            "acceptance_test": "t", "normalized_side": "candidate",
+                        }],
+                        "hedge": {"shape": "none", "output": None,
+                                  "evidence": None, "extras_direction": "ignored"},
+                    },
+                }],
+                "_override_reason": "re-checked against each acceptance criterion",
+            },
+            override_reason="re-checked against each acceptance criterion",
+        )
+        verdict = guard.check_pre(ctx)
+        assert verdict is not None, "nested declaration was not read -> gate bypassed"
+        assert verdict.reason == "reading_direction_uniform"
+
+    def test_batch_item_falls_back_to_top_level(self):
+        # Backward-compat: when an item carries no declaration, the top-level
+        # fields still govern (no regression for callers using top-level only).
+        guard = self._guard_with_plan(["A1"])
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{"step_id": 1, "status": "done",
+                             "verification": ["A1 — observed x"]}],
+                "convention": {"name": "none"},
+                "deliverable_reading": {"deliverable": "none"},
+                "_override_reason": "re-checked against each acceptance criterion",
+            },
+            override_reason="re-checked against each acceptance criterion",
+        )
+        assert guard.check_pre(ctx) is None
+

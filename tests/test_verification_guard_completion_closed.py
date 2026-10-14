@@ -325,3 +325,21 @@ def test_tc_task_text_containing_marker_still_groundable():
         "the log shows '(unavailable' as a literal token") is True
     assert _task_text_groundable(
         "quote ...[truncated] appears mid-sentence here") is True
+
+
+def test_tc_composite_wiring_truncated_segment_not_groundable():
+    """The guard is wired with a COMPOSITE (agent.py: orig + "\\n\\n" + last turn).
+    A truncated or unavailable SEGMENT of that composite must disable grounding
+    too — the marker sits at a segment edge, not at the composite's ends. A
+    regression here would fail-CLOSED (spurious reading_not_grounded) against a
+    partial corpus."""
+    from flagscale_agent.react.guard.verification import _task_text_groundable
+    # Truncated original segment then a real last-turn segment -> not groundable.
+    assert _task_text_groundable(
+        "real task head line one\n...[truncated]\n\nfinal user turn text") is False
+    # Unavailable original segment then a real last-turn segment -> not groundable.
+    assert _task_text_groundable(
+        "(unavailable: original not recovered)\n\nfinal user turn text") is False
+    # A truly complete composite (no partial segment) -> groundable.
+    assert _task_text_groundable(
+        "complete task text here\n\nfinal user turn text") is True

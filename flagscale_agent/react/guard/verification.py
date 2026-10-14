@@ -736,13 +736,19 @@ def _task_text_groundable(task_text: str) -> bool:
     t = (task_text or "").strip()
     if not t:
         return False
-    # Positional markers, matching the producer exactly: the unavailable form
-    # is the WHOLE text ("(unavailable: ...)"), the truncation marker is an
-    # ENDING ("...\n...[truncated]"). A mere substring occurrence inside real
-    # task text must NOT disable the check.
-    if t.startswith("(unavailable"):
+    # The guard receives a COMPOSITE: the original task + "\n\n" + the last
+    # user turn (agent.py wiring). Each marker therefore sits at a SEGMENT edge,
+    # not necessarily at t's ends. Ground quotes only against a COMPLETE corpus:
+    # an unavailable OR truncated SEGMENT means real text is missing, so fail
+    # open (skip the grounding check) rather than emit a spurious
+    # reading_not_grounded block against a partial corpus. A mere substring
+    # occurrence inside real task text must NOT disable the check.
+    segments = [s.strip() for s in t.split("\n\n") if s.strip()]
+    if not segments:
         return False
-    if t.endswith("...[truncated]"):
+    if any(s.startswith("(unavailable") for s in segments):
+        return False
+    if any(s.endswith("...[truncated]") for s in segments):
         return False
     return True
 
@@ -1370,16 +1376,34 @@ class VerificationGuard(Guard):
                 # same declaration is mandatory here; otherwise the batch path is
                 # the silent hole the convention field exists to close.
                 if has_done:
-                    bad = _check_convention_field(ctx.tool_args.get("convention"))
-                    if bad is not None:
-                        return bad
-                    dr = ctx.tool_args.get("deliverable_reading")
-                    bad = _check_deliverable_reading_field(
-                        dr, self._task_text(), self._observed(ctx))
-                    if bad is not None:
-                        return bad
-                    if _declares_graded_reading(dr):
-                        self._graded_reading_seen = True
+                    # A batch item that flips a step to "done" commits the SAME
+                    # claim as a single step_done — and the natural place to write
+                    # that claim is ON the item. Read each done item's OWN
+                    # declaration first, falling back to the top-level one, so a
+                    # declaration nested in the item cannot EVADE the fixed-field
+                    # checks (the hole this closes: the agent wrote a real
+                    # convention/deliverable_reading inside updates[i], the guard
+                    # read only the top level, saw None, and silently skipped the
+                    # direction gate — the one lever that forces the agent to face
+                    # its grader's oracle).
+                    for u in updates:
+                        if not (isinstance(u, dict) and u.get("status") == "done"):
+                            continue
+                        conv = u.get("convention")
+                        if conv is None:
+                            conv = ctx.tool_args.get("convention")
+                        bad = _check_convention_field(conv)
+                        if bad is not None:
+                            return bad
+                        dr = u.get("deliverable_reading")
+                        if dr is None:
+                            dr = ctx.tool_args.get("deliverable_reading")
+                        bad = _check_deliverable_reading_field(
+                            dr, self._task_text(), self._observed(ctx))
+                        if bad is not None:
+                            return bad
+                        if _declares_graded_reading(dr):
+                            self._graded_reading_seen = True
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:
