@@ -639,9 +639,13 @@ not-applicable), or a structured object naming the graded artifact:
        from the task, not invention), a real "acceptance_test" (a command
        that decides whether an output is accepted under that reading), and a
        real "normalized_side" (reference|candidate|both|neither — WHICH SIDE
-       the checker normalizes before comparing). At least one reading must be
-       STRICTLY ASYMMETRIC (reference|neither); a reading set that is all
-       "both" cannot discriminate the output forms the checker accepts. The
+       the checker normalizes before comparing). Any set that asserts a
+       normalization must include at least one ONE-SIDED reading
+       (reference|candidate — normalize ONE side, compare the other RAW); a set
+       that is all "neither" declares a pure byte/value-equality task and is
+       admissible. A set mixing "neither" with "both" but omitting the one-sided
+       case is AGNOSTIC to the output's form and cannot discriminate the
+       candidate forms the checker accepts. The
        SAME reading (same "reading"+"source") must not appear twice with
        CONFLICTING normalized_side — one reading has one direction.
   • "hedge": object with "shape" one of union|intersection|none. For
@@ -701,24 +705,28 @@ Re-issue with a PROVEN hedge, or a complete "if_none" proving emptiness."""
 _READING_DIRECTION_BLIND = """[VerificationGuard] The reading set is DIRECTION-BLIND.
 
 Each reading declares `normalized_side` — WHICH SIDE the checker normalizes
-before comparing (one of: reference, candidate, both, neither). A set of readings
-that ALL declare "both" cannot distinguish the candidate forms the checker
-actually accepts: a symmetric comparison normalizes BOTH sides, so a byte-exact
-output and a canonical-form output both pass it, while the real checker may
-normalize only ONE side and reject the other form. This is exactly how a
-self-oracle green-washes the wrong serialization.
+before comparing (one of: reference, candidate, both, neither). A set that asserts
+a normalization (any side other than "neither") but carries NO one-sided
+direction cannot distinguish the candidate forms the checker actually accepts:
+"both" normalizes BOTH sides (idempotent) and "neither" normalizes NEITHER
+(trivial), so a byte-exact output and a canonical-form output pass them equally,
+while the real checker may normalize only ONE side and compare it to the other
+side RAW, rejecting the other form. This is exactly how a self-oracle
+green-washes the wrong serialization: a set {neither, both} looks asymmetric but
+contains NO comparison that can reject a form difference.
 
-You MUST include at least one reading whose direction is STRICTLY ASYMMETRIC —
-"reference" (normalize the reference, compare the candidate RAW) or "neither"
-(byte-exact). The reference-only direction is the STRICTEST: normalization is
-idempotent, so any output that passes "normalize(reference) == candidate_raw"
-also passes every weaker direction (both / candidate) — an output surviving the
-strictest predicate is the conservative branch, and one that fails it is the
-form your symmetric oracle hid.
+You MUST include at least one reading whose direction is ONE-SIDED — "reference"
+(normalize the reference, compare the candidate RAW) or "candidate" (normalize
+the candidate, compare the reference RAW) — UNLESS every reading is "neither"
+(a pure byte/value-equality task with no normalization dimension). A one-sided
+comparison is the only kind that DISCRIMINATES the output's serialization:
+normalization is idempotent, so an output that passes a one-sided predicate is
+the conservative branch, and one that fails it is the form your agnostic oracle
+hid.
 
 Re-issue with `normalized_side` on EVERY reading (real value in
 reference|candidate|both|neither) and at least one reading using reference or
-neither."""
+candidate (or make every reading "neither" if no normalization is involved)."""
 
 
 def _normalize_for_grounding(s: str) -> str:
@@ -889,7 +897,8 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             category="verification_required",
         )
     groundable = _task_text_groundable(task_text)
-    has_asymmetric_direction = False
+    has_onesided_direction = False
+    all_neither = True
     seen_direction = {}
     for r in readings:
         if not isinstance(r, dict):
@@ -915,13 +924,18 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 reason="reading_not_grounded",
                 category="verification_required",
             )
-        # Direction-of-comparison: WHICH SIDE the checker normalizes. A set whose
-        # readings are ALL symmetric ("both") cannot discriminate the output forms
-        # the checker accepts — a symmetric self-oracle green-washes a byte-exact
-        # vs canonical-form difference. A real reading set must carry at least one
-        # STRICTLY ASYMMETRIC direction (reference|neither): normalize(reference)
-        # == candidate_raw is the strictest predicate, so an output surviving it
-        # also survives both/candidate — the conservative branch.
+        # Direction-of-comparison: WHICH SIDE the checker normalizes. A set that
+        # asserts a normalization (any side other than "neither") must carry at
+        # least one ONE-SIDED direction (reference|candidate) -- a comparison
+        # that normalizes ONE side and compares it to the OTHER side RAW. Only a
+        # one-sided comparison can discriminate a candidate-form (serialization)
+        # difference: "both" (normalize == normalize) is idempotent and "neither"
+        # (raw == raw) is trivial, so a byte-preserving output passes both while
+        # the real checker may compare normalize(reference) against the RAW
+        # candidate and reject it. A set pairing "neither" with "both" and
+        # omitting the one-sided case is the direction-blind set that green-washes
+        # the serialization choice. A set that is ALL "neither" declares no
+        # normalization dimension and is left admissible.
         raw_side = r.get("normalized_side")
         if raw_side is None:
             return GuardVerdict.block(
@@ -959,9 +973,18 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 category="verification_required",
             )
         seen_direction[key] = side
-        if side in ("reference", "neither"):
-            has_asymmetric_direction = True
-    if not has_asymmetric_direction:
+        if side in ("reference", "candidate"):
+            has_onesided_direction = True
+        if side != "neither":
+            all_neither = False
+    # A set that is ALL "neither" declares a pure byte/value-equality task with
+    # no normalization dimension -- legitimate (e.g. an exact-JSON grader). Any
+    # OTHER set asserts a normalization is in play, so it MUST enumerate at
+    # least one ONE-SIDED direction (reference|candidate): "both" (normalize both
+    # sides) is IDEMPOTENT and cannot reject a wrong output form by itself, and a
+    # set that pairs "neither" with "both" while omitting the one-sided case is
+    # direction-blind -- exactly how a serialization choice is green-washed.
+    if not has_onesided_direction and not all_neither:
         return GuardVerdict.block(
             message=_READING_DIRECTION_BLIND,
             reason="reading_direction_uniform",

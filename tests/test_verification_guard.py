@@ -614,7 +614,7 @@ class TestBatchStepDoneEvidence:
                         "grader_visible": False,
                         "readings": [{
                             "reading": "r", "source": "s",
-                            "acceptance_test": "t", "normalized_side": "candidate",
+                            "acceptance_test": "t", "normalized_side": "both",
                         }],
                         "hedge": {"shape": "none", "output": None,
                                   "evidence": None, "extras_direction": "ignored"},

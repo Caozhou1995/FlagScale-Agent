@@ -522,6 +522,38 @@ def test_neither_side_passes():
         shutil.rmtree(d)
 
 
+def test_all_neither_passes_exact_equality_task():
+    """An all-'neither' set declares a pure byte/value-equality task with NO
+    normalization dimension (e.g. an exact-JSON grader) — admissible. This is the
+    extract-elf case (reward=1 with normalized_side='neither'); requiring a
+    one-sided direction unconditionally would false-block it."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, reading="reading A", normalized_side="neither"),
+                           dict(GROUNDED, reading="reading B", normalized_side="neither")],
+              "hedge": _union_hedge()}
+        assert guard.check_pre(_ctx(dr)) is None
+    finally:
+        shutil.rmtree(d)
+
+
+def test_neither_plus_both_blocks():
+    """The retry19 trap: a set mixing 'neither' with 'both' but omitting the
+    one-sided case is direction-blind — it asserts a normalization is in play yet
+    carries no comparison that can reject a wrong output serialization."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, reading="reading A", normalized_side="neither"),
+                           dict(GROUNDED, reading="reading B", normalized_side="both")],
+              "hedge": _union_hedge()}
+        v = guard.check_pre(_ctx(dr))
+        assert v is not None and v.reason == "reading_direction_uniform"
+    finally:
+        shutil.rmtree(d)
+
+
 def test_conflicting_normalized_side_blocks():
     """The SAME reading re-declared with a different direction is deception:
     an agent padding an all-'both' set with a duplicate 'reference' entry to
