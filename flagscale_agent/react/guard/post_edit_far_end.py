@@ -467,6 +467,14 @@ class PostEditFarEndGuard(Guard):
             "file (not your own summary of it) and confirm the thing is really "
             "there and really in the required format. Reading back your own "
             "narration is not the probe — only the bytes on disk are.",
+            "  · VERIFICATION DIRECTION — if your deliverable REWRITES the FORM of "
+            "its input (reads content, then re-emits it, in the same or another "
+            "structured form), a checker may NORMALIZE ONE SIDE of its comparison "
+            "and compare the OTHER side RAW. A byte-preserving writer can then FAIL "
+            "where a canonical re-emission PASSES — even though preserving bytes "
+            "looks more faithful. Before you commit the output form, ask WHICH side "
+            "the checker normalizes; when both forms are defensible, prefer the one "
+            "that survives normalize-one-side == other-raw.",
             "  · SIDE-EFFECT sweep — before delivering, run `git status --short` "
             "(and `git diff --stat`) and READ the list: is there any change you did "
             "not intend to ship — a scratch/byproduct file, or a file you should "

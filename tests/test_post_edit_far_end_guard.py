@@ -232,6 +232,33 @@ class TestFormContractNudge:
         assert "git status --short" in v.message
 
 
+class TestVerificationDirectionNudge:
+    """A form-rewriting deliverable must be told the checker may normalize ONE
+    side and compare the OTHER raw, so byte-preserving can fail where canonical
+    re-emission passes. This is a SEMANTIC nudge: it names a DIRECTION, never a
+    parser library, never a concrete normalization chain, never a task's own
+    words (see test_no_harness_grader_leak.py)."""
+
+    def test_direction_line_present_unconditionally(self, guard):
+        v = guard.check_post(_ctx(path="cfg/exp.yaml",
+                                  result="Wrote 10 chars to cfg/exp.yaml"))
+        assert v is not None
+        assert "VERIFICATION DIRECTION" in v.message
+        assert "NORMALIZE ONE SIDE" in v.message
+        assert "RAW" in v.message
+        assert "canonical" in v.message
+
+    def test_direction_line_names_no_parser_oracle(self, guard):
+        """Prose only: the nudge must not smuggle a parser symbol or a verbatim
+        task grant — the leak test enforces this over the module, but assert the
+        emitted text specifically too."""
+        v = guard.check_post(_ctx(path="filter.py",
+                                  result="Successfully edited filter.py"))
+        assert v is not None
+        for tok in ("BeautifulSoup", "bs4", "html.parser", "lxml", "html5lib"):
+            assert tok not in v.message
+
+
 class TestMeasuredChecks:
     """Measurement upgrade: the guard RUNS the cheap validity check itself and
     reports the measured PASS/FAIL in the inject (user-approved design).
