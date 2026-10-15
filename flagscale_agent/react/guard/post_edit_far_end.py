@@ -155,6 +155,30 @@ _ROUNDTRIP_PROBE = (
 _ROUNDTRIP_EXTS = (
     ".json", ".yaml", ".yml", ".toml", ".xml", ".csv",
 )
+
+# Program-output preservation probe (R5): the (B)-class surface the file-level
+# round-trip probe cannot reach — a PROGRAM is not a structured data file. When
+# an edited .py is a TRANSFORM (reads a file path from argv), synthesize a
+# MINIMAL BENIGN instance of each consumed type, RUN the program on it in a
+# throwaway dir, and report a per-type verdict: PRESERVED / MODIFIED /
+# NOT-IDEMPOTENT / CRASH. Targets the class where benign clean files are
+# altered. Advisory-only; silent when not a transform. No grader parser is
+# named; only the program's OWN output bytes are used.
+_PROGRAM_INPUT_ARG = "sys.argv[1]"
+# Total wall budget for ONE program-output probe (all types) so a hanging
+# transform cannot multiply the per-run timeout across types.
+_PROGRAM_PROBE_BUDGET = 12.0
+_BENIGN_SKELETONS = {
+    ".html": ('<!DOCTYPE html>\n<html><head><title>t</title></head>\n'
+              '<body><header>h</header><nav><a href="/x">x</a></nav>\n'
+              '<main><table><tr><td>c</td></tr></table>\n'
+              '<form><input name="a"><textarea>t</textarea>'
+              '<select><option>o</option></select></form></main>\n'
+              '<footer>f</footer></body></html>\n'),
+    ".json": '{\n  "a": 1,\n  "b": [true, null, "s"]\n}\n',
+    ".txt": "alpha\nbeta\ngamma\n",
+    ".csv": "a,b,c\n1,2,3\n",
+}
 # Files that CARRY the prompt templates. Match is anchored at a path-separator
 # boundary (see _is_prompt_file) so unrelated trees whose names merely END
 # with the anchor do not false-trigger.
@@ -464,6 +488,19 @@ class PostEditFarEndGuard(Guard):
                 roundtrip = cls._roundtrip_probe(path)
                 if roundtrip:
                     return f"measured now: PASS — {roundtrip}"
+            if lower.endswith(".py"):
+                prog = cls._program_probe(path)
+                if prog:
+                    summary = ", ".join(
+                        f"{e}={v}" for e, v in prog.items())
+                    line = f"program-output probe: {summary}"
+                    if any(v == "MODIFIED" for v in prog.values()):
+                        line += (
+                            " — a benign JS-free/clean input was altered: if "
+                            "the task requires PRESERVATION (not just "
+                            "normalization), your transform over-modifies; "
+                            "broaden the corpus NOW")
+                    return f"measured now: PASS — {line}"
             return "measured now: PASS"
         return None
 
@@ -503,6 +540,74 @@ class PostEditFarEndGuard(Guard):
                 "(one edit away); if it preserves bytes, ignore this line."
             )
         return None
+
+
+    @classmethod
+    def _run_one_program(cls, path: str, ext: str, skel: str, td: str):
+        """Write skeleton, run program twice, classify the outcome."""
+        target = os.path.join(td, "benign" + ext)
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(skel)
+        before = open(target, "rb").read()
+        r1 = subprocess.run(
+            [sys.executable, os.path.abspath(path), target],
+            capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECONDS, cwd=td,
+        )
+        if r1.returncode != 0:
+            return "CRASH"
+        after1 = open(target, "rb").read()
+        subprocess.run(
+            [sys.executable, os.path.abspath(path), target],
+            capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECONDS, cwd=td,
+        )
+        after2 = open(target, "rb").read()
+        if after1 != after2:
+            return "NOT-IDEMPOTENT"
+        if after1 == before:
+            return "PRESERVED"
+        if cls._ws_norm(after1) == cls._ws_norm(before):
+            return "PRESERVED(ws)"
+        return "MODIFIED"
+
+    @staticmethod
+    def _ws_norm(b: bytes) -> bytes:
+        """Remove ALL whitespace before comparing — coarse first-order
+        normalization (NOT the grader's parser; only whitespace is dropped)."""
+        return b"".join(b.split())
+
+    @classmethod
+    def _program_probe(cls, path: str) -> dict | None:
+        """Measured preservation/idempotence observation for a .py TRANSFORM.
+
+        Returns {ext: verdict} or None when the file is not a path-transform.
+        Tries EVERY benign skeleton (robust to a program that names no
+        extension in its source). Never raises; silent on env errors.
+        """
+        if not path.lower().endswith(".py"):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                src = fh.read(cls._BOUNDARY_READ_LIMIT)
+        except OSError:
+            return None
+        if _PROGRAM_INPUT_ARG not in src:
+            return None
+        import tempfile
+        out = {}
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                import time as _t
+                deadline = _t.monotonic() + _PROGRAM_PROBE_BUDGET
+                for ext, skel in _BENIGN_SKELETONS.items():
+                    if not skel or _t.monotonic() > deadline:
+                        break
+                    try:
+                        out[ext] = cls._run_one_program(path, ext, skel, td)
+                    except (OSError, subprocess.TimeoutExpired):
+                        out[ext] = "TIMEOUT"
+        except OSError:
+            return None
+        return out
 
     @staticmethod
     def _is_prompt_file(path: str) -> bool:

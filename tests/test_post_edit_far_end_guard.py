@@ -541,3 +541,78 @@ class TestCitationDrift:
         f = tmp_path / "loose.md"
         f.write_text("a\n", encoding="utf-8")
         assert guard._relpath_for_git(str(f)) == "loose.md"
+
+
+class TestProgramOutputProbe:
+    """(B)-class surface: a .py TRANSFORM gets a MEASURED preservation/
+    idempotence observation. Real subprocesses, no mocking."""
+
+    def _transform(self, tmp_path, body, name="prog.py"):
+        p = tmp_path / name
+        p.write_text(body, encoding="utf-8")
+        return p
+
+    def test_identity_transform_reports_preserved(self, guard, tmp_path):
+        p = self._transform(tmp_path,
+            "import sys\nfp=sys.argv[1]\nd=open(fp,'rb').read()\n"
+            "open(fp,'wb').write(d)\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "measured now: PASS" in v.message
+        assert "program-output probe" in v.message
+        assert ".html=PRESERVED" in v.message
+
+    def test_overstripping_transform_reports_modified(self, guard, tmp_path):
+        p = self._transform(tmp_path,
+            "import re, sys\nfp=sys.argv[1]\n"
+            "t=open(fp,encoding='utf-8').read()\n"
+            "t=re.sub(r'<form>.*?</form>','',t,flags=re.S)\n"
+            "open(fp,'w',encoding='utf-8').write(t)\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "measured now: PASS" in v.message
+        assert ".html=MODIFIED" in v.message
+        assert "over-modifies" in v.message
+
+    def test_ws_reformat_transform_reports_preserved_ws(self, guard, tmp_path):
+        # A whitespace-only reformatter must NOT be flagged MODIFIED: the
+        # grader is whitespace-insensitive, so the probe has a ws tier.
+        p = self._transform(tmp_path,
+            "import re, sys\nfp=sys.argv[1]\n"
+            "t=open(fp,encoding='utf-8').read()\n"
+            "t=re.sub(r'>\\s+<','><',t)\n"
+            "open(fp,'w',encoding='utf-8').write(t)\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "measured now: PASS" in v.message
+        assert ".html=PRESERVED(ws)" in v.message
+        assert "over-modifies" not in v.message
+
+    def test_non_transform_py_has_no_program_line(self, guard, tmp_path):
+        p = tmp_path / "plain.py"
+        p.write_text("V = 1\n", encoding="utf-8")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "measured now: PASS" in v.message
+        assert "program-output probe" not in v.message
+
+    def test_crashing_transform_reports_crash(self, guard, tmp_path):
+        p = self._transform(tmp_path, "import sys\nsys.argv[1]\nsys.exit(2)\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "CRASH" in v.message
+
+    def test_program_probe_never_changes_verdict_class(self, guard, tmp_path):
+        p = self._transform(tmp_path,
+            "import re, sys\nfp=sys.argv[1]\nt=open(fp).read()\n"
+            "open(fp,'w').write(re.sub(r'<form>.*?</form>','',t,flags=re.S))\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and v.action == "inject"
+        assert guard.check_pre(_ctx(path=str(p))) is None
+
+    def test_hanging_transform_respects_probe_budget(self, guard, tmp_path):
+        # A sleeping transform must NOT multiply the per-run timeout across all
+        # types: the cumulative probe budget caps total wall time (<25s, never
+        # 5 types x 2 runs x 10s = 100s).
+        import time
+        p = self._transform(tmp_path, "import sys, time\ntime.sleep(60)\n")
+        t0 = time.monotonic()
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        elapsed = time.monotonic() - t0
+        assert elapsed < 25, f"probe ran {elapsed:.1f}s (budget not enforced)"
+        assert v is not None
