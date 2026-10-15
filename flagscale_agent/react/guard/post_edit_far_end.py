@@ -383,6 +383,11 @@ class PostEditFarEndGuard(Guard):
             "a representative input before assuming it is correct — a successful "
             "write is not a working artifact."
         )
+        # The SAME semantic reminders the path branch delivers — reused so a
+        # heredoc/redirect/cp/tee write (this branch) can never silently miss a
+        # nudge the path branch would have delivered (the write SHAPE does not
+        # change the reminders' truth).
+        lines += self._shared_far_end_lines()
         return GuardVerdict.inject(
             "\n".join(lines),
             reason="post_edit_far_end",
@@ -447,15 +452,18 @@ class PostEditFarEndGuard(Guard):
         return _FALLBACK_HINT
 
     @classmethod
-    def _message(cls, path: str, measurement: str | None = None,
-                 drift: str | None = None) -> str:
-        lines = [
-            f"[Post-edit] {path} edited. Verify the FAR end now:",
-        ]
-        if measurement:
-            lines.append(f"  · {measurement}")
-        lines.append(f"  · valid-for-type: {cls._hint_for(path)}")
-        lines += [
+    def _shared_far_end_lines(cls) -> list[str]:
+        """Path-agnostic far-end reminder lines, shared by BOTH branches.
+
+        The path branch (write_file/edit_file) and the effect branch (shell
+        heredoc/redirect/cp/tee detected by workspace delta) must deliver the
+        SAME semantic reminders: how the file was written is irrelevant to the
+        reminders' truth. Keeping them in ONE place means a future line (e.g.
+        the VERIFICATION DIRECTION nudge) can never reach one write shape and
+        miss another — the exact gap that made an earlier experiment's nudge
+        fire 0 times when the deliverable was assembled via a shell heredoc.
+        """
+        return [
             "  · will the consumer actually read it at this exact path?",
             "  · FORM contract — form drift (format/units/naming/structure/source) "
             "fails SILENTLY while functional tests stay green: your paraphrase of "
@@ -480,6 +488,17 @@ class PostEditFarEndGuard(Guard):
             "not intend to ship — a scratch/byproduct file, or a file you should "
             "not have touched at all? Revert it before the delivery is inspected.",
         ]
+
+    @classmethod
+    def _message(cls, path: str, measurement: str | None = None,
+                 drift: str | None = None) -> str:
+        lines = [
+            f"[Post-edit] {path} edited. Verify the FAR end now:",
+        ]
+        if measurement:
+            lines.append(f"  · {measurement}")
+        lines.append(f"  · valid-for-type: {cls._hint_for(path)}")
+        lines += cls._shared_far_end_lines()
         if cls._is_agent_source(path):
             lines.append(
                 "  · flagscale_agent/ source: the LIVE process still runs the OLD "

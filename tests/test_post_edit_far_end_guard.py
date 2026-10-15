@@ -763,6 +763,20 @@ class TestEffectBranch:
         (tmp_path / "g.py").write_text("w=2\n", encoding="utf-8")
         assert guard.check_post(self._shell()) is not None
 
+    def test_effect_branch_delivers_shared_semantic_nudges(self, guard, monkeypatch, tmp_path):
+        # A file assembled by a shell heredoc must get the SAME semantic
+        # reminders the write_file/edit_file path branch delivers — including the
+        # VERIFICATION DIRECTION nudge. Regression for the R9 gap where a nudge
+        # added only to the path branch fired 0 times when the deliverable was
+        # written via `cat > f.py <<EOF`.
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell(tool_args={"command": "cat > /app/filter.py <<'PY'"}))
+        (tmp_path / "filter.py").write_text("x = 1\n", encoding="utf-8")
+        v = guard.check_post(self._shell())
+        assert v is not None and v.action == "inject"
+        assert "VERIFICATION DIRECTION" in v.message
+        assert "COLD-CONSUMER" in v.message
+
     def test_no_pre_snapshot_is_silent(self, guard, monkeypatch, tmp_path):
         # Direct check_post with no preceding check_pre (as unit tests call it):
         # nothing to diff -> silent. Preserves the non-write-tool contract.
