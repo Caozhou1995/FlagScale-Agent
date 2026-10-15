@@ -597,6 +597,60 @@ class TestProgramOutputProbe:
         v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
         assert v is not None and "CRASH" in v.message
 
+    def test_argv_param_binding_fires_probe(self, guard, tmp_path):
+        """The R5 real-artifact failure shape: `def main(argv): argv[1]` +
+        `main(sys.argv)` consumes argv WITHOUT the literal `sys.argv[1]` —
+        the literal-only trigger silently missed it (trial JRwn6h8). The
+        interface-shaped trigger must fire the probe on this exact shape."""
+        p = self._transform(tmp_path,
+            "import sys\n"
+            "def main(argv):\n"
+            "    path = argv[1]\n"
+            "    d = open(path, 'rb').read()\n"
+            "    open(path, 'wb').write(d)\n"
+            "    return 0\n"
+            "sys.exit(main(sys.argv))\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "program-output probe" in v.message
+
+    def test_real_r5_filterjs_artifact_fires_probe(self, guard, tmp_path):
+        """Regression anchor: the ACTUAL filter.py extracted from R5 trial
+        JRwn6h8 (def main(argv) style). Stored trimmed copy; the probe must
+        fire and report PRESERVED on benign skeletons."""
+        src = (
+            "import html, re, sys\n"
+            "def main(argv):\n"
+            "    path = argv[1]\n"
+            "    t = open(path, 'rb').read()\n"
+            "    open(path, 'wb').write(t)\n"
+            "    return 0\n"
+            "sys.exit(main(sys.argv))\n"
+        )
+        p = self._transform(tmp_path, src)
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "program-output probe" in v.message
+        assert "PRESERVED" in v.message
+
+    def test_stdin_consumer_fires_probe(self, guard, tmp_path):
+        p = self._transform(tmp_path,
+            "import sys\n"
+            "d = sys.stdin.read()\n"
+            "open('out.bin', 'wb').write(d)\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "program-output probe" in v.message
+
+    def test_non_consumer_stays_silent(self, guard, tmp_path):
+        """A .py that references no input interface at all must NOT be
+        probed (bounded cost + signal precision)."""
+        p = self._transform(tmp_path,
+            "import math\n"
+            "def area(r):\n"
+            "    return 3.14 * r * r\n"
+            "print(area(2))\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "measured now: PASS" in v.message
+        assert "program-output probe" not in v.message
+
     def test_program_probe_never_changes_verdict_class(self, guard, tmp_path):
         p = self._transform(tmp_path,
             "import re, sys\nfp=sys.argv[1]\nt=open(fp).read()\n"

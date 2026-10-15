@@ -582,6 +582,17 @@ class PostEditFarEndGuard(Guard):
         Returns {ext: verdict} or None when the file is not a path-transform.
         Tries EVERY benign skeleton (robust to a program that names no
         extension in its source). Never raises; silent on env errors.
+
+        The trigger is INTERFACE-shaped, not literal-shaped: any argv/stdin
+        consumer counts. The real filter.py that motivated this probe binds
+        `def main(argv): path = argv[1]` + `main(sys.argv)` — the literal
+        `sys.argv[1]` never appears in its source, so a literal-only gate
+        silently misses it (observed in R5 trial JRwn6h8: guard fired
+        "measured now: PASS" twice, probe absent). Match the INTERFACE: any
+        of (1) sys.argv used at all, (2) an argv/stdin parameter binding
+        (`def f(...argv...)`, `argv[`, `sys.stdin`, `input(`), or (3) argparse
+        use. False-positive cost is bounded (probe budget) and its verdicts
+        are advisory-only.
         """
         if not path.lower().endswith(".py"):
             return None
@@ -590,7 +601,7 @@ class PostEditFarEndGuard(Guard):
                 src = fh.read(cls._BOUNDARY_READ_LIMIT)
         except OSError:
             return None
-        if _PROGRAM_INPUT_ARG not in src:
+        if not cls._consumes_external_input(src):
             return None
         import tempfile
         out = {}
@@ -608,6 +619,28 @@ class PostEditFarEndGuard(Guard):
         except OSError:
             return None
         return out
+
+    @staticmethod
+    def _consumes_external_input(src: str) -> bool:
+        """True if the source binds ANY external-input interface.
+
+        Interface-shaped, not literal-shaped: `def main(argv): argv[1]` +
+        `main(sys.argv)` consumes argv without ever writing `sys.argv[1]`.
+        Signals: sys.argv reference, argv parameter binding, stdin, argparse.
+        Read-only false-positive cost: a non-consumer matching a signal just
+        gets a bounded advisory probe (verdicts are observations, not gates).
+        """
+        for sig in (
+            "sys.argv",
+            "argv",
+            "sys.stdin",
+            "input(",
+            "argparse",
+            "ArgumentParser",
+        ):
+            if sig in src:
+                return True
+        return False
 
     @staticmethod
     def _is_prompt_file(path: str) -> bool:
