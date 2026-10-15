@@ -494,12 +494,15 @@ class PostEditFarEndGuard(Guard):
                     summary = ", ".join(
                         f"{e}={v}" for e, v in prog.items())
                     line = f"program-output probe: {summary}"
-                    if any(v == "MODIFIED" for v in prog.values()):
+                    modified = [e for e, v in prog.items() if v == "MODIFIED"]
+                    if modified:
                         line += (
-                            " — a benign JS-free/clean input was altered: if "
-                            "the task requires PRESERVATION (not just "
-                            "normalization), your transform over-modifies; "
-                            "broaden the corpus NOW")
+                            " — a benign input handed to your program ("
+                            + ", ".join(modified) + ") was altered: if the task "
+                            "requires PRESERVATION (not just normalization) for "
+                            "those types, your transform over-modifies; if it "
+                            "only consumes a different type, ignore this line"
+                            " (the benign corpus is not your contract)")
                     return f"measured now: PASS — {line}"
             return "measured now: PASS"
         return None
@@ -543,22 +546,37 @@ class PostEditFarEndGuard(Guard):
 
 
     @classmethod
-    def _run_one_program(cls, path: str, ext: str, skel: str, td: str):
-        """Write skeleton, run program twice, classify the outcome."""
+    def _run_one_program(cls, path: str, ext: str, skel: str, td: str,
+                         deadline: float):
+        """Write skeleton, run program twice, classify the outcome.
+
+        Each subprocess timeout is capped by the REMAINING cumulative budget
+        (deadline - now), not just the per-run constant — otherwise a single
+        hanging transform blocks up to _RUN_TIMEOUT_SECONDS on EACH type and
+        overruns _PROGRAM_PROBE_BUDGET by the type multiplier (observed: a
+        60s sleep overran a 12s budget to 20s = 2 full types).
+        """
+        import time as _t
         target = os.path.join(td, "benign" + ext)
         with open(target, "w", encoding="utf-8") as fh:
             fh.write(skel)
         before = open(target, "rb").read()
+
+        def _remaining() -> float:
+            return max(0.01, deadline - _t.monotonic())
+
         r1 = subprocess.run(
             [sys.executable, os.path.abspath(path), target],
-            capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECONDS, cwd=td,
+            capture_output=True, text=True,
+            timeout=min(_RUN_TIMEOUT_SECONDS, _remaining()), cwd=td,
         )
         if r1.returncode != 0:
             return "CRASH"
         after1 = open(target, "rb").read()
         subprocess.run(
             [sys.executable, os.path.abspath(path), target],
-            capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECONDS, cwd=td,
+            capture_output=True, text=True,
+            timeout=min(_RUN_TIMEOUT_SECONDS, _remaining()), cwd=td,
         )
         after2 = open(target, "rb").read()
         if after1 != after2:
@@ -613,9 +631,15 @@ class PostEditFarEndGuard(Guard):
                     if not skel or _t.monotonic() > deadline:
                         break
                     try:
-                        out[ext] = cls._run_one_program(path, ext, skel, td)
-                    except (OSError, subprocess.TimeoutExpired):
+                        out[ext] = cls._run_one_program(
+                            path, ext, skel, td, deadline)
+                    except subprocess.TimeoutExpired:
                         out[ext] = "TIMEOUT"
+                    except OSError:
+                        # The program path/benign file vanished (e.g. the
+                        # program deleted or renamed the argv target): a
+                        # distinct, honest verdict — NOT a timeout.
+                        out[ext] = "REMOVED"
         except OSError:
             return None
         return out

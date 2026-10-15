@@ -661,12 +661,28 @@ class TestProgramOutputProbe:
 
     def test_hanging_transform_respects_probe_budget(self, guard, tmp_path):
         # A sleeping transform must NOT multiply the per-run timeout across all
-        # types: the cumulative probe budget caps total wall time (<25s, never
-        # 5 types x 2 runs x 10s = 100s).
+        # types: the cumulative probe budget caps total wall time. This program
+        # is a REAL consumer (fp=sys.argv[1]) so the probe actually ENTERS the
+        # budget loop and runs subprocesses — a non-consumer would short-circuit
+        # to None and pass this test vacuously (the exact defect this guards).
         import time
-        p = self._transform(tmp_path, "import sys, time\ntime.sleep(60)\n")
+        p = self._transform(tmp_path,
+            "import sys, time\nfp=sys.argv[1]\ntime.sleep(60)\n")
         t0 = time.monotonic()
         v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
         elapsed = time.monotonic() - t0
-        assert elapsed < 25, f"probe ran {elapsed:.1f}s (budget not enforced)"
-        assert v is not None
+        # Bound is budget + one subprocess slack (12+3=15): the buggy code ran
+        # 2 full types (20s) and would fail this; the fix caps at ~12s.
+        assert elapsed < 15, f"probe ran {elapsed:.1f}s (budget 12s not enforced)"
+        assert v is not None and "program-output probe" in v.message
+        # Prove subprocesses actually ran (non-vacuous).
+        assert "TIMEOUT" in v.message
+
+    def test_program_that_deletes_target_is_not_mislabeled_timeout(
+            self, guard, tmp_path):
+        """A program that removes the file it is handed must be reported as a
+        distinct REMOVED verdict, not the misleading TIMEOUT."""
+        p = self._transform(tmp_path,
+            "import sys, os\nos.remove(sys.argv[1])\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and "REMOVED" in v.message
