@@ -210,6 +210,7 @@ def test_tc_graded_reading_seen_passes():
     try:
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         g._graded_reading_seen = True
+        g._acceptance_observed = True
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -343,3 +344,125 @@ def test_tc_composite_wiring_truncated_segment_not_groundable():
     # A truly complete composite (no partial segment) -> groundable.
     assert _task_text_groundable(
         "complete task text here\n\nfinal user turn text") is True
+
+# ── completion-boundary ACCEPTANCE-OBSERVATION arm (R8) ─────────────────────
+# A declared graded reading is not an OBSERVATION of the acceptance. The arm
+# forces, at the boundary, either a real observed acceptance act (command +
+# output, corpus-checked) or an explicit `unobservable` declaration — silence
+# blocks. See verification.py _acceptance_act_recorded + the completion arm.
+
+def _ctx_with_messages(text, messages, override=""):
+    c = _ctx(text, override=override)
+    c.messages = messages
+    return c
+
+
+def _tool_result_msg(observed_text):
+    return [{"role": "tool", "content": observed_text}]
+
+
+def test_tc_no_acceptance_act_blocks():
+    """All steps done, graded reading seen, but NO acceptance act recorded ->
+    the acceptance-observation arm blocks."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        v = g.check_pre(_ctx("[TASK_COMPLETE]"))
+        assert v is not None and v.reason == "completion_without_acceptance_observation", v
+    finally:
+        _close(d)
+
+
+def test_tc_acceptance_observed_flag_passes():
+    """Once an observed acceptance act was recorded (flag set), completion passes."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_acceptance_override_releases():
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        assert g.check_pre(
+            _ctx("[TASK_COMPLETE]", override="no observable acceptance; artifact is prose")
+        ) is None
+    finally:
+        _close(d)
+
+
+def test_tc_acceptance_ungroundable_task_fails_open():
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "(unavailable) task text not recovered")
+        g._graded_reading_seen = True
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_acceptance_need_user_input_not_blocked():
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        assert g.check_pre(_ctx("[NEED_USER_INPUT]")) is None
+    finally:
+        _close(d)
+
+
+def test_acceptance_act_recorded_predicate():
+    """Unit-test __acceptance_act_recorded across shapes."""
+    from flagscale_agent.react.guard.verification import _acceptance_act_recorded
+    corpus = "ok wrote 5 lines"
+    # unobservable declaration -> True regardless of corpus.
+    assert _acceptance_act_recorded({"unobservable": "hidden corpus"}, None) is True
+    # observed act present in the corpus -> True.
+    assert _acceptance_act_recorded(
+        {"command": "wc -l /app/y", "observed": "5"}, corpus) is True
+    # observed act NOT in the corpus -> False.
+    assert _acceptance_act_recorded(
+        {"command": "wc -l /app/y", "observed": "not-in-corpus"}, corpus) is False
+    # fail-open only when corpus unavailable (None) but shape is well-formed.
+    assert _acceptance_act_recorded(
+        {"command": "wc -l /app/y", "observed": "5"}, None) is True
+    # malformed / silent -> False.
+    assert _acceptance_act_recorded(None, corpus) is False
+    assert _acceptance_act_recorded({}, corpus) is False
+    assert _acceptance_act_recorded({"command": "x"}, corpus) is False
+    assert _acceptance_act_recorded({"observed": "   "}, corpus) is False
+    assert _acceptance_act_recorded({"unobservable": ""}, corpus) is False
+
+
+def test_acceptance_observed_flag_set_via_tool_result():
+    """End-to-end: a step_done carrying an observed acceptance act whose output
+    really appears in a session tool result sets the flag, so completion passes."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._step_done_recheck_reminded = True  # skip the first-step_done premise latch
+        # Simulate the step_done gate running with a real corpus hit.
+        ctx = _ctx_with_messages(
+            "done", _tool_result_msg("wrote 5 lines to /app/y\n"),
+            override="")
+        ctx.tool_name = "plan_update"
+        ctx.tool_args = {
+            "action": "step_done", "step_id": 1,
+            "verification": ["ran it"],
+            "convention": {"name": "none"},
+            "deliverable_reading": {"deliverable": "none"},
+            "acceptance_act": {"command": "cat /app/y | wc -l", "observed": "wrote 5 lines to /app/y"},
+        }
+        # No acceptance criteria on this plan's step? give it one so Mode 1 runs.
+        assert g.check_pre(ctx) is None, "step_done should pass with act"
+        assert g._acceptance_observed is True
+    finally:
+        _close(d)

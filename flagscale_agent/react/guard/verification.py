@@ -225,6 +225,24 @@ the `acceptance_test`, and the `normalized_side` the checker compares on), and t
 this completion with an `_override_reason` stating why.
 """
 
+_COMPLETION_NO_ACCEPTANCE_OBSERVED = """[VerificationGuard] You are declaring the task complete, but you never recorded a real ACCEPTANCE OBSERVATION.
+
+Declaring the readings a checker may apply is not the same as observing that your
+deliverable actually satisfies them. Before completion you must face that gap
+explicitly, on a step_done, with an `acceptance_act` object carrying ONE of:
+
+  \u2022 An OBSERVED act: {"command": "<the exact command you ran>", "observed":
+    "<its ACTUAL output text>"}. The `observed` text must be output the harness
+    really recorded for this session — a claimed-but-never-run command is refused.
+  \u2022 An UNOBSERVABLE declaration: {"unobservable": "<the acceptance dimension
+    you genuinely cannot observe, and why>"} — for a hidden corpus or an oracle
+    you have no means to run. This does NOT claim PASS; it carries the dimension
+    as an unverified premise (INCONCLUSIVE, not PASS).
+
+Then complete again. If this task truly has no acceptance you can observe or name,
+re-issue this completion with an `_override_reason` saying so.
+"""
+
 _COMPLETION_WITH_UNFINISHED_STEPS = """[VerificationGuard] You are declaring the task complete while plan step(s) {steps} are still open.
 
 A plan marks the checkpoints where your results were to be verified. Completing with steps
@@ -844,6 +862,30 @@ def _declares_graded_reading(dr) -> bool:
     return _is_real_str(deliverable)
 
 
+def _acceptance_act_recorded(act, observed) -> bool:
+    """True when a step_done's `acceptance_act` carries a REAL acceptance record.
+
+    Two admissible shapes (structural first, then corpus-membership):
+      * {"command": <str>, "observed": <str>} — an OBSERVED act; the `observed`
+        text must be found in the session's tool-result corpus (`_evidence_observed`),
+        so a claimed-but-never-run probe does not count. Fails open only when the
+        corpus itself is unavailable (observed is None).
+      * {"unobservable": <str>} — an explicit DECLARATION that the acceptance
+        dimension cannot be observed (hidden corpus / un-runnable oracle). This
+        records the gap as INCONCLUSIVE rather than PASS; it does not require a
+        corpus hit because the point is that no observation exists.
+
+    Any other shape (missing/mis-typed/blank) is False — silence is not a record.
+    """
+    if not isinstance(act, dict):
+        return False
+    if _is_real_str(act.get("unobservable")):
+        return True
+    if not (_is_real_str(act.get("command")) and _is_real_str(act.get("observed"))):
+        return False
+    return _evidence_observed(act, observed)
+
+
 def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = None):
     """Unconditional structured gate for the fixed `deliverable_reading` field.
 
@@ -1213,6 +1255,13 @@ class VerificationGuard(Guard):
         # graded-reading declaration before [TASK_COMPLETE] when none was ever
         # made — closing the opt-out (`{"deliverable": "none"}`) bypass.
         self._graded_reading_seen = False
+        # Per-RUN: True once a step_done recorded a REAL acceptance act for the
+        # completion boundary — EITHER an observed command+output (found in this
+        # session's tool-result corpus) OR an explicit `unobservable` declaration.
+        # The completion arm reads it to force the agent to confront whether it
+        # OBSERVED its deliverable's acceptance before [TASK_COMPLETE] — the gap
+        # R7 exposed (a reading declared on the wrong dimension still shipped).
+        self._acceptance_observed = False
 
     def reset_turn(self):
         """Reset per-turn state on a new user message — clears the step_done
@@ -1296,6 +1345,23 @@ class VerificationGuard(Guard):
                     return GuardVerdict.block(
                         message=_COMPLETION_NO_GRADED_READING,
                         reason="completion_without_graded_reading",
+                        category="verification_required",
+                    )
+                # Acceptance-observation obligation: a declared reading is not an
+                # OBSERVATION of the acceptance. When the task text is groundable
+                # and the agent never recorded an observed acceptance act (a real
+                # command+output, corpus-checked) or an explicit `unobservable`
+                # declaration, it must confront that gap before declaring done.
+                # Overridable: a task with no observable acceptance closes with a
+                # reason on record. This is the R8 lever — semantic, no case list.
+                if (
+                    not self._acceptance_observed
+                    and _task_text_groundable(self._task_text())
+                    and not self.accept_override(ctx.override_reason, ctx)
+                ):
+                    return GuardVerdict.block(
+                        message=_COMPLETION_NO_ACCEPTANCE_OBSERVED,
+                        reason="completion_without_acceptance_observation",
                         category="verification_required",
                     )
             return None
@@ -1392,6 +1458,9 @@ class VerificationGuard(Guard):
                     return bad
                 if _declares_graded_reading(dr):
                     self._graded_reading_seen = True
+                if _acceptance_act_recorded(
+                        ctx.tool_args.get("acceptance_act"), self._observed(ctx)):
+                    self._acceptance_observed = True
                 return None
 
             # Timing 1b: batch action marking any step done bypasses the per-step
@@ -1467,6 +1536,11 @@ class VerificationGuard(Guard):
                             return bad
                         if _declares_graded_reading(dr):
                             self._graded_reading_seen = True
+                        act = u.get("acceptance_act")
+                        if act is None:
+                            act = ctx.tool_args.get("acceptance_act")
+                        if _acceptance_act_recorded(act, self._observed(ctx)):
+                            self._acceptance_observed = True
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:
