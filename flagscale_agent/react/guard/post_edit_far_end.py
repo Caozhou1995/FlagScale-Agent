@@ -688,16 +688,24 @@ class PostEditFarEndGuard(Guard):
                 if prog:
                     summary = ", ".join(
                         f"{e}={v}" for e, v in prog.items())
-                    line = f"program-output probe: {summary}"
+                    line = (
+                        f"program-output probe: {summary} — this measures ONE "
+                        "reading only: did your transform return the input "
+                        "BYTE-IDENTICAL. That is NOT the question a consumer that "
+                        "RE-PARSES the input and re-emits it (then compares) asks: "
+                        "for such a consumer, byte-'preserved' output is the WRONG "
+                        "form whenever the input was not already in that consumer's "
+                        "canonical form. Do NOT read PRESERVED as 'my output form is "
+                        "correct' — first decide which reading the task's checker "
+                        "uses, then match it."
+                    )
                     modified = [e for e, v in prog.items() if v == "MODIFIED"]
                     if modified:
                         line += (
-                            " — a benign input handed to your program ("
-                            + ", ".join(modified) + ") was altered: if the task "
-                            "requires PRESERVATION (not just normalization) for "
-                            "those types, your transform over-modifies; if it "
-                            "only consumes a different type, ignore this line"
-                            " (the benign corpus is not your contract)")
+                            " (" + ", ".join(modified) + " came back altered: "
+                            "that can be over-modification OR exactly the "
+                            "canonical re-emission the consumer wants — the "
+                            "benign corpus is not your contract either way.)")
                     return f"measured now: PASS — {line}"
             return "measured now: PASS"
         return None

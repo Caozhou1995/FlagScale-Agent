@@ -597,7 +597,23 @@ class TestProgramOutputProbe:
         v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
         assert v is not None and "measured now: PASS" in v.message
         assert ".html=MODIFIED" in v.message
-        assert "over-modifies" in v.message
+        assert "over-modification" in v.message
+
+    def test_preserved_reading_is_not_an_unconditional_pass(self, guard, tmp_path):
+        """Regression (R12): a byte-preserving transform measures PRESERVED,
+        but the inject must NOT present that measurement as 'your output form
+        is correct/verified'. The consumer may RE-PARSE and re-emit; for such a
+        consumer byte-preservation is the WRONG form whenever the input was not
+        already canonical. The line must say this ONE reading is not the
+        acceptance question, so PRESERVED cannot be read as a green light."""
+        p = self._transform(tmp_path,
+            "import sys\nfp=sys.argv[1]\nd=open(fp,'rb').read()\n"
+            "open(fp,'wb').write(d)\n")
+        v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
+        assert v is not None and ".html=PRESERVED" in v.message
+        assert "ONE reading only" in v.message
+        assert "NOT the question" in v.message
+        assert "Do NOT read PRESERVED as" in v.message
 
     def test_ws_reformat_transform_reports_preserved_ws(self, guard, tmp_path):
         # A whitespace-only reformatter must NOT be flagged MODIFIED: the
