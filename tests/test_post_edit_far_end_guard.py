@@ -775,6 +775,7 @@ class TestEffectBranch:
         v = guard.check_post(self._shell())
         assert v is not None and v.action == "inject"
         assert "VERIFICATION DIRECTION" in v.message
+        assert "SERIALIZER FORM" in v.message
         assert "COLD-CONSUMER" in v.message
 
     def test_no_pre_snapshot_is_silent(self, guard, monkeypatch, tmp_path):

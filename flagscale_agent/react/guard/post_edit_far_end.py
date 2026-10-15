@@ -483,6 +483,15 @@ class PostEditFarEndGuard(Guard):
             "looks more faithful. Before you commit the output form, ask WHICH side "
             "the checker normalizes; when both forms are defensible, prefer the one "
             "that survives normalize-one-side == other-raw.",
+            "  · SERIALIZER FORM — 'canonical re-emission' means the SAME standard "
+            "library's OWN DEFAULT serializer output, not a hand-rolled one. When a "
+            "checker re-emits the input through that library and compares, only ITS "
+            "exact byte form survives: do NOT hand-escape or re-encode characters "
+            "(keep the raw non-ASCII character, not a named entity), do NOT reorder "
+            "attributes, do NOT change void/self-closing tags. Emit the DEFAULT "
+            "writer output — not a custom pretty-printer — and confirm by re-reading "
+            "your OWN output with that same library: if its form differs from your "
+            "bytes, your form is already wrong.",
             "  · SIDE-EFFECT sweep — before delivering, run `git status --short` "
             "(and `git diff --stat`) and READ the list: is there any change you did "
             "not intend to ship — a scratch/byproduct file, or a file you should "
