@@ -686,3 +686,105 @@ class TestProgramOutputProbe:
             "import sys, os\nos.remove(sys.argv[1])\n")
         v = guard.check_post(_ctx(path=str(p), result=f"Successfully edited {p}"))
         assert v is not None and "REMOVED" in v.message
+
+
+class TestEffectBranch:
+    """Effect-based detection: ANY tool that changes a deliverable file is
+    caught by a workspace snapshot DIFF, regardless of write-shape. This is the
+    fix for the R6 miss where /app/filter.py was written via a shell heredoc
+    (`cat > filter.py <<EOF`) and bypassed the path-based trigger entirely."""
+
+    def _shell(self, *a, **k):
+        from flagscale_agent.react.guard import GuardContext as _GC
+        return _GC(
+            tool_name=k.get("tool_name", "shell"),
+            tool_args=k.get("tool_args", {}),
+            tool_result=k.get("result", "ok"),
+        )
+
+    def test_pre_snapshot_taken_for_shell(self, guard, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "keep.py").write_text("x=1\n", encoding="utf-8")
+        assert guard.check_pre(self._shell()) is None  # never blocks
+        assert guard._snap_before is not None
+        assert any(p.endswith("keep.py") for p in guard._snap_before)
+
+    def test_shell_write_is_caught_by_delta(self, guard, monkeypatch, tmp_path):
+        # The R6 shape: a program written by a shell command, NOT write_file.
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell(tool_args={"command": "cat > f.py <<'EOF'"}))
+        # the tool executes and the file appears on disk:
+        (tmp_path / "f.py").write_text("def main(a): return a\n", encoding="utf-8")
+        v = guard.check_post(self._shell())
+        assert v is not None and v.action == "inject"
+        assert "DELTA" in v.message
+        assert "f.py" in v.message
+        assert v.category == "post_edit_far_end_delta"
+
+    def test_write_shape_independent_same_result(self, guard, monkeypatch, tmp_path):
+        # Two different tools writing the same file both trigger — the detector
+        # keys on the EFFECT, not the command text.
+        for name in ("f1.py",):
+            monkeypatch.chdir(tmp_path)
+            guard.check_pre(self._shell(tool_args={"command": "tee"}))
+            (tmp_path / name).write_text("v=1\n", encoding="utf-8")
+            assert guard.check_post(self._shell()) is not None
+            (tmp_path / name).unlink()
+        # and via a python -c one-liner shapes
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell(tool_args={"command": "python -c open"}))
+        (tmp_path / "g.py").write_text("w=2\n", encoding="utf-8")
+        assert guard.check_post(self._shell()) is not None
+
+    def test_no_pre_snapshot_is_silent(self, guard, monkeypatch, tmp_path):
+        # Direct check_post with no preceding check_pre (as unit tests call it):
+        # nothing to diff -> silent. Preserves the non-write-tool contract.
+        monkeypatch.chdir(tmp_path)
+        guard._snap_before = None
+        assert guard.check_post(self._shell()) is None
+
+    def test_no_change_is_silent(self, guard, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a.py").write_text("x=1\n", encoding="utf-8")
+        guard.check_pre(self._shell(tool_args={"command": "ls"}))
+        assert guard.check_post(self._shell()) is None  # nothing changed
+
+    def test_failed_shell_result_is_silent(self, guard, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell(tool_args={"command": "cat > f.py"}))
+        (tmp_path / "f.py").write_text("x=1\n", encoding="utf-8")
+        for bad in ("ERROR: boom", "[BLOCKED BY GUARD] nope",
+                    "Error executing tool: x"):
+            guard.check_pre(self._shell())  # re-arm
+            assert guard.check_post(self._shell(result=bad)) is None
+
+    def test_measurement_line_present_for_py(self, guard, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell(tool_args={"command": "cat > ok.py"}))
+        (tmp_path / "ok.py").write_text("V = 1\n", encoding="utf-8")
+        v = guard.check_post(self._shell())
+        assert v is not None and "measured now: PASS" in v.message
+
+    def test_fires_once_per_path_no_double(self, guard, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell())
+        (tmp_path / "f.py").write_text("v=1\n", encoding="utf-8")
+        assert guard.check_post(self._shell()) is not None
+        # second settle with no new change -> the already-fired path is muted
+        guard.check_pre(self._shell())
+        assert guard.check_post(self._shell()) is None
+
+    def test_reset_turn_clears_effect_state(self, guard, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell())
+        (tmp_path / "f.py").write_text("v=1\n", encoding="utf-8")
+        assert guard.check_post(self._shell()) is not None
+        guard.reset_turn()
+        assert guard._snap_before is None and guard._fired_paths == set()
+
+    def test_inject_only_contract_preserved(self, guard, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        assert guard.check_pre(self._shell()) is None
+        (tmp_path / "f.py").write_text("v=1\n", encoding="utf-8")
+        v = guard.check_post(self._shell())
+        assert v is not None and v.action == "inject"

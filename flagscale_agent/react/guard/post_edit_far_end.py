@@ -201,14 +201,110 @@ _RUN_TIMEOUT_SECONDS = 10
 _STDERR_TAIL_CHARS = 400
 
 
+# ── Effect-based detection (shape-independent) ────────────────────────────
+# WHY: a program artifact can be written by ANY tool — write_file, edit_file,
+# a shell heredoc (`cat > x.py <<EOF`), a redirect (`> x.py`), `cp`, `tee`,
+# `python -c "open(...).write(...)"`, ... Enumerating those write-shapes with
+# patterns never ends (each new shape is a new miss). Instead we observe the
+# EFFECT: snapshot the workspace before the tool call, re-snapshot after, and
+# diff -> the paths that ACTUALLY changed, whatever wrote them. The guard then
+# injects the correct SEMANTICS ("this was just written; behavioral
+# verification has not run") and lets the model judge — it does not decide.
+#
+# Extensions worth a far-end reminder — a property of the ARTIFACT (is it a
+# program/deliverable?), not of how it was written.
+_SNAPSHOT_EXTS = (
+    ".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".c", ".cc", ".cpp",
+    ".h", ".hpp", ".rs", ".go", ".java", ".rb", ".pl", ".lua", ".php",
+    ".html", ".htm", ".xml", ".csv", ".json", ".yaml", ".yml",
+)
+# Directories never worth walking (huge / machine-generated / not artifacts).
+_SNAPSHOT_SKIP_DIRS = frozenset({
+    ".git", "__pycache__", "node_modules", ".venv", "venv", "env",
+    ".mypy_cache", ".pytest_cache", ".cache", ".tox", "site-packages",
+    ".flagscale", "jobs",
+})
+# Hard per-root caps: the diff must stay cheap even when cwd is large. The walk
+# is bounded by BOTH a visited-directory cap and a matched-file cap so a big
+# tree (or a big unrelated root) cannot make every tool call expensive. In a
+# small task workspace (e.g. /app) the whole tree is seen; in a huge cwd the
+# walk degrades gracefully instead of hanging.
+_MAX_SNAPSHOT_DIRS = 1500
+_MAX_SNAPSHOT_FILES = 8000
+
+
+def _snapshot_roots(extra_roots=None):
+    """Bounded {abspath: (mtime_ns, size)} over cwd + caller-declared roots.
+
+    Each root gets its OWN budget (a huge first root must not starve a
+    declared root). Only files with a deliverable-ish extension are recorded.
+    """
+    cand = [os.getcwd()]
+    for r in (extra_roots or []):
+        if r and os.path.isdir(r):
+            cand.append(r)
+    snap = {}
+    for root in dict.fromkeys(cand):
+        ndirs = nfiles = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _SNAPSHOT_SKIP_DIRS]
+            ndirs += 1
+            for fn in filenames:
+                if not fn.lower().endswith(_SNAPSHOT_EXTS):
+                    continue
+                p = os.path.join(dirpath, fn)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                snap[p] = (st.st_mtime_ns, st.st_size)
+                nfiles += 1
+                if nfiles >= _MAX_SNAPSHOT_FILES:
+                    break
+            if ndirs >= _MAX_SNAPSHOT_DIRS or nfiles >= _MAX_SNAPSHOT_FILES:
+                break
+    return snap
+
+
+def _changed_deliverables(before, after):
+    """Paths that appeared or changed between two snapshots (content signature).
+
+    Sorted with program files first — most likely the real deliverable.
+    """
+    changed = [p for p, sig in after.items() if before.get(p) != sig]
+    changed.sort(key=lambda p: (not p.lower().endswith(
+        (".py", ".js", ".sh", ".ts", ".c", ".cpp", ".rs", ".go", ".java")), p))
+    return changed
+
+
 class PostEditFarEndGuard(Guard):
-    """Post-tool guard: verify the FAR end after every successful write/edit."""
+    """Post-tool guard: verify the FAR end after every successful write/edit.
+
+    Detection is TWO-BRANCH and shape-independent:
+      · path branch   — write_file/edit_file carry a path -> the rich per-type
+        far-end reminder (hints, boundary nudge, citation drift, round-trip).
+      · effect branch — anything else (shell heredoc, redirect, cp, tee, ...)
+        is caught by diffing a workspace snapshot taken in check_pre against a
+        re-snapshot in check_post: whatever CHANGED was written, however it was
+        written. No write-shape is enumerated.
+    """
 
     name = "post_edit_far_end"
     priority = 70  # Advisory, same tier as UnitTestGuard — never blocks
 
-    # Only these tools modify files
+    # Only these tools carry an explicit path (rich path-branch semantics)
     WRITE_TOOLS = ("write_file", "edit_file")
+
+    def __init__(self):
+        # Snapshot captured by check_pre for THIS tool call; consumed by the
+        # effect branch in check_post. None => no effect check available (the
+        # rich path branch decides on its own).
+        self._snap_before = None
+        self._fired_paths = set()
+
+    def reset_turn(self):
+        self._snap_before = None
+        self._fired_paths = set()
 
     # Signals that a Python source touches a PROCESS BOUNDARY — subprocess launch
     # or environment propagation. Mock-based unit tests systematically miss the
@@ -226,13 +322,76 @@ class PostEditFarEndGuard(Guard):
     _BOUNDARY_READ_LIMIT = 512 * 1024
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Capture the pre-tool workspace signature so check_post can diff it.
+        # Only for tools that can plausibly change files — running the snapshot
+        # on pure-read/LLM tools would waste it. Never blocks.
+        if ctx.tool_name in self.WRITE_TOOLS or ctx.tool_name == "shell":
+            try:
+                self._snap_before = _snapshot_roots()
+            except Exception:
+                self._snap_before = None
         return None  # Inject-only: never blocks or escalates
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        # Only file-writing operations carry a path worth verifying
-        if ctx.tool_name not in self.WRITE_TOOLS:
+        # ── Path branch: write_file/edit_file carry an explicit path ──
+        if ctx.tool_name in self.WRITE_TOOLS:
+            verdict = self._post_with_path(ctx)
+            if verdict is not None:
+                return verdict
             return None
 
+        # ── Effect branch: any OTHER tool (shell heredoc/redirect/cp/tee/...).
+        # Shape-independent: we diff the workspace snapshot taken in check_pre
+        # against a fresh one now, and report whatever ACTUALLY changed. No
+        # write-shape is enumerated, so no new shape can be missed.
+        return self._post_by_effect(ctx)
+
+    def _post_by_effect(self, ctx: GuardContext) -> GuardVerdict | None:
+        before = self._snap_before
+        self._snap_before = None  # consume: one effect check per pre-snapshot
+        if before is None:
+            return None
+        # A failed/blocked tool wrote nothing to verify.
+        result = (ctx.tool_result or "")
+        if not result or result.lstrip().startswith(
+                ("[BLOCKED BY GUARD]", "ERROR", "Error executing tool")):
+            return None
+        try:
+            after = _snapshot_roots()
+        except Exception:
+            return None
+        changed = _changed_deliverables(before, after)
+        fresh = [p for p in changed if p not in self._fired_paths]
+        if not fresh:
+            return None
+        for p in fresh:
+            self._fired_paths.add(p)
+        shown = fresh[:5]
+        lines = [
+            "[Post-edit] File(s) changed this step — detected by workspace "
+            "DELTA (write-shape-independent), so this fires regardless of HOW "
+            "they were written (write_file/edit_file/heredoc/redirect/cp/tee):",
+        ]
+        for p in shown:
+            m = self._measure(p)
+            lines.append(f"  · {p}" + (f" — {m}" if m else ""))
+        if len(fresh) > len(shown):
+            lines.append(f"  · (+{len(fresh) - len(shown)} more)")
+        lines.append(
+            "Behavioral verification of what you just wrote has NOT run as far "
+            "as this guard can see. If these carry a program/interface, RUN it on "
+            "a representative input before assuming it is correct — a successful "
+            "write is not a working artifact."
+        )
+        return GuardVerdict.inject(
+            "\n".join(lines),
+            reason="post_edit_far_end",
+            # Independent category so the registry's dedup cannot swallow it
+            # when the path branch injects in the same pass.
+            category="post_edit_far_end_delta",
+        )
+
+    def _post_with_path(self, ctx: GuardContext) -> GuardVerdict | None:
         result = (ctx.tool_result or "").lstrip()
         # A guard-blocked edit NEVER landed, yet the surrounding advisory
         # stream may still print "[Post-edit] ... edited" — the false-success
