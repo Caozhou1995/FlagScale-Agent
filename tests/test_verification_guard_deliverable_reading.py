@@ -329,6 +329,7 @@ def _corpus(text):
 
 
 OBSERVED_LINE = "found 698 records coverage 92.9%"
+OBSERVED_LINE_C = "candidate-side: normalize cand, raw ref matched"
 
 
 def test_union_hedge_with_observed_evidence_passes():
@@ -342,8 +343,8 @@ def test_union_hedge_with_observed_evidence_passes():
                         "extras_direction": "ignored",
                         "direction_evidence": {
                             "reference": {"command": "cr", "observed": OBSERVED_LINE},
-                            "candidate": {"command": "cc", "observed": OBSERVED_LINE}}}}
-        assert guard.check_pre(_ctx_obs(dr, _corpus("x\n" + OBSERVED_LINE + "\ny"))) is None
+                            "candidate": {"command": "cc", "observed": OBSERVED_LINE_C}}}}
+        assert guard.check_pre(_ctx_obs(dr, _corpus("x\n" + OBSERVED_LINE + "\n" + OBSERVED_LINE_C + "\ny"))) is None
     finally:
         shutil.rmtree(d)
 
@@ -460,6 +461,55 @@ def test_hedge_direction_evidence_all_neither_exempt():
         assert guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE))) is None
     finally:
         shutil.rmtree(d)
+
+
+def test_hedge_direction_evidence_reused_probe_blocks():
+    """F1: one probe reused for BOTH directions is the agnostic tag the gate
+    refuses — the two one-sided comparisons must be DISTINCT."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": OBSERVED_LINE},
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cr", "observed": OBSERVED_LINE},
+                            "candidate": {"command": "cc", "observed": OBSERVED_LINE}}}}
+        v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_direction_evidence_not_distinct"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_hedge_direction_evidence_requires_command():
+    """F1: each direction must be a real {command, observed} pair; a bare
+    observed with no command is malformed."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": OBSERVED_LINE},
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"observed": OBSERVED_LINE},
+                            "candidate": {"command": "cc", "observed": OBSERVED_LINE_C}}}}
+        v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE + " " + OBSERVED_LINE_C)))
+        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_direction_evidence_documented_in_surfaces():
+    """F3: a required field must appear on every surface that SHOWS the hedge
+    shape, else a compliant agent is false-blocked by copying the docs."""
+    from flagscale_agent.react.tools.plan_update import PlanUpdateTool
+    from flagscale_agent.react.guard import verification as V
+    schema_blob = str(PlanUpdateTool.parameters)
+    assert "direction_evidence" in schema_blob
+    assert "direction_evidence" in V._DELIVERABLE_READING_MISSING
+    assert "direction_evidence" in V._HEDGE_DIRECTION_EVIDENCE
 
 
 def _none_dr(if_none):

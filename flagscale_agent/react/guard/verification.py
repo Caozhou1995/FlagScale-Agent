@@ -635,7 +635,8 @@ an explicit owned claim). One fixed shape:
                   "normalized_side": "reference|candidate|both|neither"}],
     "hedge": {"shape": "union|intersection|none", "output": "<for union/intersection: the REAL output safe under EVERY reading; for none: None>",
               "evidence": "<for union/intersection: the REAL command + raw output proving it; for none: None>",
-              "extras_direction": "ignored|penalized"},
+              "extras_direction": "ignored|penalized",
+              "direction_evidence": "<for union/intersection, when any reading's normalized_side is not 'neither': {\"reference\": {\"command\": \"<normalize the REFERENCE, compare the RAW candidate>\", \"observed\": \"<the RAW output it produced>\"}, \"candidate\": {\"command\": \"<normalize the CANDIDATE, compare the RAW reference>\", \"observed\": \"<the RAW output it produced>\"}} — a DISTINCT observed one-sided comparison per direction; for none: omit>"},
     "if_none": {"why_intersection_empty": "<why no single output can satisfy all>",
                 "readings_rejected": [{"reading": "<a reading you dropped>", "evidence": "<independent artifact that rejected it>"}],
                 "bet_on": "<the reading you bet on>", "bet_loses_when": "<world-state where it loses>",
@@ -762,9 +763,11 @@ checker, normalizing only one side, rejects it. That is exactly how a
 form-difference gets green-washed: the one comparison that can REJECT the shipped
 form was never run.
 
-You do not know which side the invisible checker normalizes. So, whenever your
-readings assert a normalization (any reading whose normalized_side is not
-"neither"), the hedge must carry OBSERVED evidence for EACH one-sided comparison:
+You do not know which side the invisible checker normalizes. So, whenever you
+SHIP a hedge (union/intersection) and your readings assert a normalization (any
+reading whose normalized_side is not "neither"), the hedge must carry DISTINCT
+OBSERVED evidence for EACH one-sided comparison — one probe reused for both
+directions does not count:
 
   hedge={"shape": "union|intersection", "output": "...", "extras_direction": "...",
          "direction_evidence": {
@@ -774,9 +777,11 @@ readings assert a normalization (any reading whose normalized_side is not
                          "observed": "<the RAW output it produced>"}}}
 
 Each `observed` string must be text the harness can FIND in this session's tool
-results (an asserted-but-never-run probe does not count). A reading set that is
-ALL "neither" declares a pure value-equality task with no normalization dimension
-and is exempt.
+results (an asserted-but-never-run probe does not count), and the two must
+differ. A reading set that is ALL "neither" declares a pure value-equality task
+with no normalization dimension and is exempt. (A shape="none" bet ships no
+hedge; its own rule — an OBSERVED union_attempt + a named bet_loses_when —
+already forces the comparison, so it is not governed here.)
 
 Re-issue the step_done with `direction_evidence` covering both one-sided
 directions — run the comparison you have not run."""
@@ -1286,14 +1291,32 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     category="verification_required",
                 overridable=False,
                 )
+            seen_obs = set()
             for dir_name in ("reference", "candidate"):
-                if not _evidence_observed(de.get(dir_name), observed):
+                ev = de.get(dir_name)
+                # Each direction must be a real {command, observed} pair whose
+                # observed is present in the session — AND the two directions must
+                # be DISTINCT. One probe reused for both is the agnostic tag the
+                # gate exists to refuse: a single un-tagged comparison cannot show
+                # the SHIPPED form survives the side the checker normalizes.
+                if (not isinstance(ev, dict)
+                        or not _is_real_str(ev.get("command"))
+                        or not _evidence_observed(ev, observed)):
                     return GuardVerdict.block(
                         message=_HEDGE_DIRECTION_EVIDENCE,
                         reason="hedge_direction_evidence_missing",
                         category="verification_required",
                     overridable=False,
                     )
+                key = _normalize_for_grounding(ev.get("observed"))
+                if key in seen_obs:
+                    return GuardVerdict.block(
+                        message=_HEDGE_DIRECTION_EVIDENCE,
+                        reason="hedge_direction_evidence_not_distinct",
+                        category="verification_required",
+                    overridable=False,
+                    )
+                seen_obs.add(key)
     elif shape == "none":
         if_none = dr.get("if_none")
         if not isinstance(if_none, dict):
