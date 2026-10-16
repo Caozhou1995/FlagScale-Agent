@@ -232,26 +232,28 @@ class TestFormContractNudge:
         assert "git status --short" in v.message
 
 
-class TestVerificationDirectionNudge:
-    """A form-rewriting deliverable must be told the checker may normalize ONE
-    side and compare the OTHER raw, so byte-preserving can fail where canonical
-    re-emission passes. This is a SEMANTIC nudge: it names a DIRECTION, never a
-    parser library, never a concrete normalization chain, never a task's own
-    words (see test_no_harness_grader_leak.py)."""
+class TestSingleHomeInvariant:
+    """The far-end reminder must NOT re-state prompt doctrine (single-home rule):
+    a rule lives in ONE place — the system prompt. A per-edit inject that repeats
+    the direction-of-comparison / serializer doctrine is duplicative token cost,
+    not a new signal. The generic reminders (consumer path, form contract,
+    cold-consumer probe, side-effect sweep) stay; the doctrine does not."""
 
-    def test_direction_line_present_unconditionally(self, guard):
+    def test_no_doctrine_restatement_in_inject(self, guard):
         v = guard.check_post(_ctx(path="cfg/exp.yaml",
                                   result="Wrote 10 chars to cfg/exp.yaml"))
         assert v is not None
-        assert "VERIFICATION DIRECTION" in v.message
-        assert "NORMALIZE ONE SIDE" in v.message
-        assert "RAW" in v.message
-        assert "canonical" in v.message
+        assert "VERIFICATION DIRECTION" not in v.message
+        assert "SERIALIZER FORM" not in v.message
 
-    def test_direction_line_names_no_parser_oracle(self, guard):
-        """Prose only: the nudge must not smuggle a parser symbol or a verbatim
-        task grant — the leak test enforces this over the module, but assert the
-        emitted text specifically too."""
+    def test_generic_reminders_survive(self, guard):
+        v = guard.check_post(_ctx(path="filter.py",
+                                  result="Successfully edited filter.py"))
+        assert v is not None
+        assert "COLD-CONSUMER" in v.message
+        assert "SIDE-EFFECT" in v.message
+
+    def test_inject_names_no_parser_oracle(self, guard):
         v = guard.check_post(_ctx(path="filter.py",
                                   result="Successfully edited filter.py"))
         assert v is not None
@@ -781,18 +783,29 @@ class TestEffectBranch:
 
     def test_effect_branch_delivers_shared_semantic_nudges(self, guard, monkeypatch, tmp_path):
         # A file assembled by a shell heredoc must get the SAME semantic
-        # reminders the write_file/edit_file path branch delivers — including the
-        # VERIFICATION DIRECTION nudge. Regression for the R9 gap where a nudge
-        # added only to the path branch fired 0 times when the deliverable was
-        # written via `cat > f.py <<EOF`.
+        # reminders the write_file/edit_file path branch delivers. Regression for
+        # the R9 gap where a line added only to the path branch fired 0 times
+        # when the deliverable was written via `cat > f.py <<EOF`.
         monkeypatch.chdir(tmp_path)
         guard.check_pre(self._shell(tool_args={"command": "cat > /app/filter.py <<'PY'"}))
         (tmp_path / "filter.py").write_text("x = 1\n", encoding="utf-8")
         v = guard.check_post(self._shell())
         assert v is not None and v.action == "inject"
-        assert "VERIFICATION DIRECTION" in v.message
-        assert "SERIALIZER FORM" in v.message
         assert "COLD-CONSUMER" in v.message
+        assert "SIDE-EFFECT" in v.message
+
+    def test_shared_lines_do_not_restate_prompt_doctrine(self, guard, monkeypatch, tmp_path):
+        # SINGLE-HOME invariant: the far-end reminder must not re-state a rule
+        # that already lives in the system prompt. The direction-of-comparison
+        # and serializer-form doctrine belong in prompt.py; a per-edit inject
+        # that repeats them is duplicative token cost, not a new signal.
+        monkeypatch.chdir(tmp_path)
+        guard.check_pre(self._shell(tool_args={"command": "cat > /app/filter.py <<'PY'"}))
+        (tmp_path / "filter.py").write_text("x = 1\n", encoding="utf-8")
+        v = guard.check_post(self._shell())
+        assert v is not None
+        assert "VERIFICATION DIRECTION" not in v.message
+        assert "SERIALIZER FORM" not in v.message
 
     def test_no_pre_snapshot_is_silent(self, guard, monkeypatch, tmp_path):
         # Direct check_post with no preceding check_pre (as unit tests call it):

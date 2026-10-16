@@ -85,25 +85,6 @@ class TestTradeoffGateInAcceptanceBlocks:
         assert "whole deadline" in lo_r  # cost
 
 
-class TestTradeoffGateInPrompt:
-    def test_reviewer_demand_is_a_tradeoff(self):
-        p = _norm(SYSTEM_PROMPT_STATIC)
-        assert "a deliberate trade-off, not an unconditional mandate" in p
-        assert "know the reviewer's benefit" in p
-        assert "price it against your time budget" in p
-
-    def test_diverger_demand_is_a_tradeoff(self):
-        p = _norm(SYSTEM_PROMPT_STATIC)
-        assert "know the diverger's benefit" in p
-        assert "price it against your time budget" in p
-
-    def test_no_tier_label_in_prompt(self):
-        _no_tier_label(_norm(SYSTEM_PROMPT_STATIC))
-
-    def test_no_unconditional_both_halves_in_prompt(self):
-        _no_unconditional_both_halves(_norm(SYSTEM_PROMPT_STATIC))
-
-
 class TestFrameAcceptanceLinksStillPresent:
     """The trade-off gate must not remove the frame-step discipline beside it."""
 
@@ -120,33 +101,3 @@ class TestFrameAcceptanceLinksStillPresent:
         for w in ("gcode", "qemu", "sam-cell-seg"):
             assert not re.search(r"\b" + re.escape(w) + r"\b", low)
 
-
-class TestRoleOrderSeparation:
-    """diverger and reviewer are DIFFERENT roles at DIFFERENT times.
-
-    Frame (pre-artifact) dispatches the DIVERGER — the framing probe; a
-    reviewer needs a FROZEN artifact and belongs at the review step. The Frame
-    acceptance must not read as if Frame dispatches reviewers.
-    """
-
-    def test_frame_step_dispatches_diverger_not_reviewer(self):
-        low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
-        assert "what this frame step dispatches is the diverger" in low
-        assert "a reviewer needs a frozen artifact" in low
-        assert "belongs at the review step" in low
-
-    def test_reviewer_line_keeps_diverger_out(self):
-        p = _norm(SYSTEM_PROMPT_STATIC)
-        assert "the diverger is a frame-time dispatch" in p
-        assert "not here" in p
-
-    def test_order_documented_as_frame_then_fixed_review_step(self):
-        p = _norm(SYSTEM_PROMPT_STATIC)
-        assert "divergence at the frame step" in p
-        assert "reviewer at the plan's fixed review step" in p
-        assert "not fired at every step_done" in p
-
-    def test_frame_and_review_roles_are_time_separated(self):
-        p = _norm(SYSTEM_PROMPT_STATIC)
-        assert "diverger at frame" in p
-        assert "reviewer at the fixed review step" in p

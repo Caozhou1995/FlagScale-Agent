@@ -907,17 +907,22 @@ class TestPromptIntegrity:
         # No Chinese characters in static prompt
         assert not re.search(r'[\u4e00-\u9fff]', SYSTEM_PROMPT_STATIC)
 
+    # NOTE: the following tests assert that CONCEPTS (and the tool names those
+    # concepts act through) are present in the static prompt — not that a
+    # particular sentence survives. Frozen-sentence assertions made every prompt
+    # edit fail 100+ tests for wording alone; assert the concept instead.
+
     def test_static_prompt_contains_planning_section(self):
         """Static prompt should contain planning guidance."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "## Plan" in SYSTEM_PROMPT_STATIC
+        assert "PLAN" in SYSTEM_PROMPT_STATIC
         assert "plan_create" in SYSTEM_PROMPT_STATIC
-        assert "Step Notes" in SYSTEM_PROMPT_STATIC
+        assert "Step notes" in SYSTEM_PROMPT_STATIC
 
     def test_static_prompt_contains_memory_section(self):
         """Static prompt should contain memory rules."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "## Memory" in SYSTEM_PROMPT_STATIC
+        assert "MEMORY" in SYSTEM_PROMPT_STATIC
         assert "memory_read" in SYSTEM_PROMPT_STATIC
         assert "cross-session knowledge" in SYSTEM_PROMPT_STATIC
 
@@ -925,39 +930,37 @@ class TestPromptIntegrity:
         """Plan guidance must state plan is gated by whether you ACT, not by
         task difficulty, so 'simple' tasks are never a license to skip the plan."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "not gated by task difficulty" in SYSTEM_PROMPT_STATIC
-        assert "no such thing as a task too simple to plan" in SYSTEM_PROMPT_STATIC
+        assert "not by task difficulty" in SYSTEM_PROMPT_STATIC
+        assert "too simple to plan" in SYSTEM_PROMPT_STATIC
 
     def test_plan_guards_wired_to_lifecycle_rationale(self):
         """Prompt must explain WHY skipping a plan is dangerous: runtime guards
         (stall/verification) are wired to the plan lifecycle and cannot fire
         without an active plan."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "wired to the plan lifecycle" in SYSTEM_PROMPT_STATIC
-        assert "With no active plan, none of them can fire" in SYSTEM_PROMPT_STATIC
+        assert "plan-wired guards" in SYSTEM_PROMPT_STATIC
+        assert "none of them can fire" in SYSTEM_PROMPT_STATIC
 
     def test_method_switch_cannot_retarget_easier_goal(self):
         """Method-switch must not be usable to disguise lowering the bar /
         substituting a reachable target for the constrained one."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "change HOW you solve the problem the task set — never WHAT problem that is" in SYSTEM_PROMPT_STATIC
-        assert "wearing the vocabulary of Principle 3 as a disguise" in SYSTEM_PROMPT_STATIC
-        assert "never a license to retarget an easier goal" in SYSTEM_PROMPT_STATIC
+        assert "HOW you solve" in SYSTEM_PROMPT_STATIC
+        assert "never WHAT the task is" in SYSTEM_PROMPT_STATIC
 
     def test_verify_output_not_method_rationale(self):
         """Verification must reject arguing the method is sound in place of
         checking the output against ground truth (video-processing class)."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "arguing that your METHOD is sound in place of checking that your OUTPUT is correct" in SYSTEM_PROMPT_STATIC
-        assert "A confident rationale for a wrong answer is still a wrong answer" in SYSTEM_PROMPT_STATIC
+        assert "I checked the logic" in SYSTEM_PROMPT_STATIC
+        assert "not verification" in SYSTEM_PROMPT_STATIC
 
     def test_established_constraint_must_be_durable(self):
         """A load-bearing constraint must be written to memory immediately so it
         survives context eviction."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "This list must be DURABLE, not held in working context" in SYSTEM_PROMPT_STATIC
-        assert "re-inferring \"what was I even asked to do?\" from environmental scraps" in SYSTEM_PROMPT_STATIC
-        assert "recover the constraint from memory before acting" in SYSTEM_PROMPT_STATIC
+        assert "the moment you learn anything durable" in SYSTEM_PROMPT_STATIC
+        assert "persists on disk across evictions" in SYSTEM_PROMPT_STATIC
 
 
 class TestNoUnnecessaryTruncation:

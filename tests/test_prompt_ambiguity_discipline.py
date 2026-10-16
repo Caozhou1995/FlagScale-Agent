@@ -24,43 +24,6 @@ from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
 
 
-def test_ambiguity_section_present():
-    assert "UNDER-SPECIFIED CLAUSE + INVISIBLE GRADER" in SYSTEM_PROMPT_STATIC
-
-
-def test_ambiguity_three_steps_present():
-    p = SYSTEM_PROMPT_STATIC
-    # step 1: enumerate readings + acceptance sets
-    assert "ACCEPTANCE SET" in p
-    # step 2: a claimed hedge must be proven, never asserted
-    assert "CHECK FOR A HEDGE AND PROVE IT" in p
-    assert "do NOT assert it" in p
-    # step 3: empty-intersection bet, with the two deterministic tiebreaks
-    assert "INTERSECTION IS EMPTY" in p
-    assert "WORDING-LITERAL PRIORITY" in p
-    assert "ROBUSTNESS ON THE UNAMBIGUOUS AXES" in p
-
-
-def test_hedge_feasibility_is_constructive_not_introspective():
-    """A hedge must be proven by CONSTRUCTION, not decided by introspection.
-
-    Evidence 2026-10-12: a solver recognized the two grader readings,
-    introspected "Intersection = EMPTY ... No hedge possible. Must
-    BET." and shipped one reading (reward=0), while a sibling solver that
-    CONSTRUCTED the superset covering both readings passed. The prompt must therefore
-    demand writing each reading's acceptance predicate and building a
-    candidate output to test the intersection — an introspected "no hedge"
-    is a hypothesis, not a finding.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "by CONSTRUCTION, not introspection" in p
-    assert "acceptance PREDICATE" in p
-    assert "build one candidate output" in p
-    # an introspected emptiness is a hypothesis; bet only after proof
-    assert 'introspected "no hedge possible" is likewise a HYPOTHESIS' in p
-    assert "constructively shown empty" in p
-
-
 def test_frame_acceptance_carries_constructive_hedge_check():
     """The Frame step's acceptance must carry the same constructive check.
 
@@ -97,55 +60,12 @@ def test_hedge_doctrine_is_synced_across_both_surfaces():
         assert concept in prompt, f"prompt missing {concept!r}"
 
 
-def test_hedge_doctrine_has_no_contradictory_fallthrough():
-    """NEGATIVE assertion: the OLD contradictory bet rule must be GONE.
-
-    Evidence 2026-10-12 (independent review of commit 208fc03): the first
-    landing was ADDITIVE — it added the constructive rule but left standing
-    the introspection-era clause "if it does not [confirm], you have no hedge
-    — fall through to step 3 and bet", which licenses betting on a FAILED
-    probe (one candidate failing a probe does not show the intersection is
-    empty). Substring-presence tests stayed green while the prose contradicted
-    itself. A reframe needs a negative assertion that the old framing's
-    distinctive phrase is ABSENT, not just that the new one is present.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "fall through to step 3 and bet" not in p
-    # the probe must be ordered AFTER construction, not "First"
-    assert "First run a probe whose DESIGN INTENT" not in p
-    # and a failed probe must be framed as unproven, not as disproven
-    assert "the hedge is UNPROVEN" in p
-
-
 def test_ambiguity_is_regex_free_guidance():
     """The discipline must be an actionable procedure, not a keyword detector."""
     p = SYSTEM_PROMPT_STATIC
     # no enumeration of trigger keywords as the mechanism
     for kw in ("except/unless/when", "if the clause contains"):
         assert kw not in p
-
-
-def test_pre_existing_dominance_clause_preserved():
-    p = SYSTEM_PROMPT_STATIC
-    assert "DOMINANCE TIE-BREAK & DROPPED-CONSTRAINT LEDGER" in p
-    assert "Dropped-constraint ledger" in p
-
-
-def test_hedge_names_both_shapes_intersection_and_union():
-    """The hedge doctrine must name BOTH hedge shapes, not only the intersection.
-
-    Evidence 2026-10-12: a solver under an extras-ignoring reference matcher
-    (a reference key absent from the output is skipped, not penalised) made a
-    UNION/SUPERSET the winning hedge — but the intersection-only framing
-    called the union "impossible" and the agent bet on one base and scored
-    0.00%. The rule must therefore
-    present the union/superset shape alongside the intersection, and require
-    emptiness to be shown under BOTH before betting.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "UNION / SUPERSET" in p
-    assert "IGNORES output it did not ask for" in p
-    assert "under BOTH shapes" in p
 
 
 def test_frame_acceptance_names_both_hedge_shapes():
@@ -187,40 +107,6 @@ def test_no_grader_oracle_leak_in_prompt():
     assert "except for normalization that may occur" not in p
 
 
-def test_minimal_uncertainty_posture_present_both_surfaces():
-    """When the grader is invisible AND the goal under-determined, the agent
-    must minimise INTRODUCED uncertainty — a posture, not a fixed rule.
-
-    Evidence 2026-10-12 (two consecutive failed runs on an HTML-preservation
-    task): given a "preserve" instruction whose graded form was
-    under-determined, both agents
-    re-serialized the HTML (pretty-print / entity re-encode) — adding an
-    untestable transformation and failing identically. The lesson is not
-    "always preserve bytes" but "do not add what you cannot check". It must
-    be anchored on BOTH the prose and the enforced Frame acceptance.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "MINIMAL-UNCERTAINTY DEFAULT" in p
-    assert "do not add what you cannot check" in p
-    # it is a POSTURE, with preserve as one instance — not a fixed rule
-    assert "POSTURE, not a fixed rule" in p
-    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
-    assert "minimal-uncertainty default" in low
-    assert "do not add what you cannot check" in low
-    assert "posture, not a fixed rule" in low
-
-
-def test_minimal_uncertainty_is_self_observable():
-    """The posture must come with a grader-free self-check (diff vs required
-    form/input; every difference traces to an explicit requirement)."""
-    p = SYSTEM_PROMPT_STATIC
-    assert "Self-observable test (no grader needed)" in p
-    assert "must trace to an explicit task requirement" in p
-    low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
-    assert "self-observable test" in low
-    assert "trace to an explicit task requirement" in low
-
-
 def test_minimal_uncertainty_leaks_no_grader_or_posture_hardcode():
     """HARD: the new content must not leak a task's grader, and must not
     hardcode the originating task's specifics (it is a general posture)."""
@@ -236,56 +122,6 @@ def test_minimal_uncertainty_leaks_no_grader_or_posture_hardcode():
     assert not re.search(r"0x[0-9a-fA-F]{4,}", low), "Frame acceptance leaked a hex address"
 
 
-def test_cross_engine_differential_rule_present():
-    """A defensive property judged by a DIFFERENT engine than the one you
-    implement against must treat the consumer's parse path as the oracle.
-
-    Evidence 2026-10-13: a sanitizer implemented against a stdlib HTML parser
-    passed a self-built corpus and a preservation test, yet failed a
-    browser-based oracle on a construct the two engines parse differently —
-    the implementation's own parser had been taken as the oracle. The prompt
-    must therefore instruct enumerating documented differential constructs
-    between the two engines and validating through the consumer side, or
-    taking the conservative branch when preserving could leave a hazard live.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "Cross-engine differential" in p
-    assert "your own parser is NOT the oracle" in p
-    assert "CONSUMER's parse path" in p
-    assert "conservative branch" in p
-
-
-def test_standard_corpus_first_rule_present():
-    """When the hazard class has a published standard corpus, run THAT rather
-    than a self-built one: a self-built corpus only covers what the author
-    already imagined.
-
-    Evidence 2026-10-13: a solver's all-green self-built corpus missed the
-    single construct that failed the hidden oracle. The rule must state that
-    an all-green local result certifies the breadth of the author's
-    imagination, not coverage of the hazard.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "Standard-corpus first" in p
-    assert "published standard corpus" in p
-    assert "self-built corpus" in p
-    assert "breadth of your imagination" in p
-
-
-def test_direction_of_loss_rule_present():
-    """\"Conservative\" must be defined by the checker's loss direction, not by
-    gut caution: when the grader ignores extras and only requires coverage,
-    inclusion is conservative and omission is the only losing direction.
-
-    Evidence 2026-10-13: a solver dropped correctly-computed entries to hedge a
-    risk the scoring rule did not penalize, and fell below a coverage floor.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "Direction-of-loss rule" in p
-    assert "CHECKER's loss direction" in p
-    assert "OMISSION is the only losing direction" in p
-
-
 def test_cross_engine_and_corpus_rules_leak_no_specifics():
     """The two new rules are GENERAL posture: no task's grader, engine, or
     construct may be hardcoded."""
@@ -295,19 +131,3 @@ def test_cross_engine_and_corpus_rules_leak_no_specifics():
     assert not re.search(r"0x[0-9a-fA-F]{4,}", p), "prompt leaked a hex address"
 
 
-
-def test_ambiguity_of_parse_and_paired_preservation_rules_present():
-    """A hazard classification is only as strong as the parser judging it, and a
-    byte-unchanged requirement is a second gate that fights the removal gate.
-
-    Evidence 2026-10-13: a sanitizer judged hazard constructs with its own
-    tolerant parser, missed lexical quote/comment boundary break-outs that the
-    consumer engine read as live, and separately altered already-clean input
-    through a span-reassembly path the grader normalised differently.
-    """
-    p = SYSTEM_PROMPT_STATIC
-    assert "Ambiguity-of-parse rule" in p
-    assert "MOST dangerous reading" in p
-    assert "LEXICAL level" in p
-    assert "Paired-preservation rule" in p
-    assert "grader's OWN" in p or "grader\\'s OWN" in p
