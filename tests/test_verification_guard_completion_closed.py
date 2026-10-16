@@ -455,7 +455,7 @@ def test_acceptance_observed_flag_set_via_tool_result():
             override="")
         ctx.tool_name = "plan_update"
         ctx.tool_args = {
-            "action": "step_done", "step_id": 1,
+            "action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1,
             "verification": ["ran it"],
             "convention": {"name": "none"},
             "deliverable_reading": {"deliverable": "none"},

@@ -31,7 +31,7 @@ def _ctx(convention, verification=("proof A1",)):
     return GuardContext(
         tool_name="plan_update",
         tool_args={
-            "action": "step_done",
+            "action": "step_done", "assumptions": {"unverified": "none"},
             "step_id": 1,
             "verification": list(verification),
             "deliverable_reading": {"deliverable": "none"},
@@ -59,7 +59,7 @@ def test_missing_field_blocks_even_on_plain_step():
     try:
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 1,
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1,
                        "verification": ["proof A1"]},  # no `convention`
         )
         v = guard.check_pre(ctx)
@@ -235,7 +235,7 @@ def test_no_acceptance_still_needs_override_reason():
     try:
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 1,
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1,
                        "deliverable_reading": {"deliverable": "none"},
                        "convention": {"name": "none"}},
         )
@@ -419,7 +419,7 @@ def test_step_id_bool_does_not_bypass_acceptance_gate():
         assert v is not None and v.reason == "step_done_with_acceptance_no_verification"
         ctx_bool = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": True,
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": True,
                        "verification": ["p"], "convention": {"name": "none"}},
         )
         v2 = guard.check_pre(ctx_bool)

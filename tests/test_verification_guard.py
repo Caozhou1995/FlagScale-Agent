@@ -35,7 +35,7 @@ class TestVerificationGuard:
 
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 3}
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 3}
         )
         verdict = guard.check_pre(ctx)
         
@@ -53,7 +53,7 @@ class TestVerificationGuard:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "step_done",
+                "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 3,
                 "_override_reason": "grep shows no conflicts, files parseable",
                 "deliverable_reading": {"deliverable": "none"},
@@ -72,7 +72,7 @@ class TestVerificationGuard:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "step_done",
+                "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 3,
                 "_override_reason": "   "  # whitespace only
             }
@@ -124,7 +124,7 @@ class TestVerificationGuard:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "step_done",
+                "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 1,
                 "verification": ["did the thing"],
             },
@@ -144,7 +144,7 @@ class TestVerificationGuard:
         ctx1 = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "step_done",
+                "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 1,
                 "_override_reason": "re-read criteria, re-examined premises",
                 "deliverable_reading": {"deliverable": "none"},
@@ -159,7 +159,7 @@ class TestVerificationGuard:
         # falls straight to the Mode 2 evidence check and is blocked for THAT reason.
         ctx2 = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 2},
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 2},
         )
         verdict2 = guard.check_pre(ctx2)
         assert verdict2 is not None
@@ -280,7 +280,7 @@ class TestVerificationGuard:
         # step_done without override_reason should still be blocked
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 3}
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 3}
         )
         verdict = guard.check_pre(ctx)
         
@@ -358,7 +358,7 @@ class TestBatchStepDoneGate:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [
                     {"step_id": 1, "status": "done"},
                     {"step_id": 2, "status": "doing"},
@@ -376,7 +376,7 @@ class TestBatchStepDoneGate:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{"step_id": 1, "status": "done"}],
                 "_override_reason": reason,
                 "deliverable_reading": {"deliverable": "none"},
@@ -396,7 +396,7 @@ class TestBatchStepDoneGate:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{"step_id": 1, "status": "done"}],
                 "_override_reason": reason,
             },
@@ -412,7 +412,7 @@ class TestBatchStepDoneGate:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [
                     {"step_id": 1, "status": "doing"},
                     {"step_id": 2, "status": "skipped"},
@@ -427,7 +427,7 @@ class TestBatchStepDoneGate:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{"step_id": 1, "status": "done"}],
                 "_override_reason": "   ",
             },
@@ -455,7 +455,7 @@ class TestBatchStepDoneEvidence:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{"step_id": 1, "status": "done"}],
                 "_override_reason": "re-checked against each acceptance criterion",
                 "deliverable_reading": {"deliverable": "none"},
@@ -474,7 +474,7 @@ class TestBatchStepDoneEvidence:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{
                     "step_id": 1,
                     "status": "done",
@@ -498,7 +498,7 @@ class TestBatchStepDoneEvidence:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{"step_id": 1, "status": "done"}],
                 "_override_reason": "simple step, no criteria",
                 "deliverable_reading": {"deliverable": "none"},
@@ -520,7 +520,7 @@ class TestBatchStepDoneEvidence:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [
                     {"step_id": 1, "status": "done"},
                     {"step_id": 2, "status": "doing"},
@@ -562,7 +562,7 @@ class TestBatchStepDoneEvidence:
             ctx = GuardContext(
                 tool_name="plan_update",
                 tool_args={
-                    "action": "batch",
+                    "action": "batch", "assumptions": {"unverified": "none"},
                     "updates": [{"step_id": sid, "status": "done"}],
                     "_override_reason": "re-checked",
                     "deliverable_reading": {"deliverable": "none"},
@@ -581,7 +581,7 @@ class TestBatchStepDoneEvidence:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "step_done",
+                "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": "step_1",
                 "deliverable_reading": {"deliverable": "none"},
                 "convention": {"name": "none"},
@@ -603,7 +603,7 @@ class TestBatchStepDoneEvidence:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{
                     "step_id": 1, "status": "done",
                     "verification": ["A1 — observed x"],
@@ -635,7 +635,7 @@ class TestBatchStepDoneEvidence:
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "batch",
+                "action": "batch", "assumptions": {"unverified": "none"},
                 "updates": [{"step_id": 1, "status": "done",
                              "verification": ["A1 — observed x"]}],
                 "convention": {"name": "none"},

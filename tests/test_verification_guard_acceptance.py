@@ -20,7 +20,7 @@ def test_step_with_acceptance_requires_verification():
         guard._step_done_recheck_reminded = True
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 1}
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1}
         )
         
         verdict = guard.check_pre(ctx)
@@ -47,7 +47,7 @@ def test_acceptance_block_asks_for_observed_expected_gap():
         guard._step_done_recheck_reminded = True
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 1},
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1},
         )
         verdict = guard.check_pre(ctx)
         assert verdict is not None and verdict.action == "block"
@@ -72,7 +72,7 @@ def test_noacceptance_block_asks_for_observed_value():
         guard._step_done_recheck_reminded = True
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 1},
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1},
         )
         verdict = guard.check_pre(ctx)
         assert verdict is not None and verdict.action == "block"
@@ -96,7 +96,7 @@ def test_step_with_acceptance_passes_with_verification():
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "step_done",
+                "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 1,
                 "verification": ["Proof A1", "Proof A2"],
                 "deliverable_reading": {"deliverable": "none"},
@@ -122,7 +122,7 @@ def test_step_without_acceptance_requires_override():
         guard._step_done_recheck_reminded = True
         ctx = GuardContext(
             tool_name="plan_update",
-            tool_args={"action": "step_done", "step_id": 1}
+            tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1}
         )
         
         verdict = guard.check_pre(ctx)
@@ -145,7 +145,7 @@ def test_step_without_acceptance_passes_with_override():
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
-                "action": "step_done",
+                "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 1,
                 "_override_reason": "checked, all good",
                 "deliverable_reading": {"deliverable": "none"},
@@ -165,7 +165,7 @@ def test_fallback_when_plan_unavailable():
     guard = VerificationGuard(plan=None)
     ctx = GuardContext(
         tool_name="plan_update",
-        tool_args={"action": "step_done", "step_id": 1}
+        tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1}
     )
     
     verdict = guard.check_pre(ctx)
@@ -180,7 +180,7 @@ def test_backward_compatibility():
     ctx = GuardContext(
         tool_name="plan_update",
         tool_args={
-            "action": "step_done",
+            "action": "step_done", "assumptions": {"unverified": "none"},
             "step_id": 1,
             "_override_reason": "verified",
             "deliverable_reading": {"deliverable": "none"},

@@ -119,12 +119,28 @@ class PlanUpdateTool(Tool):
                     "guard message states the exact rule — read it."
                 ),
             },
+            "assumptions": {
+                "type": "object",
+                "description": (
+                    "REQUIRED on EVERY step_done. Reasoning is not evidence: split "
+                    "what you TESTED against the world from what you merely REASONED "
+                    "into your trace and treated as settled (a reading of a term, a "
+                    "'close enough', a value taken as given, a candidate dropped or "
+                    "adopted on suspicion). Pass {\"unverified\": \"none\"} (or an "
+                    "empty list) when no load-bearing premise was left untested; "
+                    "otherwise {\"unverified\": [{\"claim\": ..., \"affects_result\": "
+                    "\"yes\"|\"no\", \"probe\": ..., \"probe_output\": ..., "
+                    "\"reason\": ...}]} — an affecting premise (yes) MUST carry a "
+                    "real probe + observed output; a non-affecting one (no) MUST "
+                    "carry a reason. On a block, the guard message states the exact "
+                    "rule — read it."
+                ),
+            },
             "acceptance": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "New acceptance criteria (for update_acceptance action).",
-            },
-            "new_steps": {
+            },            "new_steps": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "New step descriptions (for add_steps).",

@@ -31,7 +31,7 @@ def _ctx(dr, verification=("proof A1",)):
     return GuardContext(
         tool_name="plan_update",
         tool_args={
-            "action": "step_done",
+            "action": "step_done", "assumptions": {"unverified": "none"},
             "step_id": 1,
             "verification": list(verification),
             "convention": {"name": "none"},
@@ -52,7 +52,7 @@ def test_missing_field_blocks():
     d, guard = _guard_with_step(["A1"])
     try:
         ctx = GuardContext(tool_name="plan_update",
-                           tool_args={"action": "step_done", "step_id": 1,
+                           tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1,
                                       "verification": ["p"], "convention": {"name": "none"}})
         v = guard.check_pre(ctx)
         assert v is not None and v.action == "block"
@@ -307,7 +307,7 @@ def test_batch_done_requires_field():
 def _ctx_obs(dr, msgs, verification=("proof A1",)):
     return GuardContext(
         tool_name="plan_update",
-        tool_args={"action": "step_done", "step_id": 1,
+        tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1,
                    "verification": list(verification),
                    "convention": {"name": "none"},
                    "deliverable_reading": dr},

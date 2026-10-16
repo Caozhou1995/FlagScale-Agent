@@ -886,6 +886,153 @@ def _acceptance_act_recorded(act, observed) -> bool:
     return _evidence_observed(act, observed)
 
 
+# ---- Unverified-assumption audit: forces the step to split its reasoning into
+# what it TESTED and what it merely ASSERTED ----
+# The failure this closes: a step can rest on premises that live only in the
+# reasoning trace ("this is close enough", "assume the field is 4 bytes", "the
+# counter can't overflow") and were adopted or vetoed without ever being tested
+# against the world. Reasoning is not evidence; an untested premise treated as a
+# conclusion is the silent assumption this gate surfaces. It is a class-level
+# obligation (every step reasons under unproven premises), fixed and REQUIRED on
+# every step_done, no marker/tag/regex. The declaration reuses the SAME
+# falsifier machinery as the convention gate: a premise that AFFECTS the result
+# must carry a real observation the harness can find; a premise declared
+# non-affecting must say why.
+_UNVERIFIED_ASSUMPTIONS_MISSING = """[VerificationGuard] Every step_done must carry the fixed `assumptions` field.
+
+Reasoning is not evidence. You can see your whole context — your own reasoning
+trace AND the tool results — so re-read it before this step closes, and split
+what you TESTED against the world from what you merely REASONED and treated as
+settled: a reading of a term you never checked, a "this is close enough", a
+value taken as given, a candidate you dropped or adopted on suspicion, a
+mechanism you assumed rather than observed. Those untested premises are exactly
+the ones that sink a step — and they are invisible in your final answer, because
+reasoning reads identically whether or not it was true. Surface them here.
+
+This is mandatory on EVERY step_done; the field is ONE fixed shape:
+  • the explicit not-applicable form, when NO load-bearing premise was left untested:
+      assumptions={"unverified": "none"}
+  • otherwise, one entry per untested premise that could move the result:
+      assumptions={"unverified": [
+        {"claim": "<the premise you leaned on without testing it>",
+         "affects_result": "yes|no",
+         "probe": "<command that tests it>",  "probe_output": "<raw output>",
+         #   ^ REQUIRED when affects_result == "yes": an affecting premise must be
+         #     TESTED, and the observed output must be found in your session log.
+         "reason": "<why it cannot affect the result>"
+         #   ^ REQUIRED when affects_result == "no": a non-affecting premise must
+         #     say WHY, not just be waved off.
+        }]}
+An empty list is also a real declaration. A silent omission is not — re-issue
+the step_done with this field."""
+
+_UNVERIFIED_ASSUMPTIONS_MALFORMED = """[VerificationGuard] The `assumptions` declaration is malformed.
+
+Write either the explicit not-applicable form (`{"unverified": "none"}` or the
+string "none" or an empty/unverified-free list), or a list under "unverified"
+of objects, each with a real string "claim" and "affects_result" in yes/no:
+  • affects_result == "yes": you MUST supply a real "probe" AND "probe_output" —
+    the premise moved the result, so it cannot ship untested;
+  • affects_result == "no": you MUST supply a real "reason" — say WHY it cannot
+    move the result.
+A claim with neither is exactly the reasoning-treated-as-evidence this gate
+exists to surface. Re-issue the step_done with a corrected `assumptions` field."""
+
+_UNVERIFIED_ASSUMPTIONS_AFFECTS = """[VerificationGuard] An unverified premise was declared to AFFECT the result
+but carries no real observation.
+
+If a premise can move the step's result, it may not ship as reasoning alone —
+test it and paste the raw output. `probe_output` must be text the harness can
+find in your session's tool results (a claimed-but-never-run probe does not
+count). Supply a real "probe" + "probe_output" — or, if the premise is
+observable in principle but unobservable here, say so in the `reason` and mark
+`affects_result` honestly; what is forbidden is asserting an affecting premise
+with no test at all."""
+
+
+def _check_unverified_assumptions_field(field, observed: str = None):
+    """Unconditional structured gate for the fixed `assumptions` field.
+
+    `field` is the raw value of ``tool_args['assumptions']``. Returns a
+    GuardVerdict.block when the declaration is missing/malformed, when an
+    affecting premise carries no observed test, or when a non-affecting premise
+    carries no reason — else None. The explicit not-applicable forms ("none",
+    {"unverified": "none"}, or an empty list) pass: that is a recorded decision,
+    not a silent skip. This is a shape + corpus check; it does not judge whether
+    the premise is truly non-affecting, only that the split is on the record.
+    """
+    if field is None:
+        return GuardVerdict.block(
+            message=_UNVERIFIED_ASSUMPTIONS_MISSING,
+            reason="assumptions_declaration_missing",
+            category="verification_required",
+        )
+    if isinstance(field, str):
+        if field.strip().lower() in _CONVENTION_NO_VALUE:
+            return None
+        return GuardVerdict.block(
+            message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+            reason="assumptions_declaration_malformed",
+            category="verification_required",
+        )
+    if isinstance(field, list):
+        items = field
+    elif isinstance(field, dict):
+        if "unverified" not in field:
+            return GuardVerdict.block(
+                message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+                reason="assumptions_declaration_malformed",
+                category="verification_required",
+            )
+        items = field.get("unverified")
+        if items is None or (isinstance(items, str)
+                             and items.strip().lower() in _CONVENTION_NO_VALUE):
+            return None
+    else:
+        return GuardVerdict.block(
+            message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+            reason="assumptions_declaration_malformed",
+            category="verification_required",
+        )
+    if not isinstance(items, list):
+        return GuardVerdict.block(
+            message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+            reason="assumptions_declaration_malformed",
+            category="verification_required",
+        )
+    for it in items:
+        if not isinstance(it, dict) or not _is_real_str(it.get("claim")):
+            return GuardVerdict.block(
+                message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+                reason="assumptions_declaration_malformed",
+                category="verification_required",
+            )
+        affects = str(it.get("affects_result") or "").strip().lower()
+        if affects not in ("yes", "no"):
+            return GuardVerdict.block(
+                message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+                reason="assumptions_declaration_malformed",
+                category="verification_required",
+            )
+        if affects == "yes":
+            if not _evidence_observed(
+                    {"command": it.get("probe"), "observed": it.get("probe_output")},
+                    observed):
+                return GuardVerdict.block(
+                    message=_UNVERIFIED_ASSUMPTIONS_AFFECTS,
+                    reason="assumptions_affecting_without_test",
+                    category="verification_required",
+                )
+        else:
+            if not _is_real_str(it.get("reason")):
+                return GuardVerdict.block(
+                    message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+                    reason="assumptions_nonaffecting_without_reason",
+                    category="verification_required",
+                )
+    return None
+
+
 def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = None):
     """Unconditional structured gate for the fixed `deliverable_reading` field.
 
@@ -1456,6 +1603,15 @@ class VerificationGuard(Guard):
                     dr, self._task_text(), self._observed(ctx))
                 if bad is not None:
                     return bad
+                # The unverified-assumption audit is a FIXED, REQUIRED field on
+                # EVERY step_done, parallel to convention/deliverable_reading:
+                # reasoning is not evidence, so any premise left untested must be
+                # surfaced — an affecting one tested, a non-affecting one
+                # justified. "none" is an explicit owned claim.
+                bad = _check_unverified_assumptions_field(
+                    ctx.tool_args.get("assumptions"), self._observed(ctx))
+                if bad is not None:
+                    return bad
                 if _declares_graded_reading(dr):
                     self._graded_reading_seen = True
                 if _acceptance_act_recorded(
@@ -1532,6 +1688,13 @@ class VerificationGuard(Guard):
                             dr = ctx.tool_args.get("deliverable_reading")
                         bad = _check_deliverable_reading_field(
                             dr, self._task_text(), self._observed(ctx))
+                        if bad is not None:
+                            return bad
+                        asm = u.get("assumptions")
+                        if asm is None:
+                            asm = ctx.tool_args.get("assumptions")
+                        bad = _check_unverified_assumptions_field(
+                            asm, self._observed(ctx))
                         if bad is not None:
                             return bad
                         if _declares_graded_reading(dr):
