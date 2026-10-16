@@ -34,10 +34,12 @@ def test_frame_acceptance_carries_constructive_hedge_check():
     constructively shown empty.
     """
     low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
+    # The Frame surface carries the PRINCIPLE (one line); the enforced detail
+    # now lives in the guard that fires on a malformed block (single home).
     assert "constructive hedge-feasibility" in low
-    assert "acceptance predicate" in low
-    assert "intersection" in low
-    assert "constructively shown empty" in low
+    assert "introspection" in low
+    assert "union" in low and "intersection" in low
+    assert "extras" in low
     # must not hardcode any originating task's specifics
     assert not re.search(r"0x[0-9a-fA-F]{4,}", low), "Frame acceptance leaked a hex address"
     assert "beautifulsoup" not in low
@@ -55,7 +57,7 @@ def test_hedge_doctrine_is_synced_across_both_surfaces():
     """
     frame = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
     prompt = SYSTEM_PROMPT_STATIC.lower()
-    for concept in ("acceptance predicate", "shown empty"):
+    for concept in ("hedge", "union", "intersection"):
         assert concept in frame, f"Frame acceptance missing {concept!r}"
         assert concept in prompt, f"prompt missing {concept!r}"
 
@@ -69,10 +71,17 @@ def test_ambiguity_is_regex_free_guidance():
 
 
 def test_frame_acceptance_names_both_hedge_shapes():
+    """The Frame surface must name BOTH hedge shapes; the enforcement detail
+    (when each applies) lives in the guard, not the per-call schema."""
     low = " ".join(_FRAME_STEP_ACCEPTANCE).lower()
-    assert "union / superset" in low
-    assert "ignores output" in low
-    assert "both shapes" in low
+    assert "union" in low
+    assert "intersection" in low
+    # the guard is the single home of the enforcement detail
+    from pathlib import Path
+    import flagscale_agent.react.guard.verification as v
+    gsrc = Path(v.__file__).read_text().lower()
+    assert "extras_direction" in gsrc
+    assert "ignored" in gsrc and "penalized" in gsrc
 
 
 def test_hedge_doctrine_no_longer_excludes_the_union_shape():
