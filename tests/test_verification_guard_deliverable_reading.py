@@ -104,7 +104,10 @@ def test_grounded_reading_with_union_hedge_passes():
               "readings": [GROUNDED],
               "hedge": {"shape": "union", "output": "...",
                         "evidence": {"command": "cmd", "observed": "ok"},
-                        "extras_direction": "ignored"}}
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cmd-r", "observed": "ok-r"},
+                            "candidate": {"command": "cmd-c", "observed": "ok-c"}}}}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
         shutil.rmtree(d)
@@ -133,7 +136,10 @@ def test_grounding_skipped_when_task_unavailable():
               "readings": [{"reading": "r", "source": "NOT IN TASK", "acceptance_test": "x", "normalized_side": "reference"}],
               "hedge": {"shape": "union", "output": "a",
                         "evidence": {"command": "c", "observed": "o"},
-                        "extras_direction": "ignored"}}
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cr", "observed": "or"},
+                            "candidate": {"command": "cc", "observed": "oc"}}}}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
         shutil.rmtree(d)
@@ -178,7 +184,10 @@ def test_intersection_under_ignored_passes():
               "readings": [GROUNDED],
               "hedge": {"shape": "intersection", "output": "a",
                         "evidence": {"command": "c", "observed": "o"},
-                        "extras_direction": "ignored"}}
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cr", "observed": "or"},
+                            "candidate": {"command": "cc", "observed": "oc"}}}}
         assert guard.check_pre(_ctx(dr)) is None
     finally:
         shutil.rmtree(d)
@@ -330,7 +339,10 @@ def test_union_hedge_with_observed_evidence_passes():
               "hedge": {"shape": "union", "output": "...",
                         "evidence": {"command": "python -c c",
                                      "observed": OBSERVED_LINE},
-                        "extras_direction": "ignored"}}
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cr", "observed": OBSERVED_LINE},
+                            "candidate": {"command": "cc", "observed": OBSERVED_LINE}}}}
         assert guard.check_pre(_ctx_obs(dr, _corpus("x\n" + OBSERVED_LINE + "\ny"))) is None
     finally:
         shutil.rmtree(d)
@@ -372,8 +384,80 @@ def test_union_hedge_evidence_failopen_when_corpus_unavailable():
               "readings": [GROUNDED],
               "hedge": {"shape": "union", "output": "...",
                         "evidence": {"command": "c", "observed": "whatever"},
-                        "extras_direction": "ignored"}}
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cr", "observed": "wr"},
+                            "candidate": {"command": "cc", "observed": "wc"}}}}
         assert guard.check_pre(_ctx(dr)) is None
+    finally:
+        shutil.rmtree(d)
+
+
+# --- direction-aligned hedge evidence: a normalization-bearing reading set must
+#     carry an OBSERVED one-sided comparison for EACH direction, so the side the
+#     invisible checker normalizes is RUN, not asserted.
+
+def test_hedge_direction_evidence_missing_blocks():
+    """The agnostic-probe trap: one-sided readings with an un-tagged evidence
+    dict — the comparison that could REJECT the shipped form was never run."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": OBSERVED_LINE},
+                        "extras_direction": "ignored"}}
+        v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_hedge_direction_evidence_one_side_missing_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": OBSERVED_LINE},
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cr", "observed": OBSERVED_LINE}}}}
+        v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_hedge_direction_evidence_fabricated_blocks():
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [GROUNDED],
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": OBSERVED_LINE},
+                        "extras_direction": "ignored",
+                        "direction_evidence": {
+                            "reference": {"command": "cr", "observed": OBSERVED_LINE},
+                            "candidate": {"command": "cc",
+                                          "observed": "made-up line 98765 zzz"}}}}
+        v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
+        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+    finally:
+        shutil.rmtree(d)
+
+
+def test_hedge_direction_evidence_all_neither_exempt():
+    """An all-'neither' reading set declares no normalization dimension, so the
+    direction-evidence requirement does not apply (pure value-equality task)."""
+    d, guard = _guard_with_step(["A1"], TASK)
+    try:
+        dr = {"deliverable": "out.json", "grader_visible": False,
+              "readings": [dict(GROUNDED, normalized_side="neither")],
+              "hedge": {"shape": "union", "output": "a",
+                        "evidence": {"command": "c", "observed": OBSERVED_LINE},
+                        "extras_direction": "ignored"}}
+        assert guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE))) is None
     finally:
         shutil.rmtree(d)
 
@@ -457,7 +541,10 @@ def test_rejected_entry_fabricated_evidence_blocks():
 def _union_hedge():
     return {"shape": "union", "output": "...",
             "evidence": {"command": "cmd", "observed": "ok"},
-            "extras_direction": "ignored"}
+            "extras_direction": "ignored",
+            "direction_evidence": {
+                "reference": {"command": "cmd-r", "observed": "ok-r"},
+                "candidate": {"command": "cmd-c", "observed": "ok-c"}}}
 
 
 def test_all_symmetric_readings_block():

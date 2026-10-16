@@ -751,6 +751,36 @@ the ONLY exit. A prose reason does not substitute for the declaration — the
 requirement is structural precisely so awareness of the right output form is not
 waivable by an unactioned sentence."""
 
+_HEDGE_DIRECTION_EVIDENCE = """[VerificationGuard] The hedge evidence is not DIRECTION-ALIGNED.
+
+A hedge claims ONE output is safe under EVERY reading. But a single, un-tagged
+probe cannot show that for a reading that asserts a NORMALIZATION: only a
+ONE-SIDED comparison can DISCRIMINATE an output's form — normalize ONE side and
+compare the OTHER side RAW. "both" (normalize both) is idempotent and "neither"
+(raw == raw) is trivial, so a byte-preserving output passes them while the real
+checker, normalizing only one side, rejects it. That is exactly how a
+form-difference gets green-washed: the one comparison that can REJECT the shipped
+form was never run.
+
+You do not know which side the invisible checker normalizes. So, whenever your
+readings assert a normalization (any reading whose normalized_side is not
+"neither"), the hedge must carry OBSERVED evidence for EACH one-sided comparison:
+
+  hedge={"shape": "union|intersection", "output": "...", "extras_direction": "...",
+         "direction_evidence": {
+           "reference": {"command": "<normalize the REFERENCE, compare the RAW candidate>",
+                         "observed": "<the RAW output it produced>"},
+           "candidate": {"command": "<normalize the CANDIDATE, compare the RAW reference>",
+                         "observed": "<the RAW output it produced>"}}}
+
+Each `observed` string must be text the harness can FIND in this session's tool
+results (an asserted-but-never-run probe does not count). A reading set that is
+ALL "neither" declares a pure value-equality task with no normalization dimension
+and is exempt.
+
+Re-issue the step_done with `direction_evidence` covering both one-sided
+directions — run the comparison you have not run."""
+
 
 def _normalize_for_grounding(s: str) -> str:
     """Whitespace-collapsed, lowercased form for verbatim grounding checks."""
@@ -1241,6 +1271,29 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 category="verification_required",
             overridable=False,
             )
+        # Direction-aligned evidence. A hedge for a normalization-bearing reading
+        # set (some reading not "neither") must carry an OBSERVED one-sided
+        # comparison for EACH direction, so the side the invisible checker
+        # normalizes is RUN, not asserted. An un-tagged probe cannot discriminate
+        # a form difference: "both" is idempotent and "neither" trivial, so both
+        # green-wash a byte-preserving output. See _HEDGE_DIRECTION_EVIDENCE.
+        if not all_neither:
+            de = hedge.get("direction_evidence")
+            if not isinstance(de, dict):
+                return GuardVerdict.block(
+                    message=_HEDGE_DIRECTION_EVIDENCE,
+                    reason="hedge_direction_evidence_missing",
+                    category="verification_required",
+                overridable=False,
+                )
+            for dir_name in ("reference", "candidate"):
+                if not _evidence_observed(de.get(dir_name), observed):
+                    return GuardVerdict.block(
+                        message=_HEDGE_DIRECTION_EVIDENCE,
+                        reason="hedge_direction_evidence_missing",
+                        category="verification_required",
+                    overridable=False,
+                    )
     elif shape == "none":
         if_none = dr.get("if_none")
         if not isinstance(if_none, dict):
