@@ -35,8 +35,17 @@ def test_is_english():
 
 
 def test_no_python_format_brace_leak_in_prose():
-    # Every literal brace must be doubled so .format() never raises.
-    assert "{{" in SYSTEM_PROMPT_STATIC  # the tool-param example is escaped
+    """Every literal brace in the prose must be DOUBLED, so .format() never
+    raises and never silently swallows a brace. Assert the real invariant:
+    after removing escaped {{ }} pairs and the four known placeholders, no
+    single unescaped brace may remain. (A weaker `"{{" in P` check passes even
+    if a new unescaped brace is introduced elsewhere.)"""
+    import re
+    p = SYSTEM_PROMPT_STATIC
+    stripped = p.replace("{{", "").replace("}}", "")
+    stripped = re.sub(r"\{(cwd|tools|skills|knowledge)\}", "", stripped)
+    residual = re.findall(r"[{}]", stripped)
+    assert not residual, f"unescaped single brace(s) remain: {residual[:5]}"
 
 
 # ── Concept presence (loose — survives paraphrase) ───────────────────────
@@ -46,7 +55,7 @@ CONCEPTS = {
     "research_first": ["problem class", "standard method", "route the task"],
     "cost_arithmetic": ["cost arithmetic", "wall-clock", "sample and extrapolate"],
     "grader_contract": ["grader's contract", "acceptance clause", "testable assertion"],
-    "observation_over_argument": ["observation", "argument", "verification"],
+    "observation_over_argument": ["observation that differs", "not verification", "i checked the logic"],
     "not_verified_debt": ["not verified", "load-bearing premise", "falsify"],
     "far_end_verification": ["far end", "target's own state", "consumer"],
     "generalization": ["generalizes", "overfit", "stress input"],
@@ -62,16 +71,22 @@ CONCEPTS = {
     "minimal_uncertainty": ["minimal-uncertainty", "widening the uncertainty", "no more"],
     "direction_of_loss": ["direction-of-loss", "inclusion", "omission"],
     "direction_of_comparison": ["normalized", "one-sided", "strictest predicate"],
-    "plan_os": ["plan", "frame", "step_done"],
+    "plan_os": ["plan_create", "step_done", "plan-wired guards"],
     "plan_gated_by_acting": ["gated", "too simple", "disarm"],
-    "memory": ["memory", "cross-session", "falsifiable"],
-    "tool_guide": ["background", "shell", "write_file"],
-    "multi_agent": ["worker", "reviewer", "dispatch"],
+    "memory": ["cross-session knowledge", "memory_read", "wrong memory"],
+    "tool_guide": ["background=true", "shell_jobs", "write_file content"],
+    "multi_agent": ["dispatch_many", "spawn_worker", "acceptance checks itself"],
     "time_budget": ["time budget", "budget order", "longest branch"],
     "environment_resilience": ["proxy", "mirror", "unreachable"],
     "resource_probing": ["cgroup", "container", "ladder"],
     "code_quality": ["pytest", "unit test", "commit message"],
     "response_format": ["task result", "rsi result", "language"],
+    "pitfall_recall": ["pitfall recall", "risk signal", "recall before the error"],
+    "dashboard": ["dashboard", "ctx", "background jobs"],
+    "far_end": ["far end", "target's own state", "consumer"],
+    "multi_agent_roles": ["reviewer", "diverger", "leaf role"],
+    "observation_semantics": ["controlled comparison", "correlational", "end-to-end metric"],
+    "dominance_and_ledger": ["dominated-nowhere", "set aside", "one-line trace"],
 }
 
 
