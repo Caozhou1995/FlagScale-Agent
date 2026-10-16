@@ -12,35 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regression tests for the Housekeeping Rhythm section of the static prompt.
+"""Static-prompt invariants that must survive EVERY edit.
 
-The section pre-states the recurring guard requirements (memory/plan/knowledge/
-context/long-command/search/step-declaration/deliverable) so the agent runs them
-on its own cadence instead of being force-reminded by a guard. This is prompt-
-only guidance, so the test asserts the section and its load-bearing clauses
-survive a future edit, and that it introduces no grader leak and no new
-``.format`` placeholder.
+Two properties are load-bearing regardless of how the prompt is worded:
+
+1. NO GRADER LEAK — the prompt must never name a specific task's engine or
+   construct (a library, a parser, a browser, a hex address). The prompt is
+   general guidance; leaking one task's grader overfits every run to it.
+2. FORMAT CONTRACT — the builder ``.format()``s the string with exactly
+   {cwd, tools, skills, knowledge}; no other placeholder may appear.
+
+Both are asserted against the WHOLE prompt because they are global invariants
+(not section-scoped). Concept/section presence is covered by
+``test_prompt_semantics.py``.
 """
 import re
 
 from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 
 
-def _housekeeping_section() -> str:
-    """The Housekeeping Rhythm section, sliced from its H2 up to the next H2.
-
-    The assertions below MUST be scoped to this slice: a whole-prompt ``in``
-    check is vacuously green — it can pass even if the entire section is deleted
-    — so the load-bearing clauses are asserted against this slice, not the whole
-    prompt. (Some probes are additionally unique to the section, but uniqueness
-    is not relied on.)
-    """
-    match = re.search(r"## Housekeeping Rhythm.*?(?=\n## )", SYSTEM_PROMPT_STATIC, re.S)
-    assert match, "Housekeeping Rhythm section not found"
-    return match.group(0).lower()
-
-
-def test_housekeeping_leaks_no_grader_or_specifics():
+def test_prompt_leaks_no_grader_or_specifics():
     """GENERAL posture: no task's grader, engine, or construct may be hardcoded."""
     p = SYSTEM_PROMPT_STATIC
     for bad in ("BeautifulSoup", "bs4", "html.parser", "html5lib", "lxml",
@@ -49,8 +40,7 @@ def test_housekeeping_leaks_no_grader_or_specifics():
     assert not re.search(r"0x[0-9a-fA-F]{4,}", p), "prompt leaked a hex address"
 
 
-def test_housekeeping_adds_no_new_placeholder():
-    """The section must not add a .format placeholder (only cwd/knowledge/skills/tools)."""
+def test_prompt_placeholders_are_exactly_the_format_contract():
+    """Only cwd/knowledge/skills/tools may be .format placeholders."""
     assert set(re.findall(r"{([a-z_]+)}", SYSTEM_PROMPT_STATIC)) == {
         "cwd", "knowledge", "skills", "tools"}
-
