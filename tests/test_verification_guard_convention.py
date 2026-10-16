@@ -95,9 +95,9 @@ def test_derived_false_escape_blocks():
     d, guard = _guard_with_step(["A1"])
     try:
         v = guard.check_pre(_ctx({"derived": False}))
-        assert v is not None and v.reason == "convention_missing_field"
+        assert v is not None and v.reason == "convention_name_missing"
         v2 = guard.check_pre(_ctx({"derived": True}))
-        assert v2 is not None and v2.reason == "convention_missing_field"
+        assert v2 is not None and v2.reason == "convention_name_missing"
     finally:
         shutil.rmtree(d)
 
@@ -108,7 +108,7 @@ def test_derived_key_is_no_longer_a_trigger():
     d, guard = _guard_with_step(["A1"])
     try:
         v = guard.check_pre(_ctx({"derived": "maybe"}))
-        assert v is not None and v.reason == "convention_missing_field"
+        assert v is not None and v.reason == "convention_name_missing"
     finally:
         shutil.rmtree(d)
 
@@ -121,7 +121,7 @@ def test_missing_required_field_blocks():
         bad = dict(GOOD)
         del bad["delivered"]
         v = guard.check_pre(_ctx(bad))
-        assert v is not None and v.reason == "convention_missing_field"
+        assert v is not None and v.reason == "convention_field_missing"
     finally:
         shutil.rmtree(d)
 
@@ -145,7 +145,7 @@ def test_null_values_are_legal_but_keys_must_exist():
         absent = dict(GOOD)
         del absent["example"]
         v = guard.check_pre(_ctx(absent))
-        assert v is not None and v.reason == "convention_missing_field"
+        assert v is not None and v.reason == "convention_field_missing"
     finally:
         shutil.rmtree(d)
 
@@ -393,7 +393,7 @@ def test_blank_or_alias_name_is_not_not_applicable():
     try:
         for nm in ["", "  ", "n/a", "na", "n.a.", "null", "nil", "-", "--"]:
             v = guard.check_pre(_ctx({"name": nm}))
-            assert v is not None and v.reason == "convention_missing_field", (
+            assert v is not None and v.reason in ("convention_name_missing", "convention_field_missing"), (
                 f"name={nm!r} must NOT be treated as not-applicable"
             )
         # the ONE legal token, case/space-insensitive, still passes
@@ -480,7 +480,7 @@ def test_non_string_convention_name_blocks():
                "delivered": "y", "conflict": "no",
                "probe": "a", "probe_output": "b"}
         v = guard.check_pre(_ctx(bad))
-        assert v is not None and v.reason == "convention_missing_field"
+        assert v is not None and v.reason == "convention_name_missing"
     finally:
         shutil.rmtree(d)
 

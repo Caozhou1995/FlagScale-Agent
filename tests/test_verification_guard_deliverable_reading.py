@@ -81,7 +81,7 @@ def test_grader_visible_requires_bool():
     d, guard = _guard_with_step(["A1"])
     try:
         v = guard.check_pre(_ctx({"deliverable": "out.json", "grader_visible": "yes"}))
-        assert v is not None and v.reason == "deliverable_reading_malformed"
+        assert v is not None and v.reason == "dr_grader_visible_missing"
     finally:
         shutil.rmtree(d)
 
@@ -92,7 +92,7 @@ def test_invisible_without_readings_blocks():
     d, guard = _guard_with_step(["A1"], TASK)
     try:
         v = guard.check_pre(_ctx({"deliverable": "out.json", "grader_visible": False}))
-        assert v is not None and v.reason == "deliverable_reading_malformed"
+        assert v is not None and v.reason == "dr_readings_empty"
     finally:
         shutil.rmtree(d)
 
@@ -122,7 +122,7 @@ def test_ungrounded_source_blocks():
               "hedge": {"shape": "union", "output": "a", "evidence": "b",
                         "extras_direction": "ignored"}}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "reading_not_grounded"
+        assert v is not None and v.reason == "reading_source_not_grounded"
     finally:
         shutil.rmtree(d)
 
@@ -154,7 +154,7 @@ def test_missing_acceptance_test_blocks():
                         "evidence": {"command": "c", "observed": "o"},
                         "extras_direction": "ignored"}}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "deliverable_reading_malformed"
+        assert v is not None and v.reason == "dr_reading_field_missing"
     finally:
         shutil.rmtree(d)
 
@@ -200,7 +200,7 @@ def test_blank_string_form_blocks():
     try:
         for s in ("", "  ", "n/a", "null", "nil", "-"):
             v = guard.check_pre(_ctx(s))
-            assert v is not None and v.reason == "deliverable_reading_malformed", s
+            assert v is not None and v.reason == "dr_string_not_none", s
         assert guard.check_pre(_ctx("none")) is None
     finally:
         shutil.rmtree(d)
@@ -213,7 +213,7 @@ def test_hedge_without_output_blocks():
               "readings": [GROUNDED],
               "hedge": {"shape": "union", "extras_direction": "ignored"}}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "hedge_unproven"
+        assert v is not None and v.reason == "hedge_output_missing"
     finally:
         shutil.rmtree(d)
 
@@ -224,7 +224,7 @@ def test_none_shape_requires_if_none():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [GROUNDED], "hedge": {"shape": "none"}}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "hedge_unproven"
+        assert v is not None and v.reason == "hedge_if_none_missing"
     finally:
         shutil.rmtree(d)
 
@@ -288,7 +288,7 @@ def test_rejected_ungrounded_blocks():
                           "bet_on": "seg VA", "bet_loses_when": "flat",
                           "why_safe": "ref"}}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "reading_not_grounded"
+        assert v is not None and v.reason == "rejected_source_not_grounded"
     finally:
         shutil.rmtree(d)
 
@@ -409,7 +409,7 @@ def test_hedge_direction_evidence_missing_blocks():
                         "evidence": {"command": "c", "observed": OBSERVED_LINE},
                         "extras_direction": "ignored"}}
         v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
-        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+        assert v is not None and v.reason == "hedge_direction_evidence_not_dict"
     finally:
         shutil.rmtree(d)
 
@@ -425,7 +425,7 @@ def test_hedge_direction_evidence_one_side_missing_blocks():
                         "direction_evidence": {
                             "reference": {"command": "cr", "observed": OBSERVED_LINE}}}}
         v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
-        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+        assert v is not None and v.reason == "hedge_direction_evidence_malformed"
     finally:
         shutil.rmtree(d)
 
@@ -443,7 +443,7 @@ def test_hedge_direction_evidence_fabricated_blocks():
                             "candidate": {"command": "cc",
                                           "observed": "made-up line 98765 zzz"}}}}
         v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE)))
-        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+        assert v is not None and v.reason == "hedge_direction_evidence_malformed"
     finally:
         shutil.rmtree(d)
 
@@ -496,7 +496,7 @@ def test_hedge_direction_evidence_requires_command():
                             "reference": {"observed": OBSERVED_LINE},
                             "candidate": {"command": "cc", "observed": OBSERVED_LINE_C}}}}
         v = guard.check_pre(_ctx_obs(dr, _corpus(OBSERVED_LINE + " " + OBSERVED_LINE_C)))
-        assert v is not None and v.reason == "hedge_direction_evidence_missing"
+        assert v is not None and v.reason == "hedge_direction_evidence_malformed"
     finally:
         shutil.rmtree(d)
 
@@ -617,7 +617,7 @@ def test_missing_normalized_side_blocks():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [r], "hedge": _union_hedge()}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "reading_direction_missing"
+        assert v is not None and v.reason == "reading_direction_not_str"
     finally:
         shutil.rmtree(d)
 
@@ -629,7 +629,7 @@ def test_invalid_normalized_side_blocks():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [r], "hedge": _union_hedge()}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "reading_direction_missing"
+        assert v is not None and v.reason == "reading_direction_invalid"
     finally:
         shutil.rmtree(d)
 
@@ -718,7 +718,7 @@ def test_non_string_normalized_side_is_malformed():
                   "readings": [dict(GROUNDED, normalized_side=bad)],
                   "hedge": _union_hedge()}
             v = guard.check_pre(_ctx(dr))
-            assert v is not None and v.reason == "deliverable_reading_malformed", bad
+            assert v is not None and v.reason == "dr_normalized_side_missing", bad
         finally:
             shutil.rmtree(d)
 
@@ -750,7 +750,7 @@ def test_direction_missing_block_is_non_overridable():
         dr = {"deliverable": "out.json", "grader_visible": False,
               "readings": [r], "hedge": _union_hedge()}
         v = guard.check_pre(_ctx(dr))
-        assert v is not None and v.reason == "reading_direction_missing"
+        assert v is not None and v.reason == "reading_direction_not_str"
         assert v.overridable is False
     finally:
         shutil.rmtree(d)
@@ -817,7 +817,7 @@ def test_hedge_arm_block_is_non_overridable():
         v2 = reg.check_pre(_reg_ctx(
             dr, "the example fixes only the FORM of the base; penalize-wrong-values "
                 "makes union inadmissible"))
-        assert v1 is not None and v1.reason == "hedge_unproven"
+        assert v1 is not None and v1.reason == "hedge_if_none_missing"
         assert v1.overridable is False, "hedge arm must be non-overridable"
         assert v2 is not None, "prose override must NOT release the hedge block"
     finally:

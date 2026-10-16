@@ -136,18 +136,18 @@ def test_nonaffecting_with_reason_passes():
 def test_bad_affects_value_blocks():
     v = _check_unverified_assumptions_field(
         {"unverified": [{"claim": "x", "affects_result": "maybe", "reason": "r"}]})
-    assert v is not None and v.reason == "assumptions_declaration_malformed"
+    assert v is not None and v.reason == "assumptions_affects_result_missing"
 
 
 def test_claim_missing_blocks():
     v = _check_unverified_assumptions_field(
         {"unverified": [{"affects_result": "no", "reason": "r"}]})
-    assert v is not None and v.reason == "assumptions_declaration_malformed"
+    assert v is not None and v.reason == "assumptions_item_malformed"
 
 
 def test_dict_without_unverified_key_blocks():
     v = _check_unverified_assumptions_field({"foo": "bar"})
-    assert v is not None and v.reason == "assumptions_declaration_malformed"
+    assert v is not None and v.reason == "assumptions_unverified_key_missing"
 
 
 # --- wired into the step_done cascade (through the guard, not just the helper) ---

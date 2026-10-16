@@ -488,13 +488,13 @@ def _check_convention_field(conv):
             return None
         return GuardVerdict.block(
             message=_CONVENTION_MALFORMED,
-            reason="convention_declaration_malformed",
+            reason="convention_string_not_none",
             category="verification_required",
         )
     if not isinstance(conv, dict):
         return GuardVerdict.block(
             message=_CONVENTION_MALFORMED,
-            reason="convention_declaration_malformed",
+            reason="convention_not_dict",
             category="verification_required",
         )
     name = conv.get("name")
@@ -513,14 +513,14 @@ def _check_convention_field(conv):
     if not _is_real_str(name):
         return GuardVerdict.block(
             message=_CONVENTION_MALFORMED,
-            reason="convention_missing_field",
+            reason="convention_name_missing",
             category="verification_required",
         )
     for f in ("example", "delivered", "conflict"):
         if f not in conv:
             return GuardVerdict.block(
                 message=_CONVENTION_MALFORMED,
-                reason="convention_missing_field",
+                reason="convention_field_missing",
                 category="verification_required",
             )
     conflict = str(conv.get("conflict")).strip().lower()
@@ -1007,7 +1007,7 @@ def _check_unverified_assumptions_field(field, observed: str = None):
             return None
         return GuardVerdict.block(
             message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
-            reason="assumptions_declaration_malformed",
+            reason="assumptions_string_not_none",
             category="verification_required",
         )
     if isinstance(field, list):
@@ -1016,7 +1016,7 @@ def _check_unverified_assumptions_field(field, observed: str = None):
         if "unverified" not in field:
             return GuardVerdict.block(
                 message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
-                reason="assumptions_declaration_malformed",
+                reason="assumptions_unverified_key_missing",
                 category="verification_required",
             )
         items = field.get("unverified")
@@ -1026,27 +1026,27 @@ def _check_unverified_assumptions_field(field, observed: str = None):
     else:
         return GuardVerdict.block(
             message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
-            reason="assumptions_declaration_malformed",
+            reason="assumptions_not_dict_or_list",
             category="verification_required",
         )
     if not isinstance(items, list):
         return GuardVerdict.block(
             message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
-            reason="assumptions_declaration_malformed",
+            reason="assumptions_unverified_not_list",
             category="verification_required",
         )
     for it in items:
         if not isinstance(it, dict) or not _is_real_str(it.get("claim")):
             return GuardVerdict.block(
                 message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
-                reason="assumptions_declaration_malformed",
+                reason="assumptions_item_malformed",
                 category="verification_required",
             )
         affects = str(it.get("affects_result") or "").strip().lower()
         if affects not in ("yes", "no"):
             return GuardVerdict.block(
                 message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
-                reason="assumptions_declaration_malformed",
+                reason="assumptions_affects_result_missing",
                 category="verification_required",
             )
         if affects == "yes":
@@ -1092,14 +1092,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             return None
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
-            reason="deliverable_reading_malformed",
+            reason="dr_string_not_none",
             category="verification_required",
         overridable=False,
         )
     if not isinstance(dr, dict):
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
-            reason="deliverable_reading_malformed",
+            reason="dr_not_dict",
             category="verification_required",
         overridable=False,
         )
@@ -1109,7 +1109,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
     if not _is_real_str(deliverable):
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
-            reason="deliverable_reading_malformed",
+            reason="dr_deliverable_missing",
             category="verification_required",
         overridable=False,
         )
@@ -1117,7 +1117,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
     if not isinstance(gv, bool):
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
-            reason="deliverable_reading_malformed",
+            reason="dr_grader_visible_missing",
             category="verification_required",
         overridable=False,
         )
@@ -1127,7 +1127,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
     if not isinstance(readings, list) or not readings:
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
-            reason="deliverable_reading_malformed",
+            reason="dr_readings_empty",
             category="verification_required",
         overridable=False,
         )
@@ -1139,7 +1139,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         if not isinstance(r, dict):
             return GuardVerdict.block(
                 message=_DELIVERABLE_READING_MALFORMED,
-                reason="deliverable_reading_malformed",
+                reason="dr_reading_not_dict",
                 category="verification_required",
             overridable=False,
             )
@@ -1148,7 +1148,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 and _is_real_str(r.get("acceptance_test"))):
             return GuardVerdict.block(
                 message=_DELIVERABLE_READING_MALFORMED,
-                reason="deliverable_reading_malformed",
+                reason="dr_reading_field_missing",
                 category="verification_required",
             overridable=False,
             )
@@ -1158,7 +1158,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         ):
             return GuardVerdict.block(
                 message=_READING_NOT_GROUNDED,
-                reason="reading_not_grounded",
+                reason="reading_source_not_grounded",
                 category="verification_required",
             overridable=False,
             )
@@ -1182,14 +1182,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             # the class-level note on the direction blocks below.
             return GuardVerdict.block(
                 message=_READING_DIRECTION_BLIND,
-                reason="reading_direction_missing",
+                reason="reading_direction_not_str",
                 category="verification_required",
                 overridable=False,
             )
         if not _is_real_str(raw_side):
             return GuardVerdict.block(
                 message=_DELIVERABLE_READING_MALFORMED,
-                reason="deliverable_reading_malformed",
+                reason="dr_normalized_side_missing",
                 category="verification_required",
             overridable=False,
             )
@@ -1197,7 +1197,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         if side not in ("reference", "candidate", "both", "neither"):
             return GuardVerdict.block(
                 message=_READING_DIRECTION_BLIND,
-                reason="reading_direction_missing",
+                reason="reading_direction_invalid",
                 category="verification_required",
                 overridable=False,
             )
@@ -1241,7 +1241,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
     if not isinstance(hedge, dict):
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
-            reason="deliverable_reading_malformed",
+            reason="dr_hedge_missing",
             category="verification_required",
         overridable=False,
         )
@@ -1250,7 +1250,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         if not _is_real_str(hedge.get("output")):
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
-                reason="hedge_unproven",
+                reason="hedge_output_missing",
                 category="verification_required",
             overridable=False,
             )
@@ -1265,7 +1265,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         if extras not in ("ignored", "penalized"):
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
-                reason="hedge_unproven",
+                reason="hedge_extras_direction_invalid",
                 category="verification_required",
             overridable=False,
             )
@@ -1287,7 +1287,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             if not isinstance(de, dict):
                 return GuardVerdict.block(
                     message=_HEDGE_DIRECTION_EVIDENCE,
-                    reason="hedge_direction_evidence_missing",
+                    reason="hedge_direction_evidence_not_dict",
                     category="verification_required",
                 overridable=False,
                 )
@@ -1304,7 +1304,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                         or not _evidence_observed(ev, observed)):
                     return GuardVerdict.block(
                         message=_HEDGE_DIRECTION_EVIDENCE,
-                        reason="hedge_direction_evidence_missing",
+                        reason="hedge_direction_evidence_malformed",
                         category="verification_required",
                     overridable=False,
                     )
@@ -1322,14 +1322,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         if not isinstance(if_none, dict):
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
-                reason="hedge_unproven",
+                reason="hedge_if_none_missing",
                 category="verification_required",
             overridable=False,
             )
         if not _is_real_str(if_none.get("why_intersection_empty")):
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
-                reason="hedge_unproven",
+                reason="hedge_why_intersection_empty_missing",
                 category="verification_required",
             overridable=False,
             )
@@ -1377,7 +1377,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             ):
                 return GuardVerdict.block(
                     message=_READING_NOT_GROUNDED,
-                    reason="reading_not_grounded",
+                    reason="extras_direction_source_not_grounded",
                     category="verification_required",
                 overridable=False,
                 )
@@ -1385,7 +1385,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         if not isinstance(rej, list) or not rej:
             return GuardVerdict.block(
                 message=_HEDGE_UNPROVEN,
-                reason="hedge_unproven",
+                reason="hedge_readings_rejected_empty",
                 category="verification_required",
             overridable=False,
             )
@@ -1395,7 +1395,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                     and _is_real_str(e.get("source"))):
                 return GuardVerdict.block(
                     message=_HEDGE_UNPROVEN,
-                    reason="hedge_unproven",
+                    reason="hedge_rejection_entry_malformed",
                     category="verification_required",
                 overridable=False,
                 )
@@ -1418,7 +1418,7 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             ):
                 return GuardVerdict.block(
                     message=_READING_NOT_GROUNDED,
-                    reason="reading_not_grounded",
+                    reason="rejected_source_not_grounded",
                     category="verification_required",
                 overridable=False,
                 )
@@ -1426,14 +1426,14 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             if not _is_real_str(if_none.get(k)):
                 return GuardVerdict.block(
                     message=_HEDGE_UNPROVEN,
-                    reason="hedge_unproven",
+                    reason="hedge_bet_forfeit_missing",
                     category="verification_required",
                 overridable=False,
                 )
     else:
         return GuardVerdict.block(
             message=_DELIVERABLE_READING_MALFORMED,
-            reason="deliverable_reading_malformed",
+            reason="dr_hedge_shape_invalid",
             category="verification_required",
         overridable=False,
         )
