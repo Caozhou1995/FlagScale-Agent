@@ -136,6 +136,18 @@ _ESCALATE_HINT = (
     "Choose a different approach. If you must proceed this way, stop and ask the user."
 )
 
+# A block message is a template that enumerates EVERY sub-rule a structured
+# declaration could violate; the specific rule that actually failed is carried
+# only in verdict.reason (internal, used for override matching). Without that
+# slug the agent can only GUESS which sub-rule it tripped and re-fires the same
+# declaration until the budget runs out. Naming the slug is generic (it describes
+# the agent's OWN declaration, never the task's answer) and turns the guess-retry
+# loop into a single corrective edit. Appended to every surfaced block/escalate.
+_REASON_DIAGNOSTIC = (
+    "\n\n[failing check: {reason}] — this is the ONE sub-rule the block above "
+    "tripped; fix THAT field and re-issue; the other sub-rules already passed."
+)
+
 
 class Guard(abc.ABC):
     """Base class for all guards.
@@ -328,9 +340,18 @@ class GuardRegistry:
                 # another guard will not release this one.
                 owner = surfaced.guard_name or surfaced_guard.name if surfaced_guard else surfaced.guard_name
                 owner_tag = f"\n\n[blocked by guard: {owner}]" if owner else ""
+                # Name the failing sub-rule (verdict.reason) so the agent does not
+                # have to guess WHICH clause of the template block it tripped. The
+                # template lists every sub-rule; without this the agent re-fires the
+                # same declaration and burns budget in a guess-retry loop. The slug
+                # describes the agent's OWN declaration — no task/grader information.
+                reason_tag = (
+                    _REASON_DIAGNOSTIC.format(reason=surfaced.reason)
+                    if surfaced.reason else ""
+                )
                 # Attach the appropriate hint to the surfaced (still-blocking) block.
                 if surfaced.action == "block" and surfaced.overridable:
-                    surfaced.message += owner_tag
+                    surfaced.message += owner_tag + reason_tag
                     # Add the override hint ONLY when no reason was supplied this
                     # turn. If a reason WAS given but did not release this block
                     # (rejected by accept_override, or written for a different
@@ -342,11 +363,11 @@ class GuardRegistry:
                         else:
                             surfaced.message += _OVERRIDE_HINT
                 elif surfaced.action == "escalate":
-                    surfaced.message += owner_tag + _ESCALATE_HINT
+                    surfaced.message += owner_tag + reason_tag + _ESCALATE_HINT
                 else:
                     # Non-overridable block: no override hint, but still name the
                     # owner so the agent addresses the right guard's required action.
-                    surfaced.message += owner_tag
+                    surfaced.message += owner_tag + reason_tag
                 # Injects marked attach_on_block carry data built for THIS
                 # invocation (e.g. an execution-domain profile for the exact
                 # command under check). Dropping them on a concurrent block
