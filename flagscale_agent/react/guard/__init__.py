@@ -137,15 +137,16 @@ _ESCALATE_HINT = (
 )
 
 # A block message is a template that enumerates EVERY sub-rule a structured
-# declaration could violate; the specific rule that actually failed is carried
-# only in verdict.reason (internal, used for override matching). Without that
-# slug the agent can only GUESS which sub-rule it tripped and re-fires the same
+# declaration could violate; the failing check category is carried only in
+# verdict.reason (internal, used for override matching). Without that slug the
+# agent can only GUESS which kind of rule it tripped and may re-fire the same
 # declaration until the budget runs out. Naming the slug is generic (it describes
-# the agent's OWN declaration, never the task's answer) and turns the guess-retry
-# loop into a single corrective edit. Appended to every surfaced block/escalate.
+# the agent's OWN declaration, never the task's answer) and narrows the guess-retry
+# loop to a bounded corrective edit. Appended to every surfaced block/escalate.
 _REASON_DIAGNOSTIC = (
-    "\n\n[failing check: {reason}] — this is the ONE sub-rule the block above "
-    "tripped; fix THAT field and re-issue; the other sub-rules already passed."
+    "\n\n[failing check: {reason}] — the FIRST sub-rule the block above tripped "
+    "(checks short-circuit, so later rules were not evaluated); this slug names "
+    "the check CATEGORY the declaration failed."
 )
 
 

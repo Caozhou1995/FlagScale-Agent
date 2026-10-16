@@ -118,3 +118,12 @@ class TestReasonDiagnostic:
         v = reg._resolve(_ctx(), "post")
         assert v is not None and v.action == "inject"
         assert "failing check" not in v.message
+
+    def test_diagnostic_makes_no_overclaim(self):
+        # Checks short-circuit at the FIRST failure, so the diagnostic must not
+        # claim later sub-rules "already passed" (they were never evaluated) nor
+        # promise field-level precision (a slug can span many sub-check sites).
+        v = _resolve(_StructuredBlock())
+        assert "already passed" not in v.message
+        assert "FIRST sub-rule" in v.message
+        assert "CATEGORY" in v.message
