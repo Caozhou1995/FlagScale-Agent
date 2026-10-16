@@ -41,12 +41,12 @@ def _ctx(convention, verification=("proof A1",)):
 
 
 GOOD = {
-    "name": "address key space",
-    "example": "0x400000",
-    "delivered": "0x0",
+    "name": "output field convention",
+    "example": "sample-1",
+    "delivered": "canonical-1",
     "conflict": "yes",
-    "probe": "readelf -S a.out",
-    "probe_output": "sh_addr=0x1060",
+    "probe": "measure --field",
+    "probe_output": "field=canonical-1",
 }
 
 
@@ -87,8 +87,8 @@ def test_string_none_passes_as_explicit_no_value():
         shutil.rmtree(d)
 
 
-def test_retry11_derived_false_escape_blocks():
-    """THE escape this redesign closes: the retry11 agent wrote a nameless
+def test_derived_false_escape_blocks():
+    """THE escape this redesign closes: an agent wrote a nameless
     object with a self-declared `derived: false` on the step whose OUTPUT rested
     on the uncertain address convention. With no `name`, the gate now BLOCKS it —
     the old design accepted it because `derived is False` returned None."""
@@ -133,7 +133,7 @@ def test_null_values_are_legal_but_keys_must_exist():
     d, guard = _guard_with_step(["A1"])
     try:
         ok = dict(GOOD, conflict="no", probe=None, probe_output=None,
-                  hedge="union", hedge_output="base∪PT_LOAD 95.4% recall 0 mismatch",
+                  hedge="union", hedge_output="union set covers all readings, 0 mismatches",
                   extras_direction="ignored")
         ok["example"] = None
         ok["delivered"] = None
@@ -165,8 +165,8 @@ def test_conflict_no_probe_none_passes():
     try:
         ok = dict(GOOD, conflict="no", probe="None", probe_output="None")
         # conflict=no still needs a FALSIFIER (probe or hedge) — probe here.
-        ok["probe"] = "readelf -S new.o | grep LOAD"
-        ok["probe_output"] = ".text  sh_addr 0x1060"
+        ok["probe"] = "measure --field"
+        ok["probe_output"] = "field=canonical-1"
         assert guard.check_pre(_ctx(ok)) is None
     finally:
         shutil.rmtree(d)
@@ -189,14 +189,14 @@ def test_valid_declaration_passes():
         shutil.rmtree(d)
 
 
-# --- the retry9 failure: deleting a candidate reading on suspicion -----------
+# --- deleting a candidate reading on suspicion -----------
 
 def test_rejected_candidate_without_evidence_blocks():
     """Naming a REJECTED candidate reading requires an independent artifact —
-    'removed it on an inferred penalty rule' is the exact retry9 failure."""
+    'removed it on an inferred penalty rule' is the exact observed failure."""
     d, guard = _guard_with_step(["A1"])
     try:
-        bad = dict(GOOD, rejected="segment-aware key space", rejected_evidence="None")
+        bad = dict(GOOD, rejected="alternative reading", rejected_evidence="None")
         v = guard.check_pre(_ctx(bad))
         assert v is not None and v.reason == "convention_rejected_without_evidence"
     finally:
@@ -258,14 +258,14 @@ def test_acceptance_without_verification_still_blocks():
 # --- the structural fix: a NAMED convention MUST carry a falsifier ------------------
 
 def test_named_bare_single_reading_blocks():
-    """THE retry9/retry10 failure shape: a derived convention with a single
+    """THE observed failure shape: a derived convention with a single
     reading, conflict=no, and NO probe and NO hedge must BLOCK — that is exactly
-    how a base locked onto an example (extract-elf) or a guessed serialisation
-    (filter-js) shipped wrongly."""
+    how a value locked onto one example, or a guessed output form,
+    shipped wrongly."""
     d, guard = _guard_with_step(["A1"])
     try:
-        bare = {"name": "address key space",
-                "example": "4194304", "delivered": "4194304", "conflict": "no"}
+        bare = {"name": "output field convention",
+                "example": "sample-1", "delivered": "sample-1", "conflict": "no"}
         v = guard.check_pre(_ctx(bare))
         assert v is not None and v.reason == "convention_no_falsifier", (
             "a bare derived single reading must be blocked"
@@ -275,11 +275,11 @@ def test_named_bare_single_reading_blocks():
 
 
 def test_named_bare_conflict_none_blocks():
-    """Same shape with conflict=None (the filter-js reserialize case)."""
+    """Same shape with conflict=None (a guessed output form)."""
     d, guard = _guard_with_step(["A1"])
     try:
-        bare = {"name": "output serialization",
-                "example": None, "delivered": "reserialize", "conflict": None}
+        bare = {"name": "output form",
+                "example": None, "delivered": "guessed", "conflict": None}
         v = guard.check_pre(_ctx(bare))
         assert v is not None and v.reason == "convention_no_falsifier"
     finally:
@@ -291,11 +291,11 @@ def test_named_with_real_probe_passes():
     even with conflict=no (a probe that could have refuted the reading)."""
     d, guard = _guard_with_step(["A1"])
     try:
-        ok = {"name": "address key space",
-              "example": "0x400000", "delivered": "sh_addr",
+        ok = {"name": "output field convention",
+              "example": "sample-1", "delivered": "canonical-1",
               "conflict": "no",
-              "probe": "readelf -S new.o | grep LOAD",
-              "probe_output": ".text sh_addr 0x1060"}
+              "probe": "measure --field",
+              "probe_output": "field=canonical-1"}
         assert guard.check_pre(_ctx(ok)) is None
     finally:
         shutil.rmtree(d)
@@ -306,9 +306,9 @@ def test_named_probe_with_none_output_blocks():
     exists to stop — still blocks."""
     d, guard = _guard_with_step(["A1"])
     try:
-        bad = {"name": "base", "example": "x",
+        bad = {"name": "output field", "example": "x",
                "delivered": "y", "conflict": "no",
-               "probe": "readelf -S a.out", "probe_output": "None"}
+               "probe": "measure --field", "probe_output": "None"}
         v = guard.check_pre(_ctx(bad))
         assert v is not None and v.reason == "convention_no_falsifier"
     finally:
@@ -317,14 +317,14 @@ def test_named_probe_with_none_output_blocks():
 
 def test_named_with_proved_union_hedge_passes():
     """A proved superset hedge (union, extras ignored) is a valid falsifier —
-    the shape the retry10 extract-elf agent reasoned out then abandoned."""
+    the shape a superset hedge realises."""
     d, guard = _guard_with_step(["A1"])
     try:
-        ok = {"name": "address key space",
-              "example": "0x400000", "delivered": "base-0x400000 ∪ PT_LOAD",
+        ok = {"name": "output field convention",
+              "example": "sample-1", "delivered": "union of candidate forms",
               "conflict": "no",
               "hedge": "union",
-              "hedge_output": "union key set: 95.4% recall, 0 mismatches",
+              "hedge_output": "union set: full recall, 0 mismatches",
               "extras_direction": "ignored"}
         assert guard.check_pre(_ctx(ok)) is None
     finally:
@@ -346,7 +346,7 @@ def test_named_with_proved_intersection_hedge_passes():
 
 def test_union_hedge_under_penalized_blocks():
     """A union/superset is a hedge ONLY when extras are ignored; declared under
-    'penalized' it is self-contradictory (the exact retry9 reasoning)."""
+    'penalized' it is self-contradictory (the exact observed reasoning)."""
     d, guard = _guard_with_step(["A1"])
     try:
         bad = {"name": "base", "example": "x",
@@ -459,13 +459,13 @@ def test_rejected_false_does_not_block():
     try:
         ok = {"name": "base", "example": "x",
               "delivered": "y", "conflict": "no",
-              "probe": "readelf", "probe_output": "0x1060",
+              "probe": "measure --field", "probe_output": "field=canonical-1",
               "rejected": False}
         assert guard.check_pre(_ctx(ok)) is None
         ok2 = dict(ok, rejected=[])
         assert guard.check_pre(_ctx(ok2)) is None
         # a REAL candidate still demands evidence
-        bad = dict(ok, rejected="segment-aware")
+        bad = dict(ok, rejected="alternative reading")
         v = guard.check_pre(_ctx(bad))
         assert v is not None and v.reason == "convention_rejected_without_evidence"
     finally:

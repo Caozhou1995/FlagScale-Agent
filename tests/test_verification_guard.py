@@ -597,7 +597,7 @@ class TestBatchStepDoneEvidence:
         # The guard must read each done item's OWN convention/deliverable_reading
         # (falling back to top level), not only the top-level fields — otherwise a
         # REAL nested declaration is silently unread and every fixed-field gate
-        # (incl. the direction gate) is bypassed. Reproduces the retry18 filter-js
+        # (incl. the direction gate) is bypassed. Reproduces an observed
         # evasion: top-level absent, declaration nested, gate never fired.
         guard = self._guard_with_plan(["A1"])
         ctx = GuardContext(

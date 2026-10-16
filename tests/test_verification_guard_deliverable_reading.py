@@ -14,7 +14,7 @@ from flagscale_agent.react.guard.verification import VerificationGuard
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.plan import TaskPlan
 
-TASK = ("Output a JSON of addresses. Every 4-byte word in a PT_LOAD segment must "
+TASK = ("Produce a data file in the stated format. Every required record must "
         "appear. Do not alter the formatting.")
 
 
@@ -40,8 +40,8 @@ def _ctx(dr, verification=("proof A1",)):
     )
 
 
-GROUNDED = {"reading": "file offset base 0",
-            "source": "Every 4-byte word in a PT_LOAD segment must appear",
+GROUNDED = {"reading": "field ordering A",
+            "source": "Every required record must appear",
             "acceptance_test": "pytest t.py",
             "normalized_side": "reference"}
 
@@ -319,7 +319,7 @@ def _corpus(text):
     return [{"role": "tool", "content": text}]
 
 
-OBSERVED_LINE = "found 698 addresses coverage 92.9%"
+OBSERVED_LINE = "found 698 records coverage 92.9%"
 
 
 def test_union_hedge_with_observed_evidence_passes():
@@ -525,7 +525,7 @@ def test_neither_side_passes():
 def test_all_neither_passes_exact_equality_task():
     """An all-'neither' set declares a pure byte/value-equality task with NO
     normalization dimension (e.g. an exact-JSON grader) — admissible. This is the
-    extract-elf case (reward=1 with normalized_side='neither'); requiring a
+    observed case (reward=1 with normalized_side='neither'); requiring a
     one-sided direction unconditionally would false-block it."""
     d, guard = _guard_with_step(["A1"], TASK)
     try:
@@ -539,7 +539,7 @@ def test_all_neither_passes_exact_equality_task():
 
 
 def test_neither_plus_both_blocks():
-    """The retry19 trap: a set mixing 'neither' with 'both' but omitting the
+    """The direction-blind trap: a set mixing 'neither' with 'both' but omitting the
     one-sided case is direction-blind — it asserts a normalization is in play yet
     carries no comparison that can reject a wrong output serialization."""
     d, guard = _guard_with_step(["A1"], TASK)
@@ -590,7 +590,7 @@ def test_non_string_normalized_side_is_malformed():
 # The direction blocks are released ONLY by the concrete corrective action
 # (declare a real normalized_side / a one-sided or all-neither set), never by an
 # _override_reason. This is what converts "occasionally aware" into "structurally
-# forced aware" — the observed failure was filter-js retry19, where the
+# forced aware" — the observed failure was a prior run, where the
 # reading_direction_uniform block FIRED and was then OVERRIDDEN with prose.
 
 def test_direction_uniform_block_is_non_overridable():
