@@ -21,7 +21,7 @@ from flagscale_agent.react.oracle import (
     ORACLE_ACCEPTANCE_ITEM,
     PREMISE_SOURCES,
     build_oracle_binding_line,
-    is_premise_external,
+    declares_external_premise,
 )
 
 
@@ -298,6 +298,14 @@ class PlanCreateTool(Tool):
                     "first_exercise": {"type": "string"},
                 },
             },
+            "oracle_step_id": {
+                "type": "integer",
+                "description": (
+                    "Optional : the 1-based number of the agent step that is the "
+                    "FIRST load-bearing step, so the oracle's first exercise binds "
+                    "to THAT step's acceptance (default: the first listed step)."
+                ),
+            },
         },
         "required": ["title", "steps"],
     }
@@ -342,28 +350,43 @@ class PlanCreateTool(Tool):
         if not normalized:
             return "ERROR: At least one step is required."
 
-        # Oracle-at-frame: when an oracle is supplied, its premise MUST be external
-        # to the agent's own implementation -- a self-authored oracle shares the
-        # agent's premise and only confirms it. Refuse a self-authored premise so
-        # the failure is loud at framing time, not silent at delivery.
+        # Oracle-at-frame: validate the DECLARED shape of a supplied oracle and
+        # bind its first exercise to the step the agent designates as load-bearing
+        # (F4: a JSON-encoded string is decoded, like `steps` above; F3: the target
+        # is explicit, not silently "whatever was listed first").
         oracle = kwargs.get("oracle")
+        if isinstance(oracle, str):
+            oracle = oracle.strip()
+            if oracle.startswith("{"):
+                try:
+                    oracle = json.loads(oracle)
+                except (json.JSONDecodeError, ValueError):
+                    pass
         if oracle is not None:
-            if not is_premise_external(oracle):
+            if not declares_external_premise(oracle):
                 return (
-                    "ERROR: oracle must name an external-premise oracle. Provide "
+                    "ERROR: oracle must DECLARE an external-premise source. Provide "
                     "'premise_source' (one of: "
                     + " | ".join(PREMISE_SOURCES)
-                    + "), a non-empty 'oracle', and a non-empty 'first_exercise'. "
-                    "A self-authored oracle (any other premise_source, or a missing "
-                    "leg) is refused: it shares your premise and only confirms it."
+                    + "), non-empty 'oracle' and 'first_exercise', and no extra keys. "
+                    "A self-authored/unknown premise_source, a missing leg, or an "
+                    "annex key is refused. Note: this is a declaration, not proof -- "
+                    "name the external artifact so a reader can check it."
                 )
             binding = build_oracle_binding_line(oracle["oracle"], oracle["first_exercise"])
-            first = normalized[0]
-            if isinstance(first, dict):
-                first.setdefault("acceptance", [])
-                first["acceptance"] = [binding] + list(first["acceptance"])
+            # F3: bind to the step the agent marks load-bearing when it says so,
+            # else the first listed step (the convention is stated in the FRAME
+            # acceptance text: "list that step first, or pass its index").
+            target_idx = 0
+            raw_idx = kwargs.get("oracle_step_id")
+            if isinstance(raw_idx, int) and 1 <= raw_idx <= len(normalized):
+                target_idx = raw_idx - 1
+            target = normalized[target_idx]
+            if isinstance(target, dict):
+                target.setdefault("acceptance", [])
+                target["acceptance"] = [binding] + list(target["acceptance"])
             else:
-                normalized[0] = {"title": str(first), "acceptance": [binding]}
+                normalized[target_idx] = {"title": str(target), "acceptance": [binding]}
 
         # Harness-appended FIXED steps — the plan standard template. The FIRST
         # step frames the plan (divergence check + qualifier/facet extraction +

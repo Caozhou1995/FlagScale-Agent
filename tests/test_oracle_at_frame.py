@@ -38,7 +38,7 @@ from flagscale_agent.react.oracle import (
     PREMISE_SOURCES,
     ORACLE_ACCEPTANCE_ITEM,
     build_oracle_binding_line,
-    is_premise_external,
+    declares_external_premise,
 )
 
 
@@ -75,33 +75,33 @@ class TestFrameAcceptanceCarriesOracleItem:
 class TestIsPremiseExternal:
     def test_valid_external_premise(self):
         for src in PREMISE_SOURCES:
-            assert is_premise_external(
+            assert declares_external_premise(
                 {"oracle": "x", "premise_source": src, "first_exercise": "cmd"}
             )
 
     def test_self_authored_premise_rejected(self):
         # any premise_source outside the external set is self-authored -> False
-        assert not is_premise_external(
+        assert not declares_external_premise(
             {"oracle": "x", "premise_source": "self", "first_exercise": "cmd"}
         )
-        assert not is_premise_external(
+        assert not declares_external_premise(
             {"oracle": "x", "premise_source": "my_own_pipeline", "first_exercise": "cmd"}
         )
 
     def test_missing_legs_rejected(self):
         # a missing first exercise is not evidence of independence
-        assert not is_premise_external(
+        assert not declares_external_premise(
             {"oracle": "x", "premise_source": "provided", "first_exercise": ""}
         )
-        assert not is_premise_external(
+        assert not declares_external_premise(
             {"oracle": "", "premise_source": "provided", "first_exercise": "cmd"}
         )
-        assert not is_premise_external({"premise_source": "provided"})
+        assert not declares_external_premise({"premise_source": "provided"})
 
     def test_non_dict_rejected(self):
-        assert not is_premise_external(None)
-        assert not is_premise_external("provided")
-        assert not is_premise_external([])
+        assert not declares_external_premise(None)
+        assert not declares_external_premise("provided")
+        assert not declares_external_premise([])
 
 
 class TestPlanCreateOracleBinding:
@@ -163,6 +163,69 @@ class TestPlanCreateOracleBinding:
         assert "Plan created" in result
         a = tp.get_active()["steps"][1]
         assert "golden file" in a["acceptance"][0]
+
+
+class TestReviewRegressionFixes:
+    """Regression tests for the adversarial-review findings (F3/F4/F6/F1-doc)."""
+
+    def test_F4_json_string_oracle_is_decoded(self, plan_dir):
+        # A model that JSON-encodes the oracle object must be DEGRADED, not
+        # refused -- same normalization `steps` already gets.
+        tp = TaskPlan(plan_dir)
+        tool = PlanCreateTool(tp)
+        result = tool.execute(
+            title="T", steps=["A"],
+            oracle='{"oracle": "golden", "premise_source": "provided", '
+                   '"first_exercise": "cmp"}',
+        )
+        assert "Plan created" in result
+        assert "golden" in tp.get_active()["steps"][1]["acceptance"][0]
+
+    def test_F3_oracle_step_id_targets_the_load_bearing_step(self, plan_dir):
+        # Bind to the step the agent marks load-bearing, NOT silently the first
+        # listed (here step 1 is a trivial preamble).
+        tp = TaskPlan(plan_dir)
+        tool = PlanCreateTool(tp)
+        result = tool.execute(
+            title="T", steps=["read task", "do the real work"],
+            oracle={"oracle": "o", "premise_source": "provided",
+                    "first_exercise": "c"},
+            oracle_step_id=2,
+        )
+        assert "Plan created" in result
+        plan = tp.get_active()
+        assert plan["steps"][1]["acceptance"] == []           # preamble untouched
+        assert "Oracle:" in plan["steps"][2]["acceptance"][0]  # load-bearing bound
+
+    def test_F3_oracle_step_id_out_of_range_falls_back_to_first(self, plan_dir):
+        tp = TaskPlan(plan_dir)
+        tool = PlanCreateTool(tp)
+        result = tool.execute(
+            title="T", steps=["A", "B"],
+            oracle={"oracle": "o", "premise_source": "provided",
+                    "first_exercise": "c"},
+            oracle_step_id=99,
+        )
+        assert "Plan created" in result
+        assert "Oracle:" in tp.get_active()["steps"][1]["acceptance"][0]
+
+    def test_F6_unknown_key_refused(self):
+        # An incriminating annex key must not ride along a passing declaration.
+        assert not declares_external_premise(
+            {"oracle": "x", "premise_source": "provided",
+             "first_exercise": "c", "note": "my own script"}
+        )
+
+    def test_F1_predicate_validates_shape_not_externalness(self):
+        # Documented limitation: a mislabeled self-pipeline passes the SHAPE
+        # check -- a string label is not evidence. This test pins the honesty of
+        # the scope so a future reader is not misled into trusting it as proof;
+        # if someone later adds real provenance verification, this test should be
+        # updated to assert rejection instead.
+        assert declares_external_premise(
+            {"oracle": "my own verify.py rerun", "premise_source": "provided",
+             "first_exercise": "python verify.py"}
+        )
 
 
 if __name__ == "__main__":
