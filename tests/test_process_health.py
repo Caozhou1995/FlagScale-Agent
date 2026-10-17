@@ -305,11 +305,11 @@ class TestShouldKillProcess:
         )
         assert should_kill is False
 
-    def test_hard_timeout_60min_kills(self):
-        # support C: hard cap 60min with no *progress* → kill. Output is moving
-        # and children alive (so earlier heuristics #3/#4 skip), but cpu/io/rss
-        # deltas are zero — output churns without real work. Only the 60min cap
-        # catches this.
+    def test_hard_timeout_60min_advisory_not_kill(self):
+        # Advisory-downgrade: a wall-clock 60min threshold is a HEURISTIC, not
+        # deterministic death, so it no longer hard-kills — it ESCALATES the
+        # advisory wording. Output churns without real work; only the 60min
+        # milestone notices. Judgment (kill vs let-run) is left to the LLM.
         should_kill, reason = should_kill_process(
             elapsed_seconds=3700,  # >60min
             output_changed=True,
@@ -321,8 +321,10 @@ class TestShouldKillProcess:
             progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
             mem_pressure=False,
         )
-        assert should_kill is True
+        assert should_kill is False, "60min wall-clock is heuristic → advisory, not kill"
         assert '60-minute' in reason
+        assert 'advisory' in reason.lower()
+        assert 'decide now' in reason.lower()
 
     def test_busy_loop_frozen_not_killed_advisory(self):
         # REDESIGN: the frozen-output rule no longer hard-kills regardless of
@@ -541,9 +543,29 @@ class TestAdvisoryDowngrade:
         assert should_kill is True
         assert 'OOM' in reason
 
-    def test_sixty_minute_cap_still_kills(self):
-        # The 60min hard cap is reached with output still CHANGING (so rule 4
-        # does not fire first) — the cap is the last deterministic kill.
+    def test_sixty_minute_milestone_advisory_not_kill(self):
+        # F1 regression: a genuinely FROZEN job past 60min must NOT hard-kill —
+        # the frozen-output advisory fires first and the LLM decides. (Prior to
+        # the advisory downgrade this test certified the 60min cap using
+        # output_changed=True, dodging the real frozen path.)
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=3700,
+            output_changed=False,
+            stall_count=120,
+            proc_health=_HEALTH,
+            output_anomalies=_CLEAN,
+            had_children=False,
+            prev_num_children=0,
+            progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
+            idle_count=0,
+        )
+        assert should_kill is False, "Frozen >60min must stay advisory (LLM decides)"
+        assert 'advisory' in reason.lower()
+        assert '60-minute' in reason  # the escalation tail is loud at the milestone
+
+    def test_sixty_minute_cap_advisory_with_output_changing(self):
+        # A non-frozen job past 60min with zero progress also gets an escalated
+        # advisory, never a hard kill (wall-clock is heuristic).
         should_kill, reason = should_kill_process(
             elapsed_seconds=3700,
             output_changed=True,
@@ -555,5 +577,6 @@ class TestAdvisoryDowngrade:
             progress_signals={'cpu_time_delta': 0.5, 'io_bytes_delta': 0, 'rss_delta': 0},
             idle_count=0,
         )
-        assert should_kill is True
+        assert should_kill is False
         assert '60-minute' in reason
+        assert 'advisory' in reason.lower()

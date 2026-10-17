@@ -238,6 +238,27 @@ def test_health_tick_kill_on_hard_indicator():
     assert tick["reason"] == "silent stall"
 
 
+def test_health_tick_surfaces_advisory_without_judge():
+    """F5: an advisory (should_kill False + kill_reason) must reach health_note
+    EVEN WITH NO LLM JUDGE wired — otherwise 'let the LLM decide' is empty."""
+    jobs = ShellJobsTool()  # no health_judge_fn
+    sh = ShellTool()
+    sh.execute(command="sleep 30", background=True)
+    job = _JOB_REGISTRY.get("job1")
+    job.evaluator = _StubEvaluator({
+        "status": "ok", "should_kill": False,
+        "kill_reason": "ADVISORY (not killed): process output has been frozen",
+        "activity": "CPU 0% (whole process tree)", "output_changed": False,
+        "stall_count": 12, "recent_text": "",
+    })
+    tick = jobs._health_tick(job)
+    assert tick["kill"] is False
+    assert "ADVISORY" in tick["activity"], (
+        f"advisory must surface in the note without a judge, got: {tick['activity']!r}"
+    )
+    assert "ADVISORY" in job.health_note
+
+
 def test_health_tick_skip_when_no_fresh_sample():
     """status='skip' (no fresh sample this tick) must NOT kill and must
     preserve the previous note."""

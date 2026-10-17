@@ -309,6 +309,21 @@ def should_kill_process(
     if mem_pressure is None:
         mem_pressure = system_mem_pressure()
 
+    def _esc(msg: str) -> str:
+        """Append a 60-minute-milestone escalation tail to any advisory.
+
+        The 60-minute mark is NOT a hard kill (the user's rule: kill-vs-let-run
+        is the LLM's call). Past it we escalate the WORDING so the decision
+        becomes urgent, but the verdict stays advisory.
+        """
+        if elapsed_seconds > 3600:
+            return (
+                msg + f" ⚠️ This job has now run {int(elapsed_seconds)}s "
+                f"(past the 60-minute milestone) with no completion — decide "
+                f"NOW whether to kill it or let it continue."
+            )
+        return msg
+
     # --- Liveness veto (support A): is the process actually working? ---
     making_progress = False
     if progress_signals is not None:
@@ -326,9 +341,10 @@ def should_kill_process(
     # blocking forever on the child.  We don't hard-kill yet — we return an
     # advisory so the LLM judge (which has command history and richer
     # context) can make the final call.
-    # Capped at stall_count < 12: after 6 minutes the hard kill below fires.
+    #     Keep the advisory signal but do NOT state a hard kill follows: past
+    #     6 minutes this rule (and the ≥12-stall rule below) still only advises.
     if not output_changed and 6 <= stall_count < 12 and elapsed_seconds > 120:
-        return False, (
+        return False, _esc(
             f"Process output has been frozen (identical) for {stall_count * 30}s "
             f"despite {proc_health['cpu_percent']:.0f}% CPU activity. "
             f"The command may have caught an error and is blocking on a subprocess. "
@@ -363,7 +379,7 @@ def should_kill_process(
     #     decides whether to let it run or stop it.
     #     Threshold: 12 consecutive stalls (≈6 minutes at 30s interval).
     if not output_changed and stall_count >= 12 and elapsed_seconds > 300:
-        return False, (
+        return False, _esc(
             f"ADVISORY (not killed): process output has been frozen (identical) "
             f"for {stall_count * 30}s with {proc_health['cpu_percent']:.0f}% CPU. "
             f"It may be blocked on a subprocess, or it may be a legitimate job "
@@ -378,7 +394,7 @@ def should_kill_process(
     #     are uncounted looks identical. The advisory is surfaced on every
     #     poll/wait and the agent judges it.
     if idle_count >= IDLE_KILL_THRESHOLD:
-        return False, (
+        return False, _esc(
             f"ADVISORY (not killed): no output and no CPU/IO/memory activity for "
             f"~{idle_count * 30}s (idle for {idle_count} consecutive checks). It "
             f"may be blocked on a syscall (dead network endpoint, DNS black hole, "
@@ -403,7 +419,7 @@ def should_kill_process(
     if (child_drop >= drop_threshold
             and proc_health['children_alive'] == 0
             and (mem_pressure or output_anomalies['killed_count'] >= 1)):
-        return False, (
+        return False, _esc(
             f"ADVISORY (not killed): children dropped {prev_num_children}→{proc_health['num_children']} "
             f"AND no live children AND memory pressure/Killed evidence — OOM likely. "
             "Inspect it and decide: kill it or let it run."
@@ -418,7 +434,7 @@ def should_kill_process(
         proc_health['children_alive'] == 0 and
         not output_changed and
         elapsed_seconds > 120):
-        return False, (
+        return False, _esc(
             f"ADVISORY (not killed): all {proc_health['num_children']} child processes exited "
             f"but parent still running with no output for {int(elapsed_seconds)}s "
             f"(build may have failed silently). Inspect it and decide: kill it or let it run."
@@ -435,21 +451,24 @@ def should_kill_process(
         not output_changed and
         stall_count >= 6 and
         elapsed_seconds > 180):
-        return False, (
+        return False, _esc(
             f"Process using 0% CPU with no output for {stall_count * 30}s. "
             "This MAY be stuck, but could also be a legitimate silent operation "
             "(library import, buffered computation). Deferring to LLM judge "
             "for contextual assessment."
         )
 
-    # 5. Graduated timeout (support C). Hard cap 60min with no activity → kill.
-    #    Soft cap 20min → do NOT kill in the hard layer; hand to the LLM judge
-    #    with elapsed context (heavy compiles/training legitimately run long).
+    # 5. Graduated timeout (support C). Past 60 minutes with no activity we
+    #    ESCALATE the advisory wording (make the milestone loud and urgent) but
+    #    do NOT hard-kill: the user's rule is that kill-vs-let-run is the LLM's
+    #    decision, and a wall-clock threshold is a heuristic, not deterministic
+    #    death. Only zombie / OOM-killed evidence (above) remains a hard kill.
     if elapsed_seconds > 3600:
-        return True, (
-            f"Command exceeded 60-minute hard timeout (ran {int(elapsed_seconds)}s) "
-            "with no detectable activity. Almost certainly stuck."
+        return False, (
+            f"ADVISORY (not killed): this command has run {int(elapsed_seconds)}s "
+            f"(past the 60-minute milestone) with no detectable activity. It is "
+            f"most likely stuck, but a long compile/train can legitimately run "
+            f"this long. Decide NOW: kill it or let it continue."
         )
-    # 20min < elapsed < 60min with no progress: defer to judge, don't hard-kill.
 
     return False, ""

@@ -1581,6 +1581,14 @@ class ShellJobsTool(Tool):
             # No fresh sample this tick — keep the last note, do nothing.
             return {'kill': False, 'reason': '', 'activity': job.health_note}
         job.health_note = res['activity']
+        # F5 fix: an advisory from the hard-indicator layer (res['kill_reason']
+        # when should_kill is False) must reach the LLM UNCONDITIONALLY — on
+        # every poll/wait — not only when an LLM judge is wired and echoes a
+        # reason. Otherwise "let the LLM decide" is empty: with no judge, on
+        # judge timeout, or a judge that returns no reason, the advisory would
+        # be dropped and the agent would never see the frozen/idle signal.
+        if res.get('kill_reason'):
+            job.health_note = f"{res['activity']} — {res['kill_reason']}"
         if res['should_kill']:
             return {'kill': True, 'reason': res['kill_reason'],
                     'activity': res['activity']}
