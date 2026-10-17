@@ -17,6 +17,12 @@
 import json
 
 from flagscale_agent.react.tools.base import Tool
+from flagscale_agent.react.oracle import (
+    ORACLE_ACCEPTANCE_ITEM,
+    PREMISE_SOURCES,
+    build_oracle_binding_line,
+    is_premise_external,
+)
 
 
 # The fixed review step the harness appends to EVERY plan. It is the single
@@ -114,6 +120,7 @@ _RSI_STEP_ACCEPTANCE = [
 _FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
 
 _FRAME_STEP_ACCEPTANCE = [
+    ORACLE_ACCEPTANCE_ITEM,
     "Divergence check — the self-divergence half is ALWAYS done; the dispatched "
     "half is priced (per the next item, a deliberate trade-off). (1) YOUR OWN "
     "deeper divergence: put 2-3 genuinely different framings of the task's "
@@ -272,6 +279,25 @@ class PlanCreateTool(Tool):
                     "premises are still cheap to revise."
                 ),
             },
+            "oracle": {
+                "type": "object",
+                "description": (
+                    "Optional but strongly encouraged at framing time: the oracle "
+                    "that will decide this task, with a premise EXTERNAL to your own "
+                    "implementation. Object with keys: `premise_source` (one of "
+                    "'differential' | 'provided' | 'consumer'), `oracle` (what "
+                    "decides it), and `first_exercise` (the exact command/check that "
+                    "runs it). When supplied, its first exercise is bound into the "
+                    "acceptance of the FIRST load-bearing step you list, so the "
+                    "acceptance->verification channel forces the oracle's evidence "
+                    "to exist early. A self-authored premise_source is refused."
+                ),
+                "properties": {
+                    "premise_source": {"type": "string"},
+                    "oracle": {"type": "string"},
+                    "first_exercise": {"type": "string"},
+                },
+            },
         },
         "required": ["title", "steps"],
     }
@@ -315,6 +341,29 @@ class PlanCreateTool(Tool):
         
         if not normalized:
             return "ERROR: At least one step is required."
+
+        # Oracle-at-frame: when an oracle is supplied, its premise MUST be external
+        # to the agent's own implementation -- a self-authored oracle shares the
+        # agent's premise and only confirms it. Refuse a self-authored premise so
+        # the failure is loud at framing time, not silent at delivery.
+        oracle = kwargs.get("oracle")
+        if oracle is not None:
+            if not is_premise_external(oracle):
+                return (
+                    "ERROR: oracle must name an external-premise oracle. Provide "
+                    "'premise_source' (one of: "
+                    + " | ".join(PREMISE_SOURCES)
+                    + "), a non-empty 'oracle', and a non-empty 'first_exercise'. "
+                    "A self-authored oracle (any other premise_source, or a missing "
+                    "leg) is refused: it shares your premise and only confirms it."
+                )
+            binding = build_oracle_binding_line(oracle["oracle"], oracle["first_exercise"])
+            first = normalized[0]
+            if isinstance(first, dict):
+                first.setdefault("acceptance", [])
+                first["acceptance"] = [binding] + list(first["acceptance"])
+            else:
+                normalized[0] = {"title": str(first), "acceptance": [binding]}
 
         # Harness-appended FIXED steps — the plan standard template. The FIRST
         # step frames the plan (divergence check + qualifier/facet extraction +
