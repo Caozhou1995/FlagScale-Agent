@@ -352,49 +352,38 @@ def should_kill_process(
             "Reduce parallelism (e.g., make -j1 instead of make -j) or increase memory."
         )
 
-    # 1b. FROZEN OUTPUT — hard kill. The process is alive (poll() is None),
-    #     children may be alive and burning CPU, but the output has been
-    #     byte-for-byte identical for stall_count consecutive 30s checks.
-    #     This means the command caught an error and is blocking forever
-    #     (e.g. a try/except that swallows the exception then waits on a
-    #     subprocess that never responds). A child burning CPU in the
-    #     background (e.g. stockfish thinking) is NOT real progress when the
-    #     parent process is stuck in a deadlock — so this fires REGARDLESS of
-    #     the liveness veto.
+    # 1b. FROZEN OUTPUT — advisory (downgraded from hard kill). The process is
+    #     alive (poll() is None) and output has been byte-for-byte identical
+    #     for stall_count consecutive 30s checks. This MAY mean the command
+    #     caught an error and is blocking forever, but the identical pattern
+    #     is indistinguishable from a legitimate job that prints only at the
+    #     end (fastText) or writes its stdout to a redirected file — the
+    #     false-kill class observed on train-fasttext. Judgment is left to
+    #     the LLM: this advisory is surfaced on every poll/wait and the agent
+    #     decides whether to let it run or stop it.
     #     Threshold: 12 consecutive stalls (≈6 minutes at 30s interval).
-    #     The advisory at line 206 fires first at stall_count >= 6 (≈3 min),
-    #     giving the LLM judge a chance to kill. This hard kill is the safety
-    #     net for when the judge doesn't act (no judge_fn, API timeout, or
-    #     judge returns kill=False).
     if not output_changed and stall_count >= 12 and elapsed_seconds > 300:
-        return True, (
-            f"Process output has been frozen (identical) for {stall_count * 30}s "
-            f"with {proc_health['cpu_percent']:.0f}% CPU. "
-            f"The command likely caught an error and is blocking on a subprocess. "
-            f"Stop and fix the root cause instead of waiting."
+        return False, (
+            f"ADVISORY (not killed): process output has been frozen (identical) "
+            f"for {stall_count * 30}s with {proc_health['cpu_percent']:.0f}% CPU. "
+            f"It may be blocked on a subprocess, or it may be a legitimate job "
+            f"that prints only at the end. Inspect it and decide: kill it or let "
+            f"it run."
         )
 
-    # 1c. IDLE HANG — hard kill, fires regardless of the liveness veto because
-    #     idle_count is ITSELF the negation of liveness: shell.py only bumps it
-    #     when output is unchanged AND all three progress deltas (cpu_time, io,
-    #     rss) are flat. IDLE_KILL_THRESHOLD consecutive such samples (~2 min at
-    #     the 30s cadence) means the process produced no output and did no
-    #     measurable CPU/IO/memory work for two straight minutes — it is blocked
-    #     on a syscall (dead network connect, DNS black hole, unobtainable lock),
-    #     not computing. A real compile / import / buffered job moves at least
-    #     one counter every sample and never reaches this count. This kills a
-    #     hung curl/wget/apt/git in ~2 min instead of waiting out the 6-min
-    #     frozen-output rule (1b), which never fires when there is simply no
-    #     output at all.
+    # 1c. IDLE HANG — advisory (downgraded from hard kill). idle_count is a
+    #     strong signal (output unchanged AND cpu_time, io and rss all flat
+    #     for ~2 min), but "blocked on a syscall" is one interpretation of
+    #     it; a job whose output goes to a redirected file and whose syscalls
+    #     are uncounted looks identical. The advisory is surfaced on every
+    #     poll/wait and the agent judges it.
     if idle_count >= IDLE_KILL_THRESHOLD:
-        return True, (
-            f"No output and no CPU/IO/memory activity for ~{idle_count * 30}s "
-            f"(idle for {idle_count} consecutive checks). The process is not "
-            f"computing — it is blocked on a syscall (a dead network endpoint, "
-            f"DNS black hole, or a lock it will never acquire). Retrying the "
-            f"same command will hang the same way. Change your approach: unset "
-            f"the proxy, try a different mirror/endpoint, add an explicit "
-            f"--max-time/timeout, or use a local cache."
+        return False, (
+            f"ADVISORY (not killed): no output and no CPU/IO/memory activity for "
+            f"~{idle_count * 30}s (idle for {idle_count} consecutive checks). It "
+            f"may be blocked on a syscall (dead network endpoint, DNS black hole, "
+            f"unacquirable lock) — or its output may simply be redirected. "
+            f"Inspect it and decide: kill it or let it run."
         )
 
     # --- Liveness veto: below here every rule is a heuristic; if the process
@@ -404,31 +393,35 @@ def should_kill_process(
 
     # === Heuristics (only reached when NOT making progress) ===
 
-    # 2b. Child-count drop — DOUBLE-evidence gate (support B). Relative drop
-    #     (>= half, min 3) AND no live children AND real OOM evidence
-    #     (system memory pressure OR at least one Killed in output). A drop
-    #     alone with killed_count==0 and no memory pressure is treated as
-    #     normal worker convergence, NOT OOM.
+    # 2b. Child-count drop — ADVISORY (downgraded from hard kill). Relative
+    #     drop (>= half, min 3) AND no live children AND OOM evidence is a
+    #     strong OOM pattern, but "OOM likely" is an inference; deterministic
+    #     OOM evidence (2a above) still hard-kills. The advisory is surfaced
+    #     and the agent judges.
     child_drop = max(0, prev_num_children - proc_health['num_children'])
     drop_threshold = max(3, prev_num_children // 2)
     if (child_drop >= drop_threshold
             and proc_health['children_alive'] == 0
             and (mem_pressure or output_anomalies['killed_count'] >= 1)):
-        return True, (
-            f"OOM likely: children dropped {prev_num_children}→{proc_health['num_children']} "
-            f"AND no live children AND memory pressure/Killed evidence. "
-            "Reduce parallelism or increase memory."
+        return False, (
+            f"ADVISORY (not killed): children dropped {prev_num_children}→{proc_health['num_children']} "
+            f"AND no live children AND memory pressure/Killed evidence — OOM likely. "
+            "Inspect it and decide: kill it or let it run."
         )
 
-    # 3. All children dead + no output + >2min (already past liveness veto)
+    # 3. All children dead + no output + >2min — ADVISORY (downgraded from
+    #    hard kill). "Build likely failed silently" is a guess about WHY the
+    #    children exited; the fact (all children exited) is already visible
+    #    to the agent in the activity line. The advisory is surfaced and the
+    #    agent judges.
     if (had_children and
         proc_health['children_alive'] == 0 and
         not output_changed and
         elapsed_seconds > 120):
-        return True, (
-            f"All {proc_health['num_children']} child processes exited "
-            f"but parent still running with no output for {int(elapsed_seconds)}s. "
-            "Build likely failed silently."
+        return False, (
+            f"ADVISORY (not killed): all {proc_health['num_children']} child processes exited "
+            f"but parent still running with no output for {int(elapsed_seconds)}s "
+            f"(build may have failed silently). Inspect it and decide: kill it or let it run."
         )
 
     # 4. SILENT + SUSTAINED STALL — now ADVISORY ONLY (handled by LLM judge).

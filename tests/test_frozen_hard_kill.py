@@ -3,9 +3,10 @@ Regression test for the dead-code bug where the frozen-output advisory
 (line 206) shadowed the hard kill (line 241) because both had the same
 condition (stall_count >= 6, elapsed > 120).
 
-After the fix:
+After the 2026-10-17 advisory-downgrade:
 - stall_count >= 6, elapsed > 120  → advisory (False, msg)
-- stall_count >= 12, elapsed > 300 → hard kill (True, msg)
+- stall_count >= 12, elapsed > 300 → advisory (False, msg) — no hard kill
+  remains for frozen output; judgment is surfaced to the LLM every poll.
 """
 from flagscale_agent.react.tools.process_health import should_kill_process
 
@@ -38,27 +39,29 @@ def test_advisory_at_3min_not_killed():
     assert 'frozen' in reason.lower(), f"Reason should mention frozen: {reason}"
 
 
-def test_hard_kill_at_6min():
-    """At stall_count=12 (~6min), should return hard kill (True)."""
+def test_advisory_at_6min_not_killed():
+    """At stall_count=12 (~6min), frozen output is advisory (False), not a kill."""
     should_kill, reason = should_kill_process(
         elapsed_seconds=400, output_changed=False, stall_count=12,
         proc_health=_health(cpu=80), output_anomalies=_anomalies(),
         had_children=True, prev_num_children=1,
         progress_signals={'cpu_time_delta': 5.0, 'io_bytes_delta': 0, 'rss_delta': 0},
     )
-    assert should_kill is True, f"Should hard-kill after 6min frozen. Got should_kill={should_kill}"
+    assert should_kill is False, f"Frozen output must be advisory, not kill. Got should_kill={should_kill}"
+    assert 'advisory' in reason.lower(), f"Reason should be the downgrade advisory: {reason}"
     assert 'frozen' in reason.lower(), f"Reason should mention frozen: {reason}"
 
 
-def test_hard_kill_fires_even_with_high_cpu():
-    """The hard kill must fire even when CPU is high (stockfish burning CPU)."""
+def test_advisory_fires_even_with_high_cpu():
+    """Frozen output with high CPU (stockfish) is still advisory, never a kill."""
     should_kill, reason = should_kill_process(
         elapsed_seconds=400, output_changed=False, stall_count=12,
         proc_health=_health(cpu=99.0), output_anomalies=_anomalies(),
         had_children=True, prev_num_children=1,
         progress_signals={'cpu_time_delta': 50.0, 'io_bytes_delta': 0, 'rss_delta': 0},
     )
-    assert should_kill is True, "Hard kill must fire even with high CPU when output frozen 6min"
+    assert should_kill is False, "Frozen output with high CPU must be advisory, not kill"
+    assert 'advisory' in reason.lower(), f"Reason should be the downgrade advisory: {reason}"
 
 
 def test_no_kill_when_output_changing():
@@ -84,12 +87,13 @@ def test_advisory_fires_before_liveness_veto():
     assert reason, "Advisory should have a reason message"
 
 
-def test_hard_kill_at_6min_with_no_progress():
-    """Hard kill fires even without progress signals (None)."""
+def test_advisory_at_6min_with_no_progress():
+    """Frozen output with no progress signals is still advisory (False)."""
     should_kill, reason = should_kill_process(
         elapsed_seconds=400, output_changed=False, stall_count=12,
         proc_health=_health(cpu=0.1), output_anomalies=_anomalies(),
         had_children=True, prev_num_children=1,
         progress_signals=None,
     )
-    assert should_kill is True, "Should hard-kill after 6min frozen even without progress signals"
+    assert should_kill is False, "Frozen output must never hard-kill, even without progress signals"
+    assert 'advisory' in reason.lower(), f"Reason should be the downgrade advisory: {reason}"

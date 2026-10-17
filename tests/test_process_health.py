@@ -176,9 +176,9 @@ class TestShouldKillProcess:
         )
         assert should_kill is False
 
-    def test_child_drop_with_oom_evidence_kills(self):
-        # support B: drop >= half AND no live children AND real OOM evidence
-        # (killed in output) → convict.
+    def test_child_drop_with_oom_evidence_advisory(self):
+        # REDESIGN: child-drop OOM heuristic is now ADVISORY only — the LLM
+        # judge decides. Deterministic OOM evidence (2a, Killed x2) still kills.
         should_kill, reason = should_kill_process(
             elapsed_seconds=120,
             output_changed=False,
@@ -190,11 +190,12 @@ class TestShouldKillProcess:
             progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
             mem_pressure=False,
         )
-        assert should_kill is True
+        assert should_kill is False
+        assert 'ADVISORY' in reason
         assert 'OOM likely' in reason
 
-    def test_child_drop_with_mem_pressure_kills(self):
-        # support B: same drop, evidence via system memory pressure instead of output
+    def test_child_drop_with_mem_pressure_advisory(self):
+        # REDESIGN: same drop, evidence via system memory pressure — advisory.
         should_kill, reason = should_kill_process(
             elapsed_seconds=120,
             output_changed=False,
@@ -206,8 +207,8 @@ class TestShouldKillProcess:
             progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
             mem_pressure=True,
         )
-        assert should_kill is True
-        assert 'OOM likely' in reason
+        assert should_kill is False
+        assert 'ADVISORY' in reason
 
     def test_liveness_veto_blocks_child_drop_kill(self):
         # support A: even with drop + no live children + memory pressure, if the
@@ -241,7 +242,9 @@ class TestShouldKillProcess:
         assert should_kill is True
         assert 'OOM' in reason
 
-    def test_all_children_dead(self):
+    def test_all_children_dead_advisory(self):
+        # REDESIGN: "build likely failed silently" is a guess — advisory only;
+        # the agent decides whether to stop it.
         should_kill, reason = should_kill_process(
             elapsed_seconds=150,
             output_changed=False,
@@ -251,7 +254,8 @@ class TestShouldKillProcess:
             had_children=True,
             prev_num_children=4,
         )
-        assert should_kill is True
+        assert should_kill is False
+        assert 'ADVISORY' in reason
         assert 'child processes exited' in reason.lower()
 
     def test_cpu_zero_long_stall_is_advisory_not_hard_kill(self):
@@ -320,12 +324,12 @@ class TestShouldKillProcess:
         assert should_kill is True
         assert '60-minute' in reason
 
-    def test_busy_loop_killed_after_6min_frozen(self):
-        # A busy-loop burning CPU with NO output change for 6+ minutes is now
-        # hard-killed. Previously this survived until 60min hard cap (liveness
-        # veto), but that caused real hangs (e.g. stockfish subprocess holding
-        # stdout while parent was dead). The frozen-output hard kill fires
-        # regardless of liveness veto.
+    def test_busy_loop_frozen_not_killed_advisory(self):
+        # REDESIGN: the frozen-output rule no longer hard-kills regardless of
+        # liveness. A busy-loop burning CPU with NO output change for 6+ min
+        # is indistinguishable locally from a legitimate job that prints only
+        # at the end (fastText) — the LLM judge decides. The advisory still
+        # fires at stall_count >= 12.
         should_kill, reason = should_kill_process(
             elapsed_seconds=1800,  # 30min
             output_changed=False,
@@ -337,7 +341,9 @@ class TestShouldKillProcess:
             progress_signals={'cpu_time_delta': 15.0, 'io_bytes_delta': 0, 'rss_delta': 0},
             mem_pressure=False,
         )
-        assert should_kill is True  # frozen output hard kill fires at stall_count >= 12
+        assert should_kill is False
+        assert 'ADVISORY' in reason
+        assert 'frozen' in reason.lower()
 
     def test_healthy_process(self):
         should_kill, reason = should_kill_process(
@@ -404,8 +410,9 @@ _HEALTH = {'zombie': False, 'cpu_percent': 0.0, 'num_children': 0, 'children_ali
 class TestIdleKill:
     """Rule 1c: no output + flat CPU/IO/RSS for IDLE_KILL_THRESHOLD samples."""
 
-    def test_idle_threshold_reached_kills(self):
-        # 4 consecutive idle samples (~2 min): no output, all counters flat.
+    def test_idle_threshold_reached_advisory(self):
+        # REDESIGN: idle-syscall heuristic is advisory only — the agent judges
+        # (a redirected-output job looks identical to a dead syscall).
         should_kill, reason = should_kill_process(
             elapsed_seconds=130,
             output_changed=False,
@@ -417,9 +424,9 @@ class TestIdleKill:
             progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
             idle_count=4,
         )
-        assert should_kill is True
+        assert should_kill is False
+        assert 'ADVISORY' in reason
         assert 'no output' in reason.lower()
-        assert 'syscall' in reason.lower() or 'network' in reason.lower()
 
     def test_below_idle_threshold_does_not_kill(self):
         # Only 3 idle samples — under the 4-sample threshold.
@@ -470,10 +477,10 @@ class TestIdleKill:
         )
         assert should_kill is False
 
-    def test_idle_kill_fires_even_with_stale_progress_signal(self):
-        # idle_count is the authority: if the caller says 4 idle samples, kill
-        # regardless of a single-sample progress_signals blip (defense in depth
-        # — caller only bumps idle_count when signals were flat anyway).
+    def test_idle_kill_advisory_even_with_stale_progress_signal(self):
+        # REDESIGN: idle_count is still surfaced as an advisory even with a
+        # single-sample progress_signals blip (defense in depth — the caller
+        # only bumps idle_count when signals were flat anyway). No kill.
         should_kill, reason = should_kill_process(
             elapsed_seconds=140,
             output_changed=False,
@@ -485,7 +492,8 @@ class TestIdleKill:
             progress_signals={'cpu_time_delta': 0.0, 'io_bytes_delta': 0, 'rss_delta': 0},
             idle_count=5,
         )
-        assert should_kill is True
+        assert should_kill is False
+        assert 'ADVISORY' in reason
 
     def test_default_idle_count_zero_is_backward_compatible(self):
         # Legacy callers omit idle_count → defaults to 0 → never triggers 1c.
@@ -499,3 +507,53 @@ class TestIdleKill:
             prev_num_children=4,
         )
         assert should_kill is False
+
+
+class TestAdvisoryDowngrade:
+    """Locks the 2026-10 redesign: heuristic kills are advisories; the LLM
+    judge (the agent) decides. Deterministic death (zombie, OOM x2, 60min
+    cap) still kills."""
+
+    def test_zombie_still_kills(self):
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=60,
+            output_changed=True,
+            stall_count=0,
+            proc_health={'zombie': True, 'cpu_percent': 0, 'num_children': 0, 'children_alive': 0},
+            output_anomalies=_CLEAN,
+            had_children=True,
+            prev_num_children=2,
+        )
+        assert should_kill is True
+        assert 'zombie' in reason.lower()
+
+    def test_oom_hard_evidence_still_kills(self):
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=120,
+            output_changed=False,
+            stall_count=2,
+            proc_health={'zombie': False, 'cpu_percent': 40, 'num_children': 4, 'children_alive': 4},
+            output_anomalies={'oom_killed': True, 'killed_count': 2, 'repeated_errors': False},
+            had_children=True,
+            prev_num_children=4,
+            progress_signals={'cpu_time_delta': 5.0, 'io_bytes_delta': 0, 'rss_delta': 0},
+        )
+        assert should_kill is True
+        assert 'OOM' in reason
+
+    def test_sixty_minute_cap_still_kills(self):
+        # The 60min hard cap is reached with output still CHANGING (so rule 4
+        # does not fire first) — the cap is the last deterministic kill.
+        should_kill, reason = should_kill_process(
+            elapsed_seconds=3700,
+            output_changed=True,
+            stall_count=0,
+            proc_health=_HEALTH,
+            output_anomalies=_CLEAN,
+            had_children=False,
+            prev_num_children=0,
+            progress_signals={'cpu_time_delta': 0.5, 'io_bytes_delta': 0, 'rss_delta': 0},
+            idle_count=0,
+        )
+        assert should_kill is True
+        assert '60-minute' in reason

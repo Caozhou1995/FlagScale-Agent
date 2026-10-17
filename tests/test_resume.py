@@ -284,7 +284,9 @@ class TestAgentResumePath:
         agent._react_loop = lambda: None
         agent._run_single_shot("a normal contract")
         contents = [str(m.get("content", "")) for m in agent.history.messages]
-        assert "a normal contract" in contents
+        # The user task may carry the multi-agent nudge suffix (single-shot
+        # adaptation); assert on a stable substring of the task itself.
+        assert any("a normal contract" in c for c in contents)
 
 
 class _RecordingWatchdog:

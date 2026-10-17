@@ -12,7 +12,8 @@ from flagscale_agent.react.multi_agent.ledger import (
     FAILED, REPORTED, RUNNING, TaskLedger,
 )
 from flagscale_agent.react.multi_agent.wiring import (
-    CONTRACT_PATH_ENV, TASK_ID_ENV, WORKER_ROLE_PREFIX,
+    CONTRACT_PATH_ENV, MULTI_AGENT_NUDGE_SUFFIX, RESUME_PATH_ENV,
+    TASK_ID_ENV, WORKER_ROLE_PREFIX,
     finalize_worker_if_no_report, is_worker, resolve_worker_query,
 )
 
@@ -50,6 +51,25 @@ class TestResolveQuery:
         out = resolve_worker_query("raw")
         assert out.startswith(WORKER_ROLE_PREFIX)
         assert "raw" in out
+
+    def test_nudge_constant_is_english_and_explains_why(self):
+        """The appended nudge is a single English sentence explaining the ask."""
+        text = MULTI_AGENT_NUDGE_SUFFIX
+        assert "multi-agent" in text
+        assert "concurrent" in text
+        assert "efficiency" in text and "quality" in text
+        assert "\n" not in text  # one line, appended after a blank line
+
+    def test_user_task_nudge_helper_appends_once(self):
+        """The wiring-level helper appends exactly one blank-line-separated nudge."""
+        from flagscale_agent.react.agent import _run_single_shot_append_nudge
+
+        q = _run_single_shot_append_nudge("analyze logs")
+        assert q.startswith("analyze logs\n\n")
+        assert q.count(MULTI_AGENT_NUDGE_SUFFIX) == 1
+        # Idempotent: a query already carrying the nudge is not re-suffixed.
+        q2 = _run_single_shot_append_nudge(q)
+        assert q2 == q
 
 
 class TestFinalizeNoReport:

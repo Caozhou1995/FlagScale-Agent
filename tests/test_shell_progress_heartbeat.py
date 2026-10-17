@@ -107,14 +107,21 @@ class TestIdleHangKill:
         import time
         tool = ShellTool(remind_interval=1)  # check_interval = 1s
         t0 = time.time()
-        # sleep 60 would hang for a full minute; idle-kill must stop it in ~5-6s
-        # (first sample has no baseline, then 4 flat samples reach the threshold).
+        # sleep 60 would hang for a full minute. Current behavior: the
+        # foreground grace window (30s) detaches it to a background job —
+        # the agent decides from there (advisory downgrade, not a kill).
+        # The idle heuristic itself is now advisory-only (see
+        # TestAdvisoryDowngrade in tests/test_process_health.py); what must
+        # still hold here is that a silent sleep does NOT block the caller
+        # for the full 60s.
         progress, result = _run_capturing_stdout(tool, "sleep 60")
         elapsed = time.time() - t0
-        assert result.startswith("TERMINATED"), result[:200]
-        assert "no output" in result.lower()
-        # Killed far sooner than the 6-min frozen rule or 60s sleep.
-        assert elapsed < 30, f"idle-kill took {elapsed:.0f}s, expected <30s"
+        detached_or_terminated = (
+            result.startswith("TERMINATED") or "DETACHED as job" in result
+        )
+        assert detached_or_terminated, result[:200]
+        # Handed back control far sooner than the 60s sleep would block.
+        assert elapsed < 60, f"hand-back took {elapsed:.0f}s, expected <60s"
 
     def test_active_command_not_idle_killed(self):
         """A CPU-burning command with no stdout must NOT be idle-killed —

@@ -39,6 +39,15 @@ WORKER_ROLE_PREFIX = (
     "refused with an explicit error and you cannot raise the cap.\n"
 )
 
+# One-line nudge appended to a USER's task in single-shot mode (not a worker
+# contract, not a resume message): steer the run toward multi-agent mode so
+# independent sub-tasks fan out concurrently for efficiency and quality.
+MULTI_AGENT_NUDGE_SUFFIX = (
+    "Use multi-agent mode for this task: fan out concurrent sub-agents where "
+    "the work can be parallelized, to maximize both efficiency and completion "
+    "quality."
+)
+
 # Fixed role prefix for a LEAF worker (reviewer/diverger): no delegation.
 WORKER_LEAF_ROLE_PREFIX = (
     "[worker role] You are a LEAF worker (reviewer/diverger) dispatched by a "

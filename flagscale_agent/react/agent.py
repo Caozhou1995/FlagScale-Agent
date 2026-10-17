@@ -71,7 +71,7 @@ from flagscale_agent.react.multi_agent.resume import ResumeChildTool
 from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
 from flagscale_agent.react.multi_agent.wiring import (
     resolve_worker_query, resolve_resume_query, finalize_worker_if_no_report,
-    is_worker, WORKER_ROLE_PREFIX,
+    is_worker, WORKER_ROLE_PREFIX, MULTI_AGENT_NUDGE_SUFFIX,
 )
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
@@ -131,6 +131,20 @@ from flagscale_agent.react.commands import CommandHandler
 
 
 # ── WorkerAgent ──────────────────────────────────────────────────────────────
+
+def _run_single_shot_append_nudge(query, worker=False, resume=False):
+    """Append the multi-agent nudge to a single-shot USER task.
+
+    Only headless user-task runs get the nudge: worker contracts and parent
+    resume messages are parent-authored text and must never be rewritten.
+    Idempotent — a query already carrying the nudge is returned unchanged.
+    """
+    if worker or resume or not query:
+        return query
+    if MULTI_AGENT_NUDGE_SUFFIX in query:
+        return query
+    return f"{query}\n\n{MULTI_AGENT_NUDGE_SUFFIX}"
+
 
 class WorkerAgent:
     """Single agent class with composable Guard/Judge architecture.
@@ -1517,6 +1531,14 @@ class WorkerAgent:
         # Worker mode: the CLI positional arg is a contract PATH; resolve
         # to the full contract text + role prefix before the loop sees it.
         query = resolve_worker_query(query)
+        # Headless user-task runs (not a resumed worker, not a worker contract)
+        # get a one-line nudge appended to the user's own task text: the task
+        # should be tackled in multi-agent mode, fanning out concurrent workers
+        # for efficiency and completion quality. Workers and resumed workers are
+        # excluded — their contract/resume text is parent-authored and must not
+        # be rewritten.
+        query = _run_single_shot_append_nudge(
+            query, worker=is_worker(), resume=resolve_resume_query() is not None)
         self.history.append({"role": "user", "content": query})
         try:
             self._react_loop()
