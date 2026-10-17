@@ -13,14 +13,19 @@ from flagscale_agent.react.multi_agent.ledger import (
 )
 from flagscale_agent.react.multi_agent.wiring import (
     CONTRACT_PATH_ENV, MULTI_AGENT_NUDGE_SUFFIX, RESUME_PATH_ENV,
-    TASK_ID_ENV, WORKER_ROLE_PREFIX,
+    TASK_ID_ENV, TASK_ROLE_ENV, WORKER_ROLE_PREFIX,
     finalize_worker_if_no_report, is_worker, resolve_worker_query,
 )
 
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for k in (TASK_ID_ENV, CONTRACT_PATH_ENV, "FLAGSCALE_OUTPUT_DIR"):
+    # Clear TASK_ROLE_ENV too: _role_prefix_for_env() reads it to pick the
+    # leaf vs ordinary prefix. If the suite runs inside a reviewer/diverger
+    # worker (FLAGSCALE_TASK_ROLE=reviewer), a leaked role flips the prefix to
+    # the leaf one and the WORKER_ROLE_PREFIX assertions below fail. Tests must
+    # be hermetic regardless of the parent's role env.
+    for k in (TASK_ID_ENV, TASK_ROLE_ENV, CONTRACT_PATH_ENV, "FLAGSCALE_OUTPUT_DIR"):
         monkeypatch.delenv(k, raising=False)
 
 
