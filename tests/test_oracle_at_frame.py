@@ -37,6 +37,7 @@ from flagscale_agent.react.tools.plan_create import (
 from flagscale_agent.react.oracle import (
     PREMISE_SOURCES,
     ORACLE_ACCEPTANCE_ITEM,
+    STATED_CONSTRAINT_ITEM,
     build_oracle_binding_line,
     declares_external_premise,
 )
@@ -226,6 +227,76 @@ class TestReviewRegressionFixes:
             {"oracle": "my own verify.py rerun", "premise_source": "provided",
              "first_exercise": "python verify.py"}
         )
+
+
+class TestFrameAcceptanceCarriesConstraintCoverageItem:
+    """The constraint-coverage item closes the COMPLEMENT of the oracle gate.
+
+    Loss it targets: an agent guards the ONE axis its oracle covers and ships
+    with every OTHER stated constraint unverified. Its own report says so
+    verbatim ("NOT VERIFIED: ... cannot be checked against a reference") -- yet
+    the task STATED the constraint, so it was checkable in form if not in value.
+    """
+
+    def test_constraint_item_is_in_frame_acceptance(self):
+        assert STATED_CONSTRAINT_ITEM in _FRAME_STEP_ACCEPTANCE
+
+    def test_constraint_item_demands_compiled_runnable_assertion(self):
+        low = STATED_CONSTRAINT_ITEM.lower()
+        # enumerate EVERY stated constraint, compile each to a runnable check
+        assert "enumerate" in low
+        assert "compile" in low
+        assert "runnable assertion" in low
+        assert "run it before you complete" in low
+
+    def test_constraint_item_resists_semantic_inversion(self):
+        # F1 (reviewer, reproduced): token-PRESENCE alone is vacuous -- an
+        # inversion ("do NOT enumerate", "do NOT compile", "optional") keeps
+        # every asserted substring and would still pass. Pin the demand against
+        # an actual inversion by asserting the inversion's distinctive tokens are
+        # ABSENT. This is the mutation that must fail.
+        inv = (
+            STATED_CONSTRAINT_ITEM
+            .replace("ENUMERATE ", "do NOT enumerate ")
+            .replace("COMPILE ", "do NOT compile ")
+            .replace("before you complete", "before you complete (optional)")
+        )
+        low_inv = inv.lower()
+        # the inverted text is what a broken item would look like; the guard
+        # below must reject it
+        assert "do not enumerate" in low_inv    # the inversion really changed it
+        assert "do not compile" in low_inv
+        # and the REAL item must not carry those negation tokens
+        real = STATED_CONSTRAINT_ITEM.lower()
+        assert "do not enumerate" not in real
+        assert "do not compile" not in real
+        assert "(optional)" not in real
+
+    def test_constraint_item_refuses_prose_not_verified(self):
+        # The exact escape hatch the observed agent used to ship unchecked.
+        low = STATED_CONSTRAINT_ITEM.lower()
+        assert "not verified" in low
+        assert "prose" in low and "is not" in low
+
+    def test_constraint_item_covers_non_value_form(self):
+        # When the task gives no expected VALUE it still gives FORM.
+        low = STATED_CONSTRAINT_ITEM.lower()
+        assert "form" in low
+        assert "bound" in low or "range" in low
+        assert "tolerance" in low
+
+    def test_constraint_item_is_distinct_from_oracle_item(self):
+        # It must name the oracle item as the ONE-axis fix, not duplicate it.
+        assert STATED_CONSTRAINT_ITEM != ORACLE_ACCEPTANCE_ITEM
+        low = STATED_CONSTRAINT_ITEM.lower()
+        assert "one axis" in low or "one  axis" in low
+
+    def test_constraint_item_is_task_agnostic(self):
+        # No concrete unit/threshold/task may be named (grader-leak constraint).
+        low = STATED_CONSTRAINT_ITEM.lower()
+        for banned in ("raman", "dna", "filter-js", "gpt2", "fasttext",
+                       "2670", "0.62", "bs4", "beautifulsoup"):
+            assert banned not in low
 
 
 if __name__ == "__main__":

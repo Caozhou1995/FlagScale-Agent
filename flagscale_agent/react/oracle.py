@@ -69,6 +69,33 @@ ORACLE_ACCEPTANCE_ITEM = (
 )
 
 
+# The FRAME acceptance item that targets the COMPLEMENT of the oracle gate. The
+# oracle gate forces ONE axis to be decided by an external premise -- but an
+# agent that guards only that one axis can still ship with every OTHER stated
+# constraint unverified (its own report literally says so). Observed loss:
+# a fit task where the agent verified one peak's position and shipped with the
+# other three parameters "NOT VERIFIED", failing a tolerance the task stated.
+# So this item demands that EVERY numeric/form constraint the task TEXT states be
+# COMPILED into a runnable assertion executed against the artifact before
+# delivery -- not declared in prose. It is generic: it names no task, unit, or
+# threshold (see tests/test_no_harness_grader_leak.py).
+STATED_CONSTRAINT_ITEM = (
+    "Stated-constraint coverage: the independent-oracle item above fixes ONE "
+    "axis; it does NOT discharge the others. Re-read the task text and ENUMERATE "
+    "every numeric or form constraint it states (a tolerance, a range, an upper "
+    "or lower bound, a count, a field name, a type, an order, a required file). "
+    "For EACH, COMPILE a runnable assertion against the delivered artifact and "
+    "actually RUN it before you complete -- a prose 'NOT VERIFIED' note is not "
+    "coverage. The trap this closes: you verify the one quantity your oracle "
+    "happens to cover, leave the rest unchecked, and a stated bound you never "
+    "tested fails at the grader. When a stated constraint has no expected VALUE, "
+    "the task still states its FORM (bound/direction/type/order) -- assert THAT. "
+    "List the enumerated constraints and each assertion's observed result in the "
+    "plan step; a constraint you cannot compile is an explicit, named gap, not a "
+    "silent omission."
+)
+
+
 def declares_external_premise(declaration):
     """Return True iff ``declaration`` has the SHAPE of an external-premise oracle.
 
