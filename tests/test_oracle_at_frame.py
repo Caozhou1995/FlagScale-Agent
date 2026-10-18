@@ -411,7 +411,10 @@ class TestOracleExerciseCompletionArm:
         v = g.check_pre(self._ctx())
         assert v is None or v.reason != "completion_without_oracle_exercise"
 
-    def test_override_releases_the_arm(self, plan_dir):
+    def test_override_does_not_release_the_arm(self, plan_dir):
+        """M2: the oracle-exercise arm is NON-overridable -- the exit is the
+        ACTION of running the declared exercise and recording oracle_act, not
+        prose."""
         tp = self._plan_with_oracle(plan_dir, {
             "oracle": "ref impl", "premise_source": "provided",
             "first_exercise": "cmp golden",
@@ -421,7 +424,8 @@ class TestOracleExerciseCompletionArm:
         ctx = self._ctx()
         ctx.override_reason = "oracle unrunnable in this environment"
         v = g.check_pre(ctx)
-        assert v is None or v.reason != "completion_without_oracle_exercise"
+        assert v is not None and v.reason == "completion_without_oracle_exercise", v
+        assert v.overridable is False
 
     def test_exercised_oracle_releases_the_arm(self, plan_dir):
         # simulate the step_done that RUNS the oracle: latch via oracle_act with

@@ -221,8 +221,9 @@ may apply and run the acceptance test on the output you are shipping.
 Before completing: on a step_done, declare `deliverable_reading` as a real object
 naming the graded artifact, its `readings` (each with the exact `source` quote,
 the `acceptance_test`, and the `normalized_side` the checker compares on), and the
-`hedge` you ran — OR, if this task genuinely grades nothing you can name, re-issue
-this completion with an `_override_reason` stating why.
+`hedge` you ran. This block is NON-overridable: the declaration IS the exit —
+even a task whose deliverable seems trivial closes it by declaring that
+deliverable and its readings explicitly, never by skipping the declaration.
 """
 
 _COMPLETION_NO_ACCEPTANCE_OBSERVED = """[VerificationGuard] You are declaring the task complete, but you never recorded a real ACCEPTANCE OBSERVATION.
@@ -244,8 +245,9 @@ explicitly, on a step_done, with an `acceptance_act` object carrying ONE of:
     ATTEMPT just as the OBSERVED form costs an OBSERVATION. A bare
     {"unobservable": "..."} with no attempt is refused.
 
-Then complete again. If this task truly has no acceptance you can observe or name,
-re-issue this completion with an `_override_reason` saying so.
+This block is NON-overridable: the recorded attempt IS the exit — if no
+acceptance can be observed, use the UNOBSERVABLE form above (with the probe you
+ran and its real recorded output), then complete again.
 """
 
 _COMPLETION_ORACLE_NOT_EXERCISED = """[VerificationGuard] You are declaring the task complete, but the independent oracle you bound at framing time was never EXERCISED.
@@ -260,11 +262,11 @@ Before completing: actually RUN a command aimed at the oracle you named and
 record it on a step_done as `oracle_act`:
 {"command": "<the exact command you ran>", "observed": "<its ACTUAL output text>"}
 The `observed` text must be output the harness really recorded for this session
--- a claimed-but-never-run exercise is refused. If the oracle you named turned out
-to be unrunnable, record the ATTEMPT the same way (run the closest probe you can
-and paste its real output) and re-issue with an `_override_reason` naming why the
-declared oracle could not be exercised. A framing-time declaration you never put
-into action is exactly the escape this arm converts into a look.
+-- a claimed-but-never-run exercise is refused. This block is NON-overridable:
+the recorded exercise IS the exit — if the oracle you named turned out unrunnable,
+run the closest probe you can and paste its real output as the attempt. A
+framing-time declaration you never put into action is exactly the escape this arm
+converts into a look.
 """
 
 _COMPLETION_ORACLE_NOT_BOUND = """[VerificationGuard] You are declaring the task complete, but you never BOUND an independent oracle.
@@ -285,10 +287,11 @@ Before completing, do ONE of these on a step_done:
     recording it as `oracle_act` = {"command": "<the command>", "observed": "<its
     ACTUAL output text>"}. The `observed` text must be output the harness really
     recorded for this session -- a claimed-but-never-run exercise is refused.
-  \u2022 Or, if this task genuinely admits NO external-premise oracle, record that as
-    an owned claim: re-issue this completion with an `_override_reason` naming the
-    axis you could not anchor and why no external authority exists for it. That is
-    a load-bearing gap stated on the record, not a silent guess.
+This block is NON-overridable: BINDING the oracle IS the exit. Even a weak,
+partial oracle (a format check against the task's own stated contract, a
+sample-level differential comparison) is an external anchor -- bind the closest
+one you can actually run. An axis with genuinely no external anchor surfaces as
+[NEED_USER_INPUT], never as an unanchored completion.
 """
 
 _COMPLETION_WITH_UNFINISHED_STEPS = """[VerificationGuard] You are declaring the task complete while plan step(s) {steps} are still open.
@@ -1690,53 +1693,55 @@ class VerificationGuard(Guard):
                 # close every step on an ungrounded opt-out and never confront
                 # the reading the checker applies. When the task text is retriev-
                 # able (groundable) and no REAL reading was declared this run,
-                # require one before the task may be declared done. Overridable:
-                # a genuinely un-graded task closes with a reason on record.
+                # require one before the task may be declared done. NON-overridable
+                # (M2): the exit is the ACTION of declaring a real
+                # deliverable_reading on a step_done, always available.
                 if (
                     not self._graded_reading_seen
                     and _task_text_groundable(self._task_text())
-                    and not self.accept_override(ctx.override_reason, ctx)
                 ):
                     return GuardVerdict.block(
                         message=_COMPLETION_NO_GRADED_READING,
                         reason="completion_without_graded_reading",
                         category="verification_required",
+                        overridable=False,
                     )
                 # Acceptance-observation obligation: a declared reading is not an
                 # OBSERVATION of the acceptance. When the task text is groundable
                 # and the agent never recorded an observed acceptance act (a real
                 # command+output, corpus-checked) or an explicit `unobservable`
                 # declaration, it must confront that gap before declaring done.
-                # Overridable: a task with no observable acceptance closes with a
-                # reason on record. This is the R8 lever — semantic, no case list.
+                # NON-overridable (M2): the exit is the ACTION of recording a
+                # real `acceptance_act` (a run command + its observed output),
+                # always available. This is the R8 lever — semantic, no case list.
                 if (
                     not self._acceptance_observed
                     and _task_text_groundable(self._task_text())
-                    and not self.accept_override(ctx.override_reason, ctx)
                 ):
                     return GuardVerdict.block(
                         message=_COMPLETION_NO_ACCEPTANCE_OBSERVED,
                         reason="completion_without_acceptance_observation",
                         category="verification_required",
+                        overridable=False,
                     )
                 # Oracle-exercise obligation: at framing the agent BOUND an
                 # independent oracle and wrote its FIRST runnable exercise — an
                 # intended ACTION. A declaration is not a look. When an oracle was
                 # bound this run and no corpus-backed `oracle_act` ever recorded
-                # that the exercise was RUN, the agent must exercise it (or record
-                # the attempt) before declaring done. Overridable: an unrunnable
-                # oracle closes with a reason on record naming why. This is the
-                # declaration->action lever -- it fires ONLY when an oracle was
-                # actually bound, so a task that named none is untouched.
+                # that the exercise was RUN, the agent must exercise it before
+                # declaring done. NON-overridable (M2): the exit is the ACTION of
+                # running the bound oracle's first exercise (the agent authors it,
+                # so a runnable one is always available) and recording `oracle_act`.
+                # Fires ONLY when an oracle was actually bound.
                 if (
                     self._bound_oracle()
                     and not self._oracle_exercised_seen
-                    and not self.accept_override(ctx.override_reason, ctx)
                 ):
                     return GuardVerdict.block(
                         message=_COMPLETION_ORACLE_NOT_EXERCISED,
                         reason="completion_without_oracle_exercise",
                         category="verification_required",
+                        overridable=False,
                     )
                 # Oracle-BIND obligation: the frame step mandates naming the oracle
                 # that will decide the task and classifying its EXTERNAL premise.
@@ -1748,18 +1753,19 @@ class VerificationGuard(Guard):
                 # task text is groundable and NO oracle was ever bound this run, the
                 # agent must confront that gap before declaring done: bind an
                 # external-premise oracle (and run its first exercise) OR record an
-                # explicit `_override_reason` naming the axis it could not anchor and
-                # why no external authority exists. Overridable: a task with no
-                # external-premise oracle closes with that gap ON THE RECORD.
+                # explicit record of the gap. NON-overridable (M2): the exit is the
+                # ACTION of binding an oracle via plan_create(oracle={...}) (any
+                # non-empty dict latches; plan_create pauses the old plan and
+                # creates a new one) and then running its first exercise.
                 if (
                     not self._bound_oracle()
                     and _task_text_groundable(self._task_text())
-                    and not self.accept_override(ctx.override_reason, ctx)
                 ):
                     return GuardVerdict.block(
                         message=_COMPLETION_ORACLE_NOT_BOUND,
                         reason="completion_without_oracle_bound",
                         category="verification_required",
+                        overridable=False,
                     )
             return None
 

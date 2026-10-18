@@ -231,14 +231,32 @@ def test_tc_graded_reading_seen_passes():
         _close(d)
 
 
-def test_tc_graded_reading_override_releases():
-    """A substantive override releases the graded-reading arm."""
+def test_tc_graded_reading_override_does_not_release():
+    """M2: the graded-reading arm is NON-overridable -- a prose override cannot
+    release it. The exit is the ACTION of declaring a real deliverable_reading
+    on a step_done (which sets the latch), never a sentence."""
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
-        assert g.check_pre(
+        v = g.check_pre(
             _ctx("[TASK_COMPLETE]", override="genuinely ungraded task, no artifact")
-        ) is None
+        )
+        assert v is not None and v.reason == "completion_without_graded_reading", v
+        assert v.overridable is False
+    finally:
+        _close(d)
+
+
+def test_tc_graded_reading_action_exit_clears():
+    """The M2 exit is the ACTION: once a real deliverable_reading was declared
+    (latch set), the same completion passes."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        _bind_oracle(g)
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
 
@@ -402,14 +420,19 @@ def test_tc_acceptance_observed_flag_passes():
         _close(d)
 
 
-def test_tc_acceptance_override_releases():
+def test_tc_acceptance_override_does_not_release():
+    """M2: the acceptance-observation arm is NON-overridable -- the exit is the
+    recorded acceptance_act (an observed act, or the UNOBSERVABLE form carrying
+    the probe that was actually run), not prose."""
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         g._graded_reading_seen = True
-        assert g.check_pre(
+        v = g.check_pre(
             _ctx("[TASK_COMPLETE]", override="no observable acceptance; artifact is prose")
-        ) is None
+        )
+        assert v is not None and v.reason == "completion_without_acceptance_observation", v
+        assert v.overridable is False
     finally:
         _close(d)
 
@@ -627,17 +650,47 @@ def test_tc_oracle_bound_not_exercised_blocks_on_exercise():
         _close(d)
 
 
-def test_tc_oracle_bind_override_releases():
-    """A substantive override releases the oracle-bound arm (no external
-    authority exists -> the gap closes ON THE RECORD)."""
+def test_tc_oracle_bind_override_does_not_release():
+    """M2: the oracle-bind arm is NON-overridable -- the exit is the ACTION of
+    binding via plan_create(oracle={...}) (any non-empty dict latches), then
+    exercising it. Even a weak/partial oracle beats an unanchored close."""
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         g._graded_reading_seen = True
         g._acceptance_observed = True
-        assert g.check_pre(
+        v = g.check_pre(
             _ctx("[TASK_COMPLETE]", override="no external authority can anchor this axis")
-        ) is None
+        )
+        assert v is not None and v.reason == "completion_without_oracle_bound", v
+        assert v.overridable is False
+    finally:
+        _close(d)
+
+
+def test_tc_oracle_bind_action_exit_clears():
+    """The M2 exit: binding the oracle through plan_create latches it in
+    check_pre, and the completion then passes the bind arm (moves on to the
+    exercise arm, which the helper marks exercised)."""
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        # The real ACTION exit: bind via plan_create (not a hand-set latch).
+        PlanCreateTool(plan).execute(
+            title="re-bind", steps=["bind"],
+            oracle={"premise_source": "provided", "oracle": "task reference",
+                    "first_exercise": "cat /app/y"},
+        )
+        ctx = _ctx("[TASK_COMPLETE]")
+        ctx.tool_name = "plan_create"   # first consult: capture the bind
+        assert g.check_pre(ctx) is None
+        # now the completion-path consult sees the latch
+        ctx2 = _ctx("[TASK_COMPLETE]")
+        v = g.check_pre(ctx2)
+        assert v is None or v.reason != "completion_without_oracle_bound", v
     finally:
         _close(d)
 
@@ -661,5 +714,29 @@ def test_tc_oracle_bind_need_user_input_not_blocked():
         g._graded_reading_seen = True
         g._acceptance_observed = True
         assert g.check_pre(_ctx("[NEED_USER_INPUT]")) is None
+    finally:
+        _close(d)
+
+
+def test_registry_does_not_release_nonwaivable_completion_block():
+    """REGISTRY-level M2 contract: even when the completion block is the one
+    surfaced last turn and a valid override reason is re-supplied, a
+    non-overridable verdict is NOT released (guard/__init__.py _resolve requires
+    verdict.overridable). The only exit is the corrective action."""
+    from flagscale_agent.react.guard import GuardRegistry
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        reg = GuardRegistry()
+        reg.register(g)
+        ctx = _ctx("[TASK_COMPLETE]",
+                   override="genuinely ungraded task, no artifact")
+        v1 = reg.check_pre(ctx)
+        assert v1 is not None and v1.action == "block", v1
+        # same block, reason now on record -> still blocked (non-waivable)
+        v2 = reg.check_pre(ctx)
+        assert v2 is not None and v2.action == "block", v2
+        assert v2.reason == "completion_without_graded_reading", v2
+        assert v2.overridable is False
     finally:
         _close(d)
