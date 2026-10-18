@@ -245,6 +245,26 @@ explicitly, on a step_done, with an `acceptance_act` object carrying ONE of:
     ATTEMPT just as the OBSERVED form costs an OBSERVATION. A bare
     {"unobservable": "..."} with no attempt is refused.
 
+CHECK THE TASK'S STATED RELATION, NOT A CONVENIENT PROXY. Re-read the wording
+that defines what "correct" means and make your probe exercise THAT relation in
+THAT form. Two traps this closes:
+  \u2022 COVERAGE. If the task states an equivalence over a COLLECTION -- "equal up
+    to permuting the neurons", "matches the reference set", "the same N items",
+    "found all K" -- then a probe that samples a subset or scores only ONE
+    direction is not the relation. Compare CARDINALITIES (your count vs the
+    reference's) AND match each reference element to a DISTINCT element of yours
+    (a bijection). A result that reproduces part of the target but omits items is
+    only caught by this; a "distinct N" over your OWN items is not coverage of
+    the reference.
+  \u2022 METRIC. Use the comparison the task's own words denote. If it says "up to
+    scaling", test that each matched pair is an exact scalar multiple (an
+    elementwise ratio constant to tolerance) -- a NORMALIZED/cosine similarity is
+    a weaker proxy that accepts near-parallel items the stated relation REJECTS.
+    If it says "equal"/"identical", test equality at the stated tolerance. Match
+    the metric to the wording; do not substitute a metric you happen to have.
+A probe that passes only because it asked a weaker question than the task does
+is the failure this observation exists to catch.
+
 This block is NON-overridable: the recorded attempt IS the exit — if no
 acceptance can be observed, use the UNOBSERVABLE form above (with the probe you
 ran and its real recorded output), then complete again.
@@ -267,6 +287,20 @@ the recorded exercise IS the exit — if the oracle you named turned out unrunna
 run the closest probe you can and paste its real output as the attempt. A
 framing-time declaration you never put into action is exactly the escape this arm
 converts into a look.
+
+EXERCISE THE ORACLE AT THE STRENGTH THE TASK STATES, NOT A WEAKER PROXY. When
+you run the exercise, the probe must test the relation the task's own wording
+denotes, over its FULL domain: if the task says "equal up to permuting/scaling"
+or otherwise compares two COLLECTIONS, your probe must compare CARDINALITIES
+(yours vs the reference's) and match each reference element to a DISTINCT element
+of yours (a bijection), using the stated metric (for "up to scaling": an exact
+scalar multiple / elementwise-ratio-constant, NOT a normalized cosine, which
+accepts near-parallel items the relation rejects). A probe that covers only part
+of the target, or scores one direction, or swaps in a weaker similarity measure,
+will PASS while the deliverable still fails the stated relation — that is the
+exact gap this arm exists to force you to see. If the oracle's output is weaker
+than the task's stated relation, the exercise is not complete: strengthen the
+probe until it tests what the task literally requires.
 """
 
 _COMPLETION_ORACLE_NOT_BOUND = """[VerificationGuard] You are declaring the task complete, but you never BOUND an independent oracle.
