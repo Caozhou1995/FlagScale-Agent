@@ -149,6 +149,41 @@ _REASON_DIAGNOSTIC = (
     "the check CATEGORY the declaration failed."
 )
 
+# Convergence escalation for a REPEATED block. The block channel has no
+# mechanism to break a guess-retry loop: when the agent keeps re-emitting a
+# declaration that trips the SAME guard with the SAME reason, the registry
+# surfaces the same message every turn and the agent re-fires it until the wall
+# clock dies (observed: a task finished its WORK but burned its whole budget on
+# 42 identical blocks of one hedge sub-rule). This is the block-channel analogue
+# of the output-saturation breaker in the kernel: after N consecutive identical
+# (owner, reason) blocks with no intervening progress, ATTACH a directive that
+# names the repetition and tells the agent to change the FORM, not the wording.
+# Generic: it describes the agent's OWN declaration and the slug the block
+# already carries — never the task's answer, never a regex, never a task name.
+REPEAT_CONVERGENCE_AT = 3
+_REPEAT_CONVERGENCE_HARD_AT = 6
+_REPEAT_CONVERGENCE = (
+    "\n\n🔁 CONVERGENCE: the SAME block ({reason}) has now been surfaced {n} "
+    "times in a row with no progress past it. Re-emitting the same declaration "
+    "again will be blocked the SAME way — STOP rewording it and change its FORM:\n"
+    "  1. Every required key is NAMED in the requirement above. Put each named "
+    "key LITERALLY at the nesting level the block shows (a key read from the "
+    "inner object but written at the outer level, or vice-versa, re-fails).\n"
+    "  2. Match each required value's JSON TYPE to what the block shows — an "
+    "object where a string is required (or a string where an object/dict is "
+    "required) re-fails the same check.\n"
+    "  3. If you cannot construct a conforming declaration, take the "
+    "ALTERNATIVE EXIT the block message names instead of retrying this one."
+)
+_REPEAT_CONVERGENCE_HARD = (
+    "\n\n🛑 CONVERGENCE (HARD): {n} identical blocks ({reason}) — you are stuck "
+    "in a retry loop that will NOT clear by re-issuing this call. Do NOT emit "
+    "this same tool call again. Either (a) make a STRUCTURALLY DIFFERENT edit "
+    "that satisfies the named keys exactly as the block shows, or (b) abandon "
+    "this path and take the alternative exit the block names. Retrying the "
+    "identical declaration is the one action guaranteed to fail again."
+)
+
 
 class Guard(abc.ABC):
     """Base class for all guards.
@@ -204,6 +239,17 @@ class GuardRegistry:
         # for the first time this turn — the phantom-override crosstalk (Bug C).
         self._last_surfaced: str | None = None
         self._last_surfaced_reason: str | None = None
+        # Repeat-convergence tracker (block channel). Counts CONSECUTIVE resolves
+        # that surfaced the SAME (owner, reason) block with no intervening progress
+        # (no override release, no different block). A repeated identical block is
+        # the tell of a guess-retry loop: the agent re-emits a declaration that
+        # re-fails the same way, and without an escalating directive it does so
+        # until the wall clock dies (observed: 42 identical hedge blocks). At the
+        # thresholds below, an escalating convergence directive is appended. It
+        # resets the moment anything changes (override released a block, the
+        # surfaced (owner, reason) differs, or a different guard wins).
+        self._repeat_key: tuple[str, str] | None = None
+        self._repeat_count: int = 0
 
     def register(self, guard: Guard):
         self._guards.append(guard)
@@ -394,6 +440,35 @@ class GuardRegistry:
                 # belong to the same VerificationGuard.
                 self._last_surfaced = owner or (surfaced_guard.name if surfaced_guard else None)
                 self._last_surfaced_reason = surfaced.reason
+                # ── Repeat-block convergence (block channel) ──
+                # Track CONSECUTIVE resolves surfacing the SAME (owner, reason).
+                # A repeated identical block is a guess-retry loop: the agent
+                # re-emits a declaration that re-fails identically and, with no
+                # escalating signal, keeps doing so to the wall (observed: 42
+                # identical blocks). Past the thresholds, append a directive that
+                # names the repetition and demands a FORM change (or the
+                # alternative exit). The streak is reset ONLY by real progress —
+                # an explicit reset_repeat_convergence() the kernel calls when a
+                # tool actually EXECUTES (see kernel.py). It must NOT reset on a
+                # "no block this resolve": the top-of-loop check_pre runs with an
+                # empty ctx every iteration between real blocks and returns None
+                # there, which would zero the streak before it could accumulate.
+                _key = (surfaced.guard_name or "", surfaced.reason or "")
+                if _key == self._repeat_key:
+                    self._repeat_count += 1
+                else:
+                    self._repeat_key = _key
+                    self._repeat_count = 1
+                if (surfaced.action == "block"
+                        and REPEAT_CONVERGENCE_AT > 0
+                        and self._repeat_count >= REPEAT_CONVERGENCE_AT):
+                    if (_REPEAT_CONVERGENCE_HARD_AT > 0
+                            and self._repeat_count >= _REPEAT_CONVERGENCE_HARD_AT):
+                        surfaced.message += _REPEAT_CONVERGENCE_HARD.format(
+                            n=self._repeat_count, reason=surfaced.reason)
+                    else:
+                        surfaced.message += _REPEAT_CONVERGENCE.format(
+                            n=self._repeat_count, reason=surfaced.reason)
                 return surfaced
 
         if inject_messages:
@@ -422,6 +497,16 @@ class GuardRegistry:
         """
         for guard in self._guards:
             guard.reset_turn()
+
+    def reset_repeat_convergence(self):
+        """Clear the repeat-block convergence streak.
+
+        Called by the kernel the moment a tool actually EXECUTES (real progress
+        past whatever blocked before), so only a genuine attempt-to-advance —
+        not the per-iteration top-of-loop no-block resolve — zeroes the streak.
+        """
+        self._repeat_key = None
+        self._repeat_count = 0
 
     @property
     def guards(self) -> list[Guard]:

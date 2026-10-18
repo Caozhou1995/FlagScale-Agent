@@ -534,6 +534,9 @@ class AgentKernel:
                 self._consecutive_text_only = 0  # Reset: tools were executed
                 self._consecutive_saturated = 0  # M5: a real action resets the streak
                 self._consecutive_completion_blocks = 0  # progress made; reset breaker
+                # M6: a tool actually EXECUTED = real progress past whatever was
+                # blocking before — zero the repeat-block convergence streak.
+                d.guard_registry.reset_repeat_convergence()
 
                 # ── Execute tools ──
                 _pre_guard_verdicts = []
