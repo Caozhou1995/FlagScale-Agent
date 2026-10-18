@@ -101,6 +101,12 @@ class AgentKernel:
         self._interrupted = False
         self._continuation_count = 0
         self._consecutive_completion_blocks = 0
+        # Structured execution ledger for the current turn: one entry per tool
+        # call that ACTUALLY ran (blocked calls excluded), each carrying the
+        # `exec_error` flag so an evidence gate can tell "something executed"
+        # from "something executed successfully". Surfaced to guards as
+        # ctx.recent_tool_history. Reset at the start of every run_turn().
+        self._recent_tool_history: list[dict] = []
 
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
@@ -123,6 +129,7 @@ class AgentKernel:
         # the way to max_iter (thousands of identical blocks). This breaks out
         # once the agent has clearly stalled on the gate.
         self._consecutive_completion_blocks = 0
+        self._recent_tool_history = []  # reset the per-turn execution ledger
         d.judge.reset_turn()
         d.guard_registry.reset_turn()
 
@@ -490,6 +497,7 @@ class AgentKernel:
 
                 # ── Execute tools ──
                 _pre_guard_verdicts = []
+                blocked_indices = set()
                 try:
                     tool_calls = response["tool_calls"]
 
@@ -559,6 +567,13 @@ class AgentKernel:
                     # Create error results for all tool calls so the LLM can see what happened
                     tool_calls = response["tool_calls"]
                     results = [f"Error executing tool: {e}"] * len(tool_calls)
+
+                # ── Record the structured execution ledger ──
+                # One entry per tool call that ACTUALLY ran this cycle; blocked
+                # calls are excluded (they never executed). `exec_error` marks a
+                # call whose result text is the executor's own error prefix, so
+                # an evidence gate can tell execution from REAL execution.
+                self._record_tool_ledger(tool_calls, results, blocked_indices)
 
                 # ── Post-guard checks (per tool) ──
                 post_verdicts = []
@@ -651,6 +666,28 @@ class AgentKernel:
                     return "".join(texts)
         return ""
 
+    def _record_tool_ledger(self, tool_calls, results, blocked_indices) -> None:
+        """Append one ledger entry per tool call that ACTUALLY ran.
+
+        Blocked calls never executed, so they are excluded. Each entry carries
+        `exec_error`: True when the result text is the executor's own error
+        prefix (a per-call error or a batch-level failure that replaced the
+        result), so an evidence gate can distinguish execution from REAL
+        execution. `result` is coerced to a string (None -> "") and truncated
+        to 500 chars.
+        """
+        err_prefix = "Error executing tool:"
+        for i, tc in enumerate(tool_calls):
+            if i in blocked_indices:
+                continue
+            raw = results[i] if i < len(results) else None
+            text = "" if raw is None else str(raw)
+            self._recent_tool_history.append({
+                "name": tc.get("name", ""),
+                "result": text[:500],
+                "exec_error": text.startswith(err_prefix),
+            })
+
     def _build_ctx(self, tool_name: str, tool_args: dict, tool_result: str | None,
                    llm_responded: bool = False) -> GuardContext:
         d = self.deps
@@ -681,6 +718,7 @@ class AgentKernel:
             override_reason=override_reason,
             assistant_text=assistant_text,
             llm_responded=llm_responded,
+            recent_tool_history=list(self._recent_tool_history),
         )
 
     def _apply_verdict(self, verdict: GuardVerdict, pre: bool) -> bool:
