@@ -95,12 +95,26 @@ class AgentKernel:
     # value >1 gives it room to react while still catching a stuck re-emit loop
     # long before max_iter.
     MAX_CONSECUTIVE_COMPLETION_BLOCKS = 5
+    # Saturation nudge: from this consecutive-saturated-call count on, the
+    # kernel DROPS the saturated filler message from history and injects a
+    # directive that FORBIDS continuing the text stream (hard convergence).
+    # 1 = first saturated text-only call already triggers it: a saturated
+    # call can cost several minutes of wall clock, and its filler is re-sent
+    # as input on every later call. 0 disables the mechanism entirely.
+    OUTPUT_SATURATION_NUDGE_AT = 1
+    # A call is "saturated" when its output tokens reach this fraction of the
+    # configured max_output_tokens (finish_reason == length).
+    OUTPUT_SATURATION_FRACTION = 0.95
 
     def __init__(self, deps: KernelDeps):
         self.deps = deps
         self._interrupted = False
         self._continuation_count = 0
         self._consecutive_completion_blocks = 0
+        # M5: consecutive saturated-call streak (output hit the token ceiling
+        # with no tool call and no stop signal). Reset by a tool turn, a
+        # stop-signal turn, or an unsaturated text-only turn.
+        self._consecutive_saturated = 0
         # Structured execution ledger for the current turn: one entry per tool
         # call that ACTUALLY ran (blocked calls excluded), each carrying the
         # `exec_error` flag so an evidence gate can tell "something executed"
@@ -487,12 +501,38 @@ class AgentKernel:
                     # Track consecutive text-only responses (no tools, no stop signal)
                     self._consecutive_text_only = getattr(self, "_consecutive_text_only", 0) + 1
 
-                    continuation = self._generate_continuation(text_only=True)
+                    # M5: a text-only response that ALSO saturated the output
+                    # token budget is a degenerate stream (the model emitted
+                    # filler until the ceiling), not a paused-but-working
+                    # turn. Track the streak and let the continuation name
+                    # the concrete escape instead of a generic "please
+                    # continue" (which re-fuels the stream).
+                    _max_out = getattr(d.config, "max_output_tokens", 0) or 0
+                    _saturated = bool(
+                        _max_out > 0
+                        and out_tok >= int(_max_out * self.OUTPUT_SATURATION_FRACTION)
+                    )
+                    if _saturated:
+                        self._consecutive_saturated = (
+                            getattr(self, "_consecutive_saturated", 0) + 1
+                        )
+                        # Drop the saturated filler from history: it would
+                        # otherwise be re-sent as input on every later call
+                        # (65k wasted input tokens per call) and invites the
+                        # model to continue the same stream.
+                        d.history.pop_last_assistant()
+                    else:
+                        self._consecutive_saturated = 0
+
+                    continuation = self._generate_continuation(
+                        text_only=True, saturated=_saturated
+                    )
                     d.history.append({"role": "user", "content": continuation})
                     continue
 
                 self._continuation_count = 0
                 self._consecutive_text_only = 0  # Reset: tools were executed
+                self._consecutive_saturated = 0  # M5: a real action resets the streak
                 self._consecutive_completion_blocks = 0  # progress made; reset breaker
 
                 # ── Execute tools ──
@@ -765,14 +805,44 @@ class AgentKernel:
                     return "".join(texts)
         return ""
 
-    def _generate_continuation(self, text_only: bool = False) -> str:
+    def _generate_continuation(self, text_only: bool = False,
+                               saturated: bool = False) -> str:
         """Generate continuation prompt.
 
         Args:
             text_only: If True, the previous response had no tool calls and no
                 stop signal. Use a more explicit prompt to help LLM self-correct.
+            saturated: If True, that text-only response ALSO hit the output
+                token ceiling — a degenerate stream, not a paused thought.
+                Past a small streak, forbid continuing the stream outright.
         """
         consecutive = getattr(self, "_consecutive_text_only", 0)
+        saturated_streak = getattr(self, "_consecutive_saturated", 0)
+
+        # M5: a saturated text-only stream repeating itself is the model
+        # filling the token budget with filler. The generic "you must emit a
+        # tool call / stop signal" nudge is not enough — it can be appended to
+        # and re-saturated. Name the ceiling explicitly, forbid continuation,
+        # and require a single concrete action on the very next output.
+        if (saturated and self.OUTPUT_SATURATION_NUDGE_AT > 0
+                and saturated_streak >= self.OUTPUT_SATURATION_NUDGE_AT):
+            return (
+                f"[system: your last {saturated_streak} responses ran to the "
+                "OUTPUT TOKEN CEILING while emitting no tool call and no stop "
+                "signal — the stream is repeating itself and filling the "
+                "budget with filler. STOP generating narration NOW. Do NOT "
+                "continue the previous text or repeat a sentence. Your next "
+                "response must contain EXACTLY ONE of:\n"
+                "1. A single tool call that takes the next concrete action "
+                "(run the command you keep describing, write the deliverable "
+                "file, run the verifier) — no accompanying prose.\n"
+                "2. The single line [TASK_COMPLETE] if the deliverable is "
+                "already on disk and verified.\n"
+                "3. The single line [NEED_USER_INPUT] if you are blocked.\n"
+                "If you cannot decide, take option 1 with the smallest "
+                "action that produces an artefact on disk. Length is not "
+                "progress.]"
+            )
 
         # If LLM has been outputting text without tools repeatedly, escalate clarity
         if text_only and consecutive >= 3:
