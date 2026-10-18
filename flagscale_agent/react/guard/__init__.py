@@ -27,6 +27,7 @@ Three action levels:
 from __future__ import annotations
 
 import abc
+import os
 from dataclasses import dataclass, field
 from flagscale_agent.react import display
 from typing import Literal, Any
@@ -206,6 +207,21 @@ class GuardRegistry:
         self._last_surfaced_reason: str | None = None
 
     def register(self, guard: Guard):
+        # A/B toggle: FLAGSCALE_AGENT_DISABLED_GUARDS is a comma-separated list of
+        # guard NAMES (matching Guard.name) to skip registering entirely. Generic —
+        # names no task or grader. Unset/empty => every guard registers (unchanged
+        # default). Used by the paired A/B harness to measure a guard's reward
+        # effect by running the same tasks with and without it.
+        disabled = {
+            n.strip()
+            for n in os.environ.get("FLAGSCALE_AGENT_DISABLED_GUARDS", "").split(",")
+            if n.strip()
+        }
+        if disabled and guard.name in disabled:
+            # Deterministic far-end marker: proves the A/B toggle reached this
+            # process. Present in the guard-OFF arm's log, absent in the ON arm.
+            display.warn(f"[guard-ab] disabled guard: {guard.name}")
+            return
         self._guards.append(guard)
         self._guards.sort(key=lambda g: g.priority)
 
