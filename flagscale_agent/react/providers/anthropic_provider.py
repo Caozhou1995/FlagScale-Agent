@@ -72,7 +72,13 @@ class AnthropicProvider(LLMProvider):
         system, chat_messages = self._split_system(messages)
         kwargs = {"model": self._model, "max_tokens": self._max_tokens, "messages": chat_messages}
         if self._temperature is not None:
-            kwargs["temperature"] = self._temperature
+            # Route temperature via extra_body, NOT as a typed kwarg: anthropic
+            # SDK 1.x removed temperature/top_p/top_k from the create()/stream()
+            # signatures entirely, so passing it typed raises TypeError. extra_body
+            # is merged verbatim into the JSON request body and is present on both
+            # the 0.x and 1.x client lines, so this works across the unpinned
+            # `anthropic>=0.39.0` range the container resolves.
+            kwargs.setdefault("extra_body", {})["temperature"] = self._temperature
         if self._thinking_budget and self._thinking_budget > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": self._thinking_budget}
         if system:

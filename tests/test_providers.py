@@ -169,13 +169,17 @@ class TestAnthropicProvider:
                 [{"role": "user", "content": "hi"}], tools=[]
             )
             assert "temperature" not in kwargs
+            assert "extra_body" not in kwargs
 
     def test_temperature_zero_is_sent(self):
-        """temperature=0.0 (deterministic decoding) MUST reach the API kwargs.
+        """temperature=0.0 (deterministic decoding) MUST reach the request body.
 
         Pinning 0.0 is the pass@1 stabilization lever: it removes run-to-run
-        sampling variance. The far end is _build_kwargs -> the API call, so the
-        key must be present with the exact value, not dropped as falsy."""
+        sampling variance. anthropic SDK 1.x removed temperature from the
+        create()/stream() signatures, so it is routed through extra_body (merged
+        into the JSON body) to work across the unpinned `>=0.39.0` range. The far
+        end is the API call, so the exact value must be present in extra_body,
+        not dropped as falsy."""
         with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
             mock_mod.Anthropic.return_value = MagicMock()
             from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
@@ -183,7 +187,8 @@ class TestAnthropicProvider:
             kwargs = p._build_kwargs(
                 [{"role": "user", "content": "hi"}], tools=[]
             )
-            assert kwargs.get("temperature") == 0.0
+            assert "temperature" not in kwargs  # NOT a typed kwarg (1.x rejects it)
+            assert kwargs.get("extra_body", {}).get("temperature") == 0.0
 
     def test_temperature_nonzero_is_sent(self):
         with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
@@ -193,7 +198,9 @@ class TestAnthropicProvider:
             kwargs = p._build_kwargs(
                 [{"role": "user", "content": "hi"}], tools=[]
             )
-            assert kwargs.get("temperature") == 0.7
+            assert kwargs.get("extra_body", {}).get("temperature") == 0.7
+            # extra_body is a forward-compatible passthrough present on both SDK lines
+            assert "extra_body" in kwargs
 
     def test_format_assistant_with_thinking(self, provider):
         """format_assistant_message should include thinking block with signature when present."""
