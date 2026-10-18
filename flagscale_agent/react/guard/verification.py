@@ -234,10 +234,15 @@ explicitly, on a step_done, with an `acceptance_act` object carrying ONE of:
   \u2022 An OBSERVED act: {"command": "<the exact command you ran>", "observed":
     "<its ACTUAL output text>"}. The `observed` text must be output the harness
     really recorded for this session — a claimed-but-never-run command is refused.
-  \u2022 An UNOBSERVABLE declaration: {"unobservable": "<the acceptance dimension
-    you genuinely cannot observe, and why>"} — for a hidden corpus or an oracle
-    you have no means to run. This does NOT claim PASS; it carries the dimension
-    as an unverified premise (INCONCLUSIVE, not PASS).
+  \u2022 An UNOBSERVABLE attempt: {"unobservable": "<the acceptance dimension you
+    genuinely cannot observe, and why>", "command": "<the probe you ran to try>",
+    "observed": "<what that probe actually returned>"} — for a hidden corpus or an
+    oracle you have no means to run. This does NOT claim PASS; it carries the
+    dimension as an unverified premise (INCONCLUSIVE, not PASS). But declaring a
+    dimension invisible is not enough on its own: you must show the probe you RAN
+    and that probe's real recorded output, so "I could not observe it" costs an
+    ATTEMPT just as the OBSERVED form costs an OBSERVATION. A bare
+    {"unobservable": "..."} with no attempt is refused.
 
 Then complete again. If this task truly has no acceptance you can observe or name,
 re-issue this completion with an `_override_reason` saying so.
@@ -900,22 +905,31 @@ def _declares_graded_reading(dr) -> bool:
 def _acceptance_act_recorded(act, observed) -> bool:
     """True when a step_done's `acceptance_act` carries a REAL acceptance record.
 
-    Two admissible shapes (structural first, then corpus-membership):
-      * {"command": <str>, "observed": <str>} — an OBSERVED act; the `observed`
-        text must be found in the session's tool-result corpus (`_evidence_observed`),
-        so a claimed-but-never-run probe does not count. Fails open only when the
-        corpus itself is unavailable (observed is None).
-      * {"unobservable": <str>} — an explicit DECLARATION that the acceptance
-        dimension cannot be observed (hidden corpus / un-runnable oracle). This
-        records the gap as INCONCLUSIVE rather than PASS; it does not require a
-        corpus hit because the point is that no observation exists.
+    Two admissible shapes, BOTH requiring a real corpus-backed observation
+    (structural first, then corpus-membership):
+      * {"command": <str>, "observed": <str>} — an OBSERVED act: the acceptance
+        was exercised and PASSED. The `observed` text must be found in the
+        session's tool-result corpus (`_evidence_observed`), so a
+        claimed-but-never-run probe does not count.
+      * {"unobservable": <str>, "command": <str>, "observed": <str>} — the
+        acceptance dimension could NOT be observed (hidden corpus / un-runnable
+        oracle). This records the gap as INCONCLUSIVE rather than PASS. But the
+        INCONCLUSIVE form costs an ATTEMPT just as the PASS form costs an
+        OBSERVATION: the agent must show the probe it actually RAN and that
+        probe's real recorded output. "I could not observe it" is admissible only
+        when the agent can show it TRIED and how.
 
-    Any other shape (missing/mis-typed/blank) is False — silence is not a record.
+    A bare `{"unobservable": ...}` with no attempt is a DECLARATION, not a
+    record, and is refused — otherwise declaring a dimension invisible is a free
+    pass that reaches completion without ever confronting the acceptance
+    dimension the self-check exists to force.
+
+    Either form fails open ONLY when the corpus itself is unavailable
+    (observed is None). Any other shape (missing/mis-typed/blank) is False —
+    silence is not a record.
     """
     if not isinstance(act, dict):
         return False
-    if _is_real_str(act.get("unobservable")):
-        return True
     if not (_is_real_str(act.get("command")) and _is_real_str(act.get("observed"))):
         return False
     return _evidence_observed(act, observed)

@@ -422,8 +422,17 @@ def test_acceptance_act_recorded_predicate():
     """Unit-test __acceptance_act_recorded across shapes."""
     from flagscale_agent.react.guard.verification import _acceptance_act_recorded
     corpus = "ok wrote 5 lines"
-    # unobservable declaration -> True regardless of corpus.
-    assert _acceptance_act_recorded({"unobservable": "hidden corpus"}, None) is True
+    # A BARE unobservable declaration (no attempt) is refused, even fail-open corpus.
+    assert _acceptance_act_recorded({"unobservable": "hidden corpus"}, None) is False
+    assert _acceptance_act_recorded({"unobservable": "hidden corpus"}, corpus) is False
+    # An UNOBSERVABLE ATTEMPT carrying a real recorded probe is admissible.
+    assert _acceptance_act_recorded(
+        {"unobservable": "hidden corpus", "command": "ls /grader",
+         "observed": "ok wrote 5 lines"}, corpus) is True
+    # ...but a claimed-invisible probe not present in the corpus is refused.
+    assert _acceptance_act_recorded(
+        {"unobservable": "hidden corpus", "command": "ls /grader",
+         "observed": "not-in-corpus"}, corpus) is False
     # observed act present in the corpus -> True.
     assert _acceptance_act_recorded(
         {"command": "wc -l /app/y", "observed": "5"}, corpus) is True
@@ -464,5 +473,83 @@ def test_acceptance_observed_flag_set_via_tool_result():
         # No acceptance criteria on this plan's step? give it one so Mode 1 runs.
         assert g.check_pre(ctx) is None, "step_done should pass with act"
         assert g._acceptance_observed is True
+    finally:
+        _close(d)
+
+
+def _step_done_ctx(acceptance_act, corpus_text="wrote 5 lines to /app/y\n"):
+    """A step_done ctx carrying `acceptance_act`, over a tool-result corpus."""
+    c = _ctx_with_messages("done", _tool_result_msg(corpus_text), override="")
+    c.tool_name = "plan_update"
+    c.tool_args = {
+        "action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1,
+        "verification": ["ran it"],
+        "convention": {"name": "none"},
+        "deliverable_reading": {"deliverable": "none"},
+        "acceptance_act": acceptance_act,
+    }
+    return c
+
+
+def _guard_ready_for_acceptance_act(plan):
+    g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+    g._graded_reading_seen = True
+    g._step_done_recheck_reminded = True  # skip the first-step_done premise latch
+    return g
+
+
+def test_tc_bare_unobservable_does_not_clear_boundary():
+    """SEMANTIC INVERSION FALSIFIER: a bare `{"unobservable": ...}` declaration
+    (no attempt) must NOT set the observed flag. If `_acceptance_act_recorded`
+    is reverted to its free-pass form, this test FAILS. This is the exact
+    loophole the change closes: declaring a dimension invisible without trying."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_ready_for_acceptance_act(plan)
+        assert g.check_pre(
+            _step_done_ctx({"unobservable": "grader corpus is hidden"})
+        ) is None
+        assert g._acceptance_observed is False, \
+            "a bare unobservable declaration must not clear the boundary"
+        # ...so completion is still blocked by the acceptance-observation arm.
+        v = g.check_pre(_ctx("[TASK_COMPLETE]"))
+        assert v is not None and v.reason == "completion_without_acceptance_observation", v
+    finally:
+        _close(d)
+
+
+def test_tc_unobservable_with_recorded_attempt_clears_boundary():
+    """The INCONCLUSIVE form is still admissible WHEN it carries a real,
+    corpus-recorded attempt: declaration + the probe the agent ran."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_ready_for_acceptance_act(plan)
+        assert g.check_pre(
+            _step_done_ctx({
+                "unobservable": "grader corpus is hidden",
+                "command": "ls /grader",
+                "observed": "wrote 5 lines to /app/y",
+            })
+        ) is None
+        assert g._acceptance_observed is True
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_unobservable_with_fabricated_attempt_still_blocks():
+    """An unobservable declaration plus an `observed` string that is NOT in the
+    recorded corpus is refused — the attempt must be real, not asserted."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_ready_for_acceptance_act(plan)
+        assert g.check_pre(
+            _step_done_ctx({
+                "unobservable": "grader corpus is hidden",
+                "command": "ls /grader",
+                "observed": "I could not find the grader",
+            })
+        ) is None
+        assert g._acceptance_observed is False
     finally:
         _close(d)
