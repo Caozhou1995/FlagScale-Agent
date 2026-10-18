@@ -190,3 +190,59 @@ def test_tool_turn_resets_saturated_streak():
     k2._consecutive_saturated = 3
     k2.run_turn()
     assert k2._consecutive_saturated == 0
+
+
+# ── M5b: text-only streak (mode-B filler, no single saturated call) ──────────
+
+def test_text_only_streak_hard_directive_at_threshold():
+    """A long text-only streak triggers the hard directive even unsaturated."""
+    k, _, _ = _make_kernel([])
+    k._consecutive_text_only = k.TEXT_ONLY_STREAK_HARD_AT
+    msg = k._generate_continuation(text_only=True, saturated=False)
+    assert "NO tool call and NO stop signal" in msg
+    assert "[TASK_COMPLETE]" in msg
+    assert "Length is not progress" in msg
+    # it must NOT be the soft 3+ nudge (which repeats forever without force)
+    assert "responded 3+ times with text only" not in msg
+
+
+def test_text_only_streak_below_threshold_uses_soft_or_generic_nudge():
+    """Below the hard threshold, a short streak keeps the weaker nudge."""
+    k, _, _ = _make_kernel([])
+    k._consecutive_text_only = k.TEXT_ONLY_STREAK_HARD_AT - 1
+    msg = k._generate_continuation(text_only=True, saturated=False)
+    assert "NO tool call and NO stop signal" not in msg
+
+
+def test_text_only_streak_hard_disabled_when_zero():
+    """TEXT_ONLY_STREAK_HARD_AT = 0 disables the mode-B mechanism."""
+    k, _, _ = _make_kernel([])
+    saved = k.TEXT_ONLY_STREAK_HARD_AT
+    try:
+        k.TEXT_ONLY_STREAK_HARD_AT = 0
+        k._consecutive_text_only = 999
+        msg = k._generate_continuation(text_only=True, saturated=False)
+        assert "NO tool call and NO stop signal" not in msg
+    finally:
+        k.TEXT_ONLY_STREAK_HARD_AT = saved
+
+
+def test_run_turn_short_text_only_streak_injects_hard_directive():
+    """Many SHORT unsaturated text-only turns (mode-B) -> hard directive."""
+    resp = [{"content": "Let me go.", "tool_calls": None, "_out_tokens": 5}
+            for _ in range(8)]
+    k, history, _ = _make_kernel(resp, max_output_tokens=100)
+    k.run_turn()
+    joined = "\n".join(m.get("content", "") for m in history.messages
+                       if isinstance(m.get("content"), str))
+    assert "NO tool call and NO stop signal" in joined
+
+
+def test_tool_turn_resets_text_only_streak():
+    """A real tool call resets the text-only streak to zero."""
+    resp = [{"content": "", "tool_calls": [{"id": "1", "name": "shell", "arguments": {}}],
+             "_out_tokens": 5}]
+    k, _, _ = _make_kernel(resp, max_output_tokens=100)
+    k._consecutive_text_only = 5
+    k.run_turn()
+    assert k._consecutive_text_only == 0

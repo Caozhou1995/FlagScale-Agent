@@ -105,6 +105,15 @@ class AgentKernel:
     # A call is "saturated" when its output tokens reach this fraction of the
     # configured max_output_tokens (finish_reason == length).
     OUTPUT_SATURATION_FRACTION = 0.95
+    # Text-only-streak convergence: a filler loop need NOT saturate a single
+    # call — the model can emit many SHORT text-only calls in a row ("Let me
+    # go." / "OK." / "Writing."), none near the token ceiling, and never
+    # saturating (observed: 25 API calls, only 1 saturated, the rest <4k
+    # tokens, filling the whole wall). From this consecutive-text-only count
+    # on (with NO tool executed in between), the kernel DROPS the accumulated
+    # no-action text from history and injects the same HARD convergence
+    # directive the saturation path uses. 0 disables it.
+    TEXT_ONLY_STREAK_HARD_AT = 6
 
     def __init__(self, deps: KernelDeps):
         self.deps = deps
@@ -524,6 +533,19 @@ class AgentKernel:
                     else:
                         self._consecutive_saturated = 0
 
+                    # M5b: a long text-only streak (many short no-action calls)
+                    # is the same degenerate stream even without a saturated
+                    # call. Past the hard threshold, drop the accumulated
+                    # no-action narration from history too — otherwise it is
+                    # re-sent as input on every later call and invites the
+                    # model to continue it.
+                    _long_text_only = (
+                        self.TEXT_ONLY_STREAK_HARD_AT > 0
+                        and self._consecutive_text_only >= self.TEXT_ONLY_STREAK_HARD_AT
+                    )
+                    if _long_text_only and not _saturated:
+                        d.history.pop_last_assistant()
+
                     continuation = self._generate_continuation(
                         text_only=True, saturated=_saturated
                     )
@@ -827,6 +849,14 @@ class AgentKernel:
         # tool call / stop signal" nudge is not enough — it can be appended to
         # and re-saturated. Name the ceiling explicitly, forbid continuation,
         # and require a single concrete action on the very next output.
+        # M5b: the SAME hard treatment applies to a long text-only STREAK even
+        # when no single call saturated — a filler loop of many short calls is
+        # the same degenerate stream, and the soft 3+ nudge repeats forever
+        # without dropping the accumulated narration from history.
+        _long_text_only = (
+            self.TEXT_ONLY_STREAK_HARD_AT > 0
+            and consecutive >= self.TEXT_ONLY_STREAK_HARD_AT
+        )
         if (saturated and self.OUTPUT_SATURATION_NUDGE_AT > 0
                 and saturated_streak >= self.OUTPUT_SATURATION_NUDGE_AT):
             return (
@@ -845,6 +875,24 @@ class AgentKernel:
                 "If you cannot decide, take option 1 with the smallest "
                 "action that produces an artefact on disk. Length is not "
                 "progress.]"
+            )
+
+        if _long_text_only:
+            return (
+                f"[system: your last {consecutive} responses contained NO tool "
+                "call and NO stop signal — only narration. Nothing you have "
+                "written in those responses changed anything on disk, and no "
+                "amount of further narration will. STOP describing the next "
+                "step and TAKE it. Do NOT repeat a sentence or continue the "
+                "previous text. Your next response must contain EXACTLY ONE of:\n"
+                "1. A single tool call that performs the next concrete action "
+                "(run the command you keep describing, write the deliverable "
+                "file, run the verifier) — with no accompanying prose.\n"
+                "2. The single line [TASK_COMPLETE] if the deliverable is "
+                "already on disk and verified.\n"
+                "3. The single line [NEED_USER_INPUT] if you are blocked.\n"
+                "If you cannot decide, take option 1 with the smallest action "
+                "that produces an artefact on disk. Length is not progress.]"
             )
 
         # If LLM has been outputting text without tools repeatedly, escalate clarity
