@@ -192,6 +192,20 @@ def _guard_with_task(plan, task_text):
     return VerificationGuard(plan=plan, task_text_fn=lambda: task_text)
 
 
+def _bind_oracle(g):
+    """Satisfy the oracle-BIND + oracle-EXERCISE completion preconditions.
+
+    The oracle-bound arm fires when NO external-premise oracle was bound this
+    run. A test that targets a LATER completion arm (graded-reading, acceptance-
+    observation) must not be blocked by the oracle arms, so it binds an oracle
+    (and marks its first exercise run) up front -- exactly the state a
+    well-behaved agent reaches at framing."""
+    g._oracle_bound = {"premise_source": "provided",
+                       "oracle": "the task's reference artifact",
+                       "first_exercise": "cat /app/y"}
+    g._oracle_exercised_seen = True
+
+
 def test_tc_no_graded_reading_blocks():
     """A [TASK_COMPLETE] with all steps done but no real deliverable_reading ever
     declared must block (the opt-out bypass)."""
@@ -211,6 +225,7 @@ def test_tc_graded_reading_seen_passes():
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         g._graded_reading_seen = True
         g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -381,6 +396,7 @@ def test_tc_acceptance_observed_flag_passes():
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         g._graded_reading_seen = True
         g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -495,6 +511,7 @@ def _guard_ready_for_acceptance_act(plan):
     g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
     g._graded_reading_seen = True
     g._step_done_recheck_reminded = True  # skip the first-step_done premise latch
+    _bind_oracle(g)
     return g
 
 
@@ -551,5 +568,98 @@ def test_tc_unobservable_with_fabricated_attempt_still_blocks():
             })
         ) is None
         assert g._acceptance_observed is False
+    finally:
+        _close(d)
+
+
+# ── completion-boundary ORACLE-BIND arm (M1) ────────────────────────────────
+# The frame step mandates naming an EXTERNAL-premise oracle (provided /
+# differential / consumer) and passing plan_create(oracle=...). Observed failure
+# mode (0/76 plans in a full TB2.1 run ever bind): agents satisfy that mandate in
+# PROSE on the frame note and never bind, so the bind->exercise->completion chain
+# is dead by construction and the agent closes on a purely self-authored
+# verification. This arm fires when NO oracle was ever bound. See verification.py
+# _COMPLETION_ORACLE_NOT_BOUND + the completion arm.
+
+def test_tc_no_oracle_bound_blocks():
+    """All steps done, graded reading + acceptance observed, but NO oracle was
+    ever bound -> the oracle-bound arm blocks."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        assert g._bound_oracle() == {}
+        v = g.check_pre(_ctx("[TASK_COMPLETE]"))
+        assert v is not None and v.reason == "completion_without_oracle_bound", v
+    finally:
+        _close(d)
+
+
+def test_tc_oracle_bound_exercised_passes():
+    """Once an external-premise oracle was bound AND its first exercise run,
+    completion passes."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        _bind_oracle(g)
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_oracle_bound_not_exercised_blocks_on_exercise():
+    """An oracle was bound but its first exercise was never run -> the EXERCISE
+    arm blocks (the bind arm does not fire, since an oracle IS bound)."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        g._oracle_bound = {"premise_source": "provided",
+                           "oracle": "the task's reference artifact",
+                           "first_exercise": "cat /app/y"}
+        v = g.check_pre(_ctx("[TASK_COMPLETE]"))
+        assert v is not None and v.reason == "completion_without_oracle_exercise", v
+    finally:
+        _close(d)
+
+
+def test_tc_oracle_bind_override_releases():
+    """A substantive override releases the oracle-bound arm (no external
+    authority exists -> the gap closes ON THE RECORD)."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        assert g.check_pre(
+            _ctx("[TASK_COMPLETE]", override="no external authority can anchor this axis")
+        ) is None
+    finally:
+        _close(d)
+
+
+def test_tc_oracle_bind_ungroundable_task_fails_open():
+    """When the harness could not recover the task text, the arm must not block."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "(unavailable) task text not recovered")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_tc_oracle_bind_need_user_input_not_blocked():
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        g._graded_reading_seen = True
+        g._acceptance_observed = True
+        assert g.check_pre(_ctx("[NEED_USER_INPUT]")) is None
     finally:
         _close(d)

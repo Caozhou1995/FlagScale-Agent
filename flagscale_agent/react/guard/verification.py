@@ -267,6 +267,30 @@ declared oracle could not be exercised. A framing-time declaration you never put
 into action is exactly the escape this arm converts into a look.
 """
 
+_COMPLETION_ORACLE_NOT_BOUND = """[VerificationGuard] You are declaring the task complete, but you never BOUND an independent oracle.
+
+The frame step tells you to name the oracle that will decide this task and classify
+its PREMISE as coming from a source you did NOT author -- 'differential' (two
+independent implementations), 'provided' (a reference/golden artifact the
+environment supplies), or 'consumer' (the exact parse/serialize path the consumer
+replays). Naming it in prose is a DECLARATION; the harness records an oracle only
+when you actually pass it to plan_create(oracle={...}). No oracle was ever bound in
+this run -- so the one external check that could catch a premise you hold wrongly
+was never established, and your closing verification rests only on your own reasoning.
+
+Before completing, do ONE of these on a step_done:
+  \u2022 BIND the oracle: call plan_create(oracle={"premise_source": "provided" |
+    "differential" | "consumer", "oracle": "<what decides it>", "first_exercise":
+    "<the exact command/check that runs it>"}) and then RUN that first exercise,
+    recording it as `oracle_act` = {"command": "<the command>", "observed": "<its
+    ACTUAL output text>"}. The `observed` text must be output the harness really
+    recorded for this session -- a claimed-but-never-run exercise is refused.
+  \u2022 Or, if this task genuinely admits NO external-premise oracle, record that as
+    an owned claim: re-issue this completion with an `_override_reason` naming the
+    axis you could not anchor and why no external authority exists for it. That is
+    a load-bearing gap stated on the record, not a silent guess.
+"""
+
 _COMPLETION_WITH_UNFINISHED_STEPS = """[VerificationGuard] You are declaring the task complete while plan step(s) {steps} are still open.
 
 A plan marks the checkpoints where your results were to be verified. Completing with steps
@@ -1712,6 +1736,29 @@ class VerificationGuard(Guard):
                     return GuardVerdict.block(
                         message=_COMPLETION_ORACLE_NOT_EXERCISED,
                         reason="completion_without_oracle_exercise",
+                        category="verification_required",
+                    )
+                # Oracle-BIND obligation: the frame step mandates naming the oracle
+                # that will decide the task and classifying its EXTERNAL premise.
+                # Observed failure mode (0/76 plans in a full TB2.1 run ever bind):
+                # agents satisfy that mandate in PROSE on the frame step's
+                # verification note and never pass plan_create(oracle=...), so the
+                # bind->exercise->completion chain above is dead by construction and
+                # the agent closes on a purely self-authored verification. When the
+                # task text is groundable and NO oracle was ever bound this run, the
+                # agent must confront that gap before declaring done: bind an
+                # external-premise oracle (and run its first exercise) OR record an
+                # explicit `_override_reason` naming the axis it could not anchor and
+                # why no external authority exists. Overridable: a task with no
+                # external-premise oracle closes with that gap ON THE RECORD.
+                if (
+                    not self._bound_oracle()
+                    and _task_text_groundable(self._task_text())
+                    and not self.accept_override(ctx.override_reason, ctx)
+                ):
+                    return GuardVerdict.block(
+                        message=_COMPLETION_ORACLE_NOT_BOUND,
+                        reason="completion_without_oracle_bound",
                         category="verification_required",
                     )
             return None
