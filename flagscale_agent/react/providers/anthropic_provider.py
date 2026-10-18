@@ -27,10 +27,11 @@ from flagscale_agent.react.providers.base import LLMProvider
 class AnthropicProvider(LLMProvider):
     schema_format = "anthropic"
 
-    def __init__(self, model: str, api_key: str, base_url: str = None, max_tokens: int = 8192, thinking_budget: int = 0):
+    def __init__(self, model: str, api_key: str, base_url: str = None, max_tokens: int = 8192, thinking_budget: int = 0, temperature: float = None):
         self._model = model
         self._max_tokens = max_tokens
         self._thinking_budget = thinking_budget
+        self._temperature = temperature
         self._api_key = api_key
         self._base_url = base_url
         self._is_third_party = base_url and "anthropic.com" not in base_url
@@ -70,6 +71,8 @@ class AnthropicProvider(LLMProvider):
     def _build_kwargs(self, messages, tools):
         system, chat_messages = self._split_system(messages)
         kwargs = {"model": self._model, "max_tokens": self._max_tokens, "messages": chat_messages}
+        if self._temperature is not None:
+            kwargs["temperature"] = self._temperature
         if self._thinking_budget and self._thinking_budget > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": self._thinking_budget}
         if system:

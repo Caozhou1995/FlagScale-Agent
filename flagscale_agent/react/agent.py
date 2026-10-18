@@ -214,6 +214,7 @@ class WorkerAgent:
             config.provider, config.model, config.api_key,
             config.base_url, config.max_output_tokens,
             thinking_budget=config.thinking_budget,
+            temperature=config.temperature,
         )
 
         self.history = HistoryManager(max_context_tokens=config.max_context_tokens)

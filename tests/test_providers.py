@@ -156,6 +156,45 @@ class TestAnthropicProvider:
             assert kwargs["thinking"]["type"] == "enabled"
             assert kwargs["thinking"]["budget_tokens"] == 12288
 
+    def test_temperature_absent_by_default(self):
+        """Without an explicit temperature, _build_kwargs must NOT include it.
+
+        Default None preserves prior behavior: fall back to the API's own
+        sampling default (no client-side pin)."""
+        with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
+            mock_mod.Anthropic.return_value = MagicMock()
+            from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
+            p = AnthropicProvider(model="test", api_key="key", max_tokens=8192)
+            kwargs = p._build_kwargs(
+                [{"role": "user", "content": "hi"}], tools=[]
+            )
+            assert "temperature" not in kwargs
+
+    def test_temperature_zero_is_sent(self):
+        """temperature=0.0 (deterministic decoding) MUST reach the API kwargs.
+
+        Pinning 0.0 is the pass@1 stabilization lever: it removes run-to-run
+        sampling variance. The far end is _build_kwargs -> the API call, so the
+        key must be present with the exact value, not dropped as falsy."""
+        with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
+            mock_mod.Anthropic.return_value = MagicMock()
+            from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
+            p = AnthropicProvider(model="test", api_key="key", max_tokens=8192, temperature=0.0)
+            kwargs = p._build_kwargs(
+                [{"role": "user", "content": "hi"}], tools=[]
+            )
+            assert kwargs.get("temperature") == 0.0
+
+    def test_temperature_nonzero_is_sent(self):
+        with patch("flagscale_agent.react.providers.anthropic_provider.anthropic") as mock_mod:
+            mock_mod.Anthropic.return_value = MagicMock()
+            from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
+            p = AnthropicProvider(model="test", api_key="key", max_tokens=8192, temperature=0.7)
+            kwargs = p._build_kwargs(
+                [{"role": "user", "content": "hi"}], tools=[]
+            )
+            assert kwargs.get("temperature") == 0.7
+
     def test_format_assistant_with_thinking(self, provider):
         """format_assistant_message should include thinking block with signature when present."""
         response = {
@@ -338,6 +377,20 @@ class TestOpenAIProvider:
             p = OpenAIProvider(model="gpt-test", api_key="test-key")
             p._mock_client = mock_client
             return p
+
+    def test_temperature_absent_by_default(self, provider):
+        """No explicit temperature -> key absent from OpenAI kwargs."""
+        kwargs = provider._build_kwargs([{"role": "user", "content": "hi"}], tools=[])
+        assert "temperature" not in kwargs
+
+    def test_temperature_zero_is_sent(self):
+        pytest.importorskip("openai")
+        with patch("flagscale_agent.react.providers.openai_provider.OpenAI") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            from flagscale_agent.react.providers.openai_provider import OpenAIProvider
+            p = OpenAIProvider(model="gpt-test", api_key="k", temperature=0.0)
+            kwargs = p._build_kwargs([{"role": "user", "content": "hi"}], tools=[])
+            assert kwargs.get("temperature") == 0.0
 
     def test_format_assistant_text_only(self, provider):
         response = {"content": "Hello!", "tool_calls": None}

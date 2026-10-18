@@ -82,6 +82,7 @@ class AgentConfig:
     shell_remind_interval: int = 60
     shell_auto_detach_grace_secs: int = 30  # foreground command running past this many seconds is auto-detached to a background job (0 disables); aligns with LongTimeShellGuard's 30s threshold
     max_output_tokens: int = 8192
+    temperature: Optional[float] = None  # None = provider/API default (sampling); 0.0 = greedy/deterministic. Pinning 0.0 removes run-to-run sampling variance, which is the dominant source of pass@1 instability on repeated benchmark runs.
     thinking_budget: int = 0  # 0 = disabled; >0 = enable thinking with budget_tokens cap (must be ≥1024 and < max_output_tokens)
     session_dir: Optional[str] = None
     skill_dirs: List[str] = field(default_factory=list)

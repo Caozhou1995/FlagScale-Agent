@@ -25,9 +25,10 @@ from flagscale_agent.react.providers.base import LLMProvider
 
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, model: str, api_key: str, base_url: str = None, max_tokens: int = 8192):
+    def __init__(self, model: str, api_key: str, base_url: str = None, max_tokens: int = 8192, temperature: float = None):
         self._model = model
         self._max_tokens = max_tokens
+        self._temperature = temperature
         self._base_url = base_url
         kwargs = {"api_key": api_key, "timeout": 120.0}
         if base_url:
@@ -41,6 +42,8 @@ class OpenAIProvider(LLMProvider):
             "messages": messages,
             "max_tokens": self._max_tokens,
         }
+        if self._temperature is not None:
+            kwargs["temperature"] = self._temperature
         if stream:
             kwargs["stream"] = True
             kwargs["stream_options"] = {"include_usage": True}
