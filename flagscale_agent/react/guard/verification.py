@@ -210,22 +210,6 @@ done, you re-checked the result against what that step was supposed to satisfy.
 If a step deserves real evidence, mark it via plan_update(step_done, verification=[...])
 individually rather than folding it into a batch."""
 
-_COMPLETION_NO_GRADED_READING = """[VerificationGuard] You are declaring the task complete, but no GRADED READING of your deliverable was ever declared.
-
-The `deliverable_reading` field is a FIXED declaration on every step_done — and
-`{"deliverable": "none"}` is a claim that there is NO graded artifact. If this
-task DOES grade an artifact (its text is available to ground a reading), that
-claim is unsupported until you have actually enumerated the readings the checker
-may apply and run the acceptance test on the output you are shipping.
-
-Before completing: on a step_done, declare `deliverable_reading` as a real object
-naming the graded artifact, its `readings` (each with the exact `source` quote,
-the `acceptance_test`, and the `normalized_side` the checker compares on), and the
-`hedge` you ran. This block is NON-overridable: the declaration IS the exit —
-even a task whose deliverable seems trivial closes it by declaring that
-deliverable and its readings explicitly, never by skipping the declaration.
-"""
-
 _COMPLETION_NO_ACCEPTANCE_OBSERVED = """[VerificationGuard] You are declaring the task complete, but you never recorded a real ACCEPTANCE OBSERVATION.
 
 Declaring the readings a checker may apply is not the same as observing that your
@@ -1721,33 +1705,15 @@ class VerificationGuard(Guard):
                         reason="completion_with_unfinished_steps",
                         category="verification_required",
                     )
-                # Graded-reading obligation at the boundary: the deliverable_read-
-                # ing gate is otherwise OPT-OUTABLE — `{"deliverable": "none"}`
-                # satisfies it without any reading enumerated, so an agent can
-                # close every step on an ungrounded opt-out and never confront
-                # the reading the checker applies. When the task text is retriev-
-                # able (groundable) and no REAL reading was declared this run,
-                # require one before the task may be declared done. NON-overridable
-                # (M2): the exit is the ACTION of declaring a real
-                # deliverable_reading on a step_done, always available.
-                if (
-                    not self._graded_reading_seen
-                    and _task_text_groundable(self._task_text())
-                ):
-                    return GuardVerdict.block(
-                        message=_COMPLETION_NO_GRADED_READING,
-                        reason="completion_without_graded_reading",
-                        category="verification_required",
-                        overridable=False,
-                    )
-                # Acceptance-observation obligation: a declared reading is not an
-                # OBSERVATION of the acceptance. When the task text is groundable
-                # and the agent never recorded an observed acceptance act (a real
-                # command+output, corpus-checked) or an explicit `unobservable`
-                # declaration, it must confront that gap before declaring done.
-                # NON-overridable (M2): the exit is the ACTION of recording a
-                # real `acceptance_act` (a run command + its observed output),
-                # always available. This is the R8 lever — semantic, no case list.
+                # Acceptance-observation obligation (M4: fires FIRST): a declared
+                # reading is not an OBSERVATION of the acceptance. When the task
+                # text is groundable and the agent never recorded an observed
+                # acceptance act (a real command+output, corpus-checked) or an
+                # explicit `unobservable` declaration, it must confront that gap
+                # before declaring done. NON-overridable (M2): the exit is the
+                # ACTION of recording a real `acceptance_act` (a run command +
+                # its observed output), always available. This is the R8 lever —
+                # semantic, no case list.
                 if (
                     not self._acceptance_observed
                     and _task_text_groundable(self._task_text())
@@ -1758,6 +1724,18 @@ class VerificationGuard(Guard):
                         category="verification_required",
                         overridable=False,
                     )
+                # Graded-reading obligation at the boundary: SUPERSEDED by the
+                # acceptance-observation arm above (M4). The deliverable_reading
+                # gate is still enforced PER STEP by _check_deliverable_reading_
+                # field; at the COMPLETION boundary the acceptance act strictly
+                # subsumes it — a corpus-checked act that exercises the task's
+                # stated relation (coverage+metric, per _COMPLETION_NO_ACCEPTANCE_
+                # OBSERVED) is a stronger demand than enumerating readings. Measured
+                # (four_m3): requiring BOTH the full reading hedge AND the act at
+                # the wall cost ~3min of bookkeeping (11 direction_evidence
+                # mentions) while the act already carries the semantic content.
+                # So once the task text is groundable, the act arm above is the
+                # boundary exit; no separate graded-reading arm fires here.
                 # Oracle-exercise obligation: at framing the agent BOUND an
                 # independent oracle and wrote its FIRST runnable exercise — an
                 # intended ACTION. A declaration is not a look. When an oracle was

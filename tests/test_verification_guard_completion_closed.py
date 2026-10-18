@@ -207,13 +207,16 @@ def _bind_oracle(g):
 
 
 def test_tc_no_graded_reading_blocks():
-    """A [TASK_COMPLETE] with all steps done but no real deliverable_reading ever
-    declared must block (the opt-out bypass)."""
+    """M4: a [TASK_COMPLETE] with all steps done but NEITHER a real reading NOR
+    an acceptance act declared blocks at the boundary (the opt-out bypass). The
+    boundary now surfaces the acceptance-observation arm (which strictly subsumes
+    the reading arm: a corpus-checked act that exercises the task's stated
+    relation is a stronger demand than enumerating readings)."""
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         v = g.check_pre(_ctx("[TASK_COMPLETE]"))
-        assert v is not None and v.reason == "completion_without_graded_reading", v
+        assert v is not None and v.reason == "completion_without_acceptance_observation", v
     finally:
         _close(d)
 
@@ -232,16 +235,16 @@ def test_tc_graded_reading_seen_passes():
 
 
 def test_tc_graded_reading_override_does_not_release():
-    """M2: the graded-reading arm is NON-overridable -- a prose override cannot
-    release it. The exit is the ACTION of declaring a real deliverable_reading
-    on a step_done (which sets the latch), never a sentence."""
+    """M2/M4: the completion-boundary block is NON-overridable -- a prose override
+    cannot release it. The exit is the ACTION of recording the acceptance act (or
+    declaring a real deliverable_reading), never a sentence."""
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         v = g.check_pre(
             _ctx("[TASK_COMPLETE]", override="genuinely ungraded task, no artifact")
         )
-        assert v is not None and v.reason == "completion_without_graded_reading", v
+        assert v is not None and v.reason == "completion_without_acceptance_observation", v
         assert v.overridable is False
     finally:
         _close(d)
@@ -334,13 +337,14 @@ def test_declares_graded_reading_rejects_grader_visible_claim():
 
 def test_tc_grader_visible_claim_still_blocks():
     """End-to-end: a gv=True claim without a real reading must not set the flag,
-    so [TASK_COMPLETE] still blocks."""
+    so [TASK_COMPLETE] still blocks (M4: now at the acceptance-observation arm,
+    which subsumes the reading arm at the boundary)."""
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
         assert g._graded_reading_seen is False
         v = g.check_pre(_ctx("[TASK_COMPLETE]"))
-        assert v is not None and v.reason == "completion_without_graded_reading", v
+        assert v is not None and v.reason == "completion_without_acceptance_observation", v
     finally:
         _close(d)
 
@@ -736,7 +740,41 @@ def test_registry_does_not_release_nonwaivable_completion_block():
         # same block, reason now on record -> still blocked (non-waivable)
         v2 = reg.check_pre(ctx)
         assert v2 is not None and v2.action == "block", v2
-        assert v2.reason == "completion_without_graded_reading", v2
+        assert v2.reason == "completion_without_acceptance_observation", v2
         assert v2.overridable is False
+    finally:
+        _close(d)
+
+
+# ---- M4: the acceptance act subsumes the graded-reading arm at the boundary ----
+
+def test_m4_acceptance_act_alone_clears_boundary():
+    """M4: recording a real acceptance_act (acceptance_observed latched) clears
+    the boundary WITHOUT a separate deliverable_reading -- the act strictly
+    subsumes the reading arm (a corpus-checked act exercising the task's stated
+    relation is a stronger demand than enumerating readings)."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        _bind_oracle(g)                # oracle arms satisfied
+        g._acceptance_observed = True  # the ACT, and NOTHING else
+        assert g._graded_reading_seen is False
+        assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
+    finally:
+        _close(d)
+
+
+def test_m4_no_reading_and_no_act_blocks():
+    """M4 contrast: with NEITHER a reading NOR an act, the boundary still blocks
+    (at the acceptance arm). This makes the previous test discriminating -- the
+    clear is caused by the ACT, not by the arm having been deleted."""
+    d, plan = _plan_with_statuses(["done"])
+    try:
+        g = _guard_with_task(plan, "Read /app/x and emit /app/y exactly.")
+        _bind_oracle(g)
+        assert g._graded_reading_seen is False
+        assert g._acceptance_observed is False
+        v = g.check_pre(_ctx("[TASK_COMPLETE]"))
+        assert v is not None and v.reason == "completion_without_acceptance_observation", v
     finally:
         _close(d)
