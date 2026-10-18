@@ -38,9 +38,15 @@ from flagscale_agent.react.oracle import (
     PREMISE_SOURCES,
     ORACLE_ACCEPTANCE_ITEM,
     STATED_CONSTRAINT_ITEM,
+    AMBIGUITY_ANCHOR_ITEM,
     build_oracle_binding_line,
     declares_external_premise,
 )
+from flagscale_agent.react.guard.verification import (
+    VerificationGuard,
+    _oracle_exercised,
+)
+from flagscale_agent.react.guard import GuardContext
 
 
 @pytest.fixture
@@ -297,6 +303,157 @@ class TestFrameAcceptanceCarriesConstraintCoverageItem:
         for banned in ("raman", "dna", "filter-js", "gpt2", "fasttext",
                        "2670", "0.62", "bs4", "beautifulsoup"):
             assert banned not in low
+
+
+class TestOracleExerciseActionLeg:
+    """The oracle gate's ACTION half: a bound oracle must be EXERCISED, not just
+    named. Framing validates the declaration SHAPE; this leg forces the declared
+    first_exercise to have been RUN -- a corpus-backed `oracle_act`.
+
+    Every falsifier here fails on the pre-change code (no _oracle_exercised, no
+    completion_without_oracle_exercise arm).
+    """
+
+    def test_ambiguity_item_is_in_frame_acceptance(self):
+        assert AMBIGUITY_ANCHOR_ITEM in _FRAME_STEP_ACCEPTANCE
+
+    def test_ambiguity_item_demands_external_anchor_and_probe(self):
+        low = AMBIGUITY_ANCHOR_ITEM.lower()
+        assert "external" in low
+        assert "probe" in low
+        assert "ambiguity axis" in low
+        # the self-authored failure mode is named
+        assert "self" in low and "reasoning" in low
+
+    def test_ambiguity_item_resists_semantic_inversion(self):
+        # token-PRESENCE alone is vacuous; pin the demand against an inversion.
+        inv = (
+            AMBIGUITY_ANCHOR_ITEM
+            .replace("do NOT resolve", "DO resolve")
+            .replace("ANCHOR ", "ignore ")
+        ).lower()
+        assert "do resolve" in inv  # the inversion really changed it
+        real = AMBIGUITY_ANCHOR_ITEM.lower()
+        assert "do not resolve" in real
+        assert "anchor the choice on the strongest external" in real
+
+    def test_ambiguity_item_is_task_agnostic(self):
+        low = AMBIGUITY_ANCHOR_ITEM.lower()
+        for banned in ("raman", "dna", "fasttext", "gpt2", "2670", "0.62",
+                       "bs4", "beautifulsoup", "lxml"):
+            assert banned not in low
+
+    def test_oracle_exercised_requires_corpus_backed_output(self):
+        # a claimed-but-never-run exercise (observed absent from corpus) is False
+        corpus = "real output line 42"
+        assert _oracle_exercised(
+            {"command": "run oracle", "observed": "real output line 42"}, corpus)
+        assert not _oracle_exercised(
+            {"command": "run oracle", "observed": "NEVER RAN THIS"}, corpus)
+
+    def test_oracle_exercised_rejects_declaration_only(self):
+        # a bare declaration (no command / no observed) is not an exercise
+        assert not _oracle_exercised({"oracle": "named"}, "corpus")
+        assert not _oracle_exercised({"command": "c"}, "corpus")
+        assert not _oracle_exercised({"observed": "o"}, "corpus")
+        assert not _oracle_exercised("ran it", "corpus")
+
+    def test_oracle_exercised_fails_open_when_corpus_unavailable(self):
+        # shape OK but corpus unknown (None) -> fail-open, never spurious block
+        assert _oracle_exercised(
+            {"command": "c", "observed": "o"}, None)
+
+
+class TestOracleExerciseCompletionArm:
+    """End-to-end: a plan with a BOUND oracle cannot [TASK_COMPLETE] until the
+    oracle's exercise is recorded as a corpus-backed action."""
+
+    def _plan_with_oracle(self, plan_dir, oracle):
+        tp = TaskPlan(plan_dir)
+        tool = PlanCreateTool(tp)
+        tool.execute(title="T", steps=["A"], oracle=oracle)
+        return tp
+
+    @staticmethod
+    def _close_all_steps(tp):
+        """Mark every step done/skipped so the unfinished-steps arm is inert and
+        the completion path reaches the oracle-exercise arm."""
+        plan = tp.get_active()
+        for s in plan.get("steps", []):
+            tp.update_step(s["id"], "skipped")
+
+    def _ctx(self, corpus_obs=None):
+        msgs = []
+        if corpus_obs is not None:
+            msgs = [{"role": "tool", "content": corpus_obs}]
+        return GuardContext(tool_name="", tool_args={}, tool_result=None,
+                            assistant_text="[TASK_COMPLETE]", override_reason="",
+                            llm_responded=True, messages=msgs)
+
+    def test_bound_oracle_without_exercise_blocks(self, plan_dir):
+        tp = self._plan_with_oracle(plan_dir, {
+            "oracle": "ref impl", "premise_source": "differential",
+            "first_exercise": "python diff.py",
+        })
+        self._close_all_steps(tp)
+        g = VerificationGuard(plan=tp)
+        v = g.check_pre(self._ctx())
+        assert v is not None and v.reason == "completion_without_oracle_exercise"
+
+    def test_no_bound_oracle_does_not_block_on_this_arm(self, plan_dir):
+        # no oracle bound -> this arm is inert (must not regress normal tasks)
+        tp = TaskPlan(plan_dir)
+        tool = PlanCreateTool(tp)
+        tool.execute(title="T", steps=["A"])
+        self._close_all_steps(tp)
+        g = VerificationGuard(plan=tp)
+        v = g.check_pre(self._ctx())
+        assert v is None or v.reason != "completion_without_oracle_exercise"
+
+    def test_override_releases_the_arm(self, plan_dir):
+        tp = self._plan_with_oracle(plan_dir, {
+            "oracle": "ref impl", "premise_source": "provided",
+            "first_exercise": "cmp golden",
+        })
+        self._close_all_steps(tp)
+        g = VerificationGuard(plan=tp)
+        ctx = self._ctx()
+        ctx.override_reason = "oracle unrunnable in this environment"
+        v = g.check_pre(ctx)
+        assert v is None or v.reason != "completion_without_oracle_exercise"
+
+    def test_exercised_oracle_releases_the_arm(self, plan_dir):
+        # simulate the step_done that RUNS the oracle: latch via oracle_act with
+        # a corpus-backed observed output, then completion passes this arm.
+        tp = self._plan_with_oracle(plan_dir, {
+            "oracle": "ref impl", "premise_source": "differential",
+            "first_exercise": "python diff.py",
+        })
+        g = VerificationGuard(plan=tp)
+        obs = "diff.py: 0 differing lines"
+        ctx = self._ctx(corpus_obs=obs)
+        ctx.tool_name = "plan_update"
+        ctx.tool_args = {
+            "action": "step_done", "step_id": 1,
+            "verification": ["ran the oracle"],
+            "convention": {"name": "none"},
+            "deliverable_reading": {"deliverable": "none"},
+            "assumptions": {"unverified": "none"},
+            "oracle_act": {"command": "python diff.py", "observed": obs},
+        }
+        # step_id 1 is the fixed FRAME step; its acceptance is non-empty, so the
+        # Mode-1 evidence gate is satisfied by the verification list. The
+        # premise-recheck gate fires once on the first step_done.
+        v1 = g.check_pre(ctx)
+        assert v1 is None or v1.reason == "step_done_premise_recheck"
+        ctx.override_reason = "re-checked"
+        v2 = g.check_pre(ctx)
+        assert v2 is None  # exercise recorded
+        # now completion clears the oracle arm
+        self._close_all_steps(tp)
+        done_ctx = self._ctx(corpus_obs=obs)
+        v = g.check_pre(done_ctx)
+        assert v is None or v.reason != "completion_without_oracle_exercise"
 
 
 if __name__ == "__main__":

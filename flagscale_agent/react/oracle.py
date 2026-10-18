@@ -96,6 +96,36 @@ STATED_CONSTRAINT_ITEM = (
 )
 
 
+# The FRAME acceptance item that targets the AMBIGUITY the oracle gate assumes
+# away: the oracle gate demands an external premise when one EXISTS, but a spec
+# that leaves a choice OPEN (a convention, a unit, a layout, a direction, a
+# default, an edge case, an interface signature) is exactly where the agent's
+# self-authored oracle shares the wrong premise and green-washes it. Observed
+# loss: an ambiguous interface whose parameter semantics the text never pinned --
+# the agent picked a reading by internal preference, self-verified, and failed
+# the grader's expected convention. So this item forces the OPEN axis to be
+# ANCHORED on the strongest EXTERNAL authority the task/environment makes
+# available and PROBED by running against it -- never settled by the agent's own
+# reasoning. Generic: it names no task, unit, library, or threshold (see
+# tests/test_no_harness_grader_leak.py).
+AMBIGUITY_ANCHOR_ITEM = (
+    "Ambiguity anchoring: when the task's own text leaves a choice OPEN -- a "
+    "convention, a unit, a layout, a direction, a default, a naming, an edge "
+    "case, or an interface signature the text does not pin -- do NOT resolve it "
+    "by your own preference or an internal consistency argument. NAME the "
+    "ambiguity axis in one line, then ANCHOR the choice on the STRONGEST EXTERNAL "
+    "authority the task or environment makes available and RUN a probe against "
+    "it: the real library/API the task names (call it and read what it returns), "
+    "the framework or tool the task is built on (exercise its actual behavior), "
+    "or a reference/golden artifact the environment supplies. A choice confirmed "
+    "only by your own reasoning, or by a script you wrote to agree with itself, "
+    "is the same wrong premise restated -- it cannot catch an error you already "
+    "hold. Record the probe and its real observed output, not just the "
+    "conclusion. If no external authority can decide the axis, say so explicitly "
+    "and name the residual risk -- an honest gap, not a silent guess."
+)
+
+
 def declares_external_premise(declaration):
     """Return True iff ``declaration`` has the SHAPE of an external-premise oracle.
 

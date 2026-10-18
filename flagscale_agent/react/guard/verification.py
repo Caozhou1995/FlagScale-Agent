@@ -248,6 +248,25 @@ Then complete again. If this task truly has no acceptance you can observe or nam
 re-issue this completion with an `_override_reason` saying so.
 """
 
+_COMPLETION_ORACLE_NOT_EXERCISED = """[VerificationGuard] You are declaring the task complete, but the independent oracle you bound at framing time was never EXERCISED.
+
+At framing you named an oracle and wrote its FIRST runnable exercise -- an
+intended ACTION, not a label. Naming an oracle is a DECLARATION; only running it
+makes it a LOOK. Nothing in this run shows the exercise you declared was ever
+executed: the completion boundary can find no recorded exercise of the bound
+oracle in your session.
+
+Before completing: actually RUN a command aimed at the oracle you named and
+record it on a step_done as `oracle_act`:
+{"command": "<the exact command you ran>", "observed": "<its ACTUAL output text>"}
+The `observed` text must be output the harness really recorded for this session
+-- a claimed-but-never-run exercise is refused. If the oracle you named turned out
+to be unrunnable, record the ATTEMPT the same way (run the closest probe you can
+and paste its real output) and re-issue with an `_override_reason` naming why the
+declared oracle could not be exercised. A framing-time declaration you never put
+into action is exactly the escape this arm converts into a look.
+"""
+
 _COMPLETION_WITH_UNFINISHED_STEPS = """[VerificationGuard] You are declaring the task complete while plan step(s) {steps} are still open.
 
 A plan marks the checkpoints where your results were to be verified. Completing with steps
@@ -935,7 +954,26 @@ def _acceptance_act_recorded(act, observed) -> bool:
     return _evidence_observed(act, observed)
 
 
-# ---- Unverified-assumption audit: forces the step to split its reasoning into
+def _oracle_exercised(act, observed) -> bool:
+    """True when a recorded act shows the bound oracle's exercise was RUN.
+
+    The framing-time oracle declaration names an oracle and its ``first_exercise``
+    -- an intended ACTION. This predicate is the ACTION half: an ``oracle_act``
+    row ({"command": C, "observed": O}) counts only when BOTH legs are real
+    strings AND the ``observed`` text is found in the session's non-forgeable
+    tool-result corpus (``_evidence_observed``). A declared-but-never-run exercise
+    therefore does not count -- the same bar the OBSERVED ``acceptance_act`` form
+    meets.
+
+    STRUCTURAL validity is checked first and always. The corpus-membership test
+    fails open ONLY when the corpus itself is unavailable (``observed is None``),
+    so a task whose session log cannot be read is not spuriously blocked.
+    """
+    if not isinstance(act, dict):
+        return False
+    if not (_is_real_str(act.get("command")) and _is_real_str(act.get("observed"))):
+        return False
+    return _evidence_observed(act, observed)
 # what it TESTED and what it merely ASSERTED ----
 # The failure this closes: a step can rest on premises that live only in the
 # reasoning trace ("this is close enough", "assume the field is 4 bytes", "the
@@ -1499,6 +1537,12 @@ class VerificationGuard(Guard):
         # OBSERVED its deliverable's acceptance before [TASK_COMPLETE] — the gap
         # R7 exposed (a reading declared on the wrong dimension still shipped).
         self._acceptance_observed = False
+        # Per-RUN: True once a step_done recorded a REAL exercise of the oracle
+        # bound at framing time (`oracle_act` with a corpus-backed command+output).
+        # The completion arm reads it: a bound oracle that was named but never RUN
+        # is the declaration->action hole this closes -- framing forces the agent
+        # to NAME an oracle, this forces it to LOOK through it at least once.
+        self._oracle_exercised_seen = False
 
     def reset_turn(self):
         """Reset per-turn state on a new user message — clears the step_done
@@ -1599,6 +1643,25 @@ class VerificationGuard(Guard):
                     return GuardVerdict.block(
                         message=_COMPLETION_NO_ACCEPTANCE_OBSERVED,
                         reason="completion_without_acceptance_observation",
+                        category="verification_required",
+                    )
+                # Oracle-exercise obligation: at framing the agent BOUND an
+                # independent oracle and wrote its FIRST runnable exercise — an
+                # intended ACTION. A declaration is not a look. When an oracle was
+                # bound this run and no corpus-backed `oracle_act` ever recorded
+                # that the exercise was RUN, the agent must exercise it (or record
+                # the attempt) before declaring done. Overridable: an unrunnable
+                # oracle closes with a reason on record naming why. This is the
+                # declaration->action lever -- it fires ONLY when an oracle was
+                # actually bound, so a task that named none is untouched.
+                if (
+                    self._bound_oracle()
+                    and not self._oracle_exercised_seen
+                    and not self.accept_override(ctx.override_reason, ctx)
+                ):
+                    return GuardVerdict.block(
+                        message=_COMPLETION_ORACLE_NOT_EXERCISED,
+                        reason="completion_without_oracle_exercise",
                         category="verification_required",
                     )
             return None
@@ -1707,6 +1770,9 @@ class VerificationGuard(Guard):
                 if _acceptance_act_recorded(
                         ctx.tool_args.get("acceptance_act"), self._observed(ctx)):
                     self._acceptance_observed = True
+                if _oracle_exercised(
+                        ctx.tool_args.get("oracle_act"), self._observed(ctx)):
+                    self._oracle_exercised_seen = True
                 return None
 
             # Timing 1b: batch action marking any step done bypasses the per-step
@@ -1794,6 +1860,11 @@ class VerificationGuard(Guard):
                             act = ctx.tool_args.get("acceptance_act")
                         if _acceptance_act_recorded(act, self._observed(ctx)):
                             self._acceptance_observed = True
+                        oact = u.get("oracle_act")
+                        if oact is None:
+                            oact = ctx.tool_args.get("oracle_act")
+                        if _oracle_exercised(oact, self._observed(ctx)):
+                            self._oracle_exercised_seen = True
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:
@@ -1897,6 +1968,25 @@ class VerificationGuard(Guard):
             ]
         except Exception:
             return []
+
+    def _bound_oracle(self) -> dict:
+        """Return the oracle declaration bound at framing time, or {} if none.
+
+        Reads the plan-level ``oracle`` mapping persisted by plan_create. Permissive
+        contract (mirrors _step_status): no plan, no declaration, or a failed
+        lookup yields {} so the completion arm does not block when state is
+        unknown -- it fires ONLY when an oracle was actually bound.
+        """
+        if not self._plan:
+            return {}
+        try:
+            plan_data = self._plan.get_active()
+            if not plan_data:
+                return {}
+            oracle = plan_data.get("oracle")
+            return oracle if isinstance(oracle, dict) else {}
+        except Exception:
+            return {}
 
     def _step_status(self, step_id) -> str | None:
         """Return the status of a step in the active plan, or None if unknown.

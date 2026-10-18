@@ -20,6 +20,7 @@ from flagscale_agent.react.tools.base import Tool
 from flagscale_agent.react.oracle import (
     ORACLE_ACCEPTANCE_ITEM,
     STATED_CONSTRAINT_ITEM,
+    AMBIGUITY_ANCHOR_ITEM,
     PREMISE_SOURCES,
     build_oracle_binding_line,
     declares_external_premise,
@@ -123,6 +124,7 @@ _FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
 _FRAME_STEP_ACCEPTANCE = [
     ORACLE_ACCEPTANCE_ITEM,
     STATED_CONSTRAINT_ITEM,
+    AMBIGUITY_ANCHOR_ITEM,
     "Divergence check — the self-divergence half is ALWAYS done; the dispatched "
     "half is priced (per the next item, a deliberate trade-off). (1) YOUR OWN "
     "deeper divergence: put 2-3 genuinely different framings of the task's "
@@ -414,7 +416,8 @@ class PlanCreateTool(Tool):
         thinking = kwargs.get("thinking", "") or ""
 
         try:
-            plan = self._plan.create(title, normalized, self._session_id, thinking=thinking)
+            plan = self._plan.create(title, normalized, self._session_id, thinking=thinking,
+                                     oracle=oracle)
             return (
                 "Plan created.\n\n"
                 "NOTE: this is the FlagScale-Agent Plan STANDARD TEMPLATE. The harness "

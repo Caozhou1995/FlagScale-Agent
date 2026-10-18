@@ -99,7 +99,8 @@ class TaskPlan:
         with open(active_path, "w", encoding="utf-8") as f:
             yaml.dump({"active_id": plan_id}, f)
 
-    def create(self, title: str, steps: List, session_id: str = "", thinking: str = "") -> dict:
+    def create(self, title: str, steps: List, session_id: str = "", thinking: str = "",
+               oracle: Optional[dict] = None) -> dict:
         """Create a new plan.
         
         Args:
@@ -117,6 +118,12 @@ class TaskPlan:
                       thinking is a single overwrite-style slot holding the
                       current understanding of the WHOLE task, and it is the
                       home for deliberate/deep reasoning as opposed to fast action.
+            oracle: Optional independent-oracle declaration (a mapping with
+                    ``oracle``/``premise_source``/``first_exercise``). Persisted
+                    at the plan level so the completion boundary can read what
+                    oracle the agent BOUND -- turning the framing-time
+                    declaration into something the presentation path can check
+                    was actually EXERCISED, not merely named. Empty when absent.
         """
         with self._lock:
             # Pause any existing active plan (check both active.yaml and scan files)
@@ -168,6 +175,12 @@ class TaskPlan:
                 "steps": step_list,
                 "thinking": (thinking or "").strip(),
                 "thinking_updated": time.time() if (thinking or "").strip() else 0.0,
+                # The independent-oracle declaration bound at framing time. Kept
+                # at the plan level (not only as prose on a step's acceptance) so
+                # the completion boundary can read WHERE the oracle lives and
+                # check it was EXERCISED -- a declaration becomes load-bearing
+                # only when the presentation path can see it.
+                "oracle": dict(oracle) if isinstance(oracle, dict) else {},
             }
             self._save(plan)
             return plan
