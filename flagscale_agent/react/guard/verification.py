@@ -954,7 +954,7 @@ def _acceptance_act_recorded(act, observed) -> bool:
     return _evidence_observed(act, observed)
 
 
-def _oracle_exercised(act, observed) -> bool:
+def _oracle_exercised(act, observed, first_exercise=None) -> bool:
     """True when a recorded act shows the bound oracle's exercise was RUN.
 
     The framing-time oracle declaration names an oracle and its ``first_exercise``
@@ -965,6 +965,14 @@ def _oracle_exercised(act, observed) -> bool:
     therefore does not count -- the same bar the OBSERVED ``acceptance_act`` form
     meets.
 
+    When ``first_exercise`` (the declared command/check) is supplied, the recorded
+    ``command`` must TOPICALLY RELATE to it -- share at least one significant
+    token -- else any prior tool output ("ok", a plan-create banner) would latch
+    the exercise without any oracle ever being run, making the label meaningless.
+    This is a class-level relation (identifier/path-like token overlap), not a
+    per-task rule. It fails open when either side carries no significant token
+    (a very short command), so a legitimate exercise is not spuriously refused.
+
     STRUCTURAL validity is checked first and always. The corpus-membership test
     fails open ONLY when the corpus itself is unavailable (``observed is None``),
     so a task whose session log cannot be read is not spuriously blocked.
@@ -973,7 +981,25 @@ def _oracle_exercised(act, observed) -> bool:
         return False
     if not (_is_real_str(act.get("command")) and _is_real_str(act.get("observed"))):
         return False
+    if _is_real_str(first_exercise):
+        _cmd_toks = _significant_tokens(act["command"])
+        _ex_toks = _significant_tokens(first_exercise)
+        if _cmd_toks and _ex_toks and not (_cmd_toks & _ex_toks):
+            return False
     return _evidence_observed(act, observed)
+
+
+# A "significant" token for the oracle-exercise topical relation: an
+# identifier/path-like run of >=4 characters (so `torch`, `pytest`, `tests/foo.py`,
+# `import`), case-folded. Short glue ("in", "the", "-c") is ignored so it cannot
+# manufacture a spurious match. Used ONLY to require the recorded command to
+# relate to the declared exercise -- generic, not task-specific.
+_TOPK_RE = re.compile(r"[a-z0-9_./-]{4,}")
+
+
+def _significant_tokens(s: str) -> set:
+    """Identifier/path-like tokens (>=4 chars, case-folded) in ``s``."""
+    return set(_TOPK_RE.findall((s or "").lower()))
 # what it TESTED and what it merely ASSERTED ----
 # The failure this closes: a step can rest on premises that live only in the
 # reasoning trace ("this is close enough", "assume the field is 4 bytes", "the
@@ -1543,6 +1569,17 @@ class VerificationGuard(Guard):
         # is the declaration->action hole this closes -- framing forces the agent
         # to NAME an oracle, this forces it to LOOK through it at least once.
         self._oracle_exercised_seen = False
+        # Per-RUN: the oracle declaration OBSERVED at plan_create time, latched
+        # independently of the active plan. Why a latch, not just the persisted
+        # plan: the tool completion route `plan_update(action="complete")` clears
+        # the active pointer BEFORE the text `[TASK_COMPLETE]` is consulted, so a
+        # read of get_active() at the boundary sees NO oracle and the obligation
+        # silently disarms. A re-frame (a second plan_create with no oracle) or a
+        # deactivate() has the same effect. Capturing the declaration here keeps
+        # the obligation alive for the whole run: once an oracle was BOUND, it must
+        # be EXERCISED before the task may close, however the plan is later
+        # mutated. Empty dict == no oracle bound this run.
+        self._oracle_bound = {}
 
     def reset_turn(self):
         """Reset per-turn state on a new user message — clears the step_done
@@ -1559,6 +1596,19 @@ class VerificationGuard(Guard):
         return None
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Capture the oracle declaration the MOMENT a plan binds it, into a
+        # per-RUN latch. The completion boundary must be able to see an oracle
+        # bound at framing time even after the plan is closed or replaced: the
+        # tool route `plan_update(action="complete")` clears the active pointer
+        # (plan.py completes -> _clear_active), and a re-frame replaces it, so a
+        # read of get_active() at the boundary alone would MISS the oracle and
+        # silently disarm the obligation. Latched here (idempotent; first binding
+        # wins for the run), the obligation survives any later plan mutation.
+        if ctx.tool_name == "plan_create":
+            _decl = (ctx.tool_args or {}).get("oracle")
+            if isinstance(_decl, dict) and _decl:
+                self._oracle_bound = _decl
+
         # The pure-text [TASK_COMPLETE] finish-path gate stack and the
         # plan_update(action="complete") completion-gate cascade previously
         # lived here. They are SUPERSEDED by the plan's fixed review step plus
@@ -1771,7 +1821,8 @@ class VerificationGuard(Guard):
                         ctx.tool_args.get("acceptance_act"), self._observed(ctx)):
                     self._acceptance_observed = True
                 if _oracle_exercised(
-                        ctx.tool_args.get("oracle_act"), self._observed(ctx)):
+                        ctx.tool_args.get("oracle_act"), self._observed(ctx),
+                        self._bound_oracle().get("first_exercise")):
                     self._oracle_exercised_seen = True
                 return None
 
@@ -1863,7 +1914,8 @@ class VerificationGuard(Guard):
                         oact = u.get("oracle_act")
                         if oact is None:
                             oact = ctx.tool_args.get("oracle_act")
-                        if _oracle_exercised(oact, self._observed(ctx)):
+                        if _oracle_exercised(oact, self._observed(ctx),
+                                             self._bound_oracle().get("first_exercise")):
                             self._oracle_exercised_seen = True
 
         # Timing 2: post-recovery, inject reminder on first step_doing
@@ -1970,13 +2022,21 @@ class VerificationGuard(Guard):
             return []
 
     def _bound_oracle(self) -> dict:
-        """Return the oracle declaration bound at framing time, or {} if none.
+        """Return the oracle declaration bound this run, or {} if none.
 
-        Reads the plan-level ``oracle`` mapping persisted by plan_create. Permissive
-        contract (mirrors _step_status): no plan, no declaration, or a failed
-        lookup yields {} so the completion arm does not block when state is
-        unknown -- it fires ONLY when an oracle was actually bound.
+        Reads the per-RUN latch captured at plan_create time (``_oracle_bound``),
+        so the obligation survives a later plan close/replace -- the tool route
+        ``plan_update(action="complete")`` clears the active pointer and a
+        re-frame swaps it, either of which would make a get_active()-only read
+        MISS a bound oracle and silently disarm the completion arm. Falling back
+        to the persisted active plan keeps the arm live for a guard constructed
+        AFTER the binding (e.g. a resumed session whose plan already carries the
+        oracle). Permissive contract (mirrors _step_status): no plan, no
+        declaration, or a failed lookup yields {} so the completion arm does not
+        block when state is unknown -- it fires ONLY when an oracle was bound.
         """
+        if self._oracle_bound:
+            return self._oracle_bound
         if not self._plan:
             return {}
         try:

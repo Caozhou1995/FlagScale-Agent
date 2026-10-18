@@ -45,6 +45,7 @@ from flagscale_agent.react.oracle import (
 from flagscale_agent.react.guard.verification import (
     VerificationGuard,
     _oracle_exercised,
+    _normalize_for_grounding,
 )
 from flagscale_agent.react.guard import GuardContext
 
@@ -454,6 +455,86 @@ class TestOracleExerciseCompletionArm:
         done_ctx = self._ctx(corpus_obs=obs)
         v = g.check_pre(done_ctx)
         assert v is None or v.reason != "completion_without_oracle_exercise"
+
+
+class TestOracleArmNotDisarmableByPlanMutation:
+    """Regression (review F1/F3): a bound oracle must survive the tool completion
+    route and plan mutation. The arm previously read the oracle from the ACTIVE
+    plan, so `plan_update(action='complete')` (which clears the active pointer),
+    a re-frame, or a deactivate() silently disarmed the obligation."""
+
+    def _bind(self, plan_dir, oracle):
+        tp = TaskPlan(plan_dir)
+        g = VerificationGuard(plan=tp)
+        # the guard must LATCH the declaration when it sees plan_create
+        g.check_pre(GuardContext(tool_name="plan_create",
+                                 tool_args={"title": "T", "oracle": oracle}))
+        PlanCreateTool(tp).execute(title="T", steps=["A"], oracle=oracle)
+        return tp, g
+
+    @staticmethod
+    def _close(tp):
+        for s in tp.get_active().get("steps", []):
+            tp.update_step(s["id"], "skipped")
+
+    def _complete_ctx(self):
+        return GuardContext(tool_name="", tool_args={}, assistant_text="[TASK_COMPLETE]",
+                            llm_responded=True, messages=[])
+
+    def test_tool_complete_route_does_not_disarm(self, plan_dir):
+        # F1: close via the TOOL route (ungated), then the text sentinel must
+        # STILL block -- the active plan is gone, but the run latched the oracle.
+        tp, g = self._bind(plan_dir, {
+            "oracle": "ref impl", "premise_source": "provided",
+            "first_exercise": "python x.py"})
+        self._close(tp)
+        tp.complete()  # clears the active pointer
+        assert g._plan.get_active() in (None, False, {})
+        v = g.check_pre(self._complete_ctx())
+        assert v is not None and v.reason == "completion_without_oracle_exercise"
+
+    def test_reframe_without_oracle_does_not_disarm(self, plan_dir):
+        # F3a: a second plan_create with NO oracle must not drop the obligation.
+        tp, g = self._bind(plan_dir, {
+            "oracle": "ref impl", "premise_source": "provided",
+            "first_exercise": "python x.py"})
+        g.check_pre(GuardContext(tool_name="plan_create", tool_args={"title": "T2"}))
+        PlanCreateTool(tp).execute(title="T2", steps=["B"])  # no oracle
+        self._close(tp)
+        v = g.check_pre(self._complete_ctx())
+        assert v is not None and v.reason == "completion_without_oracle_exercise"
+
+    def test_deactivate_does_not_disarm(self, plan_dir):
+        # F3b: deactivate() must not drop the obligation either.
+        tp, g = self._bind(plan_dir, {
+            "oracle": "ref impl", "premise_source": "provided",
+            "first_exercise": "python x.py"})
+        tp.deactivate()
+        v = g.check_pre(self._complete_ctx())
+        assert v is not None and v.reason == "completion_without_oracle_exercise"
+
+
+class TestOracleExerciseTopicalRelation:
+    """Regression (review F2): the recorded command must relate to the declared
+    first_exercise -- an unrelated command with any corpus-backed output must not
+    latch the "exercise" (which would make the label meaningless)."""
+
+    def test_unrelated_command_is_refused(self):
+        corpus = _normalize_for_grounding("Plan created.\n\nFOUND: 42")
+        assert not _oracle_exercised(
+            {"command": "python diff.py", "observed": "Plan created."},
+            corpus, "pytest tests/test_x.py")
+
+    def test_related_command_is_allowed(self):
+        corpus = _normalize_for_grounding("ran ok\nFOUND: 42")
+        assert _oracle_exercised(
+            {"command": "pytest tests/test_x.py -q", "observed": "FOUND: 42"},
+            corpus, "pytest tests/test_x.py -q")
+
+    def test_missing_oracle_exercise_fails_open(self):
+        corpus = _normalize_for_grounding("FOUND: 42")
+        assert _oracle_exercised({"command": "anything", "observed": "FOUND: 42"},
+                                 corpus, None)
 
 
 if __name__ == "__main__":
