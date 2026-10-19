@@ -105,6 +105,31 @@ class AgentKernel:
     # A call is "saturated" when its output tokens reach this fraction of the
     # configured max_output_tokens (finish_reason == length).
     OUTPUT_SATURATION_FRACTION = 0.95
+    # Degenerate-repeat loop breaker. The counters above bound the number of
+    # CONTINUATIONS, but they are reset on several paths (a tool call, a
+    # cap-retry, an empty-output retry), so a stream that keeps REGENERATING
+    # THE SAME FEW TEXTS can outlive every counter: observed on a real trial as
+    # a PERIOD-4 cycle ("Let me write the file." / "Let me write the content." /
+    # "Let me write it." / "OK.") repeated 405 times — 1600+ log lines, zero
+    # tool calls, no deliverable written. A count-based cap cannot see that, and
+    # neither can an adjacency check (a period-4 cycle never repeats back to
+    # back — verified: an e2e run with adjacency-only detection ran to
+    # max_continuations without firing). What DOES see it is the DIVERSITY of
+    # the recent window: W consecutive tool-free responses drawn from at most
+    # DISTINCT_MOST distinct texts is a dead loop. Measured on the real
+    # trajectory (tee'd log grouped into responses by blank-line separation:
+    # 9907 responses, 627 distinct overall, but the degenerate region drawing
+    # from only 8 filler phrases — "Let me write it." x2320, "Let me write the
+    # content." x2310, "Let me write the file." x2309, "OK." x1153, plus four
+    # "OK, writing…" variants): DISTINCT_MOST=6 over a 12-response window fires
+    # at response #470 of that log (~5% in), while genuine work introduces new
+    # distinct texts every few steps and stays far above the bound. 0 disables.
+    DEGENERATE_REPEAT_WINDOW_CALLS = 12
+    DEGENERATE_REPEAT_DISTINCT_MOST = 6
+    # Bytes of the assistant text used for the fingerprint. Short filler
+    # phrases ("OK.", "Let me write it.") are fully covered; for a long
+    # response the TAIL is the part that repeats.
+    DEGENERATE_REPEAT_WINDOW = 400
     # Text-only-streak convergence: a filler loop need NOT saturate a single
     # call — the model can emit many SHORT text-only calls in a row ("Let me
     # go." / "OK." / "Writing."), none near the token ceiling, and never
@@ -559,6 +584,43 @@ class AgentKernel:
                         result.stop_reason = "explicit_signal"
                         break
 
+                    # ── Degenerate-repeat loop breaker ──
+                    # Independent of every counter above: those bound the NUMBER
+                    # of continuations and are reset on tool calls / retries, so
+                    # a stream that regenerates the same FEW texts outlives all
+                    # of them. An ADJACENCY check is not enough either: the real
+                    # failure was a PERIOD-4 cycle whose neighbours always
+                    # differ (verified — adjacency-only ran to max_continuations
+                    # without firing). What does catch it is the DIVERSITY of a
+                    # window of recent tool-free responses.
+                    if self.DEGENERATE_REPEAT_WINDOW_CALLS > 0:
+                        _fp_src = (assistant_text or "").strip()
+                        _fp = " ".join(
+                            _fp_src[-self.DEGENERATE_REPEAT_WINDOW:].split()
+                        )
+                        _win = getattr(self, "_recent_assistant_fps", None)
+                        if _win is None:
+                            _win = self._recent_assistant_fps = []
+                        if _fp:
+                            _win.append(_fp)
+                        _n = self.DEGENERATE_REPEAT_WINDOW_CALLS
+                        if len(_win) > _n:
+                            del _win[:-_n]
+                        if (len(_win) >= _n
+                                and len(set(_win)) <= self.DEGENERATE_REPEAT_DISTINCT_MOST):
+                            result.stop_reason = "degenerate_repeat_loop"
+                            result.error = (
+                                f"the last {len(_win)} responses contained only "
+                                f"{len(set(_win))} distinct texts with no tool call; "
+                                "aborting to protect the wall clock"
+                            )
+                            d.display.warn(
+                                "Degenerate repeat loop detected "
+                                f"({len(_win)} responses, only {len(set(_win))} "
+                                "distinct, no tool call) — stopping this turn."
+                            )
+                            break
+
                     # ── Continuation: LLM didn't stop, keep going ──
                     # Short output retry (truncated/confused)
                     if (len(assistant_text.strip()) < 10 and iteration > 0
@@ -632,6 +694,7 @@ class AgentKernel:
                 self._continuation_count = 0
                 self._consecutive_text_only = 0  # Reset: tools were executed
                 self._consecutive_saturated = 0  # M5: a real action resets the streak
+                self._recent_assistant_fps = []  # tools ran: not a dead loop
                 self._consecutive_completion_blocks = 0  # progress made; reset breaker
 
                 # ── Execute tools ──
