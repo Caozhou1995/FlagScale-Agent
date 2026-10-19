@@ -187,3 +187,26 @@ def _is_flagscale_launch_command(cmd: str, _depth: int = 0) -> bool:
             return _is_flagscale_launch_command(inner, _depth + 1)
 
     return False
+
+
+def echo_received(bad, name, raw, fix=""):
+    """Append the value a mechanical check ACTUALLY received to its block.
+
+    A guard that rejects something already holds what it rejected. Naming it
+    turns "this was refused" (guess what was wrong) into "here is exactly what
+    you sent" (compare and fix) — the same rule JSON-Schema/Pydantic/clap
+    follow. Use at the dispatch site, not in each branch, so future branches
+    inherit it.
+    """
+    if bad is None:
+        return None
+    try:
+        shown = repr(raw)
+    except Exception:
+        shown = "<unrepresentable %s>" % type(raw).__name__
+    if len(shown) > 400:
+        shown = shown[:400] + "...(truncated, %d chars total)" % len(repr(raw))
+    bad.message = bad.message + "\n[RECEIVED] %s = %s\n" % (name, shown)
+    if fix:
+        bad.message += fix
+    return bad

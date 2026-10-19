@@ -621,3 +621,37 @@ class TestCwdRelativeEscapeFamily:
         # positional is the scoped target -> allowed.
         assert g.check_pre(_shell("grep -rn -e . ./src")) is None
         assert g.check_pre(_shell("grep -rn --regexp . ./src")) is None
+
+
+# --- the block echoes the command it rejected --------------------------
+# A mechanical check already holds the rejected input; naming it turns
+# "refused" into "here is exactly what you sent". Without it the agent
+# guesses (re-scoping the wrong part, or rewording an override).
+
+
+def test_find_block_echoes_the_rejected_command():
+    v = FindGuard().check_pre(_shell("find / -name x"))
+    assert v is not None
+    assert "[RECEIVED] command = 'find / -name x'" in v.message
+    assert "[FIX]" in v.message
+
+
+def test_broad_grep_block_echoes_the_rejected_command():
+    v = FindGuard().check_pre(_shell("grep -rn foo /mnt"))
+    assert v is not None
+    assert "[RECEIVED] command = 'grep -rn foo /mnt'" in v.message
+    assert "[FIX]" in v.message
+
+
+def test_received_echo_does_not_fire_on_allowed_commands():
+    g = FindGuard()
+    # Every `find` is blocked by design (it is never the cheap channel), so the
+    # echo appears there too — that is the point. What must NOT echo is a
+    # scoped grep, which this guard allows through untouched.
+    assert g.check_pre(_shell("grep -rn foo ./src")) is None
+    scoped_find = g.check_pre(_shell("find ./src -maxdepth 2 -name '*.py'"))
+    assert scoped_find is not None
+    # repr() picks its quoting to avoid escaping, so assert the stable parts:
+    # the field name and the command's distinctive content.
+    assert "[RECEIVED] command = " in scoped_find.message
+    assert "-maxdepth 2 -name" in scoped_find.message

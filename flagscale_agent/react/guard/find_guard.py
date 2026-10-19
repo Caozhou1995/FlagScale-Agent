@@ -51,6 +51,7 @@ import os
 import re
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.guard.utils import echo_received as _echo_received
 
 
 # Match `find` as a command word: at start of the command/line (re.MULTILINE so
@@ -947,18 +948,26 @@ class FindGuard(Guard):
         # _statement_find_violation adds token-anchored coverage for absolute
         # paths (/usr/bin/find) and prefix forms (sudo/nohup/VAR=val find).
         if _FIND_RE.search(sanitized) or _statement_find_violation(sanitized):
-            return GuardVerdict.block(
-                _FIND_MESSAGE,
-                reason="find_invocation",
-                category="find_guard",
+            return _echo_received(
+                GuardVerdict.block(
+                    _FIND_MESSAGE,
+                    reason="find_invocation",
+                    category="find_guard",
+                ),
+                "command", command,
+            fix="[FIX] scope it: name a specific directory and add -maxdepth / -name. If the root really is bounded and the cheaper channels above do not apply, re-issue with _override_reason.",
             )
 
         # Broad recursive grep: same cost class as a bare find.
         if _grep_is_broad(sanitized):
-            return GuardVerdict.block(
-                _GREP_MESSAGE,
-                reason="broad_recursive_grep",
-                category="find_guard",
+            return _echo_received(
+                GuardVerdict.block(
+                    _GREP_MESSAGE,
+                    reason="broad_recursive_grep",
+                    category="find_guard",
+                ),
+                "command", command,
+            fix="[FIX] scope it: name a specific directory and add -maxdepth / -name. If the root really is bounded and the cheaper channels above do not apply, re-issue with _override_reason.",
             )
 
         # Hidden invocations: find / broad grep inside payloads handed to
