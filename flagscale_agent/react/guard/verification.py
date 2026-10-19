@@ -2047,6 +2047,113 @@ class VerificationGuard(Guard):
         # keeps only the plan step_done evidence gate in check_pre below.
         return None
 
+    def _at_task_complete(self, ctx: GuardContext) -> bool:
+        """Is this the completion-path consultation of a [TASK_COMPLETE] claim?
+
+        Fired ONLY on the completion-path consultation: tool_name=="" AND the
+        sentinel came from THIS iteration's fresh LLM output (llm_responded=True).
+        The top-of-loop check_pre also runs with tool_name=="" every iteration to
+        catch stale completions out of history; requiring llm_responded keeps THIS
+        arm off that stale scan. A text-only completion has two shapes, and
+        testing only the trailing one would leak the override form (marker plus an
+        inline `_override_reason:` line, where text follows the marker so
+        trailing_sentinel returns None) — mirror the kernel's EXACT completion
+        predicate (kernel.py:378: `trailing == "[TASK_COMPLETE]" or
+        has_override_completion(text)`).
+        """
+        if ctx.tool_name != "" or not ctx.llm_responded:
+            return False
+        _text = (ctx.assistant_text or "").rstrip()
+        return (
+            trailing_sentinel(_text) == "[TASK_COMPLETE]"
+            or has_override_completion(_text)
+        )
+
+    def _completion_obligations(self, ctx: GuardContext) -> list[GuardVerdict]:
+        """EVERY unmet obligation behind one [TASK_COMPLETE], not just the first.
+
+        The completion boundary evaluates several INDEPENDENT obligations at ONE
+        decision point: the plan's steps must be finished, the acceptance must
+        have been OBSERVED, and an oracle bound at framing must have been both
+        BOUND and EXERCISED. Each demand reads a different piece of state, so
+        returning the first (the old shape) left the agent to discover the rest
+        one full round trip at a time — the same cascade the registry-level merge
+        removed ACROSS guards, here inside a single guard.
+
+        Safe to evaluate the whole set in one pass: every gate below only READS
+        state (no latch is written in this method; the latches `_graded_reading_
+        seen` / `_acceptance_observed` / `_oracle_exercised_seen` are written on
+        the step_done route, not here), so a full pass has no side effect to
+        preserve in order. The list keeps the original severity order, so a
+        caller that presents only the leader behaves exactly as before.
+        """
+        pending: list[GuardVerdict] = []
+        unfinished = self._unfinished_steps()
+        # Release through the SAME override bar the tool route uses (registry ->
+        # owner.accept_override; base default = reason longer than 5 chars), so
+        # the text and tool completion routes enforce an identically strong bar.
+        if unfinished and not self.accept_override(ctx.override_reason, ctx):
+            pending.append(GuardVerdict.block(
+                message=_COMPLETION_WITH_UNFINISHED_STEPS.format(
+                    steps=", ".join(str(s) for s in unfinished),
+                ),
+                reason="completion_with_unfinished_steps",
+                category="verification_required",
+            ))
+        # Acceptance-observation obligation (M4): a declared reading is not an
+        # OBSERVATION of the acceptance. NON-overridable: the exit is the ACTION
+        # of recording a real `acceptance_act`. The graded-reading arm is
+        # deliberately absent — the acceptance act strictly subsumes it at this
+        # boundary (see the step_done route for the per-step gate).
+        if (
+            not self._acceptance_observed
+            and _task_text_groundable(self._task_text())
+        ):
+            pending.append(GuardVerdict.block(
+                message=_COMPLETION_NO_ACCEPTANCE_OBSERVED,
+                reason="completion_without_acceptance_observation",
+                category="verification_required",
+                overridable=False,
+            ))
+        # Oracle-exercise obligation: binding an oracle at framing wrote an
+        # intended ACTION. NON-overridable: the exit is running that exercise.
+        if self._bound_oracle() and not self._oracle_exercised_seen:
+            pending.append(GuardVerdict.block(
+                message=_COMPLETION_ORACLE_NOT_EXERCISED,
+                reason="completion_without_oracle_exercise",
+                category="verification_required",
+                overridable=False,
+            ))
+        # Oracle-BIND obligation: 0/76 plans in a full TB2.1 run ever bound an
+        # oracle, closing on a purely self-authored verification. NON-overridable:
+        # the exit is binding one via plan_create(oracle={...}) and running it.
+        if (
+            not self._bound_oracle()
+            and _task_text_groundable(self._task_text())
+        ):
+            pending.append(GuardVerdict.block(
+                message=_COMPLETION_ORACLE_NOT_BOUND,
+                reason="completion_without_oracle_bound",
+                category="verification_required",
+                overridable=False,
+            ))
+        return pending
+
+    def check_all_pre(self, ctx: GuardContext) -> list[GuardVerdict]:
+        """Every unmet requirement at this decision point, not just the first.
+
+        Only the COMPLETION boundary evaluates several INDEPENDENT obligations at
+        one decision point (see _completion_obligations). Every other route this
+        guard covers is a single sequential pipeline over ONE declaration — the
+        step_done route already merges its own fixed fields via
+        _collect_fixed_field_failures — so those keep check_pre's first-failure
+        shape and this method delegates.
+        """
+        if self._at_task_complete(ctx):
+            return self._completion_obligations(ctx)
+        verdict = self.check_pre(ctx)
+        return [] if verdict is None else [verdict]
+
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         # Capture the oracle declaration the MOMENT a plan binds it, into a
         # per-RUN latch. The completion boundary must be able to see an oracle
@@ -2083,109 +2190,10 @@ class VerificationGuard(Guard):
         # (llm_responded=True). The top-of-loop check_pre also runs with
         # tool_name=="" every iteration to catch stale completions out of
         # history; requiring llm_responded keeps THIS arm off that stale scan.
-        if ctx.tool_name == "" and ctx.llm_responded:
-            # Only a [TASK_COMPLETE] claims the work is DONE; [NEED_USER_INPUT]
-            # is the opposite (the agent is stuck and asking) and must never be
-            # blocked by a closure rule. Mirror the kernel's EXACT completion
-            # predicate (kernel.py:378: `trailing == "[TASK_COMPLETE]" or
-            # has_override_completion(text)`) — a text-only completion has two
-            # shapes, and testing only the trailing one would leak the override
-            # form (marker + inline `_override_reason:` line, where text follows
-            # the marker so trailing_sentinel returns None).
-            _text = (ctx.assistant_text or "").rstrip()
-            _is_task_complete = (
-                trailing_sentinel(_text) == "[TASK_COMPLETE]"
-                or has_override_completion(_text)
-            )
-            if _is_task_complete:
-                unfinished = self._unfinished_steps()
-                # Release through the SAME override bar the tool route uses
-                # (registry -> owner.accept_override; base default = reason
-                # longer than 5 chars), so the text and tool completion routes
-                # enforce an identically strong bar rather than any non-empty
-                # string.
-                if unfinished and not self.accept_override(ctx.override_reason, ctx):
-                    return GuardVerdict.block(
-                        message=_COMPLETION_WITH_UNFINISHED_STEPS.format(
-                            steps=", ".join(str(s) for s in unfinished),
-                        ),
-                        reason="completion_with_unfinished_steps",
-                        category="verification_required",
-                    )
-                # Acceptance-observation obligation (M4: fires FIRST): a declared
-                # reading is not an OBSERVATION of the acceptance. When the task
-                # text is groundable and the agent never recorded an observed
-                # acceptance act (a real command+output, corpus-checked) or an
-                # explicit `unobservable` declaration, it must confront that gap
-                # before declaring done. NON-overridable (M2): the exit is the
-                # ACTION of recording a real `acceptance_act` (a run command +
-                # its observed output), always available. This is the R8 lever —
-                # semantic, no case list.
-                if (
-                    not self._acceptance_observed
-                    and _task_text_groundable(self._task_text())
-                ):
-                    return GuardVerdict.block(
-                        message=_COMPLETION_NO_ACCEPTANCE_OBSERVED,
-                        reason="completion_without_acceptance_observation",
-                        category="verification_required",
-                        overridable=False,
-                    )
-                # Graded-reading obligation at the boundary: SUPERSEDED by the
-                # acceptance-observation arm above (M4). The deliverable_reading
-                # gate is still enforced PER STEP by _check_deliverable_reading_
-                # field; at the COMPLETION boundary the acceptance act strictly
-                # subsumes it — a corpus-checked act that exercises the task's
-                # stated relation (coverage+metric, per _COMPLETION_NO_ACCEPTANCE_
-                # OBSERVED) is a stronger demand than enumerating readings. Measured
-                # (four_m3): requiring BOTH the full reading hedge AND the act at
-                # the wall cost ~3min of bookkeeping (11 direction_evidence
-                # mentions) while the act already carries the semantic content.
-                # So once the task text is groundable, the act arm above is the
-                # boundary exit; no separate graded-reading arm fires here.
-                # Oracle-exercise obligation: at framing the agent BOUND an
-                # independent oracle and wrote its FIRST runnable exercise — an
-                # intended ACTION. A declaration is not a look. When an oracle was
-                # bound this run and no corpus-backed `oracle_act` ever recorded
-                # that the exercise was RUN, the agent must exercise it before
-                # declaring done. NON-overridable (M2): the exit is the ACTION of
-                # running the bound oracle's first exercise (the agent authors it,
-                # so a runnable one is always available) and recording `oracle_act`.
-                # Fires ONLY when an oracle was actually bound.
-                if (
-                    self._bound_oracle()
-                    and not self._oracle_exercised_seen
-                ):
-                    return GuardVerdict.block(
-                        message=_COMPLETION_ORACLE_NOT_EXERCISED,
-                        reason="completion_without_oracle_exercise",
-                        category="verification_required",
-                        overridable=False,
-                    )
-                # Oracle-BIND obligation: the frame step mandates naming the oracle
-                # that will decide the task and classifying its EXTERNAL premise.
-                # Observed failure mode (0/76 plans in a full TB2.1 run ever bind):
-                # agents satisfy that mandate in PROSE on the frame step's
-                # verification note and never pass plan_create(oracle=...), so the
-                # bind->exercise->completion chain above is dead by construction and
-                # the agent closes on a purely self-authored verification. When the
-                # task text is groundable and NO oracle was ever bound this run, the
-                # agent must confront that gap before declaring done: bind an
-                # external-premise oracle (and run its first exercise) OR record an
-                # explicit record of the gap. NON-overridable (M2): the exit is the
-                # ACTION of binding an oracle via plan_create(oracle={...}) (any
-                # non-empty dict latches; plan_create pauses the old plan and
-                # creates a new one) and then running its first exercise.
-                if (
-                    not self._bound_oracle()
-                    and _task_text_groundable(self._task_text())
-                ):
-                    return GuardVerdict.block(
-                        message=_COMPLETION_ORACLE_NOT_BOUND,
-                        reason="completion_without_oracle_bound",
-                        category="verification_required",
-                        overridable=False,
-                    )
+        if self._at_task_complete(ctx):
+            _pending = self._completion_obligations(ctx)
+            if _pending:
+                return _pending[0]
             return None
 
         # Timing 0: acceptance is frozen once a step leaves "pending".
