@@ -59,6 +59,16 @@ def test_prompt_requires_named_tool_default_path():
     assert "do not deliver the other one" in low
 
 
+def test_prompt_requires_obtaining_the_real_grader():
+    """A reachable grader beats any reconstruction of it; state the fallback order."""
+    low = _prompt_low()
+    assert "can i obtain the grader instead of guessing it" in low
+    # must name the concrete artifacts to look for, not just "look for it"
+    assert "tests/ directory" in low and "official solution script" in low
+    # must state the ORDER: real grader first, diff-two-definitions only as fallback
+    assert "only when no such artifact is reachable" in low
+
+
 def test_quantity_clauses_stay_generic():
     """No originating-task specifics may leak into the generic prompt."""
     low = _prompt_low()
