@@ -184,3 +184,56 @@ class TestBlockMessage:
             assert r in msg
         for key in ("constraints", "quote", "command", "observed"):
             assert key in msg
+
+
+# ── M12: the copy-paste starters in the message must themselves be valid ────
+
+def test_message_carries_copy_paste_starters():
+    """The missing-field message must contain complete, copyable examples.
+
+    A description of the shape forces the model to compose the object; a full
+    starter it can copy and edit removes that failure mode. This test pins the
+    presence of all three starters so the guidance cannot silently regress.
+    """
+    from flagscale_agent.react.guard.verification import _DELIVERABLE_READING_MISSING
+    assert "COPY-PASTE STARTERS" in _DELIVERABLE_READING_MISSING
+    for marker in ('deliverable_reading={"deliverable": "none"}',
+                   '"shape": "union"',
+                   '"shape": "intersection"'):
+        assert marker in _DELIVERABLE_READING_MISSING, marker
+
+
+def test_copy_paste_starters_are_accepted_by_the_real_checker():
+    """Each starter, filled in, must PASS the guard — guidance must not lie."""
+    from flagscale_agent.react.guard import verification as V
+    corpus = " ".join(
+        "files differ\nPASS rescale\nnormalized ref observed\n"
+        "normalized cand observed\n".split()).lower()
+    starters = [
+        {"deliverable": "none"},
+        {"deliverable": "/app/out.txt", "grader_visible": False,
+         "readings": [{"reading": "raw bytes", "source": "q",
+                       "acceptance_test": "cmp a b",
+                       "normalized_side": "neither"}],
+         "hedge": {"shape": "union", "output": "x",
+                   "evidence": {"command": "cmp a b",
+                                "observed": "files differ"},
+                   "extras_direction": "ignored"}},
+        {"deliverable": "/app/out.npy", "grader_visible": False,
+         "readings": [{"reading": "rescale", "source": "q1",
+                       "acceptance_test": "c1", "normalized_side": "both"},
+                      {"reading": "raw", "source": "q2",
+                       "acceptance_test": "c2", "normalized_side": "candidate"}],
+         "hedge": {"shape": "intersection", "output": "y",
+                   "evidence": {"command": "c1 && c2",
+                                "observed": "PASS rescale"},
+                   "extras_direction": "penalized",
+                   "direction_evidence": {
+                       "reference": {"command": "n1",
+                                     "observed": "normalized ref observed"},
+                       "candidate": {"command": "n2",
+                                     "observed": "normalized cand observed"}}}},
+    ]
+    for dr in starters:
+        res = V._check_deliverable_reading_field(dr, task_text="", observed=corpus)
+        assert res is None, f"starter rejected: {res.reason if res else ''}"

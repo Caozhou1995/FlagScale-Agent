@@ -791,7 +791,51 @@ an explicit owned claim). One fixed shape:
                 "why_safe": "<why betting is safe>"}
   }
 
-Missing field = malformed = BLOCKED. See the spec for the sub-rules."""
+Missing field = malformed = BLOCKED. See the spec for the sub-rules.
+
+COPY-PASTE STARTERS — the three shapes, complete and valid. Replace the
+angle-bracket values; keep every key. Copying one of these and editing the
+values is faster and safer than composing the object from the description.
+
+  # A. this step emits no graded artifact
+  deliverable_reading={"deliverable": "none"}
+
+  # B. grader invisible, ONE reading, union hedge over an output both accept
+  deliverable_reading={
+    "deliverable": "/app/out.txt",
+    "grader_visible": false,
+    "readings": [{"reading": "the checker compares the raw file bytes",
+                  "source": "<paste the task sentence that says this>",
+                  "acceptance_test": "cmp /app/out.txt /app/expected.txt",
+                  "normalized_side": "neither"}],
+    "hedge": {"shape": "union",
+              "output": "<the exact bytes you will ship>",
+              "evidence": {"command": "cmp /app/out.txt /app/expected.txt",
+                           "observed": "<the command's RAW output>"},
+              "extras_direction": "ignored"}}
+
+  # C. grader invisible, two readings that DISAGREE -> intersection only
+  deliverable_reading={
+    "deliverable": "/app/out.npy",
+    "grader_visible": false,
+    "readings": [{"reading": "checker rescales both sides",
+                  "source": "<paste the task sentence that says this>",
+                  "acceptance_test": "python check.py --rescale",
+                  "normalized_side": "both"},
+                 {"reading": "checker compares raw values, no rescale",
+                  "source": "<paste the second task sentence>",
+                  "acceptance_test": "python check.py --raw",
+                  "normalized_side": "candidate"}],
+    "hedge": {"shape": "intersection",
+              "output": "<the exact artifact you will ship>",
+              "evidence": {"command": "python check.py --rescale && python check.py --raw",
+                           "observed": "<the command's RAW output>"},
+              "extras_direction": "penalized",
+              "direction_evidence": {
+                "reference": {"command": "<normalize the REFERENCE, compare the RAW candidate>",
+                              "observed": "<that command's RAW output>"},
+                "candidate": {"command": "<normalize the CANDIDATE, compare the RAW reference>",
+                              "observed": "<that command's RAW output>"}}}}"""
 
 _DELIVERABLE_READING_MALFORMED = """[VerificationGuard] The `deliverable_reading` declaration is malformed.
 
