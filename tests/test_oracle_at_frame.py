@@ -437,6 +437,10 @@ class TestOracleExerciseCompletionArm:
         g = VerificationGuard(plan=tp)
         obs = "diff.py: 0 differing lines"
         ctx = self._ctx(corpus_obs=obs)
+        # the topical relation is read by the judge (no token overlap); stub it
+        # so the exercise is affirmable without an LLM, exactly as production
+        # passes ctx.judge.
+        ctx.judge = _StubJudge(same=True)
         ctx.tool_name = "plan_update"
         ctx.tool_args = {
             "action": "step_done", "step_id": 1,
@@ -518,22 +522,62 @@ class TestOracleArmNotDisarmableByPlanMutation:
         assert v is not None and v.reason == "completion_without_oracle_exercise"
 
 
+class _StubJudge:
+    """Affirms/refuses the prose relation without an LLM (semantic half stub)."""
+
+    def __init__(self, same: bool):
+        self._same = same
+
+    def classify(self, category, payload, default=None):
+        return self._same
+
+
 class TestOracleExerciseTopicalRelation:
     """Regression (review F2): the recorded command must relate to the declared
     first_exercise -- an unrelated command with any corpus-backed output must not
-    latch the "exercise" (which would make the label meaningless)."""
+    latch the "exercise" (which would make the label meaningless).
+
+    The relation is SEMANTIC, so it is read by the judge (no token overlap -- that
+    was the earlier implementation the user ruled out). These tests therefore
+    inject a stub judge; the no-judge path is fail-CLOSED and covered explicitly
+    below.
+    """
 
     def test_unrelated_command_is_refused(self):
         corpus = _normalize_for_grounding("Plan created.\n\nFOUND: 42")
         assert not _oracle_exercised(
             {"command": "python diff.py", "observed": "Plan created."},
-            corpus, "pytest tests/test_x.py")
+            corpus, "pytest tests/test_x.py", _StubJudge(same=False))
 
     def test_related_command_is_allowed(self):
         corpus = _normalize_for_grounding("ran ok\nFOUND: 42")
         assert _oracle_exercised(
             {"command": "pytest tests/test_x.py -q", "observed": "FOUND: 42"},
-            corpus, "pytest tests/test_x.py -q")
+            corpus, "pytest tests/test_x.py -q", _StubJudge(same=True))
+
+    def test_no_judge_fails_closed(self):
+        """A CERTIFYING predicate must not pass when the relation is unreadable.
+
+        Accepting here would let any corpus-backed command latch the exercise
+        whenever no judge is configured, i.e. the gate disappears exactly when
+        the machinery is degraded. Fail-closed is the only direction that cannot
+        produce a false PASS.
+        """
+        corpus = _normalize_for_grounding("ran ok\nFOUND: 42")
+        assert not _oracle_exercised(
+            {"command": "pytest tests/test_x.py -q", "observed": "FOUND: 42"},
+            corpus, "pytest tests/test_x.py -q", None)
+
+    def test_dead_judge_fails_open(self):
+        """The JUDGE dying is not the agent's fault -> keep the arm open."""
+        class _Boom:
+            def classify(self, *a, **k):
+                raise RuntimeError("provider down")
+
+        corpus = _normalize_for_grounding("ran ok\nFOUND: 42")
+        assert _oracle_exercised(
+            {"command": "pytest tests/test_x.py -q", "observed": "FOUND: 42"},
+            corpus, "pytest tests/test_x.py -q", _Boom())
 
     def test_missing_oracle_exercise_fails_open(self):
         corpus = _normalize_for_grounding("FOUND: 42")

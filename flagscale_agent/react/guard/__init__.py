@@ -65,9 +65,16 @@ class GuardContext:
     # The unified LLM judge (flagscale_agent.react.judge.Judge). Guards use it
     # for the SEMANTIC half of a check -- reading prose that has no fixed shape
     # (e.g. "which requirements does this statement state?", "which requirement
-    # does this claim address?"). None when no provider is configured; every
-    # caller must fail open on None so a dead provider cannot manufacture a
-    # block.
+    # does this claim address?").
+    #
+    # None when no provider is configured. The DIRECTION of the fallback depends
+    # on what the predicate asserts, and the two must not be confused:
+    #   * A predicate that DECIDES TO BLOCK (a refusal) fails OPEN on None -- a
+    #     dead reader must not manufacture a block, or the agent livelocks.
+    #   * A predicate that CERTIFIES a fact ("the oracle was exercised", "the
+    #     requirement is covered") fails CLOSED on None -- an unreadable relation
+    #     is not evidence, and a false PASS destroys the label's meaning.
+    # A caller must therefore state which shape it implements.
     judge: Any = None
 
     # Override reason from LLM

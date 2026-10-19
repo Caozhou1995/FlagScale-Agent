@@ -1406,18 +1406,25 @@ def _oracle_exercised(act, observed, first_exercise=None, judge=None) -> bool:
         return False
     if _is_real_str(first_exercise):
         if judge is None:
-            pass  # fail open: no reader for the prose relation
-        else:
-            try:
-                same = judge.classify(
-                    "acts_on_same_subject",
-                    {"first_exercise": first_exercise, "action": act["command"]},
-                    default=True,
-                )
-            except Exception:
-                same = True  # fail open: a dead judge must not manufacture a block
-            if same is False:
-                return False
+            # FAIL CLOSED: with no reader for the prose relation we cannot tell
+            # whether the recorded command is the declared exercise, so we do
+            # NOT claim it was exercised. A verification predicate must not
+            # produce a false PASS; refusing keeps the label meaningful. Every
+            # production call site passes ctx.judge (agent.py builds one
+            # unconditionally), so this arm only fires on the test/degraded path.
+            return False
+        try:
+            same = judge.classify(
+                "acts_on_same_subject",
+                {"first_exercise": first_exercise, "action": act["command"]},
+                default=True,
+            )
+        except Exception:
+            # A dead judge must not manufacture a block: keep this arm open,
+            # because the failure mode here is the JUDGE, not the agent.
+            same = True
+        if same is False:
+            return False
     return _evidence_observed(act, observed)
 
 
