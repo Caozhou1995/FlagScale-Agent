@@ -2331,7 +2331,7 @@ class VerificationGuard(Guard):
                         return GuardVerdict.block(
                             _completion_constraint_coverage_missing(_miss),
                             reason="acceptance_constraint_coverage_missing",
-                            slug="acceptance_constraint_coverage_missing",
+                            category="verification_required",
                         )
                     self._acceptance_observed = True
                 if _oracle_exercised(
