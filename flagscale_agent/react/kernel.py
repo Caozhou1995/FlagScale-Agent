@@ -315,6 +315,31 @@ class AgentKernel:
                         thinking_text = response.get("thinking") or ""
                         was_reasoning_only = bool(thinking_text.strip())
                         was_thinking_capped = bool(response.get("thinking_capped"))
+                        # ── Output saturation with no visible text ──
+                        # A reasoning model can burn the ENTIRE output budget on
+                        # one monolithic thinking stream, then be cut off before
+                        # emitting any visible text. Structurally this is the SAME
+                        # event as a runtime thinking cap (a stream hit the
+                        # ceiling), but `thinking_capped` is only ever set by
+                        # providers that surface it -- an anthropic-compat
+                        # endpoint does not (observed: 0 cap trips across a
+                        # whole trial whose single call reported ↓65,536).
+                        # Without this, the saturation fell into the
+                        # "reasoning produced content" branch, which re-injects
+                        # the FULL ~20k-token reasoning with a RESUME directive
+                        # ("continue where you left off") -- actively feeding the
+                        # monolithic stream that exhausted the budget, and the
+                        # M5 saturation guard is unreachable from that path (it
+                        # sits after the `continue`). Detect it by the only
+                        # signal that is always available: the token counter.
+                        _sat_max = getattr(d.config, "max_output_tokens", 0) or 0
+                        was_saturated = bool(
+                            _sat_max > 0
+                            and out_tok >= 0.95 * _sat_max
+                            and not assistant_text.strip()
+                        )
+                        if was_saturated:
+                            was_thinking_capped = True
                         # SEPARATE BUDGETS: a cap-trip is a PACING event, not a
                         # failure — the model still produced (thinking) output
                         # and each retry is already bounded by the cap itself
@@ -366,19 +391,60 @@ class AgentKernel:
                             # CONVERGENCE, not resume: the model must land
                             # its next concrete step now — segmented
                             # reasoning beats one 20-minute thought.
-                            nudge = (
-                                "[system: your reasoning reached its runtime length cap and was stopped. "
-                                "Your reasoning so far is reproduced below — do NOT continue it. "
-                                "Land the next concrete step NOW: either call a tool to test your "
-                                "next hypothesis, or output your answer. Deep problems are solved "
-                                "stepwise; experiments beat more thinking. Before that next step, "
-                                "write_file a note or memory_write the delivery contract this "
-                                "reasoning already fixed (deliverable path, format, constraints) — "
-                                "this block is dropped from context on your next call.]\n\n"
-                                "<previous_reasoning>\n"
-                                f"{thinking_text}\n"
-                                "</previous_reasoning>"
-                            )
+                            #
+                            # Saturation case: the reasoning ALREADY ate the
+                            # whole output budget once. Re-injecting all of it
+                            # spends the next call's input budget re-reading the
+                            # same dead stream and invites an identical
+                            # continuation, so keep only a bounded tail as a
+                            # recap and count the repeat.
+                            if was_saturated:
+                                self._saturated_text_streak = (
+                                    getattr(self, "_saturated_text_streak", 0) + 1
+                                )
+                                _recap = thinking_text[-4000:] if len(thinking_text) > 4000 else thinking_text
+                                _repeat = getattr(self, "_saturated_text_streak", 0)
+                                nudge = (
+                                    "[system: your reasoning consumed the ENTIRE output budget "
+                                    f"({out_tok} of {_sat_max} tokens) and was cut off before producing "
+                                    "any visible text or tool call. This is not a pause -- the stream "
+                                    "hit the hard ceiling and every further attempt to continue it will "
+                                    "be cut at the same point.\n"
+                                    f"This is occurrence #{_repeat} in this turn.\n"
+                                    "DO NOT reason further about the problem. Do exactly ONE of these NOW, "
+                                    "in your very next output:\n"
+                                    "  1. Call the single tool that tests your strongest remaining "
+                                    "hypothesis (write_file / shell / web_fetch), or\n"
+                                    "  2. Write the deliverable with what you already know, or\n"
+                                    "  3. Output [NEED_USER_INPUT] with the specific question blocking you.\n"
+                                    "Any output that consists only of reasoning will be discarded again.\n\n"
+                                    f"<recap_of_discarded_reasoning_tail>\n{_recap}\n"
+                                    "</recap_of_discarded_reasoning_tail>"
+                                )
+                                if _repeat >= 2:
+                                    nudge = (
+                                        "[system: HARD STOP. You have now saturated the output budget "
+                                        f"{_repeat} times in this turn without emitting a single tool call "
+                                        "or any visible text. Reasoning cannot solve this -- it is "
+                                        "mechanically cut off. Your next message MUST contain a tool call. "
+                                        "Start with the cheapest useful action: `shell` to inspect the "
+                                        "environment, or `write_file` to persist what you already derived. "
+                                        "Do not explain, do not plan, do not reason -- emit the tool call."
+                                    )
+                            else:
+                                nudge = (
+                                    "[system: your reasoning reached its runtime length cap and was stopped. "
+                                    "Your reasoning so far is reproduced below — do NOT continue it. "
+                                    "Land the next concrete step NOW: either call a tool to test your "
+                                    "next hypothesis, or output your answer. Deep problems are solved "
+                                    "stepwise; experiments beat more thinking. Before that next step, "
+                                    "write_file a note or memory_write the delivery contract this "
+                                    "reasoning already fixed (deliverable path, format, constraints) — "
+                                    "this block is dropped from context on your next call.]\n\n"
+                                    "<previous_reasoning>\n"
+                                    f"{thinking_text}\n"
+                                    "</previous_reasoning>"
+                                )
                         elif was_reasoning_only:
                             # Many providers (e.g. GLM Anthropic-compat endpoint)
                             # DROP assistant thinking blocks from the input, so

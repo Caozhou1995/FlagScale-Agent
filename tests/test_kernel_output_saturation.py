@@ -238,11 +238,94 @@ def test_run_turn_short_text_only_streak_injects_hard_directive():
     assert "NO tool call and NO stop signal" in joined
 
 
-def test_tool_turn_resets_text_only_streak():
-    """A real tool call resets the text-only streak to zero."""
-    resp = [{"content": "", "tool_calls": [{"id": "1", "name": "shell", "arguments": {}}],
-             "_out_tokens": 5}]
-    k, _, _ = _make_kernel(resp, max_output_tokens=100)
-    k._consecutive_text_only = 5
+# ── M11: saturated REASONING-ONLY response (no visible text at all) ──────────
+#
+# The real failure (jobs/ds1017_m10/model-extraction, HEAD=1c7ed76): a single
+# call reported `632.7s | ↑20,616 | ↓65,536` — the whole output budget went to
+# one monolithic thinking stream that was cut off before emitting any visible
+# text or tool call. Because `assistant_text` was empty, control went to the
+# EMPTY-OUTPUT branch, which treated it as "reasoning produced content" and
+# re-injected the full ~20k-token reasoning with a RESUME directive, actively
+# feeding the stream; M5's saturation guard sits after that branch's `continue`
+# and was therefore unreachable. These tests pin the corrected routing.
+
+def _thinking_only(out_tokens, text="a very long monolithic chain of thought " * 50):
+    """A reasoning-only response: thinking content, no visible text, no tools."""
+    return {"content": "", "tool_calls": None, "thinking": text,
+            "_out_tokens": out_tokens}
+
+
+def _all_injected(history):
+    return "\n".join(m.get("content", "") for m in history.messages
+                     if isinstance(m.get("content"), str))
+
+
+def test_saturated_reasoning_only_routes_to_convergence_not_resume():
+    """Saturated thinking-only call must NOT get the resume directive.
+
+    Falsifier for the real defect: before the fix this asserted-failing branch
+    was the only one reachable, and its message told the model to "resume from
+    where it left off" — the exact behaviour that re-fuels the dead stream.
+    """
+    resp = [_thinking_only(100), _thinking_only(100)]
+    k, history, _ = _make_kernel(resp, max_output_tokens=100)
     k.run_turn()
-    assert k._consecutive_text_only == 0
+    joined = _all_injected(history)
+    assert "consumed the ENTIRE output budget" in joined
+    # the old (wrong) path's directive must be gone
+    assert "resume from where it left off" not in joined
+
+
+def test_saturated_reasoning_only_repeats_escalate_to_hard_directive():
+    """A second saturated thinking-only call escalates to the HARD STOP form."""
+    resp = [_thinking_only(100) for _ in range(3)]
+    k, history, _ = _make_kernel(resp, max_output_tokens=100)
+    k.run_turn()
+    joined = _all_injected(history)
+    assert "HARD STOP" in joined
+    assert "MUST contain a tool call" in joined
+    assert k._saturated_text_streak >= 2
+
+
+def test_unsaturated_reasoning_only_keeps_resume_path():
+    """Below the ceiling, a reasoning-only response is still a normal retry.
+
+    Guards against over-reach: the convergence directive must be reserved for
+    genuine saturation, not for every reasoning-only response.
+    """
+    resp = [_thinking_only(10), _thinking_only(10)]
+    k, history, _ = _make_kernel(resp, max_output_tokens=100)
+    k.run_turn()
+    joined = _all_injected(history)
+    assert "consumed the ENTIRE output budget" not in joined
+    assert "reasoning but no visible output" in joined
+
+
+def test_saturation_leaves_no_full_reasoning_in_context():
+    """The dead stream must not be re-injected whole (input budget waste)."""
+    big = "REASONING_MARKER " * 2000  # -> truncated to a bounded tail
+    resp = [{"content": "", "tool_calls": None, "thinking": big, "_out_tokens": 100},
+            _thinking_only(100)]
+    k, history, _ = _make_kernel(resp, max_output_tokens=100)
+    k.run_turn()
+    injected = [m.get("content", "") for m in history.messages
+                if isinstance(m.get("content"), str)]
+    sat_msgs = [c for c in injected if "consumed the ENTIRE output budget" in c]
+    assert sat_msgs, "saturation directive must be injected"
+    assert all(len(c) < 6000 for c in sat_msgs), \
+        "the discarded reasoning must be re-injected as a bounded recap only"
+
+
+def test_saturated_reasoning_only_does_not_count_as_text_only_continuation():
+    """Saturation is handled before the text-only bookkeeping.
+
+    The two counters must stay independent: saturation escalates through
+    _saturated_text_streak, not through the mode-B text-only streak.
+    """
+    resp = [_thinking_only(100) for _ in range(3)]
+    k, history, _ = _make_kernel(resp, max_output_tokens=100)
+    k.run_turn()
+    assert getattr(k, "_consecutive_text_only", 0) == 0
+    joined = _all_injected(history)
+    assert "NO tool call and NO stop signal" not in joined
+
