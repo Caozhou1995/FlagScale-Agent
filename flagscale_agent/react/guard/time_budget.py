@@ -98,12 +98,33 @@ class TimeBudgetGuard(Guard):
         """
         self._stats_fn = stats_fn
         self._fired: set[int] = set()
+        # Thresholds crossed while building a block that the registry may NOT
+        # surface (a harder block won the same resolve). Kept separately from
+        # _fired so block_not_surfaced() can hand them back: a nag the agent never
+        # saw has not been delivered, so spending it would silently disable the
+        # ONLY hard convergence point of the turn. Observed failure: at 91.7% a
+        # rank-1 VerificationGuard block outranked this one on every call, 90 was
+        # marked fired anyway, and the agent ran 6m34s past the 80% wrap-up with
+        # no 90% gate ever reaching it.
+        self._pending_block_fired: set[int] = set()
 
     def reset_turn(self):
         # A new user message restarts the per-turn wall-clock accounting on the
         # agent side (self._turn_start is re-stamped), so clear which thresholds
         # we have already announced.
         self._fired = set()
+        self._pending_block_fired = set()
+
+    def block_not_surfaced(self):
+        """Hand back thresholds consumed while building a block that never surfaced.
+
+        The registry calls this for every guard whose block was outranked by a
+        harder one in the same resolve. Those thresholds were never delivered to
+        the agent, so they must be re-armable — otherwise the 90% gate is dead for
+        the remainder of the turn while the wall-clock keeps draining.
+        """
+        self._fired -= self._pending_block_fired
+        self._pending_block_fired = set()
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         """Block at 90%+ budget to force explicit deliverable reasoning.
@@ -141,9 +162,11 @@ class TimeBudgetGuard(Guard):
         if 90 <= pct < 100 and 90 not in self._fired:
             # Mark ALL crossed thresholds as spent, preventing check_post from
             # re-injecting lower advisories and preventing this block from re-firing.
-            for t in self._THRESHOLDS:
-                if pct >= t:
-                    self._fired.add(t)
+            # Record them as PENDING as well: if the registry outranks this block
+            # with a harder one, block_not_surfaced() returns them so the gate can
+            # still fire later in the turn instead of dying unseen.
+            self._pending_block_fired = {t for t in self._THRESHOLDS if pct >= t}
+            self._fired |= self._pending_block_fired
             
             elapsed = _fmt(stats.get("elapsed", 0.0))
             remaining = _fmt(stats.get("remaining", 0.0))
