@@ -1071,6 +1071,17 @@ class WorkerAgent:
     _MECH_LAST_TURN_CAP = 2000
     _MECH_LAST_TURN_DEPTH = 5
 
+    # Intra-stream degenerate-repeat detection (see _call_llm_stream). A single
+    # response can emit an unbounded cycle of filler lines inside its THINKING
+    # channel, which the kernel's per-response window cannot see. Calibrated on
+    # a real trial: the degenerate region shows 6 distinct lines in a 16-line
+    # window (longest 18 chars) while genuine reasoning shows 16 distinct in the
+    # same window (longest 583 chars). The bound is 8, not 6, so that a balanced
+    # 8-phrase cycle (the same dead loop with more filler variety) is caught too
+    # without reaching genuine reasoning's 16. 0 disables.
+    INTRA_STREAM_REPEAT_WINDOW = 16
+    INTRA_STREAM_REPEAT_DISTINCT_MOST = 8
+
     def _mech_original_task(self) -> str:
         """First user turn of the session = the original task text, verbatim.
 
@@ -2135,6 +2146,25 @@ class WorkerAgent:
         cap_budget = getattr(self.config, "thinking_budget", 0) or 0
         thinking_counter = ThinkingCapCounter()
 
+        # ── Intra-stream degenerate-repeat breaker (thinking channel) ──
+        # The kernel's windowed repeat detector sees ONE fingerprint per
+        # RESPONSE (assistant content), so it is blind to a model that
+        # degenerates INSIDE a single response. Measured on a real trial: the
+        # visible log reached 9382 lines whose tail 1000 held `OK.` x250 /
+        # `Go.` x250 / `Let me run.` x249 / `Running.` x125 with ZERO tool
+        # calls and ZERO turn boundaries — one unbounded THINKING stream
+        # emitting a 4-line cycle. The kernel saw a single response, nothing
+        # fired, and the wall burned to the deadline with no deliverable.
+        # Calibrated on that log: the degenerate region shows <=6 distinct
+        # non-empty lines in a 16-line window (longest line 18 chars), while
+        # genuine reasoning shows 16 distinct in the same window (longest line
+        # 583 chars). 0 disables.
+        _intra_window = self.INTRA_STREAM_REPEAT_WINDOW
+        _intra_distinct_max = self.INTRA_STREAM_REPEAT_DISTINCT_MOST
+        _intra_lines = []
+        _intra_buf = ""
+        intra_degenerate = False
+
         stream = retry_with_backoff(
             lambda: self.provider.chat_stream(messages, schemas),
             max_retries=3,
@@ -2239,6 +2269,40 @@ class WorkerAgent:
                         if not thinking_capped and not content_parts and not tool_calls:
                             thinking_counter.add(event["content"])
                             capped_now, _capped_at = thinking_counter.state(cap_budget)
+                            # ── Intra-stream degenerate-repeat breaker ──
+                            # Detect an unbounded filler cycle inside ONE
+                            # thinking stream, per completed line, and abort it
+                            # instead of letting it consume the wall clock.
+                            if _intra_window > 0:
+                                _intra_buf += event["content"]
+                                while "\n" in _intra_buf:
+                                    _ln, _intra_buf = _intra_buf.split("\n", 1)
+                                    _ln = " ".join(_ln.split())[:200]
+                                    if not _ln:
+                                        continue
+                                    _intra_lines.append(_ln)
+                                    if len(_intra_lines) > _intra_window:
+                                        del _intra_lines[:-_intra_window]
+                                    if (len(_intra_lines) >= _intra_window
+                                            and len(set(_intra_lines))
+                                            <= _intra_distinct_max):
+                                        intra_degenerate = True
+                                        break
+                                if intra_degenerate:
+                                    if display.thinking_enabled():
+                                        display._write(
+                                            display.dim(
+                                                "\n[intra-stream degenerate repeat "
+                                                f"detected ({_intra_window} lines, "
+                                                f"{len(set(_intra_lines))} distinct)"
+                                                " — aborting this stream]"
+                                            )
+                                        )
+                                    try:
+                                        stream.close()
+                                    except Exception:
+                                        pass
+                                    break
                             if capped_now:
                                 thinking_capped = True
                                 reasoning_only = True
