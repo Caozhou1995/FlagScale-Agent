@@ -345,6 +345,15 @@ class AgentKernel:
                         thinking_text = response.get("thinking") or ""
                         was_reasoning_only = bool(thinking_text.strip())
                         was_thinking_capped = bool(response.get("thinking_capped"))
+                        # The stream was aborted BY US for an intra-stream
+                        # degenerate repeat. That is not a pause and not an
+                        # empty output: the reasoning text IS the filler. Treat
+                        # it as its own event so we neither re-inject the
+                        # filler (which re-feeds the loop) nor charge the
+                        # empty-output budget that ends the turn.
+                        was_intra_degenerate = bool(response.get("intra_degenerate"))
+                        if was_intra_degenerate:
+                            was_thinking_capped = False
                         # ── Output saturation with no visible text ──
                         # A reasoning model can burn the ENTIRE output budget on
                         # one monolithic thinking stream, then be cut off before
@@ -383,7 +392,23 @@ class AgentKernel:
                         # (per turn) instead of the 3-strike empty budget.
                         cap_retries = getattr(self, "_cap_retries", 0)
                         empty_retries = getattr(self, "_empty_output_retries", 0)
-                        if was_thinking_capped:
+                        intra_retries = getattr(self, "_intra_degen_retries", 0)
+                        if was_intra_degenerate:
+                            # Own generous-but-bounded counter: the abort is a
+                            # healthy intervention, so it must NOT consume the
+                            # empty-output budget. Only a model that degenerates
+                            # over and over ends the turn.
+                            if intra_retries >= 4:
+                                self._intra_degen_retries = 0
+                                result.stop_reason = "intra_degenerate_max_retries"
+                                break
+                            self._intra_degen_retries = intra_retries + 1
+                            d.display.warn(
+                                "Degenerate repeat inside the reasoning stream "
+                                f"(recovery {self._intra_degen_retries}/4) — "
+                                "demanding a tool call..."
+                            )
+                        elif was_thinking_capped:
                             if cap_retries >= 50:
                                 self._cap_retries = 0
                                 result.stop_reason = "thinking_cap_max_retries"
@@ -412,7 +437,28 @@ class AgentKernel:
                         # pop_last_assistant() which mutates _messages for real.
                         d.history.pop_last_assistant()
                         # Inject a targeted nudge
-                        if was_thinking_capped:
+                        if was_intra_degenerate:
+                            # Do NOT reproduce the degenerate text: it is pure
+                            # filler and re-sending it invites the same loop.
+                            # Demand one concrete tool call instead.
+                            _intra_n = getattr(self, "_intra_degen_retries", 1)
+                            nudge = (
+                                "[system: your reasoning stream entered a degenerate "
+                                "repeat loop and was aborted mid-stream. The text you "
+                                "produced was filler (short phrases repeated with no "
+                                "progress), so it has been discarded.\n"
+                                f"This is occurrence #{_intra_n} in this turn.\n"
+                                "Your very next message MUST contain ONE tool call — no "
+                                "prose, no plan, no repeated phrases. Pick the single most "
+                                "useful action you were about to take and DO it now:\n"
+                                "  1. `write_file` the deliverable (or the next section of "
+                                "it) at its required path with what you already know, or\n"
+                                "  2. `shell` the one command that tests your strongest "
+                                "remaining hypothesis, or\n"
+                                "  3. output [NEED_USER_INPUT] with the specific question "
+                                "blocking you."
+                            )
+                        elif was_thinking_capped:
                             # The runtime cap aborted a monolithic thinking
                             # stream. Same re-injection as the resume path
                             # (assistant thinking blocks are dropped by the
@@ -498,6 +544,7 @@ class AgentKernel:
                     else:
                         self._empty_output_retries = 0
                         self._cap_retries = 0
+                        self._intra_degen_retries = 0
 
                     # Detect completion signals. Use end-anchored matching to
                     # distinguish a real sentinel (trailing the text) from a
@@ -700,6 +747,7 @@ class AgentKernel:
                 self._consecutive_text_only = 0  # Reset: tools were executed
                 self._consecutive_saturated = 0  # M5: a real action resets the streak
                 self._recent_assistant_fps = []  # tools ran: not a dead loop
+                self._intra_degen_retries = 0  # tools ran: recovery succeeded
                 self._consecutive_completion_blocks = 0  # progress made; reset breaker
 
                 # ── Execute tools ──

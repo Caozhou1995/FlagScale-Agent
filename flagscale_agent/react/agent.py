@@ -2404,7 +2404,7 @@ class WorkerAgent:
             if not parsed_tool_calls:
                 parsed_tool_calls = None
 
-        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated, "reasoning_only": reasoning_only, "thinking_capped": thinking_capped, "thinking": thinking_text or None, "signature": thinking_signature or None}, usage
+        return {"content": "".join(content_parts) or None, "tool_calls": parsed_tool_calls, "truncated": stream_truncated, "reasoning_only": reasoning_only, "thinking_capped": thinking_capped, "intra_degenerate": intra_degenerate, "thinking": thinking_text or None, "signature": thinking_signature or None}, usage
 
     # ── Tool execution (delegated to ToolExecutor) ──────────────────────────
 
