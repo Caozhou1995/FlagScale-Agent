@@ -2225,38 +2225,42 @@ class VerificationGuard(Guard):
                 # enough", "this value is current", a convenient reading of a term),
                 # and that re-interpretation only surfaces at finalize time. Firing
                 # once (not every step) keeps it a genuine checkpoint, not noise.
-                # Fires ahead of the Mode 1/2 evidence checks so the agent re-reads
-                # its premises before writing the verification it will be judged on.
-                if not self._step_done_recheck_reminded:
-                    if not override_reason:
-                        return GuardVerdict.block(
-                            message=_STEP_DONE_RECHECK_REMINDER,
-                            reason="step_done_premise_recheck",
-                            category="verification_required",
-                        )
-                    # Override provided → agent paused to re-check. Release for good,
-                    # then fall through to the Mode 1/2 evidence checks below: the
-                    # re-check does not exempt the step from still carrying evidence.
+                #
+                # MERGED REPORTING (M13): this check no longer returns on its own.
+                # It is evaluated together with the Mode 1/2 evidence check and the
+                # three fixed-field declarations, and ALL unmet ones are reported in
+                # ONE message. Rationale is the measured M8 lesson: the model can
+                # only fix what it is told about, and every round trip is a full
+                # model call, so short-circuiting turns a purely mechanical shape
+                # error into a guess→block→guess loop (measured: four sequential
+                # blocks on a single step_done). Nothing is weakened — every check
+                # still blocks exactly as before, and any unmet one still blocks the
+                # whole call; only the reporting is merged.
+                if not self._step_done_recheck_reminded and override_reason:
+                    # Override provided → agent paused to re-check. Release for
+                    # good (content is never checked), and do not exempt the step
+                    # from still carrying evidence — the Mode 1/2 and fixed-field
+                    # checks below still apply.
                     self._step_done_recheck_reminded = True
-                
+
                 # Get step's acceptance criteria if plan is available
                 acceptance = self._step_acceptance(step_id)
-                
+
                 # Mode 1: Step has acceptance → require verification list
+                # Mode 2: No acceptance (simple step) → require override_reason
+                _mode_bad = None
                 if acceptance:
                     if not verification:
-                        msg = _VERIFICATION_REQUIRED_WITH_ACCEPTANCE.format(
-                            acceptance="\n".join(f"  • {a}" for a in acceptance)
-                        )
-                        return GuardVerdict.block(
-                            message=msg,
+                        _mode_bad = GuardVerdict.block(
+                            message=_VERIFICATION_REQUIRED_WITH_ACCEPTANCE.format(
+                                acceptance="\n".join(f"  • {a}" for a in acceptance)
+                            ),
                             reason="step_done_with_acceptance_no_verification",
                             category="verification_required"
                         )
-                # Mode 2: No acceptance (simple step) → require override_reason
                 else:
                     if not override_reason:
-                        return GuardVerdict.block(
+                        _mode_bad = GuardVerdict.block(
                             message=_VERIFICATION_REQUIRED_NO_ACCEPTANCE,
                             reason="step_done_no_verification",
                             category="verification_required"
@@ -2275,6 +2279,15 @@ class VerificationGuard(Guard):
                 # justified. "none" is an explicit owned claim.
                 bad = _collect_fixed_field_failures([
                     _echo_received(
+                        None if (self._step_done_recheck_reminded or override_reason)
+                        else GuardVerdict.block(
+                            message=_STEP_DONE_RECHECK_REMINDER,
+                            reason="step_done_premise_recheck",
+                            category="verification_required",
+                        ),
+                        "_override_reason", override_reason),
+                    _mode_bad,
+                    _echo_received(
                         _check_convention_field(ctx.tool_args.get("convention")),
                         "convention", ctx.tool_args.get("convention")),
                     _echo_received(
@@ -2287,6 +2300,11 @@ class VerificationGuard(Guard):
                         "assumptions", ctx.tool_args.get("assumptions")),
                 ])
                 if bad is not None:
+                    # The premise re-check is a ONE-SHOT checkpoint: it must fire
+                    # again on the next step_done if the agent has still not
+                    # paused, so latching stays tied to an accepted release
+                    # (override_reason present), never to merely having been
+                    # told about it in a merged message.
                     return bad
                 if _declares_graded_reading(dr):
                     self._graded_reading_seen = True

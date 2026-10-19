@@ -646,3 +646,48 @@ class TestBatchStepDoneEvidence:
         )
         assert guard.check_pre(ctx) is None
 
+
+
+# --- M13: the step_done gate reports ALL unmet requirements in ONE message ---
+# Measured motivation: a single step_done with several unmet fixed fields used
+# to cost one full model round per field (four sequential blocks observed).
+# Every requirement still blocks identically; only the reporting is merged.
+
+def test_m13_all_unmet_requirements_reported_in_one_message():
+    from flagscale_agent.react.guard.verification import VerificationGuard
+    g = VerificationGuard()
+    ctx = GuardContext(tool_name="plan_update", tool_args={"action": "step_done", "step_id": 1})
+    v = g.check_pre(ctx)
+    assert v is not None, "a step_done missing everything must block"
+    line = [l for l in v.message.splitlines() if l.startswith("[REJECTED FIELDS]")]
+    assert line, "the merged report must name every rejected field"
+    for slug in ("step_done_premise_recheck", "step_done_no_verification",
+                 "convention_declaration_missing",
+                 "deliverable_reading_missing",
+                 "assumptions_declaration_missing"):
+        assert slug in line[0], "missing %s from the merged report" % slug
+
+
+def test_m13_merge_does_not_weaken_any_single_requirement():
+    # With every OTHER requirement satisfied, each individual gap must still
+    # block on its own -- the merge must not turn a multi-gap call into a pass.
+    from flagscale_agent.react.guard.verification import VerificationGuard
+    g = VerificationGuard()
+    g._step_done_recheck_reminded = True          # premise check already released
+    args = {"action": "step_done", "step_id": 1,
+            "convention": {"name": "none"},
+            "deliverable_reading": {"deliverable": "none"},
+            "assumptions": {"unverified": "none"}}
+    # no override_reason and no acceptance criteria -> mode-2 is the ONLY gap
+    v = g.check_pre(GuardContext(tool_name="plan_update", tool_args=args))
+    assert v is not None and v.reason == "step_done_no_verification", (
+        "the ONLY remaining gap (mode-2 override) must still block on its own")
+
+    g2 = VerificationGuard()
+    g2._step_done_recheck_reminded = True
+    args2 = dict(args)
+    args2["convention"] = None                    # only convention missing
+    v2 = g2.check_pre(GuardContext(tool_name="plan_update", tool_args=args2,
+                                   override_reason="no acceptance criteria"))
+    assert v2 is not None and v2.reason == "convention_declaration_missing", (
+        "a lone malformed convention must still block on its own")
