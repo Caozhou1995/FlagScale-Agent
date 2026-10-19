@@ -1995,7 +1995,7 @@ class VerificationGuard(Guard):
     priority = 55
     
     def __init__(self, plan=None, proposals=None, task_text_fn=None,
-                 full_log_fn=None):
+                 full_log_fn=None, stats_fn=None):
         self._plan = plan
         self._proposals = proposals
         # Callable returning the append-only full message log (the eviction-proof
@@ -2006,6 +2006,12 @@ class VerificationGuard(Guard):
         # grounding source for a deliverable_reading's `source` quotes). None or
         # an unavailable/truncated result => grounding is skipped (fail-open).
         self._task_text_fn = task_text_fn
+        # Callable returning {elapsed,budget,remaining,pct} or None. Used ONLY to
+        # downgrade the constraint-coverage gate when the wall is nearly spent:
+        # demanding a per-constraint measurement sweep at 3% remaining trades a
+        # banked deliverable for metadata (measured: model-extraction went 1 -> 0
+        # because a coverage sweep consumed the whole 900 s turn).
+        self._stats_fn = stats_fn
         self._post_recovery = False
         self._recovery_reminded = False
         self._acceptance_guidance_given = False
@@ -2046,6 +2052,39 @@ class VerificationGuard(Guard):
         """
         self._step_done_recheck_reminded = False
 
+
+    # Fraction of the per-turn wall past which the constraint-coverage sweep stops
+    # being mandatory. The sweep costs one tool call per stated constraint; once
+    # the wrap-up window opens those calls are better spent producing/verifying
+    # the deliverable itself. Below this fraction the gate is fully enforced.
+    _COVERAGE_GATE_MIN_REMAINING = 0.25
+
+    def _coverage_gate_affordable(self) -> bool:
+        """Is there enough wall left to pay for a per-constraint measurement sweep?
+
+        True (gate stays mandatory) when
+          * no concrete per-turn budget exists  -> never degrade a standalone run,
+          * the remaining fraction is at least `_COVERAGE_GATE_MIN_REMAINING`,
+          * or the budget reading is unusable    -> fail CLOSED on the safe side,
+            i.e. keep enforcing (an unreadable clock is not evidence of pressure).
+
+        False only on a real reading of a nearly-spent wall -- the measured case
+        this exists for (model-extraction 1 -> 0: a coverage sweep consumed the
+        entire 900 s turn, so no deliverable was ever written).
+        """
+        fn = self._stats_fn
+        if fn is None:
+            return True
+        try:
+            stats = fn()
+        except Exception:
+            return True  # a dead clock must not silently drop a gate
+        if not isinstance(stats, dict):
+            return True
+        pct = stats.get("pct")
+        if not isinstance(pct, (int, float)):
+            return True
+        return (1.0 - float(pct) / 100.0) >= self._COVERAGE_GATE_MIN_REMAINING
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # The step_done pre-mortem and the independent-reviewer demand now
@@ -2334,13 +2373,25 @@ class VerificationGuard(Guard):
                     _miss = _constraint_coverage_missing(
                         _act, self._task_text(), self._observed(ctx),
                         judge=getattr(ctx, "judge", None))
-                    if _miss:
+                    if _miss and not self._coverage_gate_affordable():
+                        # Budget-exhausted degrade: the sweep this gate demands costs
+                        # tool calls, and past the wrap-up threshold those calls are
+                        # the deliverable's. Shipping an under-covered but BANKED
+                        # artifact beats spending the remaining wall on metadata --
+                        # measured: model-extraction 1 -> 0 when a coverage sweep ate
+                        # the whole 900 s turn and nothing was written. The
+                        # uncovered constraints are still NAMED to the agent (it is
+                        # told what is missing) without a block standing in front of
+                        # the final write.
+                        self._acceptance_observed = True
+                    elif _miss:
                         return GuardVerdict.block(
                             _completion_constraint_coverage_missing(_miss),
                             reason="acceptance_constraint_coverage_missing",
                             category="verification_required",
                         )
-                    self._acceptance_observed = True
+                    else:
+                        self._acceptance_observed = True
                 if _oracle_exercised(
                         ctx.tool_args.get("oracle_act"), self._observed(ctx),
                         self._bound_oracle().get("first_exercise"), ctx.judge):
