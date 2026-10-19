@@ -70,7 +70,10 @@ class TestPrecedence:
 
     def test_stats_shape_and_elapsed(self, monkeypatch):
         r = WorkerAgent._task_budget_stats(_make(100.0, elapsed=25.0))
-        assert set(r) == {"elapsed", "budget", "remaining", "pct"}
+        assert set(r) == {"elapsed", "budget", "remaining", "pct", "rounds"}
+        # `rounds` must be an int a consumer can divide elapsed by; a string or
+        # None here would make a rounds-derived trigger silently unreachable.
+        assert isinstance(r["rounds"], int)
         assert r["budget"] == 100.0
         assert 24.0 <= r["elapsed"] <= 27.0
         assert 24.0 <= r["pct"] <= 27.0

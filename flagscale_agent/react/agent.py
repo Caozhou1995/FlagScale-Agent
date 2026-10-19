@@ -688,11 +688,27 @@ class WorkerAgent:
         elapsed = max(0.0, time.time() - self._turn_start)
         remaining = budget - elapsed
         pct = (elapsed / budget) * 100.0 if budget else 0.0
+        # Read the kernel's LIVE per-turn iteration count: _turn_iteration_count
+        # is only assigned after run_turn() returns, so inside the turn it is
+        # always 0 and a consumer would silently fall back (the same inert-mechanism
+        # trap as a never-accumulating counter). Fall back to the post-turn value
+        # when no kernel is wired (unit tests).
+        rounds = 0
+        _kernel = getattr(self, "_kernel", None)
+        if _kernel is not None and hasattr(_kernel, "iterations_live"):
+            rounds = int(getattr(_kernel, "iterations_live", 0) or 0)
+        if rounds <= 0:
+            rounds = int(getattr(self, "_turn_iteration_count", 0) or 0)
         return {
             "elapsed": elapsed,
             "budget": budget,
             "remaining": remaining,
             "pct": pct,
+            # Rounds spent so far THIS turn. Consumers derive the turn's own
+            # measured cost-per-action (elapsed/rounds) instead of assuming one:
+            # a percentage alone cannot say how many actions are left, and the
+            # measured harness spends very different wall per round across models.
+            "rounds": rounds,
         }
 
     def _task_budget_summary(self) -> str:

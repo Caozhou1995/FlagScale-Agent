@@ -19,7 +19,7 @@ from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.time_budget import TimeBudgetGuard, _fmt
 
 
-def make_ctx(tool_name="shell"):
+def make_ctx(tool_name="read_file"):
     ctx = GuardContext()
     ctx.tool_name = tool_name
     return ctx
@@ -199,11 +199,17 @@ class TestTimeBudgetGuard90Block:
         v_post = g.check_post(make_ctx())
         assert v_post is None
 
-    def test_below_90_does_not_block(self):
+    def test_below_fallback_fraction_does_not_block(self):
+        # 89% used to be silent when the trigger was a hardcoded 90%. The trigger
+        # is now "the remaining wall cannot cover ~6 more actions", and with no
+        # round history yet the documented fallback fraction (85%) governs. The
+        # contract is therefore: silent below the fallback, armed at/above it.
         s = _Stats()
         g = TimeBudgetGuard(stats_fn=s)
-        s.pct = 89.0
+        s.pct = 80.0
         assert g.check_pre(make_ctx()) is None
+        s.pct = 86.0
+        assert g.check_pre(make_ctx()) is not None
 
     def test_90_block_offers_in_flight_background_job_as_valid_case(self):
         # The 90% gate must recognise a background job already producing the
@@ -216,13 +222,15 @@ class TestTimeBudgetGuard90Block:
         v = g.check_pre(make_ctx())
         assert v is not None and v.reason == "time_budget_90pct_block"
         msg = v.message
-        # All three satisfiable cases are spelled out.
-        assert "(1)" in msg and "(2)" in msg and "(3)" in msg
-        # Case (3) is explicitly about a background job in flight.
+        # An in-flight background job must still be offered as the cheap route:
+        # collecting a delegated write beats duplicating it with one round left.
         assert "background job" in msg.lower()
-        assert "job id" in msg
-        # And it forbids the self-defeating kill.
+        assert "poll" in msg.lower()
+        # And the self-defeating kill must still be forbidden.
         assert "kill" in msg.lower()
+        # The gate must say plainly that production calls are NOT blocked, so the
+        # reader does not go hunting for a way past a wall that is not there.
+        assert "write_file" in msg and "shell" in msg
 
     def test_jump_past_90_blocks_once(self):
         # Jumping 30 -> 95 should block at 90, marking all thresholds as spent.
@@ -340,18 +348,17 @@ class TestTimeBudgetGateCopy:
     def test_90_shown_not_claimed(self):
         v = self._pre90()
         assert v is not None and v.action == "block"
-        # case(1) now demands evidence, not a bare claim
-        assert "SHOWN, not claimed" in v.message
-        assert "verification action you just ran" in v.message
+        # Evidence over claim: a path is DISCOVERED by running a command, not
+        # asserted from memory — the message must hand over that exact command.
         assert "ls -la" in v.message
+        assert "discover" in v.message.lower()
 
     def test_90_verify_is_not_refining(self):
         v = self._pre90()
-        # re-classification: cheapest trust-restoring action outranks write-through
-        assert "is NOT refining" in v.message
-        assert "trust-restoring" in v.message
-        # doubts must surface: settle them or record an audited degrade
-        assert "audited degrade" in v.message
+        # The distinction must survive: a re-check is only worth a round when the
+        # doubt would otherwise make the deliverable wrong.
+        assert "NOT refining" in v.message
+        assert "verify" in v.message.lower()
 
     def test_90_injections_not_a_clock(self):
         # copy-slimming: the NOT-a-clock long tail was removed from the 90% block

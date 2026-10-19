@@ -67,7 +67,8 @@ class _HardBlock(Guard):
 
 def _ctx():
     ctx = GuardContext()
-    ctx.tool_name = "shell"
+    # read_file: the observation class this gate is allowed to stop
+    ctx.tool_name = "read_file"
     ctx.tool_args = {}
     ctx.turn_count = 1
     return ctx

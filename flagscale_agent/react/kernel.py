@@ -130,6 +130,12 @@ class AgentKernel:
         # from "something executed successfully". Surfaced to guards as
         # ctx.recent_tool_history. Reset at the start of every run_turn().
         self._recent_tool_history: list[dict] = []
+        # Live per-turn iteration counter, updated at the TOP of every loop
+        # iteration so a consumer INSIDE the turn (a guard asking "how many
+        # actions have I already spent?") sees a real number. KernelResult only
+        # reports the total AFTER the turn ends, which is too late for any
+        # in-turn admission decision.
+        self.iterations_live: int = 0
 
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
@@ -153,6 +159,7 @@ class AgentKernel:
         # once the agent has clearly stalled on the gate.
         self._consecutive_completion_blocks = 0
         self._recent_tool_history = []  # reset the per-turn execution ledger
+        self.iterations_live = 0
         d.judge.reset_turn()
         d.guard_registry.reset_turn()
 
@@ -169,6 +176,10 @@ class AgentKernel:
 
         try:
             for iteration in range(max_iter):
+                # Publish the live count FIRST: every in-turn consumer (a guard
+                # deciding whether the remaining wall can still cover a wrap-up)
+                # must see how many action rounds THIS turn has already spent.
+                self.iterations_live = iteration + 1
                 if self._interrupted:
                     break
 

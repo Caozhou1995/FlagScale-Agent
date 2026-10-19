@@ -59,6 +59,7 @@ Key design decisions:
 from __future__ import annotations
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.guard.utils import READ_ONLY_TOOLS
 
 
 def _fmt(sec: float) -> str:
@@ -90,6 +91,19 @@ class TimeBudgetGuard(Guard):
     # 50% nudge). Firing at 25% puts the pacing guidance where the agent has
     # enough trajectory to gauge its burn rate AND enough budget left to correct.
     _THRESHOLDS = (100, 90, 80, 75, 50, 25)
+
+    # A turn dies with the budget, not with a percentage: what matters is how
+    # many more ACTIONS fit. This is the number of remaining action-rounds the
+    # critical gate reserves before it refuses to spend one on an observation.
+    # 6 rounds is the measured minimum for a real wrap-up (read the delivery path,
+    # write the crude answer, run it, record the result, report) at the observed
+    # per-call latency of this harness.
+    _CRITICAL_ROUNDS = 6
+
+    # Fallback when the wall reports no per-call latency (a stats_fn that only
+    # knows elapsed/budget): fall back to the fraction of budget at which the
+    # measured runs still had those rounds left.
+    _CRITICAL_PCT_FALLBACK = 85.0
 
     def __init__(self, stats_fn):
         """stats_fn() -> dict|None with keys elapsed/budget/remaining/pct.
@@ -155,40 +169,77 @@ class TimeBudgetGuard(Guard):
             return None
 
         pct = stats.get("pct", 0.0)
-        # Block only in the [90, 100) window, once per turn (a checkpoint, not a
-        # repeated wall). At/after 100% the wall-clock is fully spent and the guard
-        # must NOT block: the agent needs a clear path to emit its wrap-up response
-        # (and NEED_USER_INPUT) — that final rung is handled as a check_post inject.
-        if 90 <= pct < 100 and 90 not in self._fired:
-            # Mark ALL crossed thresholds as spent, preventing check_post from
-            # re-injecting lower advisories and preventing this block from re-firing.
-            # Record them as PENDING as well: if the registry outranks this block
-            # with a harder one, block_not_surfaced() returns them so the gate can
-            # still fire later in the turn instead of dying unseen.
+        budget = float(stats.get("budget", 0.0) or 0.0)
+        remaining = float(stats.get("remaining", 0.0) or 0.0)
+        rounds = int(stats.get("rounds", 0) or 0)
+        # When does the turn actually run out of ACTION rounds? A percentage is a
+        # proxy that assumes a fixed cost per round; the measured harness varies
+        # from 3s to 174s a call, and 10% of an 1800s wall is ~2 rounds — too few
+        # to write, run and report a deliverable (observed: a task scored 1 with no
+        # gate and 0 with it). Derive the trigger from ROUNDS: arm once the
+        # remaining wall cannot cover _CRITICAL_ROUNDS more actions at THIS turn's
+        # own measured cost per action (elapsed / rounds). No history yet (rounds==0)
+        # -> fall back to the fraction of budget at which measured runs still had
+        # those rounds left.
+        if budget > 0 and rounds >= 3:
+            per_round = float(stats.get("elapsed", 0.0) or 0.0) / rounds
+            critical = per_round > 0 and remaining <= per_round * self._CRITICAL_ROUNDS
+        else:
+            critical = pct >= self._CRITICAL_PCT_FALLBACK
+        # Block only once per turn (a checkpoint, not a repeated wall), and only
+        # while rounds remain: at/after 100% the wall-clock is fully spent and the
+        # guard must NOT block — the agent needs a clear path to emit its wrap-up
+        # response (and NEED_USER_INPUT); that final rung is a check_post inject.
+        # No percentage floor here: the round count IS the floor. A fixed pct gate
+        # contradicts it (78% with 5.7 actions left is exactly the case the rounds
+        # criterion is meant to catch, but a >=80 floor would stay silent).
+        if critical and pct < 100 and 90 not in self._fired:
+            # A gate whose only lever is "spend a round asking permission" must not
+            # collect that round from the very call it is asking for. Measured
+            # failure: at 91% with ~1m16s left (~2 calls) the gate blocked the
+            # `write_file` that WAS the deliverable; the agent then spent both
+            # remaining rounds satisfying the override prose and had no time left
+            # to run it — a task that scored 1 without the gate scored 0 with it.
+            # The gate's subject is UNPRODUCTIVE time use, so it may only stop an
+            # OBSERVATION round (read_file / grep / plan_status / memory_*), never a
+            # production round (write_file / edit_file / shell), which is the
+            # wrap-up it exists to force. Classification is the harness's existing
+            # read-only tool set — a stable property of the tool, not this subject.
+            if ctx.tool_name not in READ_ONLY_TOOLS:
+                return None
             self._pending_block_fired = {t for t in self._THRESHOLDS if pct >= t}
             self._fired |= self._pending_block_fired
             
             elapsed = _fmt(stats.get("elapsed", 0.0))
-            remaining = _fmt(stats.get("remaining", 0.0))
+            msg_rounds = (
+                f"~{int(remaining / per_round)} actions left at this turn's rate"
+                if (budget > 0 and rounds >= 3 and per_round > 0) else "final actions"
+            )
+            remaining_s = _fmt(remaining)
             message = (
                 f"[TimeBudget] CRITICAL CHECKPOINT — {pct:.0f}% of budget spent "
-                f"({elapsed} used, ~{remaining} left). Satisfy ONE now:\n\n"
-                f"  (1) A deliverable already exists at its path — SHOWN, not "
-                f"claimed: your _override_reason cites a verification action "
-                f"you just ran (`ls -la <delivery_path>` / `cat "
-                f"<delivery_file>`).\n"
-                f"  (2) THIS call finalizes it — cite the path it writes.\n"
-                f"  (3) A background job of yours is producing it NOW — cite "
-                f"job id + path, then POLL it; the write is delegated: collect "
-                f"it, do not kill or re-run it.\n\n"
-                f"Verifying a claim is NOT refining. Doubting an unbanked "
-                f"result? The cheapest trust-restoring action outranks "
-                f"write-through: run the re-check, or record why the value "
-                f"stands (an audited degrade beats a silent one).\n\n"
-                f"If NEITHER (1) nor (2) holds, STOP and write a crude-but-complete "
-                f"answer to the delivery path NOW. Also memory_write() the facts "
-                f"living only here — survival-range test: cross-session truth -> "
-                f"memory, session progress -> plan notes.\n\n"
+                f"({elapsed} used, ~{remaining_s} left, {msg_rounds}).\n\n"
+                f"This gate stops OBSERVATION calls only (read_file, memory_read, "
+                f"plan_status, web_fetch, ...). Every PRODUCTION call — "
+                f"write_file, edit_file, shell — already passes, so nothing you "
+                f"need in order to deliver is blocked.\n\n"
+                f"Do this, in this order, with no other calls in between:\n"
+                f"  1. If you do NOT know the exact delivery path, discover it with "
+                f"ONE shell call (`ls -la <dir>`); shell is a production tool and "
+                f"is not gated.\n"
+                f"  2. Write the crude-but-complete deliverable to that path NOW "
+                f"(write_file). Partial and correct beats complete and unwritten.\n"
+                f"  3. Run it and report what it printed (shell). Its output IS "
+                f"your report — do not re-derive it.\n"
+                f"  4. If a background job of yours is already producing the "
+                f"deliverable, collect it instead of duplicating the work: poll "
+                f"the job, then read the file it wrote; do not kill or re-run it.\n\n"
+                f"Do not read, re-plan, or verify anything you are not required to "
+                f"verify; verifying a claim is NOT refining, and a re-check only "
+                f"wins when a doubt would otherwise make the deliverable wrong.\n\n"
+                f"Also memory_write() any fact that lives only here (survival-range "
+                f"test: cross-session truth -> memory, session progress -> plan "
+                f"notes).\n\n"
             )
             return GuardVerdict.block(
                 message=message,
