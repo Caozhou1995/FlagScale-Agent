@@ -96,3 +96,16 @@ def test_prompt_requires_cosource_check_before_trusting_a_differential():
     # and the named tool's high-level task entry point must be named as THE path
     assert "task entry point" in low
     assert "bare encode" in low
+
+
+def test_prompt_requires_grader_criterion_expression_not_metric_substitute():
+    """A self-check must restate the grader's exact criterion expression.
+    Substituting cosine similarity for an elementwise ratio-constancy test is a
+    DIFFERENT quantity: |cos|=0.999997 coexists with per-element ratio spread
+    1.8e-2 against a 1e-4 tolerance (m21 model-extraction, 28/30 rows failed).
+    Removing this clause must break the assertion."""
+    text = SYSTEM_PROMPT_STATIC
+    assert "restate its exact expression" in text, (
+        "prompt must require restating the grader criterion's exact expression")
+    assert "a different metric is a different question" in text, (
+        "prompt must forbid substituting a different similarity metric")
