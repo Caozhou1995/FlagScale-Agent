@@ -38,9 +38,11 @@ class _Window:
     """Replica of the kernel's window-diversity rule (kept in lock-step)."""
 
     def __init__(self, n: int = Kernel.DEGENERATE_REPEAT_WINDOW_CALLS,
-                 distinct_most: int = Kernel.DEGENERATE_REPEAT_DISTINCT_MOST):
+                 distinct_most: int = Kernel.DEGENERATE_REPEAT_DISTINCT_MOST,
+                 max_len: int = 0):
         self.n = n
         self.distinct_most = distinct_most
+        self.max_len = max_len
         self.win: list[str] = []
 
     def feed(self, text: str) -> bool:
@@ -50,7 +52,8 @@ class _Window:
             self.win.append(fp)
         if len(self.win) > self.n:
             del self.win[:-self.n]
-        return self.n > 0 and len(self.win) >= self.n and len(set(self.win)) <= self.distinct_most
+        return (self.n > 0 and len(self.win) >= self.n
+                and len(set(self.win)) <= self.distinct_most)
 
     def reset(self):
         self.win = []
@@ -134,3 +137,4 @@ def test_whitespace_variation_still_counts_as_the_same_loop():
             tripped = True
             break
     assert tripped, "whitespace-only variation escaped the breaker"
+
