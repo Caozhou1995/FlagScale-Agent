@@ -457,3 +457,43 @@ class TestFirstActionRegistrySurvival:
         probe_v = _phase(fresh, "first_action").check(_tool("plan_update"))
         assert probe_v is not None
         assert probe_v.attach_on_block is True
+
+
+# --- research gate: batch-order honesty -------------------------------
+# Every tool call in a turn is checked BEFORE any of them executes (kernel.py
+# collects all check_pre verdicts first). So a research call issued in the SAME
+# turn as a blocked work call has NOT taken effect yet. An agent that just made
+# a research call and is still blocked must be told the real reason, or it
+# guesses (rewording the override, retrying the same call).
+
+
+def test_research_block_names_the_batch_order_reason():
+    from flagscale_agent.react.guard.startup import _RESEARCH_BLOCK_MESSAGE as M
+
+    assert "ALREADY SENT ONE THIS TURN" in M
+    # The actionable instruction, not just an explanation.
+    assert "next turn" in M
+    # It must NOT invite an override.
+    assert "reword the override" in M
+
+
+def test_research_block_still_keeps_the_research_menu():
+    from flagscale_agent.react.guard.startup import _RESEARCH_BLOCK_MESSAGE as M
+
+    for tool in ("web_fetch", "load_knowledge", "load_skill", "recall_search"):
+        assert tool in M
+
+
+def test_same_batch_research_does_not_clear_gate_for_sibling():
+    """The mechanism the new message describes: pre-check order is per-turn."""
+    g = StartupGuard(single_shot=True)
+    rp = _phase(g, "research")
+    # A research call's check_pre passes...
+    assert rp.check(_tool("web_fetch")) is None
+    # ...but its observe_post has NOT run (kernel executes later), so a sibling
+    # work call in the same batch is still blocked.
+    assert rp.check(_tool("read_file")).reason == "startup_research_gate"
+    # Once the research call actually executed, the gate opens.
+    rp.observe_post(GuardContext(tool_name="web_fetch", tool_args={},
+                                 tool_result="real docs"))
+    assert rp.check(_tool("read_file")) is None
