@@ -75,3 +75,24 @@ def test_quantity_clauses_stay_generic():
     for leak in ("dna-insert", "mteb-retrieve", "primers_concat", "humaneval", "bge-small"):
         assert leak not in low, f"prompt leaked task-specific identifier: {leak}"
     assert not re.search(r"0x[0-9a-f]{4,}", low)
+
+
+def test_prompt_requires_cosource_check_before_trusting_a_differential():
+    """Two implementations that AGREE can be co-source and both wrong.
+
+    Real evidence: m19/m20 mteb-retrieve agent ran mteb-wrapper(no prompt) and
+    raw sentence-transformers(no prompt), got identical 30 cosines and rank5,
+    called it a "differential oracle confirming", and shipped the wrong line.
+    Both sides were the BARE encode path; the named tool's retrieval evaluator
+    (prompt_type=query/passage) was never exercised.
+    """
+    low = _prompt_low()
+
+    assert "co-source" in low
+    # the co-source warning must say agreement is not proof
+    i = low.index("co-source")
+    window = low[i:i + 500]
+    assert "same wrong answer" in window
+    # and the named tool's high-level task entry point must be named as THE path
+    assert "task entry point" in low
+    assert "bare encode" in low
