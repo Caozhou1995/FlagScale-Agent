@@ -62,6 +62,14 @@ class GuardContext:
     # LLM classify function
     classify_fn: Any = None
 
+    # The unified LLM judge (flagscale_agent.react.judge.Judge). Guards use it
+    # for the SEMANTIC half of a check -- reading prose that has no fixed shape
+    # (e.g. "which requirements does this statement state?", "which requirement
+    # does this claim address?"). None when no provider is configured; every
+    # caller must fail open on None so a dead provider cannot manufacture a
+    # block.
+    judge: Any = None
+
     # Override reason from LLM
     override_reason: str = ""
 

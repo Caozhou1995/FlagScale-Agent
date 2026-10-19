@@ -799,6 +799,7 @@ class AgentKernel:
             evictable_indexes=history.get_evictable_indexes() if history else [],
             messages=history.get_messages() if history else [],
             classify_fn=d.judge.classify,
+            judge=d.judge,
             override_reason=override_reason,
             assistant_text=assistant_text,
             llm_responded=llm_responded,

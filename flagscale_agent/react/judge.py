@@ -724,7 +724,131 @@ class Judge:
                     pass
         return {}
 
+    #: The semantic half of per-constraint coverage: given the task's stated
+    #: requirements and the wording of the constraints the agent's acceptance
+    #: record claims to address, decide which requirements each claim actually
+    #: addresses. Wording differs between the two sides ("Tm within 5 degrees"
+    #: vs "Tm difference <= 5") so this is a reading task; the mechanical half
+    #: (is the claimed observation real?) stays in the guard.
+    _COVERAGE_PROMPT = """You are checking whether an agent's acceptance record
+addresses every requirement a task stated.
+
+REQUIREMENTS (each with an index):
+{requirements}
+
+CLAIMS the agent entered in its acceptance record:
+{claims}
+
+For each CLAIM, decide which REQUIREMENT it addresses. A claim addresses a
+requirement when it reports a measurement of THAT requirement -- same quantity,
+same thing being bounded -- even if the wording differs. A claim does NOT
+address a requirement when it measures a different quantity, even if it shares
+words with it, and a claim that reports nothing measurable addresses nothing.
+
+Each requirement must be addressed by at least one claim to count as covered.
+One claim may address only one requirement.
+
+Return ONLY JSON, no prose:
+{"covered": [<index>, ...]}
+where the list holds the indexes of requirements addressed by at least one claim.
+Return an empty list if no claim addresses any requirement.
+
+TASK STATEMENT (for context):
+{task_text}"""
+
+    def constraint_coverage(self, quotes: list, constraints: list,
+                            task_text: str = "") -> list:
+        """Indexes of ``constraints`` that at least one quote addresses.
+
+        Returns [] on any failure or unusable answer. Never raises -- a dead
+        provider must leave the coverage gate inert, not manufacture a block.
+        """
+        if not constraints or not quotes:
+            return []
+        reqs = "\n".join("%d. %s" % (i, c) for i, c in enumerate(constraints))
+        claims = "\n".join("- %s" % q for q in quotes)
+        ctx = {"quotes": list(quotes), "constraints": list(constraints)}
+        cache_key = self._key("constraint_coverage", ctx)
+        cached = self._cache.get(cache_key)
+        if isinstance(cached, list):
+            return cached
+        prompt = (self._COVERAGE_PROMPT
+                  .replace("{requirements}", reqs)
+                  .replace("{claims}", claims)
+                  .replace("{task_text}", task_text))
+        data = self._call_and_parse(prompt)
+        raw = data.get("covered") if isinstance(data, dict) else None
+        out = []
+        if isinstance(raw, list):
+            for it in raw:
+                try:
+                    idx = int(it)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < len(constraints) and idx not in out:
+                    out.append(idx)
+        self._cache[cache_key] = out
+        return out
+
     @staticmethod
     def _key(category: str, context: dict) -> str:
         raw = category + json.dumps(context, sort_keys=True, default=str)
         return hashlib.md5(raw.encode()).hexdigest()[:16]
+
+    #: One prompt for the SEMANTIC half of per-constraint coverage: read the task
+    #: statement and return the checkable requirements it states, VERBATIM. The
+    #: statement's wording is free-form, so extracting what it requires is a
+    #: language task -- there is no shape to key off and no vocabulary that is
+    #: not task-specific. The MECHANICAL half (did the agent's acceptance record
+    #: actually observe each one?) stays deterministic in the guard; only the
+    #: reading of prose crosses this boundary. The model is told to quote, never
+    #: paraphrase, so the returned strings are anchored in the task text.
+    _CONSTRAINTS_PROMPT = """Read the task statement below. List EVERY checkable
+requirement it states that a deliverable could be verified against: a numeric
+bound, a range, a tolerance, a count, a required file or field, an exact value,
+or a stated ordering.
+
+Rules:
+- Quote each requirement using the statement's OWN words, copied verbatim.
+- One entry per DISTINCT requirement. Do not merge two requirements, and do not
+  split one requirement into two.
+- Only what the statement actually states. Do not add requirements you infer
+  from the domain, and do not invent a threshold the statement does not give.
+- Requirements that are purely stylistic or purely procedural (e.g. "explain
+  your reasoning") are NOT checkable constraints -- omit them.
+- If the statement states fewer than two checkable requirements, return an
+  empty list.
+
+Return ONLY JSON, no prose:
+{"constraints": ["<verbatim requirement>", ...]}
+
+TASK STATEMENT:
+{task_text}"""
+
+    def constraints(self, task_text: str) -> list:
+        """The checkable requirements a task statement states, verbatim.
+
+        Returns [] when the judge is unavailable or returns nothing usable --
+        the caller treats an empty list as "this statement enumerates nothing
+        to check", which leaves the coverage gate inert rather than inventing
+        obligations. Never raises: a dead provider must not break the loop.
+        """
+        if not isinstance(task_text, str) or not task_text.strip():
+            return []
+        ctx = {"task_text": task_text}
+        cache_key = self._key("constraints", ctx)
+        cached = self._cache.get(cache_key)
+        if isinstance(cached, list):
+            return cached
+        prompt = self._CONSTRAINTS_PROMPT.replace("{task_text}", task_text)
+        data = self._call_and_parse(prompt)
+        items = data.get("constraints") if isinstance(data, dict) else None
+        out = []
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, str) and it.strip():
+                    phrase = " ".join(it.split())
+                    if phrase.lower() not in [s.lower() for s in out]:
+                        out.append(phrase)
+        self._cache[cache_key] = out
+        return out

@@ -1195,6 +1195,139 @@ def _acceptance_act_recorded(act, observed) -> bool:
     return _evidence_observed(act, observed)
 
 
+#: Minimum number of DISTINCT checkable requirements a task statement must
+#: enumerate before the per-constraint coverage gate applies. Below this the
+#: statement is prose-shaped and a coverage demand would be noise; at or above
+#: it the statement hands the agent a checkable list, and checking ONE of them
+#: is a proxy for the task, not the task.
+_CONSTRAINT_COVERAGE_MIN = 3
+
+
+def _stated_constraints(task_text: str, judge=None) -> list:
+    """The DISTINCT checkable requirements a task statement enumerates.
+
+    READING the statement is a language task: requirements are stated in free
+    prose ("Tm must be within 5 degrees", "no more than 5000 bytes", "exactly
+    four shards"), with no fixed shape to key off and no vocabulary that is not
+    task-specific. So the reading is delegated to the judge (an LLM), which
+    returns each requirement VERBATIM. Nothing here pattern-matches the text:
+    a differently-worded statement of the same requirement yields the same
+    answer, which a shape rule cannot promise.
+
+    Returning [] when no judge is supplied (or the judge reads nothing) leaves
+    the gate inert rather than inventing obligations -- a dead provider must not
+    manufacture a block.
+    """
+    if not _is_real_str(task_text):
+        return []
+    if judge is None:
+        return []
+    try:
+        return judge.constraints(task_text)
+    except Exception:
+        return []
+
+
+
+def _constraint_coverage_missing(act, task_text: str, observed, judge=None) -> list:
+    """Constraint phrases the task states that the acceptance record did NOT cover.
+
+    Returns [] when the gate does not apply (statement enumerates fewer than
+    `_CONSTRAINT_COVERAGE_MIN` checkable constraints, or the coverage question
+    cannot be answered). Otherwise returns the list of stated-constraint
+    phrases for which the `acceptance_act` carries no corpus-backed observation.
+
+    WHY THIS EXISTS: `_acceptance_act_recorded` accepts ONE observed act as the
+    acceptance record. When the statement enumerates N independent checkable
+    constraints, one observation is a PROXY for the task, not the task -- an
+    agent can observe a cheap constraint, bank the deliverable, and only then
+    discover a different constraint it violated (measured: dna-insert's agent
+    wrote primers.fasta, then 10s later self-found "Tm must be computed on the
+    ANNEALED part only", then hit the wall). The gate closes that by demanding
+    one covered entry per stated constraint BEFORE completion.
+
+    SPLIT OF WORK -- both halves are load-bearing:
+      * READING prose is semantic (which claims address which requirement), so
+        the judge answers it. Nothing here pattern-matches wording; a
+        differently-worded claim for the same measurement still counts.
+      * ADMISSIBILITY is mechanical and stays here: a claim is only eligible if
+        it carries a command and an `observed` value that really occurs in the
+        session's tool-output corpus. So the entries cannot be fabricated -- a
+        claim about a measurement never actually made is dropped before the
+        judge ever sees it.
+    """
+    if not _is_real_str(task_text):
+        return []
+    stated = _stated_constraints(task_text, judge)
+    if len(stated) < _CONSTRAINT_COVERAGE_MIN:
+        return []
+    if observed is None:
+        return []  # fail open: no corpus, coverage is unjudgeable
+    if judge is None:
+        return []  # fail open: no reader for the prose, nothing to judge
+    rows = act.get("constraints") if isinstance(act, dict) else None
+    if not isinstance(rows, list):
+        return stated
+    quotes = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        quote = row.get("quote")
+        if not _is_real_str(quote):
+            continue
+        if not (_is_real_str(row.get("command")) and _is_real_str(row.get("observed"))):
+            continue
+        if not _evidence_observed(row, observed):
+            continue  # observed text not in the real corpus -> not a coverage
+        quotes.append(quote)
+    if not quotes:
+        return stated
+    try:
+        covered = set(judge.constraint_coverage(quotes, stated, task_text))
+    except Exception:
+        return []  # fail open: a dead judge must not manufacture a block
+    return [s for i, s in enumerate(stated) if i not in covered]
+
+
+def _completion_constraint_coverage_missing(missing: list) -> str:
+    """Block message: which stated constraints the acceptance record missed.
+
+    Names the ACTUAL uncovered constraints (not just "coverage missing") and
+    shows the exact row shape to add, so the agent does not have to guess.
+    """
+    items = "\n".join("  \u2022 %s" % m for m in missing)
+    example = (missing[0] if missing else "<one of the constraints above>")
+    return f"""[VerificationGuard] Your acceptance record does not cover every constraint the task states.
+
+This task's text enumerates {len(missing)} checkable constraint(s) for which your
+`acceptance_act` carries NO corpus-backed observation:
+{items}
+
+One observed act is a PROXY for such a task, not the task itself. Observing one
+cheap constraint and banking the deliverable is exactly the failure this gate
+exists to stop: the deliverable is written, the remaining constraint is violated,
+and there is no time left to fix it.
+
+Add a `constraints` list to `acceptance_act` -- ONE row per constraint above, each
+carrying the constraint's own wording, the command you actually ran, and that
+command's REAL recorded output (output you never produced is refused):
+
+  acceptance_act={{
+    "command": "<the command you already ran>",
+    "observed": "<its real recorded output>",
+    "constraints": [
+      {{"quote": "{example}",
+        "command": "<command that measures THIS constraint>",
+        "observed": "<that command's real output, e.g. the measured value>"}}
+      ... one row for every constraint listed above ...
+    ]
+  }}
+
+If a constraint cannot be measured in this environment, say so in that row
+explicitly rather than omitting it -- an omitted constraint and an unmeasurable
+one are different states, and only the second is admissible."""
+
+
 def _oracle_exercised(act, observed, first_exercise=None) -> bool:
     """True when a recorded act shows the bound oracle's exercise was RUN.
 
@@ -2113,8 +2246,20 @@ class VerificationGuard(Guard):
                     return bad
                 if _declares_graded_reading(dr):
                     self._graded_reading_seen = True
-                if _acceptance_act_recorded(
-                        ctx.tool_args.get("acceptance_act"), self._observed(ctx)):
+                _act = ctx.tool_args.get("acceptance_act")
+                if _acceptance_act_recorded(_act, self._observed(ctx)):
+                    # Coverage gate (M10): ONE observed act is a proxy when the
+                    # statement enumerates several checkable constraints. Do not
+                    # latch acceptance until every stated constraint is covered.
+                    _miss = _constraint_coverage_missing(
+                        _act, self._task_text(), self._observed(ctx),
+                        judge=getattr(ctx, "judge", None))
+                    if _miss:
+                        return GuardVerdict.block(
+                            _completion_constraint_coverage_missing(_miss),
+                            reason="acceptance_constraint_coverage_missing",
+                            slug="acceptance_constraint_coverage_missing",
+                        )
                     self._acceptance_observed = True
                 if _oracle_exercised(
                         ctx.tool_args.get("oracle_act"), self._observed(ctx),
