@@ -126,9 +126,109 @@ def test_explicit_reset_clears_streak():
     assert "CONVERGENCE:" not in v2.message
 
 
-def test_kernel_progress_reset_is_wired():
-    """The kernel calls reset_repeat_convergence() when tools execute."""
-    import inspect
-    from flagscale_agent.react import kernel as kernel_mod
-    src = inspect.getsource(kernel_mod.AgentKernel)
-    assert "reset_repeat_convergence()" in src
+def test_kernel_reset_is_gated_on_tool_execution():
+    """The kernel must reset the streak ONLY when a tool actually executed.
+
+    Behavioural (not a source grep): this reproduces the kernel's per-iteration
+    ordering — [existing streak] then check_pre — and asserts the streak still
+    accumulates across turns when NOTHING resets it (the all-blocked case), and
+    that an explicit reset (the a-tool-executed case) does clear it. A lossy
+    wiring that calls reset unconditionally every turn would pin the count at 1
+    and never reach REPEAT_CONVERGENCE_AT; this test fails in that world.
+    """
+    import flagscale_agent.react.guard as gm
+
+    reg = GuardRegistry()
+    reg.register(_Repeat())
+    ctx = _ctx()
+
+    # Simulate 4 turns of an ALL-BLOCKED loop: NO reset (no tool executed).
+    for _ in range(gm.REPEAT_CONVERGENCE_AT):
+        v = reg.check_pre(ctx)
+    assert reg._repeat_count >= gm.REPEAT_CONVERGENCE_AT
+    assert v is not None and "CONVERGENCE:" in v.message
+
+    # Simulate a turn where a tool EXECUTED: the kernel calls reset once.
+    reg.reset_repeat_convergence()
+    assert reg._repeat_count == 0
+
+
+def test_kernel_all_blocked_turns_accumulate_convergence():
+    """Integration (the defect F1 closed): drive AgentKernel.run_turn through
+    several ALL-BLOCKED tool turns and assert the CONVERGENCE directive reaches
+    history. In the buggy wiring the kernel reset the streak unconditionally at
+    the top of every iteration — including all-blocked ones — so the count was
+    pinned at 1 and NO convergence ever fired. This test exercises the REAL
+    kernel ordering, so it fails in that world (unlike the old source-grep)."""
+    import types
+    from unittest.mock import MagicMock
+    from flagscale_agent.react.kernel import AgentKernel, KernelDeps
+
+    class _Block(Guard):
+        name = "blocker"
+        priority = 50
+
+        def check_pre(self, ctx):
+            # Only block the TOOL CALL (the real mteb site), not the top-of-loop
+            # empty-ctx consultation — a guard that also blocks there would
+            # `continue` before tool execution and never exercise the reset path.
+            if not ctx.tool_name:
+                return None
+            return GuardVerdict.block("[blocker] nope", reason="same_slug",
+                                      category="c", overridable=False)
+
+    class _Hist:
+        def __init__(self):
+            self.messages = [{"role": "user", "content": "go"}]
+
+        def append(self, m):
+            self.messages.append(m)
+
+        def get_messages(self):
+            return self.messages
+
+        def get_context_pressure(self):
+            return 0.1
+
+        def get_evictable_indexes(self):
+            return []
+
+        def report_actual_tokens(self, n):
+            pass
+
+        def pop_last_assistant(self):
+            for i in range(len(self.messages) - 1, -1, -1):
+                if self.messages[i].get("role") == "assistant":
+                    self.messages.pop(i)
+                    return
+
+    reg = GuardRegistry()
+    reg.register(_Block())
+    hist = _Hist()
+    injected = []
+    cfg = types.SimpleNamespace(max_iterations=20, max_continuations=200,
+                                mode="auto", max_output_tokens=100)
+    provider = MagicMock()
+    provider.format_assistant_message.side_effect = (
+        lambda r: {"role": "assistant", "content": r.get("content", "")}
+    )
+
+    def call_llm_fn(messages, schemas):
+        # Every turn: the SAME blocked tool call (a guess-retry loop).
+        return ({"content": "", "tool_calls": [
+            {"id": "1", "name": "plan_update", "arguments": {}}
+        ]}, {"input_tokens": 1, "output_tokens": 5})
+
+    deps = KernelDeps(
+        provider=provider, history=hist, tool_registry=MagicMock(),
+        judge=MagicMock(), guard_registry=reg, config=cfg, display=MagicMock(),
+        get_schemas_fn=lambda: [], inject_message_fn=lambda m: injected.append(m),
+        append_tool_results_fn=lambda r: None,
+        format_tool_result_fn=lambda t, r: {}, execute_tools_fn=lambda tcs: [],
+        is_context_limit_error_fn=lambda e: False, call_llm_fn=call_llm_fn,
+    )
+    AgentKernel(deps).run_turn()
+    joined = "\n".join(injected)
+    assert "CONVERGENCE" in joined, "M6 never fired on an all-blocked loop"
+
+

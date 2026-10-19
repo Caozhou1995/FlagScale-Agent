@@ -556,9 +556,6 @@ class AgentKernel:
                 self._consecutive_text_only = 0  # Reset: tools were executed
                 self._consecutive_saturated = 0  # M5: a real action resets the streak
                 self._consecutive_completion_blocks = 0  # progress made; reset breaker
-                # M6: a tool actually EXECUTED = real progress past whatever was
-                # blocking before — zero the repeat-block convergence streak.
-                d.guard_registry.reset_repeat_convergence()
 
                 # ── Execute tools ──
                 _pre_guard_verdicts = []
@@ -639,6 +636,17 @@ class AgentKernel:
                 # call whose result text is the executor's own error prefix, so
                 # an evidence gate can tell execution from REAL execution.
                 self._record_tool_ledger(tool_calls, results, blocked_indices)
+
+                # M6: reset the repeat-block convergence streak ONLY when a tool
+                # actually EXECUTED this cycle (real progress past whatever blocked
+                # before). This MUST NOT fire when every call was blocked — a
+                # repeated block requires the agent to re-issue an identical call,
+                # which is exactly an all-blocked turn; resetting there zeroes the
+                # streak at the top of every iteration before it can accumulate
+                # (the counter would stay pinned at 1 and never reach the
+                # threshold). So gate on at least one non-blocked call.
+                if len(blocked_indices) < len(tool_calls):
+                    d.guard_registry.reset_repeat_convergence()
 
                 # ── Post-guard checks (per tool) ──
                 post_verdicts = []
