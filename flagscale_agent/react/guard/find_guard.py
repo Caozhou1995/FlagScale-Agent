@@ -933,14 +933,32 @@ class FindGuard(Guard):
     priority = 25
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        """First failing rule only — see check_all_pre for the full report."""
+        found = self.check_all_pre(ctx)
+        return found[0] if found else None
+
+    def check_all_pre(self, ctx: GuardContext) -> list[GuardVerdict]:
+        """Report EVERY independent rule this command breaks, not just the first.
+
+        The rule groups below are independent properties of the same command
+        string (a command can invoke `find` AND hand a recursive grep to a remote
+        executor AND smuggle one through a heredoc). Returning at the first hit
+        makes the agent fix that one, retry, and discover the next on the
+        following round trip — one wasted round per extra violation. Collect them
+        all so one corrective edit satisfies the whole set.
+        """
+        out: list[GuardVerdict] = []
         if ctx.tool_name != "shell":
-            return None
+            return out
 
         command = ctx.tool_args.get("command", "")
         if not command:
-            return None
+            return out
 
         sanitized = _sanitize(command)
+        _fix = ("[FIX] scope it: name a specific directory and add -maxdepth / "
+                "-name. If the root really is bounded and the cheaper channels "
+                "above do not apply, re-issue with _override_reason.")
 
         # Block on EVERY find invocation (not once-per-turn): each new find that
         # lacks an override should be stopped. The registry's override mechanism
@@ -948,27 +966,25 @@ class FindGuard(Guard):
         # _statement_find_violation adds token-anchored coverage for absolute
         # paths (/usr/bin/find) and prefix forms (sudo/nohup/VAR=val find).
         if _FIND_RE.search(sanitized) or _statement_find_violation(sanitized):
-            return _echo_received(
+            out.append(_echo_received(
                 GuardVerdict.block(
                     _FIND_MESSAGE,
                     reason="find_invocation",
                     category="find_guard",
                 ),
-                "command", command,
-            fix="[FIX] scope it: name a specific directory and add -maxdepth / -name. If the root really is bounded and the cheaper channels above do not apply, re-issue with _override_reason.",
-            )
+                "command", command, fix=_fix,
+            ))
 
         # Broad recursive grep: same cost class as a bare find.
         if _grep_is_broad(sanitized):
-            return _echo_received(
+            out.append(_echo_received(
                 GuardVerdict.block(
                     _GREP_MESSAGE,
                     reason="broad_recursive_grep",
                     category="find_guard",
                 ),
-                "command", command,
-            fix="[FIX] scope it: name a specific directory and add -maxdepth / -name. If the root really is bounded and the cheaper channels above do not apply, re-issue with _override_reason.",
-            )
+                "command", command, fix=_fix,
+            ))
 
         # Hidden invocations: find / broad grep inside payloads handed to
         # remote/shell executors (ssh, docker, kubectl, bash -lc, ...) or
@@ -978,7 +994,7 @@ class FindGuard(Guard):
         # _hidden_violation re-derives its own quote-preserving view.
         hidden = _hidden_violation(command, cwd=os.getcwd())
         if hidden is not None:
-            return hidden
+            out.append(hidden)
 
         # Round-2 lexical scanner: shell-semantics escape families the
         # string-regex layers above cannot see (word-splitting, line
@@ -986,9 +1002,9 @@ class FindGuard(Guard):
         # pipe-to-shell, nested substitution, shell-fed heredocs).
         scanned = _scan(command, cwd=os.getcwd())
         if scanned is not None:
-            return scanned
+            out.append(scanned)
 
-        return None
+        return out
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         return None

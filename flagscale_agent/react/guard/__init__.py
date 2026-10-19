@@ -152,9 +152,22 @@ _ESCALATE_HINT = (
 # the agent's OWN declaration, never the task's answer) and narrows the guess-retry
 # loop to a bounded corrective edit. Appended to every surfaced block/escalate.
 _REASON_DIAGNOSTIC = (
-    "\n\n[failing check: {reason}] — the FIRST sub-rule the block above tripped "
-    "(checks short-circuit, so later rules were not evaluated); this slug names "
-    "the check CATEGORY the declaration failed."
+    "\n\n[failing check: {reason}] — this slug names the check CATEGORY the "
+    "declaration failed. Every failing check evaluated at this decision point is "
+    "listed above, so you can fix them together instead of one at a time."
+)
+
+# Multi-block header. The registry merges EVERY failing check at a decision
+# point into ONE message: a guard cascade (surface one block, wait for the fix,
+# surface the next) makes the agent pay one full round trip per violation and
+# leaves the remaining violations invisible until it has already spent the fix
+# on the first. Reporting all of them at once costs the same single round trip
+# and lets one corrective edit satisfy the whole set. Nothing is dropped: each
+# block keeps its full message and its own failing-check slug.
+_MULTI_BLOCK_HEADER = (
+    "{n} independent requirements failed at this decision point. Fix them ALL in "
+    "one pass — they are reported together so you do not have to discover them "
+    "one round trip at a time:"
 )
 
 # Convergence escalation for a REPEATED block. The block channel has no
@@ -212,6 +225,30 @@ class Guard(abc.ABC):
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         """Post-execution check. Return inject to add context."""
         return None
+
+    def check_all_pre(self, ctx: GuardContext) -> list[GuardVerdict]:
+        """Every pre-check violation of this guard, not just the first.
+
+        A guard that internally evaluates several INDEPENDENT sub-rules (e.g. one
+        scanner per command family) naturally short-circuits: the first rule that
+        fires returns and the rest are never evaluated, so the agent fixes one
+        violation only to discover the next on the following round trip. Override
+        this to run the whole rule set and return EVERY violation found; the
+        registry merges them into a single message.
+
+        Default wraps check_pre so single-rule guards need no change.
+        """
+        verdict = self.check_pre(ctx)
+        if verdict is None:
+            return []
+        return [verdict]
+
+    def check_all_post(self, ctx: GuardContext) -> list[GuardVerdict]:
+        """Every post-check violation of this guard. See check_all_pre."""
+        verdict = self.check_post(ctx)
+        if verdict is None:
+            return []
+        return [verdict]
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
         """Validate LLM's override reason. Only called for block verdicts.
@@ -284,14 +321,21 @@ class GuardRegistry:
 
         collect-all + severity-rank + owner-scoped override:
         - Collect ALL block/escalate verdicts paired with their owning guard
-          (injects still merge, deduplicated by category).
+          (injects still merge, deduplicated by category). Guards that evaluate
+          several independent sub-rules contribute EVERY violation they find via
+          check_all_pre/check_all_post, not just their first.
         - Rank hardest-first (escalate > non-overridable > overridable); ties
           broken by guard priority (guards are pre-sorted, so stable sort keeps
           priority order within a severity tier).
-        - Present the single top-ranked block. Offer _override_reason ONLY to that
-          block's owning guard via guard.accept_override — a reason written for one
-          guard can never release another (Bug B root cause: global override_reason
-          fed to whichever guard happened to win).
+        - Present EVERY failing requirement in ONE message: the top-ranked block
+          leads, and the rest are merged beneath it with their own owner tag and
+          failing-check slug. They are delivered, not deferred — an agent that
+          fixes only the first and retries pays one full round trip per violation
+          for information it could have had at once.
+        - Offer _override_reason ONLY to the leading block's owning guard via
+          guard.accept_override — a reason written for one guard can never release
+          another (Bug B root cause: global override_reason fed to whichever guard
+          happened to win).
         - Stamp guard_name so the message names the owner.
         """
         blocks: list[tuple[Guard, GuardVerdict]] = []
@@ -303,25 +347,44 @@ class GuardRegistry:
         first_reason = ""
 
         check = (lambda g: g.check_pre(ctx)) if phase == "pre" else (lambda g: g.check_post(ctx))
+        # Collect EVERY violation per guard, not just its first. A guard with
+        # several independent sub-rules short-circuits check_pre at the first hit;
+        # reporting only that one makes the agent fix a violation, retry, and
+        # discover the next on a later round trip. check_all_* lets one guard
+        # contribute all of its violations to the same message.
+        collect = ((lambda g: g.check_all_pre(ctx)) if phase == "pre"
+                   else (lambda g: g.check_all_post(ctx)))
 
         for guard in self._guards:
-            verdict = check(guard)
-            if verdict is None:
-                continue
-
-            if verdict.action in ("block", "escalate"):
-                verdict.guard_name = guard.name
-                blocks.append((guard, verdict))
-            elif verdict.action == "inject":
-                cat = verdict.category
-                if cat and cat in inject_categories_seen:
+            seen_rule: set[tuple[str, str]] = set()
+            for verdict in collect(guard):
+                if verdict is None:
                     continue
-                if cat:
-                    inject_categories_seen.add(cat)
-                inject_messages.append(verdict.message)
-                inject_pairs.append((guard, verdict))
-                if not first_reason:
-                    first_reason = verdict.reason
+
+                if verdict.action in ("block", "escalate"):
+                    # One rule can be detected by more than one layer inside a
+                    # guard (e.g. a broad-grep regex layer AND the lexical
+                    # scanner confirm the same violation). Reporting it twice
+                    # from the same guard is noise, not extra information: the
+                    # agent would fix one thing and be told it twice. Keep the
+                    # first (richer) report per rule; distinct rules still all
+                    # appear.
+                    _key = (guard.name, verdict.reason)
+                    if _key in seen_rule:
+                        continue
+                    seen_rule.add(_key)
+                    verdict.guard_name = guard.name
+                    blocks.append((guard, verdict))
+                elif verdict.action == "inject":
+                    cat = verdict.category
+                    if cat and cat in inject_categories_seen:
+                        continue
+                    if cat:
+                        inject_categories_seen.add(cat)
+                    inject_messages.append(verdict.message)
+                    inject_pairs.append((guard, verdict))
+                    if not first_reason:
+                        first_reason = verdict.reason
 
         if blocks:
             # Stable sort by severity; priority ties already ordered by _guards sort.
@@ -334,11 +397,11 @@ class GuardRegistry:
             # called at most once per guard here, so no double-eval side effects.
             surfaced: GuardVerdict | None = None
             surfaced_guard: Guard | None = None
-            # Guards from this index down returned a block that a higher-ranked
-            # block outranked — their verdicts never reached the agent. Notify
-            # them so a one-shot side effect (e.g. consuming a pending-demand
-            # flag) is undone and the demand re-fires once the winner clears.
-            ranked_out_from: int | None = None
+            # Blocks that ALSO failed this decision point and are merged into the
+            # surfaced message. They are DELIVERED, not deferred: the agent sees
+            # every failing requirement in one message and can satisfy them in one
+            # corrective pass.
+            also_failing: list[tuple[Guard, GuardVerdict]] = []
             for idx, (guard, verdict) in enumerate(blocks):
                 # An override reason may release a block ONLY if that block is the
                 # one this registry surfaced to the agent last turn. You cannot
@@ -362,7 +425,7 @@ class GuardRegistry:
                     # gates on plan_update(complete)). When the first gate's block
                     # is released by an override, the guard's check_pre may now
                     # return a DIFFERENT block (the next gate). Re-call check_pre
-                    # and if it returns a new block with a different reason, surface
+                    # and if it returns a new block with a different reason, report
                     # THAT instead of silently releasing. This prevents an
                     # override reason written for Gate 1 from releasing Gate 5.
                     new_verdict = check(guard)
@@ -372,22 +435,15 @@ class GuardRegistry:
                         and new_verdict.reason != verdict.reason
                     ):
                         new_verdict.guard_name = guard.name
-                        surfaced, surfaced_guard = new_verdict, guard
-                        ranked_out_from = idx + 1
-                        break
-                    continue  # released; fall through to next hardest block
-                surfaced, surfaced_guard = verdict, guard
-                ranked_out_from = idx + 1
-                break
-
-            if surfaced is not None and ranked_out_from is not None:
-                # Blocks at ranked_out_from.. returned a block the agent never
-                # saw (outranked). Let each undo any one-shot side effect.
-                for out_guard, _ in blocks[ranked_out_from:]:
-                    try:
-                        out_guard.block_not_surfaced()
-                    except Exception:
-                        pass
+                        if surfaced is None:
+                            surfaced, surfaced_guard = new_verdict, guard
+                        else:
+                            also_failing.append((guard, new_verdict))
+                    continue  # released; fall through to next block
+                if surfaced is None:
+                    surfaced, surfaced_guard = verdict, guard
+                else:
+                    also_failing.append((guard, verdict))
 
             if surfaced is not None:
                 # Name the owner guard so the agent knows WHICH guard is blocking
@@ -423,6 +479,31 @@ class GuardRegistry:
                     # Non-overridable block: no override hint, but still name the
                     # owner so the agent addresses the right guard's required action.
                     surfaced.message += owner_tag + reason_tag
+                # ── Merge every OTHER failing requirement into the same message ──
+                # A cascade (surface one block, wait for the fix, surface the next)
+                # costs one full round trip PER violation and hides the rest until
+                # the agent has already spent a fix on the first. Report them all
+                # here instead: nothing is dropped, each keeps its full message and
+                # its own failing-check slug, and one corrective pass can satisfy
+                # the whole set. Ordering stays hardest-first.
+                if also_failing:
+                    extra = []
+                    for ex_guard, ex_verdict in also_failing:
+                        ex_owner = ex_verdict.guard_name or ex_guard.name
+                        ex_text = ex_verdict.message
+                        if ex_owner:
+                            ex_text += f"\n\n[blocked by guard: {ex_owner}]"
+                        if ex_verdict.reason:
+                            ex_text += _REASON_DIAGNOSTIC.format(reason=ex_verdict.reason)
+                        if ex_verdict.action == "escalate":
+                            ex_text += _ESCALATE_HINT
+                        extra.append(ex_text)
+                    surfaced.message += (
+                        "\n\n" + "=" * 62 + "\n"
+                        + _MULTI_BLOCK_HEADER.format(n=len(also_failing) + 1)
+                        + "\n" + "=" * 62 + "\n\n"
+                        + "\n\n" + "-" * 62 + "\n\n".join(extra)
+                    )
                 # Injects marked attach_on_block carry data built for THIS
                 # invocation (e.g. an execution-domain profile for the exact
                 # command under check). Dropping them on a concurrent block

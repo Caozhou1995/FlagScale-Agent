@@ -146,22 +146,37 @@ class ReviewerDeadlineGuard(Guard):
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
         """Enforce the contract the L2 block message states.
 
-        The reason must point at the reviewer's report file: a path that
-        EXISTS on disk, plus a quote of what the report says (a >=5-word
-        verbatim span of the reason must appear in the file). A text-only
-        reason can never satisfy this — passively claiming the report exists
-        without reading it is exactly the poll-chaining this guard exists to
-        stop. Trailing punctuation after the cited path (`,` `.` or backticks)
-        is tolerated.
+        The reason must be grounded in the reviewer's report: a report file that
+        EXISTS on disk and is non-empty, PLUS a quote of what it says (a
+        >=5-word verbatim span of the reason must appear in that file). A
+        text-only reason can never satisfy this — passively claiming the report
+        exists without reading it is exactly the poll-chaining this guard exists
+        to stop.
+
+        WHERE the report lives is NOT inferred from the reason's prose. The
+        ledger already records it: the reviewer's contract carries `output_ptr`,
+        the absolute path that worker was required to write. Reading it from
+        there is authoritative; guessing paths out of free text is a lexical
+        extraction of the kind this harness does not do (a reworded reason with
+        no literal path would have been rejected, while a stray path-shaped word
+        could have latched an unrelated file).
         """
         if not reason:
             return False
-        # A reason may cite the path in ordinary prose: pull every path-shaped
-        # token, trim trailing punctuation/backticks/quotes, and accept if ANY
-        # of them names a real report file that the reason then quotes.
-        candidates = re.findall(r"/(?:[^\s'\"`])+", reason)
-        for raw in candidates:
-            path = raw.rstrip(".,;:!?`'\")]}")
+
+        # Authoritative candidates: the reviewer's contracted output path, then
+        # any explicit absolute path the agent typed (an exact token, not a
+        # pattern-scraped span), in case the agent is citing an ancillary report.
+        candidates: list[str] = []
+        report = self._reviewer_report_path(reason)
+        if report:
+            candidates.append(report)
+        for tok in reason.replace("`", " ").split():
+            t = tok.strip(".,;:!?\"')]}")
+            if t.startswith("/") and t not in candidates:
+                candidates.append(t)
+
+        for path in candidates:
             try:
                 with open(path, "r", errors="replace") as fh:
                     text = fh.read()
@@ -171,14 +186,47 @@ class ReviewerDeadlineGuard(Guard):
                 continue
             # The reason must quote the report: some >=5-word verbatim span of
             # the reason must appear in the file (whitespace-normalized on both
-            # sides; the path token itself is the pointer, not the evidence).
+            # sides). Mechanically admissible, and it is the same membership test
+            # the evidence gates use — not a semantic judgement.
             norm_text = " ".join(text.split())
-            tokens = re.sub(r"/(?:[^\s'\"`])+", " ", reason).split()
+            tokens = [t for t in reason.replace("`", " ").split()
+                      if not t.strip(".,;:!?\"')]}")
+                      .startswith("/")]
+            if not tokens:
+                continue
             for i in range(max(0, len(tokens) - 4)):
                 window = " ".join(tokens[i : i + 5])
                 if window in norm_text:
                     return True
         return False
+
+    def _reviewer_report_path(self, reason: str) -> str:
+        """The output path the reviewer was contracted to write, from the ledger.
+
+        Tries each task id this guard currently tracks (and, when the reason
+        names one verbatim, that one first). Returns "" when no reviewer record
+        or no contracted path is available — callers then fall back to an
+        explicitly typed absolute path.
+        """
+        try:
+            from flagscale_agent.react.multi_agent.ledger import TaskLedger
+            from flagscale_agent.react.multi_agent.wiring import get_tasks_dir
+
+            ledger = TaskLedger(get_tasks_dir())
+        except Exception:
+            return ""
+        ids = list(self._not_ready.keys())
+        for tid in ids:
+            try:
+                rec = ledger.get(tid)
+            except Exception:
+                continue
+            if rec is None or rec.contract is None:
+                continue
+            ptr = getattr(rec.contract, "output_ptr", "") or ""
+            if ptr:
+                return ptr
+        return ""
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _stats(self) -> dict | None:

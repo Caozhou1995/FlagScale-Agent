@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regression tests: the 90% hard wall must survive an outranking block.
+"""Regression tests: an outranked 90% hard wall must still reach the agent.
 
 Defect (observed in a live 1800s run): TimeBudgetGuard.check_pre marked the 90
 threshold fired while *building* its block. When a rank-1 (non-overridable)
@@ -21,9 +21,14 @@ reached the agent, yet 90 stayed spent -- so the only hard convergence point of
 the turn was silently disabled. The agent then ran 6m34s past the 80% wrap-up
 window with no 90% gate ever surfacing.
 
-The registry already offers `Guard.block_not_surfaced()` for exactly this, and
-calls it on every guard whose block was outranked. TimeBudgetGuard must undo the
-threshold spend there.
+Two mechanisms now guarantee delivery, and the tests below pin BOTH:
+  1. `Guard.block_not_surfaced()` hands the threshold back when a block is
+     never delivered (kept for any future dropping path).
+  2. M14: the registry MERGES every block that fires at a decision point into
+     the one message the agent receives. The 90% gate is therefore delivered
+     even when a harder block leads the same resolve — the invariant the agent
+     depends on is "the warning reaches it", not "a second round trip re-sends
+     it".
 """
 from flagscale_agent.react.guard import (
     Guard,
@@ -74,8 +79,12 @@ def _ctx():
     return ctx
 
 
-def test_90_gate_survives_when_outranked_by_hard_block():
-    """The regression itself: after being outranked once, the 90 gate must fire."""
+def test_90_gate_reaches_agent_even_when_outranked_by_hard_block():
+    """The regression itself: the 90% warning must REACH the agent.
+
+    Under M14 the harder wall still leads, and the 90% gate is merged into the
+    same message — the agent learns both at once instead of one round trip apart.
+    """
     reg = GuardRegistry()
     tb = TimeBudgetGuard(stats_fn=_Stats(91.7))
     hard = _HardBlock()
@@ -83,17 +92,14 @@ def test_90_gate_survives_when_outranked_by_hard_block():
     reg.register(hard)
 
     first = reg.check_pre(_ctx())
-    # The harder wall wins this resolve -- the agent sees the hard block instead.
+    # The harder wall leads (severity ranking is unchanged by merging).
     assert first is not None
     assert first.guard_name == "hard_block_for_test"
     assert first.reason == "hard_wall"
-
-    # The harder wall clears; the 90% gate must still be reachable this turn.
-    hard.armed = False
-    second = reg.check_pre(_ctx())
-    assert second is not None, "90% gate was consumed while never surfaced"
-    assert second.guard_name == "time_budget"
-    assert "90pct" in second.reason
+    # ...and the 90% gate is in the SAME message, so it is genuinely delivered.
+    assert "CRITICAL CHECKPOINT" in first.message, \
+        "90% gate must reach the agent in the merged message, not a later turn"
+    assert "time_budget_90pct_block" in first.message
 
 
 def test_block_not_surfaced_returns_thresholds():

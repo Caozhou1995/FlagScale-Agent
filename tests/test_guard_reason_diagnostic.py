@@ -120,10 +120,11 @@ class TestReasonDiagnostic:
         assert "failing check" not in v.message
 
     def test_diagnostic_makes_no_overclaim(self):
-        # Checks short-circuit at the FIRST failure, so the diagnostic must not
-        # claim later sub-rules "already passed" (they were never evaluated) nor
-        # promise field-level precision (a slug can span many sub-check sites).
+        # M14: every failing check evaluated at a decision point is listed in
+        # the merged message, so the diagnostic must not claim later sub-rules
+        # "already passed" nor promise field-level precision (a slug can span
+        # many sub-check sites).
         v = _resolve(_StructuredBlock())
         assert "already passed" not in v.message
-        assert "FIRST sub-rule" in v.message
+        assert "listed above" in v.message
         assert "CATEGORY" in v.message

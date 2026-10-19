@@ -53,36 +53,30 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
 from flagscale_agent.react.display import has_override_completion, trailing_sentinel
 
-# Mirrors plan_update._parse_step_id: the handler accepts "1", "step_1",
-# "step 2", etc. and normalizes to an int before mutating the plan. The guard
-# MUST normalize identically, or a string id ("step_1") misses the plan lookup
-# (step.get("id") == 1 fails), the lookup falls back to permissive, and the
-# gate is bypassed while the handler still marks the step done.
-_STEP_ID_RE = re.compile(r"(?:step[_\s]?)?#?(\d+)", re.IGNORECASE)
-
 
 def _normalize_step_id(raw) -> int | None:
-    """Normalize a step id the SAME way the plan_update tool does.
+    """Normalize a step id EXACTLY the way the plan_update tool does.
 
-    Returns an int for any accepted form (1, "1", "step_1", "step 2", "Step #3"),
-    else None. The guard's lookups use this so what the guard checks is exactly
-    the step the handler will mutate.
+    Delegates to the handler's own parser rather than keeping a second copy of
+    the rule. The guard's lookups must agree with what the handler will mutate;
+    two implementations of "which step does this id name" drift apart silently —
+    the handler accepts a form the guard does not, the guard's lookup misses, and
+    the gate is bypassed while the step still gets marked done. One parser, used
+    by both, makes that impossible. Falls back to a local scalar normalize (no
+    text scanning) if the handler is unavailable.
     """
+    try:
+        from flagscale_agent.react.tools.plan_update import _parse_step_id
+
+        return _parse_step_id(raw)
+    except Exception:
+        pass
     if isinstance(raw, bool):
         return None
     if isinstance(raw, int):
         return raw
     if isinstance(raw, float):
         return int(raw)
-    if isinstance(raw, str):
-        s = raw.strip()
-        try:
-            return int(s)
-        except ValueError:
-            pass
-        m = _STEP_ID_RE.search(s)
-        if m:
-            return int(m.group(1))
     return None
 
 
@@ -1372,7 +1366,7 @@ explicitly rather than omitting it -- an omitted constraint and an unmeasurable
 one are different states, and only the second is admissible."""
 
 
-def _oracle_exercised(act, observed, first_exercise=None) -> bool:
+def _oracle_exercised(act, observed, first_exercise=None, judge=None) -> bool:
     """True when a recorded act shows the bound oracle's exercise was RUN.
 
     The framing-time oracle declaration names an oracle and its ``first_exercise``
@@ -1394,30 +1388,39 @@ def _oracle_exercised(act, observed, first_exercise=None) -> bool:
     STRUCTURAL validity is checked first and always. The corpus-membership test
     fails open ONLY when the corpus itself is unavailable (``observed is None``),
     so a task whose session log cannot be read is not spuriously blocked.
+
+    The topical-relation test between the recorded command and the declared
+    first_exercise is SEMANTIC ("is this the same check on the same subject?"),
+    so it is delegated to the judge — an LLM reads both and decides. Token
+    overlap was the previous implementation and it drew the conclusion from a
+    bag of shared words: a `cat` of a file whose name happened to match counted
+    as "the oracle was exercised", while a genuine re-invocation through a
+    different runner (`python -m pytest -q tests/a.py::K` vs `pytest tests/a.py`)
+    could be rejected. Re-wording is not a different exercise. With no judge we
+    fail OPEN on this axis (we cannot read the relation, so we do not block),
+    while the corpus-membership half below stays fully mechanical.
     """
     if not isinstance(act, dict):
         return False
     if not (_is_real_str(act.get("command")) and _is_real_str(act.get("observed"))):
         return False
     if _is_real_str(first_exercise):
-        _cmd_toks = _significant_tokens(act["command"])
-        _ex_toks = _significant_tokens(first_exercise)
-        if _cmd_toks and _ex_toks and not (_cmd_toks & _ex_toks):
-            return False
+        if judge is None:
+            pass  # fail open: no reader for the prose relation
+        else:
+            try:
+                same = judge.classify(
+                    "acts_on_same_subject",
+                    {"first_exercise": first_exercise, "action": act["command"]},
+                    default=True,
+                )
+            except Exception:
+                same = True  # fail open: a dead judge must not manufacture a block
+            if same is False:
+                return False
     return _evidence_observed(act, observed)
 
 
-# A "significant" token for the oracle-exercise topical relation: an
-# identifier/path-like run of >=4 characters (so `torch`, `pytest`, `tests/foo.py`,
-# `import`), case-folded. Short glue ("in", "the", "-c") is ignored so it cannot
-# manufacture a spurious match. Used ONLY to require the recorded command to
-# relate to the declared exercise -- generic, not task-specific.
-_TOPK_RE = re.compile(r"[a-z0-9_./-]{4,}")
-
-
-def _significant_tokens(s: str) -> set:
-    """Identifier/path-like tokens (>=4 chars, case-folded) in ``s``."""
-    return set(_TOPK_RE.findall((s or "").lower()))
 # what it TESTED and what it merely ASSERTED ----
 # The failure this closes: a step can rest on premises that live only in the
 # reasoning trace ("this is close enough", "assume the field is 4 bytes", "the
@@ -2325,7 +2328,7 @@ class VerificationGuard(Guard):
                     self._acceptance_observed = True
                 if _oracle_exercised(
                         ctx.tool_args.get("oracle_act"), self._observed(ctx),
-                        self._bound_oracle().get("first_exercise")):
+                        self._bound_oracle().get("first_exercise"), ctx.judge):
                     self._oracle_exercised_seen = True
                 return None
 
@@ -2422,7 +2425,8 @@ class VerificationGuard(Guard):
                         if oact is None:
                             oact = ctx.tool_args.get("oracle_act")
                         if _oracle_exercised(oact, self._observed(ctx),
-                                             self._bound_oracle().get("first_exercise")):
+                                             self._bound_oracle().get("first_exercise"),
+                                             ctx.judge):
                             self._oracle_exercised_seen = True
 
         # Timing 2: post-recovery, inject reminder on first step_doing
