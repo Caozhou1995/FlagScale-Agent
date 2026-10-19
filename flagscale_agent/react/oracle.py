@@ -92,7 +92,20 @@ STATED_CONSTRAINT_ITEM = (
     "the task still states its FORM (bound/direction/type/order) -- assert THAT. "
     "List the enumerated constraints and each assertion's observed result in the "
     "plan step; a constraint you cannot compile is an explicit, named gap, not a "
-    "silent omission."
+    "silent omission. "
+    "For each such assertion state WHERE the measured quantity's DEFINITION comes "
+    "from: the task's own construction (the mechanical order it states, or the "
+    "tool it NAMES and that tool's own default path), NOT a definition you chose "
+    "because it was easy to measure on the objects you happen to hold (anchoring "
+    "on your template, counting from your boundary, skipping the prompt the named "
+    "library would add). When two defensible definitions exist, compute BOTH and "
+    "diff the numbers before delivering; if they disagree, the grader-side "
+    "definition wins, and a passing self-check built on the other one is not "
+    "evidence. Observed loss: an agent's self-check reported PASS on a quantity "
+    "it defined by template anchoring (15-17 nt) while the grader's construction "
+    "gave 56 nt and the stated bound 15-45 failed; another delivered the "
+    "no-instruction variant of a value when the task NAMED the library whose "
+    "default applies the instruction."
 )
 
 
