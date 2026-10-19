@@ -123,9 +123,14 @@ class AgentKernel:
     # content." x2310, "Let me write the file." x2309, "OK." x1153, plus four
     # "OK, writing…" variants): DISTINCT_MOST=6 over a 12-response window fires
     # at response #470 of that log (~5% in), while genuine work introduces new
-    # distinct texts every few steps and stays far above the bound. 0 disables.
-    DEGENERATE_REPEAT_WINDOW_CALLS = 12
-    DEGENERATE_REPEAT_DISTINCT_MOST = 6
+    # distinct texts every few steps and stays far above the bound. Calibrated
+    # on the real log AND on a uniform-cycle stress case (a balanced 8-phrase
+    # cycle is the same dead loop but a 12/6 window sees 8 distinct and misses
+    # it): 16/8 fires on both, fires on the real log at response #482 of 9907
+    # (~4.9%), and still never fires on genuine work with 16+ distinct texts.
+    # 0 disables.
+    DEGENERATE_REPEAT_WINDOW_CALLS = 16
+    DEGENERATE_REPEAT_DISTINCT_MOST = 8
     # Bytes of the assistant text used for the fingerprint. Short filler
     # phrases ("OK.", "Let me write it.") are fully covered; for a long
     # response the TAIL is the part that repeats.

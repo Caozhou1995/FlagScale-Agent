@@ -106,6 +106,25 @@ def test_tool_call_resets_the_window():
     assert len(w.win) == 1
 
 
+def test_uniform_period8_cycle_is_stopped():
+    """STRESS CASE found by perturbation: a BALANCED 8-phrase cycle is the same
+    dead loop, but a 12/6 window sees 8 distinct texts and misses it while the
+    real (skewed-frequency) log still fired. 16/8 must catch both."""
+    cycle8 = _FILLER_CYCLE + [
+        "OK, writing now.",
+        "OK, I'll write it.",
+        "OK, writing.",
+        "OK, I'll write it now.",
+    ]
+    w = _Window()
+    tripped = False
+    for i in range(len(cycle8) * 5):
+        if w.feed(cycle8[i % len(cycle8)]):
+            tripped = True
+            break
+    assert tripped, "uniform 8-phrase cycle escaped the breaker"
+
+
 def test_whitespace_variation_still_counts_as_the_same_loop():
     fp = _Window()
     variants = ["Let me write it.", "Let  me write\nit.", "Let me write it.  "]
