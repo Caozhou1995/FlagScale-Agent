@@ -943,6 +943,123 @@ def _evidence_observed(ev, corpus) -> bool:
     return n in corpus
 
 
+def _longest_common_snippet(needle_norm: str, corpus_norm: str, min_len: int = 12) -> str:
+    """Longest run of `needle_norm` that actually occurs in `corpus_norm`.
+
+    Used ONLY to explain a failed grounding match back to the agent. It is a
+    deterministic boundary search (coarse-to-fine over the needle, both already
+    normalized), not a similarity heuristic: the returned text is guaranteed to
+    be a real substring of the corpus, so the agent can paste it verbatim and
+    pass on the next attempt.
+
+    `min_len` is deliberately small (12): a real paraphrase of a real tool output
+    usually still shares 12+ contiguous characters with it (an identifier, a
+    number with its label, a file path), and that shared run is exactly the
+    anchor the agent needs. When even that does not line up, the observation did
+    not come from any tool result — which is itself the signal, and the caller
+    then falls back to showing the corpus itself.
+    """
+    if not needle_norm or not corpus_norm:
+        return ""
+    if needle_norm in corpus_norm:
+        return needle_norm
+    # Sliding window over the needle: shrink from both ends until a substring of
+    # the needle is found in the corpus. Deterministic, O(len^2) worst case but
+    # the needle is a short pasted observation, and this runs only on a FAILED
+    # check (rare, and the cost is dwarfed by the round trip it saves).
+    best = ""
+    n = len(needle_norm)
+    step = max(1, n // 64)  # coarse-to-fine: bounded work on long needles
+    for start in range(0, n, step):
+        for end in range(n, start + len(best), -step):
+            cand = needle_norm[start:end]
+            if len(cand) > len(best) and cand in corpus_norm:
+                best = cand
+                break
+    if len(best) < min_len:
+        return ""
+    return best
+
+
+def _evidence_observed_diagnosis(ev, corpus, corpus_raw=None) -> str:
+    """Human/LLM-readable WHY a failed grounding check failed, plus the fix.
+
+    Appended to the block message so the agent does not have to guess how strict
+    "must be findable in your session's tool results" is (observed in a live run:
+    the agent re-pasted paraphrase after paraphrase, each time guessing at the
+    required exactness, burning its wall-clock budget). The guidance is derived
+    from the agent's OWN declaration and the harness's OWN corpus — no task
+    content, no per-case text:
+
+      1. Echo what was checked (the normalized needle, its length).
+      2. If a substantial prefix/slice of it DOES occur in the corpus, show the
+         largest real matching slice and say: paste THIS exactly.
+      3. Otherwise say the text does not occur at all, and give the concrete
+         command shape that dumps the true tool output so it can be copied.
+    """
+    obs = ev.get("observed") if isinstance(ev, dict) else None
+    if not _is_real_str(obs):
+        return (
+            "\n\n[how to fix] `observed` must be the RAW text a tool produced in "
+            "this session. You passed a non-string or an empty value. Copy the "
+            "exact characters out of a tool result, e.g. the line `ls` printed."
+        )
+    needle = _normalize_for_grounding(obs)
+    if corpus is None:
+        return ""
+    if not corpus:
+        return (
+            "\n\n[how to fix] No tool-result text has been recorded in this "
+            "session yet, so nothing can be observed. RUN the probe first, then "
+            "paste its output."
+        )
+    snippet = _longest_common_snippet(needle, corpus)
+    if snippet:
+        return (
+            "\n\n[how to fix — this is the whole problem] Your `observed` is "
+            f"{len(needle)} chars; the longest part of it that really occurs in "
+            "your recorded tool results is the slice below. Paste THAT text "
+            "byte-for-byte (whitespace and case are ignored, nothing else is):\n"
+            f"  ---8<--- real text from your tool results ---\n  {snippet}\n"
+            "  --->8---\n"
+            "Do not paraphrase, summarize, or reformat an observation: the check "
+            "is membership in the recorded output, not semantic similarity."
+        )
+    return (
+        f"\n\n[how to fix — this is the whole problem] None of your `observed` "
+        f"({len(needle)} chars) occurs in any tool result recorded this session. "
+        "That means it was written from memory or paraphrased. Produce the text "
+        "with a real command and copy its raw output, e.g.:\n"
+        "  · re-run the probe and paste stdout verbatim, or\n"
+        "  · `cat <the file you wrote>` / `head -c 400 <file>` and paste exactly "
+        "what it prints.\n"
+        "Whitespace and letter case are ignored; nothing else is — no ellipses, "
+        "no `...`, no re-wording."
+        + _corpus_tail_hint(corpus)
+    )
+
+
+def _corpus_tail_hint(corpus_norm: str, tail_chars: int = 600) -> str:
+    """Show the END of the recorded tool-result text so the agent can copy from it.
+
+    When nothing of the agent's `observed` matches at all, the most useful thing
+    the harness can hand back is what the recorded output ACTUALLY looks like —
+    the agent then sees the real wording/format instead of guessing again. This
+    is bounded (last `tail_chars` of the normalized corpus) and derived only from
+    the harness's own record, so it carries no task content.
+    """
+    if not corpus_norm:
+        return ""
+    tail = corpus_norm[-tail_chars:]
+    head = "…" if len(corpus_norm) > tail_chars else ""
+    return (
+        "\n\nFor reference, the END of what your tool results actually recorded "
+        "(normalized: whitespace collapsed, lowercased). Copy a contiguous run "
+        f"from here — it is guaranteed to match:\n  ---8<---\n  {head}{tail}\n"
+        "  --->8---"
+    )
+
+
 def _declares_graded_reading(dr) -> bool:
     """True when `dr` is a REAL (non-none) deliverable_reading declaration.
 
@@ -1173,11 +1290,12 @@ def _check_unverified_assumptions_field(field, observed: str = None):
                 category="verification_required",
             )
         if affects == "yes":
-            if not _evidence_observed(
-                    {"command": it.get("probe"), "observed": it.get("probe_output")},
-                    observed):
+            _ev_assume = {"command": it.get("probe"),
+                          "observed": it.get("probe_output")}
+            if not _evidence_observed(_ev_assume, observed):
                 return GuardVerdict.block(
-                    message=_UNVERIFIED_ASSUMPTIONS_AFFECTS,
+                    message=(_UNVERIFIED_ASSUMPTIONS_AFFECTS
+                             + _evidence_observed_diagnosis(_ev_assume, observed)),
                     reason="assumptions_affecting_without_test",
                     category="verification_required",
                 )
@@ -1379,10 +1497,11 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             )
         if not _evidence_observed(hedge.get("evidence"), observed):
             return GuardVerdict.block(
-                message=_HEDGE_UNPROVEN,
+                message=(_HEDGE_UNPROVEN
+                         + _evidence_observed_diagnosis(hedge.get("evidence"), observed)),
                 reason="hedge_evidence_unobserved",
                 category="verification_required",
-            overridable=False,
+                overridable=False,
             )
         extras = str(hedge.get("extras_direction") or "").strip().lower()
         if extras not in ("ignored", "penalized"):
@@ -1426,7 +1545,8 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                         or not _is_real_str(ev.get("command"))
                         or not _evidence_observed(ev, observed)):
                     return GuardVerdict.block(
-                        message=_HEDGE_DIRECTION_EVIDENCE,
+                        message=(_HEDGE_DIRECTION_EVIDENCE
+                                 + _evidence_observed_diagnosis(ev, observed)),
                         reason="hedge_direction_evidence_malformed",
                         category="verification_required",
                     overridable=False,
@@ -1464,7 +1584,9 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
         # hedge was really tried and its result seen.
         if not _evidence_observed(if_none.get("union_attempt"), observed):
             return GuardVerdict.block(
-                message=_HEDGE_UNPROVEN,
+                message=(_HEDGE_UNPROVEN
+                         + _evidence_observed_diagnosis(
+                             if_none.get("union_attempt"), observed)),
                 reason="hedge_union_unattempted",
                 category="verification_required",
             overridable=False,
@@ -1527,7 +1649,8 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             # intersection if the rejection itself had to be run.
             if not _evidence_observed(e.get("evidence"), observed):
                 return GuardVerdict.block(
-                    message=_HEDGE_UNPROVEN,
+                    message=(_HEDGE_UNPROVEN
+                             + _evidence_observed_diagnosis(e.get("evidence"), observed)),
                     reason="hedge_rejection_unobserved",
                     category="verification_required",
                 overridable=False,
