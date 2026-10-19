@@ -429,6 +429,85 @@ _CONVENTION_NO_VALUE = frozenset(
 )
 
 
+
+def _found_report(path, value, want):
+    """One line stating the field, the value actually received, and what was
+    wanted. This is the whole point of a mechanical check: it can name the
+    rejected value, so the reader never has to guess it.
+
+    Kept format-stable and short: the value is repr'd (so an empty string, a
+    dict, a None and a typo'd key are all visually distinct) and truncated so a
+    huge nested object cannot flood the context it is trying to help.
+    """
+    try:
+        shown = repr(value)
+    except Exception:
+        shown = "<unrepresentable %s>" % type(value).__name__
+    if len(shown) > 240:
+        shown = shown[:240] + "...(truncated)"
+    return ("\n[WHERE IT FAILED] %s: found %s (type %s); wanted %s.\n"
+            "[FIX] Keep every other field exactly as it is and correct only "
+            "this one, then re-issue the same call.\n"
+            % (path, shown, type(value).__name__, want))
+
+
+def _collect_fixed_field_failures(checks):
+    """Run every fixed-field check and merge ALL failures into ONE block.
+
+    Why merge: the checks are independent and the model can only fix what it is
+    told about. Returning the first failure makes three malformed fixed fields
+    cost three rounds (measured: a single round reveals 1 of 3), and each round
+    is a full model call — so short-circuiting is exactly what turns a
+    mechanical shape error into the "guess, get blocked, guess again" loop. The
+    three checks are pure shape+copies, so evaluating them all is free and
+    cannot produce a wrong accept.
+
+    ``checks`` is a list of (verdict_or_None). Returns one merged verdict or None.
+    """
+    bad = [v for v in checks if v is not None]
+    if not bad:
+        return None
+    if len(bad) == 1:
+        return bad[0]
+    head = bad[0]
+    parts = [head.message]
+    for extra in bad[1:]:
+        parts.append("\n" + "-" * 68 + "\n" + extra.message)
+    head.message = (
+        "[VerificationGuard] %d required fields are wrong in this ONE call. "
+        "Fix ALL of them together and re-issue once — they are independent, so "
+        "fixing one at a time costs one round each.\n" % len(bad)
+        + "\n".join(parts)
+        + "\n[REJECTED FIELDS] " + ", ".join(v.reason or "?" for v in bad) + "\n"
+    )
+    return head
+
+
+def _echo_received(bad, name, raw):
+    """Append the RAW value the validator actually received to any block.
+
+    This is the one place that covers every malformed-field branch at once: the
+    checker already holds ``raw`` — echoing it converts "the declaration is
+    malformed" (guess which part) into "here is exactly what you sent" (copy and
+    fix). Applied at the six dispatch sites rather than in 59 individual
+    branches, so a future branch inherits the behaviour for free.
+    """
+    if bad is None:
+        return None
+    try:
+        shown = repr(raw)
+    except Exception:
+        shown = "<unrepresentable %s>" % type(raw).__name__
+    if len(shown) > 400:
+        shown = shown[:400] + "...(truncated, %d chars total)" % len(repr(raw))
+    bad.message = (bad.message
+                   + "\n[RECEIVED] %s = %s\n" % (name, shown)
+                   + "[FIX] compare the value above with the shape the message "
+                     "asks for, change only the part that differs, and re-issue "
+                     "the same call.\n")
+    return bad
+
+
 def _is_real_str(v):
     """A REAL evidence string: a non-empty ``str`` that is not a no-value token.
 
@@ -1255,7 +1334,9 @@ def _check_unverified_assumptions_field(field, observed: str = None):
     elif isinstance(field, dict):
         if "unverified" not in field:
             return GuardVerdict.block(
-                message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+                message=_UNVERIFIED_ASSUMPTIONS_MALFORMED
+                + _found_report("step_done.assumptions", field,
+                                "a dict whose only required key is \"unverified\""),
                 reason="assumptions_unverified_key_missing",
                 category="verification_required",
             )
@@ -1275,10 +1356,12 @@ def _check_unverified_assumptions_field(field, observed: str = None):
             reason="assumptions_unverified_not_list",
             category="verification_required",
         )
-    for it in items:
+    for _i, it in enumerate(items):
         if not isinstance(it, dict) or not _is_real_str(it.get("claim")):
             return GuardVerdict.block(
-                message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+                message=_UNVERIFIED_ASSUMPTIONS_MALFORMED
+                + _found_report("step_done.assumptions[%d]" % _i, it,
+                                "a dict with a non-empty string \"claim\""),
                 reason="assumptions_item_malformed",
                 category="verification_required",
             )
@@ -1302,7 +1385,10 @@ def _check_unverified_assumptions_field(field, observed: str = None):
         else:
             if not _is_real_str(it.get("reason")):
                 return GuardVerdict.block(
-                    message=_UNVERIFIED_ASSUMPTIONS_MALFORMED,
+                    message=_UNVERIFIED_ASSUMPTIONS_MALFORMED
+                    + _found_report("step_done.assumptions[%d].reason" % _i,
+                                    it.get("reason"),
+                                    "a non-empty sentence: why it cannot change the result"),
                     reason="assumptions_nonaffecting_without_reason",
                     category="verification_required",
                 )
@@ -1670,8 +1756,26 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 )
         for k in ("bet_on", "bet_loses_when", "why_safe"):
             if not _is_real_str(if_none.get(k)):
+                # Say WHICH field and WHAT was found. A mechanical checker knows
+                # both facts; withholding them makes the reader guess the field
+                # name from a 600-word spec, and it will guess wrong (observed:
+                # 42 identical rejections in one trial, the reader cycling
+                # "maybe it wants X... or maybe Y..." on every round).
+                _v = if_none.get(k, "<missing>")
+                _shown = repr(_v) if not isinstance(_v, str) else (
+                    "an empty/placeholder string " + repr(_v) if not _v.strip()
+                    else "a placeholder token " + repr(_v))
                 return GuardVerdict.block(
-                    message=_HEDGE_UNPROVEN,
+                    message=_HEDGE_UNPROVEN + (
+                        "\n[WHERE IT FAILED] if_none.%s is not a real string: "
+                        "found %s (type %s). Keep every other field exactly as "
+                        "you have it and replace ONLY this one with a sentence "
+                        "of plain prose.\n"
+                        "  bet_on           = the one reading you are betting on\n"
+                        "  bet_loses_when   = the world-state in which that bet is wrong\n"
+                        "  why_safe         = why that world-state cannot happen here\n"
+                        % (k, _shown, type(_v).__name__)
+                    ),
                     reason="hedge_bet_forfeit_missing",
                     category="verification_required",
                 overridable=False,
@@ -1986,21 +2090,25 @@ class VerificationGuard(Guard):
                 # itself an explicit declaration ({"name": "none"} or "none"),
                 # so a silent omission is impossible. Runs AFTER the mode checks
                 # so the agent first supplies its evidence, then the declaration.
-                bad = _check_convention_field(ctx.tool_args.get("convention"))
-                if bad is not None:
-                    return bad
                 dr = ctx.tool_args.get("deliverable_reading")
-                bad = _check_deliverable_reading_field(
-                    dr, self._task_text(), self._observed(ctx))
-                if bad is not None:
-                    return bad
                 # The unverified-assumption audit is a FIXED, REQUIRED field on
                 # EVERY step_done, parallel to convention/deliverable_reading:
                 # reasoning is not evidence, so any premise left untested must be
                 # surfaced — an affecting one tested, a non-affecting one
                 # justified. "none" is an explicit owned claim.
-                bad = _check_unverified_assumptions_field(
-                    ctx.tool_args.get("assumptions"), self._observed(ctx))
+                bad = _collect_fixed_field_failures([
+                    _echo_received(
+                        _check_convention_field(ctx.tool_args.get("convention")),
+                        "convention", ctx.tool_args.get("convention")),
+                    _echo_received(
+                        _check_deliverable_reading_field(
+                            dr, self._task_text(), self._observed(ctx)),
+                        "deliverable_reading", dr),
+                    _echo_received(
+                        _check_unverified_assumptions_field(
+                            ctx.tool_args.get("assumptions"), self._observed(ctx)),
+                        "assumptions", ctx.tool_args.get("assumptions")),
+                ])
                 if bad is not None:
                     return bad
                 if _declares_graded_reading(dr):
@@ -2075,21 +2183,25 @@ class VerificationGuard(Guard):
                         conv = u.get("convention")
                         if conv is None:
                             conv = ctx.tool_args.get("convention")
-                        bad = _check_convention_field(conv)
-                        if bad is not None:
-                            return bad
                         dr = u.get("deliverable_reading")
                         if dr is None:
                             dr = ctx.tool_args.get("deliverable_reading")
-                        bad = _check_deliverable_reading_field(
-                            dr, self._task_text(), self._observed(ctx))
-                        if bad is not None:
-                            return bad
                         asm = u.get("assumptions")
                         if asm is None:
                             asm = ctx.tool_args.get("assumptions")
-                        bad = _check_unverified_assumptions_field(
-                            asm, self._observed(ctx))
+                        bad = _collect_fixed_field_failures([
+                            _echo_received(
+                                _check_convention_field(conv),
+                                "updates[].convention", conv),
+                            _echo_received(
+                                _check_deliverable_reading_field(
+                                    dr, self._task_text(), self._observed(ctx)),
+                                "updates[].deliverable_reading", dr),
+                            _echo_received(
+                                _check_unverified_assumptions_field(
+                                    asm, self._observed(ctx)),
+                                "updates[].assumptions", asm),
+                        ])
                         if bad is not None:
                             return bad
                         if _declares_graded_reading(dr):
