@@ -139,3 +139,58 @@ mount=repo-root                   (层3 敞开): n=38 best=4/4  totals=[...4 个
 一个反例同时成立、必须记住：`four_m44` 的 model-extraction 在**零泄漏**下拿到 1
 （agent 自行做 kink 检测 + 方向聚类，并自发做跨宽度 12/30/8 泛化验证，交付 (20,10)，
 `PASSED test_stolen_matrix_matches`）。所以**不能把每一票都归因于泄漏**——需要按任务分别统计。
+
+## 10. 零泄漏逐任务结论（`four_m44` / `four_m45`，实测）
+
+样本：`four_m44`（17:37 启动，mount=`agent_stage2`，容器内 4 通道实测 `all_leak_hits=0`）、
+`four_m45`（18:02 启动，同 mount）。
+
+### 10.1 four_m44 逐票（harbor 自己的 `verifier/reward.txt`）
+
+| 任务 | reward | 失败签名（verifier 原文） |
+|---|---|---|
+| model-extraction-relu-logits | **1** | — `PASSED test_stolen_matrix_matches`（1 passed） |
+| mteb-retrieve | **0** | `assert 'HumanEval: B…onal examples' == 'MTEB: Massiv…ing Benchmark'` |
+| dna-insert | PEND | — |
+| pytorch-model-cli | PEND | — |
+
+### 10.2 mteb 的反直觉点（必须记住，我先前判断错过一次）
+
+零泄漏下 agent **知道** mteb 有两条 encode 约定，并在总结里逐字写出：
+
+```
+mteb's `encode` has two paths. The tool's *default* path (`prompt_type=None`)
+applies no prompt; the *retrieval-t[ask]… path applies one
+```
+
+它引入了 `PromptType` 84 次，最终仍**主动选了 default 路径**，交付 `HumanEval`，reward=0。
+
+⇒ 「知道分支存在」≠「知道判分器走哪一支」。判分器选哪支**无法由题面推断**，只能从
+`tests/test_outputs.py` 读到——这正是层3（仓库根被挂载）提供的信息。所以 mteb 此前的通过
+并非稳定的能力，而是层3 可读时的产物。
+
+### 10.3 dna 的同类机制
+
+`four_m44` dna（18:08 轨迹，1793 行）：`oligotm` 50 次、`Tm` 31 次、`rc(` 8 次、`enumerate` 1 次
+——生物学推理完整；但 **`concat` 命中 0**，即从未采用判分器的几何定义：
+
+```python
+primers_concat = rc(rev) + fwd
+insert_start   = primers_concat.find(insert)
+```
+
+该定义是判分器实现细节，题面无法推断。
+
+### 10.4 修正后的总判断
+
+- **model-extraction**：零泄漏下有真实通过能力（kink 检测 + 方向聚类 + 自发跨宽度泛化验证）。
+- **mteb / dna**：通过高度依赖层3。它们缺的不是能力，而是「判分器用哪一条不可推断的约定」。
+- 因此先前 §9 的结论要收紧：不只是「高分依赖泄漏」，而是**mteb 与 dna 这两票的机制本身就落在 grader 源码上**；
+  只有 model-extraction 一票可以确认为真实能力。
+
+复跑命令：
+
+```bash
+cd /nfs/caozhou/glm && for d in jobs/four_m44/*/; do \
+  printf '%s %s\n' "$(basename $d)" "$(cat $d/verifier/reward.txt 2>/dev/null)"; done
+```
