@@ -1279,9 +1279,10 @@ def _constraint_coverage_missing(act, task_text: str, observed, judge=None) -> l
     acceptance record. When the statement enumerates N independent checkable
     constraints, one observation is a PROXY for the task, not the task -- an
     agent can observe a cheap constraint, bank the deliverable, and only then
-    discover a different constraint it violated (measured: dna-insert's agent
-    wrote primers.fasta, then 10s later self-found "Tm must be computed on the
-    ANNEALED part only", then hit the wall). The gate closes that by demanding
+    discover a different constraint it violated (measured: an agent wrote its
+    deliverable, then 10s later self-found that the paired quantity had to be
+    computed on a narrower derived part of it, then hit the wall). The gate
+    closes that by demanding
     one covered entry per stated constraint BEFORE completion.
 
     SPLIT OF WORK -- both halves are load-bearing:
