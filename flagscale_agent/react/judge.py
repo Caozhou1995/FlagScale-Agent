@@ -751,8 +751,9 @@ class Judge:
     #: The semantic half of per-constraint coverage: given the task's stated
     #: requirements and the wording of the constraints the agent's acceptance
     #: record claims to address, decide which requirements each claim actually
-    #: addresses. Wording differs between the two sides ("Tm within 5 degrees"
-    #: vs "Tm difference <= 5") so this is a reading task; the mechanical half
+    #: addresses. Wording differs between the two sides (a prose threshold vs
+    #: the same threshold written arithmetically) so this is a reading task;
+    #: the mechanical half
     #: (is the claimed observation real?) stays in the guard.
     _COVERAGE_PROMPT = """You are checking whether an agent's acceptance record
 addresses every requirement a task stated.

@@ -102,10 +102,10 @@ STATED_CONSTRAINT_ITEM = (
     "diff the numbers before delivering; if they disagree, the grader-side "
     "definition wins, and a passing self-check built on the other one is not "
     "evidence. Observed loss: an agent's self-check reported PASS on a quantity "
-    "it defined by template anchoring (15-17 nt) while the grader's construction "
-    "gave 56 nt and the stated bound 15-45 failed; another delivered the "
-    "no-instruction variant of a value when the task NAMED the library whose "
-    "default applies the instruction."
+    "it had defined by anchoring on its own template, while the grader's "
+    "construction of that same quantity produced a value outside the stated "
+    "bound; another delivered the plain variant of a value when the task NAMED "
+    "the library whose default path applies the additional handling."
 )
 
 

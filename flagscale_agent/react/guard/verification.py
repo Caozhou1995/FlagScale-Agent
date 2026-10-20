@@ -1245,8 +1245,9 @@ def _stated_constraints(task_text: str, judge=None) -> list:
     """The DISTINCT checkable requirements a task statement enumerates.
 
     READING the statement is a language task: requirements are stated in free
-    prose ("Tm must be within 5 degrees", "no more than 5000 bytes", "exactly
-    four shards"), with no fixed shape to key off and no vocabulary that is not
+    prose ("the difference must stay under a stated bound", "no more than N
+    bytes", "exactly four shards"), with no fixed shape to key off and no
+    vocabulary that is not
     task-specific. So the reading is delegated to the judge (an LLM), which
     returns each requirement VERBATIM. Nothing here pattern-matches the text:
     a differently-worded statement of the same requirement yields the same

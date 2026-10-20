@@ -57,7 +57,9 @@ def test_clause_states_extras_are_free_in_reference_iteration():
 
 def test_clause_states_bijection_penalizes_extras():
     clause = _clause()
-    assert re.search(r"bijection", clause)
+    # the rule must survive; the task-specific word must not
+    assert re.search(r"one-to-one correspondence", clause)
+    assert not re.search(r"bijection", clause), "task-specific word leaked back in"
     assert re.search(r"extras ARE penalized", clause)
 
 

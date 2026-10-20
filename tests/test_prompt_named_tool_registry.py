@@ -18,7 +18,7 @@ def test_registry_clause_present():
 def test_registry_clause_demands_a_lookup_and_its_output():
     low = PROMPT.lower()
     assert "query that registry" in low
-    assert "get_model_meta" in PROMPT
+    assert "read the metadata entry for the artifact" in PROMPT
     assert "say which registry lookup you ran and what it printed" in low
 
 

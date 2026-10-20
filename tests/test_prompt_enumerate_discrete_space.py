@@ -37,7 +37,7 @@ def test_requires_reporting_margin_not_only_pass_fail():
 def test_non_monotone_warning_present():
     """The specific wrong intuition (longer => different Tm monotonically) must be stated."""
     t = SYSTEM_PROMPT_STATIC
-    assert "is NOT monotone in the design parameter" in t
+    assert "need NOT be monotone in your design parameter" in t
     assert "walks in the wrong direction" in t
 
 
@@ -50,10 +50,11 @@ def test_instance_example_is_framed_as_illustration():
     i = t.index(CLAUSE_HEAD)
     j = t.index("\n\n", i)
     clause = t[i:j]
-    assert "Real instance:" in clause
-    # The instance must be explicitly labelled as an example, not an instruction
-    assert "Real instance: a primer-design task" in clause
-    # Directive verbs must be generic (no hardcoded parameter values in the rule body)
-    rule_body = clause.split("Real instance:")[0]
-    for leaked in ("837", "Lr", "Lf", "oligotm", "primer"):
-        assert leaked not in rule_body, f"instance-specific token in rule body: {leaked}"
+    assert "Real failure:" in clause
+    # The instance must be explicitly labelled as an example, not an instruction.
+    # It must ALSO not name the graded task: a worked instance that identifies the
+    # task hands the agent the answer's shape (that is leakage, not teaching).
+    rule_body = clause.split("Real failure:")[0]
+    for leaked in ("837", "Lr", "Lf", "oligotm", "primer", "melting temperature",
+                   "Tm", "degrees", "anneal"):
+        assert leaked not in clause, f"instance-specific token in clause: {leaked}"
