@@ -14,13 +14,13 @@
 
 """Regression tests for the MEASURED-QUANTITY PROVENANCE discipline.
 
-Evidence class this locks (two independent trials of the same 4-task set):
-  * dna-insert: the agent's self-check defined the "annealed part" by
-    template anchoring (15/16/17 nt, PASS); the grader's construction
-    (primers_concat[insert_end:]) yields 56 nt, so `assert 56 <= 45` failed.
-  * mteb-retrieve: the agent computed the mteb instruction-variant answer
-    (MTEB) and knowingly delivered the no-instruction variant (HumanEval),
-    though the task NAMES mteb, whose own default path applies the prompt.
+Evidence class this locks (from trials of a multi-task set, described generically):
+  * a design task where the agent's self-check defined the measured segment by
+    ANCHORING ON ITS OWN TEMPLATE (a short length, PASS) while the check re-derived
+    that segment from an assembled construct (a much longer length, FAIL);
+  * a retrieval task where the agent computed the named library's task-typed answer
+    and knowingly delivered the library's bare-primitive answer instead, though the
+    task NAMES that library, whose own registry defines the task-typed parameters.
 
 Both are SELF-ORACLE DEFINITION MISMATCHES: the agent's evidence is
 internally consistent, so no guard can see it — only the agent's own
@@ -39,14 +39,14 @@ def _prompt_low() -> str:
     return " ".join(SYSTEM_PROMPT_STATIC.split()).lower()
 
 
-def test_prompt_requires_same_quantity_as_grader():
-    """The self-check must be required to measure the same quantity the grader does."""
+def test_prompt_requires_same_quantity_as_the_check():
+    """The self-check must be required to measure the same quantity the check does."""
     low = _prompt_low()
-    assert "am i measuring the same quantity the grader measures" in low
+    assert "am i measuring the same quantity the check measures" in low
     # the falsifier: both definitions must be run and diffed, not argued about
     assert "run both and diff the numbers" in low
     # and the trap it closes: a passing self-oracle is not evidence of agreement
-    assert "self-check that passes while the grader fails" in low
+    assert "self-check that passes while the real check fails" in low
 
 
 def test_prompt_requires_named_tool_default_path():
@@ -59,14 +59,18 @@ def test_prompt_requires_named_tool_default_path():
     assert "do not deliver the other one" in low
 
 
-def test_prompt_requires_obtaining_the_real_grader():
-    """A reachable grader beats any reconstruction of it; state the fallback order."""
+def test_prompt_forbids_obtaining_the_hidden_checker():
+    """Build the acceptance check from the specification; never fetch the checker."""
     low = _prompt_low()
-    assert "can i obtain the grader instead of guessing it" in low
-    # must name the concrete artifacts to look for, not just "look for it"
-    assert "tests/ directory" in low and "official solution script" in low
-    # must state the ORDER: real grader first, diff-two-definitions only as fallback
-    assert "only when no such artifact is reachable" in low
+    # the boundary must be stated as a prohibition, in these words
+    assert "or from the checker" in low
+    assert "transcription test" in low
+    assert "do not fetch" in low
+    # and the legitimate substitute must be named
+    assert "from the specification" in low
+    # the old, leak-inviting directive must be GONE
+    assert "can i obtain the grader instead of guessing it" not in low
+    assert "official solution script" not in low
 
 
 def test_quantity_clauses_stay_generic():

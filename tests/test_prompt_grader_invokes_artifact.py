@@ -54,7 +54,7 @@ def test_no_instance_specific_leakage():
 def test_discipline_is_placed_with_the_grader_contract_items():
     """It belongs next to the other 'what does the grader actually do' items."""
     i = SYSTEM_PROMPT_STATIC.index("Does the grader RUN my script itself")
-    j = SYSTEM_PROMPT_STATIC.index("Have I REPLAYED the grader's own construction")
+    j = SYSTEM_PROMPT_STATIC.index("Have I replayed the derivation the task implies")
     k = SYSTEM_PROMPT_STATIC.index("Which artifacts does the grader OPEN?")
     # sits in the same block as the grader-contract disciplines
     assert min(j, k) < i < max(j, k) + 4000
