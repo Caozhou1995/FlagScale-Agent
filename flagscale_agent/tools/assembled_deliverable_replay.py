@@ -109,6 +109,12 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     lo_s, _, hi_s = args.bound.partition(":")
+    # Accept both the documented "MIN:MAX" form and a bare MAX. A caller who
+    # knows only the upper bound writes `--bound 45`, and crashing on that
+    # (ValueError: invalid literal for int() with base 10: '') turns a usable
+    # check into an unusable one at exactly the moment it is needed.
+    if hi_s == "":
+        lo_s, hi_s = "0", lo_s
     lo, hi = int(lo_s), int(hi_s)
 
     inp = load_seq(args.input)

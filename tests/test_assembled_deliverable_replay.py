@@ -95,3 +95,38 @@ def test_tool_names_no_target():
     txt = TOOL.read_text(encoding="utf-8").lower()
     for tok in ("mteb", "primers", "stolen_a1", "cli_tool", "oligotm", "seed5", "terminal-bench"):
         assert tok not in txt, tok
+
+
+def test_bare_upper_bound_is_accepted(tmp_path):
+    """`--bound 45` (a caller who knows only the upper bound) must not crash.
+
+    Measured: the replay tool raised
+    `ValueError: invalid literal for int() with base 10: ''`
+    on that form. A check that crashes on the obvious invocation is unusable
+    at exactly the moment the agent needs it.
+    """
+    import subprocess
+    import sys
+    import pathlib as _pl
+
+    seq = "ACGT" * 60
+    comp = str.maketrans("ACGT", "TGCA")
+    rc = lambda s: s.translate(comp)[::-1]
+    insert = "TTGGCCAA" * 3
+
+    inp = tmp_path / "seq.fasta"
+    ins = tmp_path / "ins.fasta"
+    deliv = tmp_path / "deliv.fasta"
+    inp.write_text(">s\n" + seq + "\n")
+    ins.write_text(">i\n" + insert + "\n")
+    deliv.write_text(">f\n" + seq[60:75] + "\n>r\n" + rc(seq[40:60]) + insert + "\n")
+
+    tool = _pl.Path(__file__).resolve().parents[1] / "flagscale_agent" / "tools" / "assembled_deliverable_replay.py"
+    for bound in ("15:45", "45"):
+        r = subprocess.run(
+            [sys.executable, str(tool), "--input", str(inp), "--insert-fasta", str(ins),
+             "--deliverable", str(deliv), "--bound", bound],
+            capture_output=True, text=True,
+        )
+        assert "Traceback" not in r.stderr, (bound, r.stderr)
+        assert "VERDICT:" in r.stdout, (bound, r.stdout)
