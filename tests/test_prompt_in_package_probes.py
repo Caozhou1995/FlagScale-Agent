@@ -33,3 +33,15 @@ def test_no_bare_python3_locator_for_the_probes():
 
 def test_locator_never_cwd_relative():
     assert "never a path relative to your task's working directory" in PROMPT
+
+
+def test_prompt_tells_the_agent_to_merge_and_recheck():
+    """The probe must be presented as a REPAIR step, not only a diagnosis.
+
+    Measured motivation: a zero-leak model-extraction agent converged on its own
+    clustered count, self-verified against that same count, and delivered a short
+    matrix. A report-only probe leaves it with nothing to add.
+    """
+    assert "--emit-merged" in PROMPT
+    assert "count of uncovered directions is 0" in PROMPT
+    assert "reference-iteration check" in PROMPT

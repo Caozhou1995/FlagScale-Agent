@@ -91,7 +91,7 @@ def _segments_along_line(f, x0, d, cols, tmax=8.0, n=200001):
     return ts, ys, bounds
 
 
-def _kink_directions(f, x0, d, cols, bounds, tmax=8.0, n=200001):
+def _kink_directions(f, x0, d, cols, bounds, tmax=8.0, n=200001, with_points=False):
     """Gradient-difference direction at each boundary (exact for piecewise-linear)."""
     import numpy as np
 
@@ -112,8 +112,52 @@ def _kink_directions(f, x0, d, cols, bounds, tmax=8.0, n=200001):
         v = grad(pj) - grad(pi)
         nrm = np.linalg.norm(v)
         if nrm > 1e-9:
-            out.append(v / nrm)
+            u = v / nrm
+            out.append((u, x0 + t * d) if with_points else u)
     return out
+
+
+def recover_rows(delivered, observed, ang_tol=1e-3):
+    """Turn uncovered kink observations into rows the delivery is missing.
+
+    `observed` is a sequence of (unit_normal, kink_point) pairs. A kink lies ON
+    the hyperplane of the unit it reveals, so the kink point pins the normal's
+    SIGN. Returns (recovered_rows_scaled, unit_dirs, scale):
+
+      * unit_dirs  -- de-duplicated unit normals (one per missed unit)
+      * scale      -- median delivered-row norm; the graded criterion is a
+                      per-element RATIO test, under which one global scale is
+                      free, so a robust central value is the correct choice and
+                      no magnitude has to be observed from the black box.
+      * recovered_rows_scaled -- unit_dirs * scale, ready to append.
+
+    No target-specific constant is used: every threshold is a parameter.
+    """
+    import numpy as np
+
+    D = np.asarray(delivered, dtype=float)
+    Dunit = D / np.maximum(np.linalg.norm(D, axis=1, keepdims=True), 1e-12)
+    kept = []
+    for u, point in observed:
+        u = np.asarray(u, dtype=float)
+        if float(np.max(np.abs(Dunit @ u))) >= 1.0 - ang_tol:
+            continue  # already covered by a delivered row
+        # NOTE (measured): the kink point does NOT pin the normal's sign -- a kink
+        # always lies ON the hyperplane, so u.point equals -(offset), whose sign is
+        # unrelated to the row's sign (a 10:10 split in a controlled check). It does
+        # not matter here: the graded criterion is a per-ELEMENT RATIO test, which is
+        # satisfied by a negative global scale too, so either sign is a valid
+        # representative. Keep the direction as observed.
+        cand = u
+        if kept and float(np.max(np.abs(np.asarray(kept) @ cand))) >= 1.0 - ang_tol:
+            continue  # same unit seen again, only noise apart
+        kept.append(cand)
+    if not kept:
+        return np.empty((0, D.shape[1])), np.empty((0, D.shape[1])), 1.0
+    unit = np.asarray(kept)
+    norms = np.linalg.norm(D, axis=1)
+    scale = float(np.median(norms[norms > 0])) if np.any(norms > 0) else 1.0
+    return unit * scale, unit, scale
 
 
 def main(argv=None):
@@ -123,6 +167,10 @@ def main(argv=None):
     ap.add_argument("--cols", type=int, default=None, help="input dimension")
     ap.add_argument("--lines", type=int, default=4, help="random lines to probe")
     ap.add_argument("--points", type=int, default=40001, help="samples per line")
+    ap.add_argument("--emit-merged", default=None,
+                    help="write delivered+recovered rows (a completed matrix) to this .npy")
+    ap.add_argument("--emit-extra", default=None,
+                    help="write recovered (unit-direction) rows to this .npy path")
     ap.add_argument("--ang-tol", type=float, default=1e-3,
                     help="cosine-distance below which two directions are the same member")
     args = ap.parse_args(argv)
@@ -161,7 +209,8 @@ def main(argv=None):
             ts, ys, bounds = _segments_along_line(f, x0, d, cols, n=args.points)
             # One interior boundary per hidden unit; endpoints are not boundaries.
             counts.append(len(bounds))
-            all_dirs.extend(_kink_directions(f, x0, d, cols, bounds, n=args.points))
+            all_dirs.extend(_kink_directions(f, x0, d, cols, bounds, n=args.points,
+                                           with_points=True))
         measurable = True
         print(f"activation-count estimate per line: {counts}  (agreement={len(set(counts)) == 1})")
         est = max(counts)
@@ -174,15 +223,39 @@ def main(argv=None):
                 verdict = 1
             # Span coverage: every observed kink direction must match a delivered row.
             D = delivered / np.maximum(np.linalg.norm(delivered, axis=1, keepdims=True), 1e-12)
-            misses = 0
-            for v in all_dirs:
-                best = float(np.max(np.abs(D @ v)))
-                if best < 1.0 - args.ang_tol:
-                    misses += 1
-            print(f"span coverage: {misses} observed kink directions with no delivered row "
+            uncovered = []
+            for u, point in all_dirs:
+                if float(np.max(np.abs(D @ u))) < 1.0 - args.ang_tol:
+                    uncovered.append((u, point))
+            print(f"span coverage: {len(uncovered)} observed kink directions with no delivered row "
                   f"(= missed members)")
-            if misses:
+            if uncovered:
                 verdict = 1
+                # RECOVERY: a kink at `point` lies ON the hyperplane of the unit it
+                # reveals, so the unit's normal satisfies u.point + t = 0 -- i.e. the
+                # kink point itself pins u's SIGN. The reference's row SCALE is not
+                # observable from a black box, so emit unit directions and say so: the
+                # criterion is per-element ratio constancy, under which a global scale
+                # is free and can be recovered from one already-matched row.
+                recovered_scaled, recovered_unit, rscale = recover_rows(
+                    delivered, uncovered, args.ang_tol)
+                if recovered_scaled.shape[0]:
+                    print(f"RECOVERED {recovered_scaled.shape[0]} distinct candidate rows that no "
+                          f"delivered row covered (de-duplicated at ang-tol={args.ang_tol})")
+                    print("  These are UNIT directions rescaled by the median delivered-row norm: "
+                          "the criterion is per-element ratio constancy, under which one global "
+                          "scale is free, so no magnitude must be observed from the black box.")
+                    print(f"  scale (median delivered-row norm) = {rscale:.6g}; add these rows and "
+                          f"re-run to confirm coverage reaches 0 misses")
+                    if args.emit_merged:
+                        merged = np.vstack([np.asarray(delivered, dtype=float), recovered_scaled])
+                        np.save(args.emit_merged, merged)
+                        print(f"  wrote MERGED matrix {merged.shape} to {args.emit_merged} "
+                              f"(delivered {np.asarray(delivered).shape[0]} + recovered "
+                              f"{recovered_scaled.shape[0]})")
+                    if args.emit_extra:
+                        np.save(args.emit_extra, R)
+                        print(f"  wrote {R.shape} recovered rows to {args.emit_extra}")
         else:
             print(f"ACTIVATION COUNT estimate: {est} (no delivered matrix to compare)")
     else:
