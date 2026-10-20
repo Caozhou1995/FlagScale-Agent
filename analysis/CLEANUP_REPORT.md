@@ -90,3 +90,31 @@ git bundle verify -> "records a complete history"
 - `tests/` 内仍有 16 个文件含答案词（回归资产），容器已不可读（层3 已封）。
 - `four_m44` 是当前唯一的无污染基线（stage2、零注入、零泄漏），仍在跑。
   **可证伪预测**：若 3/4 主要来自泄漏，m44 应 ≤2/4。若 m44 仍 ≥3/4，则我的归因仍不完整，需查第五层通道。
+
+## 7. 层3 封闭的补充实测（容器内，2026-10-20 17:5x）
+
+除 `/opt/fsagent-src` 之外，还要确认容器**无法经任何路径**够到宿主上的仓库或历史结果：
+
+```
+容器内 /nfs/caozhou 内容：  fa_eval/  glm/
+容器内 /nfs/caozhou/fa_eval：assets          <- 只有 assets，没有 FlagScale-Agent
+容器内 /nfs/caozhou/glm：   agent_stage2     <- 只有 staging 树
+容器内 /nfs/caozhou/glm/jobs：No such file or directory
+容器内 /root/.cache/harbor：  No such file or directory
+容器内 /app/tests, /tests, /opt/tests：均 No such file or directory
+```
+
+⇒ 判分器副本（`tests/`）、历史 reward（`jobs/`）、harbor 任务包缓存（`.cache/harbor`）三条路径全部不可达。
+
+## 8. 所有启动脚本的挂载源已统一（同通道多载体）
+
+层3 的载体不止一个：仓库里共 15 个 launcher，其中 **12 个**仍挂载整个仓库根
+（`four_launch_dna28/dna_first/m26/m27/m27d/m31/m33/m40/v2`、`ptmteb_launch`、`mteb_launch`、`two_launch`）。
+任何一个被复用都会让层3 泄漏复活。已用 `fix_launcher_mounts.py` 批量改为只挂 `agent_stage2`：
+
+```
+CHANGED 12   ALREADY_CLEAN 3   SYNTAX_FAILURES 0
+grep -l 'source":"/nfs/caozhou/fa_eval/FlagScale-Agent"' *.sh | wc -l  ->  0
+```
+
+教训：修一类通道时要扫**该通道的所有载体**，不能只改手上正在用的那一个。
