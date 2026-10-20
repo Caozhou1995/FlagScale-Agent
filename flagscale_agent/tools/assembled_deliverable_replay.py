@@ -136,20 +136,47 @@ def main(argv=None) -> int:
         print(f"FAIL: deliverable has {len(pieces)} sequence(s); two flanks are required")
         print("VERDICT: FAIL")
         return 1
-    fwd = next((s for n, s in pieces if "f" in n.lower()), pieces[0][1])
-    rev = next((s for n, s in pieces if "r" in n.lower()), pieces[1][1])
+    # Which piece is the reverse flank is NOT safely inferable from a name:
+    # "primer_pair_1_forward" contains an 'r' (in "primer"), so a substring test
+    # for 'r' selects the forward piece and the assembly then cannot contain the
+    # insert. A wrong assignment here reports FAIL for a correct deliverable.
+    # So do not guess: evaluate every assignment of the two pieces and keep the
+    # one that actually assembles. Names are used only to ORDER the attempts.
+    def _assignments():
+        named_rev, named_fwd = None, None
+        for n, seq in pieces:
+            low = n.lower()
+            if named_rev is None and any(t in low for t in ("reverse", "rev_", "_rev", "r_primer")):
+                named_rev = seq
+            if named_fwd is None and any(t in low for t in ("forward", "fwd", "_for", "f_primer")):
+                named_fwd = seq
+        seen = []
+        if named_fwd is not None and named_rev is not None:
+            seen.append((named_fwd, named_rev))
+        seen.append((pieces[0][1], pieces[1][1]))
+        seen.append((pieces[1][1], pieces[0][1]))
+        out = []
+        for cand in seen:
+            if cand not in out:
+                out.append(cand)
+        return out
 
     # The construction a splice consumer performs: rc(reverse piece) + forward piece.
-    assembly = rc(rev) + fwd
-    hits = find_all(assembly, insert)
-    print(f"insert: {len(insert)} nt; assembly: {len(assembly)} nt; "
-          f"offsets where the inserted region matches: {hits or 'NONE'}")
-
-    if not hits:
-        print("FAIL: the delivered pieces do not assemble into a sequence containing the "
-              "inserted region — a consumer searching this assembly finds nothing")
+    chosen = None
+    for idx, (fwd, rev) in enumerate(_assignments()):
+        cand_assembly = rc(rev) + fwd
+        cand_hits = find_all(cand_assembly, insert)
+        print(f"insert: {len(insert)} nt; assembly[{idx}]: {len(cand_assembly)} nt; "
+              f"offsets where the inserted region matches: {cand_hits or 'NONE'}")
+        if cand_hits:
+            chosen = (fwd, rev, cand_assembly, cand_hits)
+            break
+    if chosen is None:
+        print("FAIL: under every assignment of the two delivered pieces, the assembly does not "
+              "contain the inserted region — a consumer searching this assembly finds nothing")
         print("VERDICT: FAIL")
         return 1
+    fwd, rev, assembly, hits = chosen
     if len(hits) < args.min_hits:
         print(f"FAIL: only {len(hits)} match(es); expected at least {args.min_hits}")
         print("VERDICT: FAIL")
