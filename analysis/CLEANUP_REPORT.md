@@ -118,3 +118,24 @@ grep -l 'source":"/nfs/caozhou/fa_eval/FlagScale-Agent"' *.sh | wc -l  ->  0
 ```
 
 教训：修一类通道时要扫**该通道的所有载体**，不能只改手上正在用的那一个。
+
+## 9. 逐轮统计（`analysis/round_table.py`，可复跑）
+
+该工具对每一轮读取两个**该轮自己的产物**，不使用推断：
+- `jobs/<round>/config.json` 的 bind-mount 源（`stage` vs `repo-root`）
+- 该轮启动时刻对应的 `prompt.py` 修订里的任务词计数
+
+结果（实测输出）：
+
+```
+mount=stage AND prompt_tokens==0  (完全干净):  n=2  best=1/4  totals=[0, 1]
+mount=stage but prompt_tokens>0   (部分干净):  n=1  best=2/4  totals=[2]
+mount=repo-root                   (层3 敞开): n=38 best=4/4  totals=[...4 个 4/4…]
+```
+
+**所有 3/4 与 4/4 都出现在 `mount=repo-root` 的轮次；完全干净的轮次目前最高 1/4。**
+（完全干净样本量仅 2，其中 `four_m44` 尚未跑完，因此「干净条件下限」还不能定论。）
+
+一个反例同时成立、必须记住：`four_m44` 的 model-extraction 在**零泄漏**下拿到 1
+（agent 自行做 kink 检测 + 方向聚类，并自发做跨宽度 12/30/8 泛化验证，交付 (20,10)，
+`PASSED test_stolen_matrix_matches`）。所以**不能把每一票都归因于泄漏**——需要按任务分别统计。
