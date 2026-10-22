@@ -148,6 +148,38 @@ def test_read_image_downscales_and_says_so(tmp_path):
         assert max(PIL.open(fh).size) <= MAX_EDGE
 
 
+def test_byte_ceiling_shrink_is_reported_not_hidden(tmp_path):
+    """A post-encode shrink must be stated; the text must never claim original pixels.
+
+    Regression for an observed lie: a 1568x1568 noise PNG exceeded MAX_BYTES, the
+    loop shrank it to ~1181px, and the reply still said
+    "adjustments: none (you are seeing the original pixels)". The model then
+    reasons about a reduced copy believing it saw the original.
+    """
+    import random
+    random.seed(0)
+    path = str(tmp_path / "noise.png")
+    im = PIL.new("RGB", (MAX_EDGE, MAX_EDGE))
+    px = im.load()
+    for y in range(MAX_EDGE):
+        for x in range(MAX_EDGE):
+            px[x, y] = (random.randrange(256), random.randrange(256), random.randrange(256))
+    im.save(path)
+
+    out = ReadImageTool().execute(path=path)
+    raw = base64.b64decode(out.images[0]["data"])
+    delivered_max = None
+    with io.BytesIO(raw) as fh:
+        delivered_max = max(PIL.open(fh).size)
+
+    assert delivered_max <= MAX_EDGE
+    if delivered_max < MAX_EDGE:
+        assert "adjustments: none" not in out, (
+            "tool downscaled to %dpx but told the model it saw original pixels" % delivered_max
+        )
+        assert str(delivered_max) in out or "downscaled" in out
+
+
 def test_read_image_region_crops(tmp_path):
     path = _split(tmp_path)
     out = ReadImageTool().execute(path=path, region="0,0,20,10")

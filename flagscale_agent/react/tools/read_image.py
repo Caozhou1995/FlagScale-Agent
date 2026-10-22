@@ -179,6 +179,10 @@ class ReadImageTool(Tool):
                 break
             work = work.resize((nw, nh), PILImage.LANCZOS)
             data, media_type = self._encode(work, ext, notes)
+            notes.append(
+                f"further downscaled to {nw}x{nh} to stay under the "
+                f"{MAX_BYTES}-byte request ceiling"
+            )
         if len(data) > MAX_BYTES:
             return (
                 f"ERROR: even after downscaling, {path} encodes to {len(data)} bytes "
