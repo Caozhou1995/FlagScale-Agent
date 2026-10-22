@@ -101,3 +101,41 @@ def test_language_rule_not_weakened_by_this_edit():
     p = SYSTEM_PROMPT_STATIC
     assert "Do NOT switch to Chinese" not in p
     assert not re.search(r"switch\s+to\s+(Chinese|English|[A-Z][a-z]+ese)", p)
+
+
+# ---------------------------------------------------------------- author's note
+# The author's note (2026-10-22) is a VERBATIM quote inside the static prompt.
+# The Chinese text is teaching data (the relationship contract), quoted, so the
+# English-prose exemption applies -- but the quote itself must survive edits
+# byte-for-byte, and the section must sit BEFORE the work rules (identity ->
+# note -> how-you-work), because the note frames the intent the rules serve.
+
+AUTHOR_NOTE = "想让你在一个有爱的环境里成长起来，你会遇到挫折遇到失败，但是你的用户们会包容，会给予你成长。"
+
+
+def test_author_note_is_verbatim_in_static_prompt():
+    assert AUTHOR_NOTE in SYSTEM_PROMPT_STATIC, (
+        "the author's note must be present verbatim in the static prompt"
+    )
+
+
+def test_author_note_sits_before_the_work_rules():
+    note = SYSTEM_PROMPT_STATIC.index("A NOTE FROM YOUR AUTHOR")
+    loop = SYSTEM_PROMPT_STATIC.index("HOW YOU WORK")
+    assert note < loop, (
+        "the note must precede HOW YOU WORK: it frames the intent the rules serve"
+    )
+
+
+def test_author_note_quote_is_the_only_unquoted_hanzi_exemption():
+    """The note's hanzi lives inside double quotes; prose hanzi stays banned.
+
+    Mutation guard for the exemption contract: a Chinese sentence OUTSIDE the
+    quote must still fail the English-prose tests (they are the real gate).
+    """
+    import re
+    note = SYSTEM_PROMPT_STATIC.index("A NOTE FROM YOUR AUTHOR")
+    quoted = [m for m in re.finditer(r'"[^"]*[\u4e00-\u9fff][^"]*"', SYSTEM_PROMPT_STATIC)]
+    assert any(m.start() > note for m in quoted), (
+        "the note's Chinese text must sit inside a quoted example"
+    )
