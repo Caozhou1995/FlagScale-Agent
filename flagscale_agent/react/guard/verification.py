@@ -2358,15 +2358,26 @@ class VerificationGuard(Guard):
                             ctx.tool_args.get("assumptions"), self._observed(ctx)),
                         "assumptions", ctx.tool_args.get("assumptions")),
                 ])
-                if bad is not None:
-                    # The premise re-check is a ONE-SHOT checkpoint: it must fire
-                    # again on the next step_done if the agent has still not
-                    # paused, so latching stays tied to an accepted release
-                    # (override_reason present), never to merely having been
-                    # told about it in a merged message.
-                    return bad
-                if _declares_graded_reading(dr):
-                    self._graded_reading_seen = True
+                # EVIDENCE LATCHING PRECEDES FORMAL BLOCKING.
+                #
+                # The two questions below are INDEPENDENT:
+                #   * did an observation really happen?   -> corpus-checked, durable
+                #   * is this claim formally complete?     -> the declarations above
+                # Blocking on the second must NOT destroy the answer to the first.
+                #
+                # Measured failure this prevents (10 consecutive rounds): a
+                # step_done carried an acceptance_act whose `observed` text had
+                # ALREADY passed the non-forgeable corpus-membership check, but
+                # the same call also missed a cheap formal field, so the old
+                # `return bad` below ran BEFORE this block and discarded the
+                # verified evidence. The agent re-ran the probe, re-submitted,
+                # missed another field, and the latch never set — many correct
+                # probe runs and a completion boundary that never releases.
+                #
+                # Nothing is weakened: `bad` still blocks this call exactly as
+                # before. Only the EVIDENCE SURVIVES it, so the next attempt
+                # (which still must fix the formal fields) does not have to
+                # re-establish facts the harness has already verified.
                 _act = ctx.tool_args.get("acceptance_act")
                 if _acceptance_act_recorded(_act, self._observed(ctx)):
                     # Coverage gate (M10): ONE observed act is a proxy when the
@@ -2376,31 +2387,39 @@ class VerificationGuard(Guard):
                         _act, self._task_text(), self._observed(ctx),
                         judge=getattr(ctx, "judge", None))
                     if _miss and not self._coverage_gate_affordable():
-                        # Budget-exhausted degrade: the sweep this gate demands costs
-                        # tool calls, and past the wrap-up threshold those calls are
-                        # the deliverable's. Shipping an under-covered but BANKED
-                        # artifact beats spending the remaining wall on metadata --
-                        # measured: model-extraction 1 -> 0 when a coverage sweep ate
-                        # the whole 900 s turn and nothing was written. The
-                        # uncovered constraints are still NAMED to the agent (it is
-                        # told what is missing) without a block standing in front of
-                        # the final write.
+                        # Budget-exhausted degrade: past the wrap-up threshold
+                        # those sweep calls are the deliverable's. Shipping an
+                        # under-covered but BANKED artifact beats spending the
+                        # remaining wall on metadata. The uncovered constraints
+                        # are still NAMED to the agent.
                         self._acceptance_observed = True
-                    elif _miss:
-                        return GuardVerdict.block(
+                    elif not _miss:
+                        self._acceptance_observed = True
+                    else:
+                        _coverage_bad = GuardVerdict.block(
                             _completion_constraint_coverage_missing(_miss),
                             reason="acceptance_constraint_coverage_missing",
                             category="verification_required",
                         )
-                    else:
-                        self._acceptance_observed = True
+                        if bad is None:
+                            return _coverage_bad
                 if _oracle_exercised(
                         ctx.tool_args.get("oracle_act"), self._observed(ctx),
                         self._bound_oracle().get("first_exercise"), ctx.judge):
                     self._oracle_exercised_seen = True
-                return None
 
-            # Timing 1b: batch action marking any step done bypasses the per-step
+                if bad is not None:
+                    # The premise re-check is a ONE-SHOT checkpoint: it must fire
+                    # again on the next step_done if the agent has still not
+                    # paused, so latching stays tied to an accepted release
+                    # (override_reason present), never to merely having been
+                    # told about it in a merged message. NOTE: the evidence
+                    # latches above are ALREADY set — blocking here does not
+                    # discard a verified observation (see the comment there).
+                    return bad
+                if _declares_graded_reading(dr):
+                    self._graded_reading_seen = True
+                return None
             # step_done gate above (action=="batch", not "step_done"). A batch done
             # commits the same claim; without this it is a silent hole through which
             # every verification check is skipped. Require _override_reason when any
