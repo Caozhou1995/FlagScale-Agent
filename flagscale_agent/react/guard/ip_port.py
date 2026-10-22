@@ -50,7 +50,7 @@ _IP_PORT_MESSAGE = """[IpPortGuard] This command involves an IP or port — prov
 
 Before concluding anything:
 1. IP/port values must come from FACTS, not recall: look up the authoritative mapping in memory (a fact-type entry) and cat the on-disk hostfile the launcher uses, before any node-health claim or fan-out. Never type an IP from recall unverified.
-2. Port role first: each SSH channel (agent→host, agent→container, container→container) has its own port, key set, and failure semantics. A "connection refused/denied" on one channel says nothing about the others — misreading a port as an outage is the classic false verdict.
+2. Port role first: each SSH channel (agent→host, agent→container, container→container) has its own port, key set, and failure semantics. A refused or denied connection on one channel says nothing about the others — misreading a port as an outage is the classic false verdict.
 
 Advisory only — nothing is blocked; override/retry freely. The reminder breaks recall-based probing."""
 

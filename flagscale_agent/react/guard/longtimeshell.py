@@ -69,7 +69,7 @@ DO: run it as a background job and poll:
   shell(command="{command}", background=true)   # returns a handle immediately
   shell_jobs(action="wait", job_id="jobN", timeout=30)   # short bounded waits
 
-If the foreground wait is genuinely correct here (e.g. a rate-limit cooldown the
+If the foreground wait is genuinely correct here (e.g. an external throttle period the
 NEXT command depends on, a health-check settle window), proceed with:
   _override_reason: <your concrete reason — any non-trivial explanation is accepted>
 

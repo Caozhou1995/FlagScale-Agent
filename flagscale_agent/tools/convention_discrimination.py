@@ -64,24 +64,34 @@ def discriminability(conventions, inputs, tol=1e-9, collapse=None):
     """For each input, compute every convention's FINAL observable and report separation.
 
     Returns a list of (input_index, n_distinct_outputs, outputs_by_convention).
-    An input with n_distinct == 1 cannot discriminate anything.
+
+    An input with n_distinct == 1 cannot discriminate anything -- BUT only when
+    every candidate actually evaluated. A candidate that RAISED produced no
+    observable at all: it is UNKNOWN, not "agrees with the others". Counting it
+    as a value would let N-1 broken candidates collapse onto one identical
+    `<error: ...>` string and manufacture a false NOT SEPARABLE verdict, which is
+    the exact opposite of the truth (the spec is invalid, so nothing was learned).
+    Such a row is reported with .errored populated and the caller refuses to draw
+    a conclusion from it.
     """
     rows = []
     for i, x in enumerate(inputs):
         outs = {}
+        errored = {}
         for name, expr in conventions.items():
             try:
                 v = apply_convention(expr, x)
                 v = apply_collapse(collapse, v)
             except Exception as e:  # a candidate that cannot run is not comparable
-                outs[name] = f"<error: {type(e).__name__}>"
+                errored[name] = f"{type(e).__name__}: {e}"
                 continue
             arr = np.asarray(v, dtype=np.float64).ravel()
             # coarse-quantise so float noise does not fake a separation
             key = tuple(np.round(arr, int(-np.log10(tol))) if tol > 0 else arr)
             outs[name] = key
-        distinct = len(set(outs.values()))
-        rows.append((i, distinct, outs))
+        # Separability is judged ONLY over candidates that produced an observable.
+        distinct = len(set(outs.values())) if len(outs) >= 2 else 1
+        rows.append((i, distinct, outs, errored))
     return rows
 
 
@@ -109,8 +119,8 @@ def main():
         print("DEMO: candidates =", list(conventions))
         rows = discriminability(conventions, inputs, args.tol)
         sep = [r for r in rows if r[1] > 1]
-        for i, d, _ in rows:
-            print(f"  input {i}: {d} distinct output(s)")
+        for idx, d, _, _ in rows:
+            print(f"  input {idx}: {d} distinct output(s)")
         print(f"VERDICT: {'SEPARABLE' if sep else 'NOT SEPARABLE'} "
               f"({len(sep)}/{len(rows)} inputs separate the candidates)")
         return 0
@@ -124,13 +134,32 @@ def main():
         inputs = inputs[None, :]
     rows = discriminability(conventions, inputs, args.tol, args.collapse)
     sep = [r for r in rows if r[1] > 1]
-    for i, d, _ in rows:
-        print(f"input {i}: {d} distinct")
+    errored_any = {n for _, _, _, e in rows for n in e}
+    for idx, d, _, err in rows:
+        suffix = f"  [ERR: {len(err)} candidate(s) did not evaluate]" if err else ""
+        print(f"input {idx}: {d} distinct{suffix}")
+    if errored_any:
+        print(f"WARNING: these candidates raised and produced NO observable: "
+              f"{sorted(errored_any)}")
+        print("A candidate that raises was NOT compared -- it is unknown, not "
+              "agreeing. Any input above where a candidate raised is "
+              "INCONCLUSIVE for that candidate; fix the expression and re-run "
+              "before drawing a verdict.")
     if sep:
-        print(f"VERDICT: SEPARABLE -- use these observations to decide: "
+        print(f"VERDICT: SEPARABLE -- these inputs separate the candidates: "
               f"{[r[0] for r in sep]}")
-        print("For each, run the consumer's own reference path and keep the "
-              "candidate that matches it.")
+        print("To decide, run those inputs through the CONSUMER'S OWN reference")
+        print("path -- the pipeline that produced the values the checker compares")
+        print("against: the author's reference/solve program, a shipped sample")
+        print("output, or a golden artifact.")
+        print("A measurement against GROUND-TRUTH LABELS is NOT that path. Accuracy,")
+        print("confidence, margin or any benchmark score measures how GOOD a")
+        print("candidate is; the checker measures whether it is EQUIVALENT to the")
+        print("reference pipeline, which may be weaker or differently configured.")
+        print("If the reference path is not available, the axis is UNDECIDED: fall")
+        print("back to the minimal-uncertainty default (add no unrequested")
+        print("transformation) and record the residual risk. Never take the")
+        print("highest-scoring candidate.")
         return 0
     print("VERDICT: NOT SEPARABLE -- no visible observation distinguishes the "
           "candidates.")
