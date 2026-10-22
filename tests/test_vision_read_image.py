@@ -24,6 +24,7 @@ The properties that matter, each of which would fail SILENTLY otherwise:
 """
 
 import base64
+import inspect
 import io
 import os
 
@@ -31,7 +32,7 @@ import pytest
 
 from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
 from flagscale_agent.react.tools.base import ImageResult, Tool
-from flagscale_agent.react.tools.read_image import MAX_EDGE, ReadImageTool
+from flagscale_agent.react.tools.read_image import MAX_BYTES, MAX_EDGE, ReadImageTool
 
 PIL = pytest.importorskip("PIL.Image", reason="Pillow needed to build test images")
 
@@ -228,3 +229,67 @@ def test_tool_is_registered_on_the_agent():
     assert "ReadImageTool()" in src
     # and the symbol it names must be importable from where the module imports it
     assert hasattr(agent_mod, "ReadImageTool")
+
+
+def test_non_rgb_mode_conversion_is_reported(tmp_path):
+    """RGBA->RGB discards alpha; the text must not claim original pixels."""
+    p = str(tmp_path / "rgba.png")
+    PIL.new("RGBA", (30, 30), (255, 0, 0, 128)).save(p)
+    out = ReadImageTool().execute(path=p)
+    raw = base64.b64decode(out.images[0]["data"])
+    with io.BytesIO(raw) as fh:
+        assert PIL.open(fh).mode != "RGBA"
+    assert "none" not in [l for l in str(out).splitlines() if "adjustments" in l][0]
+    assert "RGB" in out
+
+
+def test_exif_orientation_is_applied_and_reported(tmp_path):
+    """A stored 'rotate me' must be applied, not shown sideways with a 'none' claim."""
+    p = str(tmp_path / "rot.jpg")
+    im = PIL.new("RGB", (40, 20), (0, 0, 255))
+    exif = im.getexif()
+    exif[274] = 6  # rotate 90 CW
+    im.save(p, exif=exif)
+    out = ReadImageTool().execute(path=p)
+    raw = base64.b64decode(out.images[0]["data"])
+    with io.BytesIO(raw) as fh:
+        got = PIL.open(fh).size
+    assert got == (20, 40), f"orientation not applied, delivered {got}"
+    assert "EXIF" in out
+
+
+def test_encoded_size_stays_under_api_limit():
+    """The raw ceiling must not encode past the 5 MB per-image API limit."""
+    worst_b64 = len(base64.standard_b64encode(b"\0" * MAX_BYTES))
+    assert worst_b64 <= 5 * 1024 * 1024, f"{worst_b64} b64 bytes exceeds 5 MB"
+
+
+def test_cached_tool_result_keeps_images(tmp_path):
+    """A cache hit must not downgrade ImageResult to str and drop the pixels.
+
+    Behavioural, not source-text: build a real ImageResult, put it in the agent's
+    turn cache, call execute_single twice, and require the SECOND (cached) result
+    to still carry .images with the same payload.
+    """
+    from flagscale_agent.react.tool_executor import ToolExecutor
+
+    p = _split(tmp_path)          # real image on disk
+    img = ReadImageTool().execute(path=p)
+    assert hasattr(img, "images") and img.images
+
+    class _Reg:
+        def execute(self, name, **kw):
+            return img
+
+    class _Agent:
+        _tool_call_cache = {}
+        tool_registry = _Reg()
+
+    ex = ToolExecutor.__new__(ToolExecutor)
+    ex._agent = _Agent()
+    call = {"name": "read_image", "arguments": {"path": p}}
+    first = ex.execute_single(call)
+    second = ex.execute_single(call)          # cache hit
+    assert "Cached result" in second
+    assert hasattr(second, "images"), "cache hit dropped .images (model gets text only)"
+    assert second.images[0]["data"] == first.images[0]["data"]

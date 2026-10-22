@@ -44,10 +44,12 @@ _SUPPORTED = {
 }
 _PASSTHROUGH_MEDIA = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
-# Hard ceilings. A 4 MB image is ~5.4 MB after base64, which is already a large
-# single request; above that we downscale rather than fail, so a big screenshot
-# is still usable.
-MAX_BYTES = 4 * 1024 * 1024
+# Hard ceilings. The API limits the ENCODED image to 5 MB, and base64 is ~4/3 of
+# raw, so a raw-bytes ceiling must sit near 3.5 MB to stay legal. Previously this
+# was 4 MB raw = 5.33 MB base64, which the local guard passed and the API then
+# rejected with HTTP 400 mid-turn (a local limit that should never become a
+# provider error). Still above that we downscale rather than fail.
+MAX_BYTES = 3_500_000    # raw bytes; ~4.67 MB base64, under the 5 MB API limit
 MAX_EDGE = 1568          # Anthropic's recommended long-edge limit
 DEFAULT_QUALITY = 85
 
@@ -121,7 +123,22 @@ class ReadImageTool(Tool):
             with PILImage.open(path) as im:
                 orig_mode, orig_fmt = im.mode, im.format
                 orig_w, orig_h = im.size
+                # EXIF orientation: a phone/DSLR photo stores "rotate me" in the
+                # metadata, not in the pixels. Reading it without applying it shows
+                # the model a sideways image while the text claims original pixels.
+                try:
+                    from PIL import ImageOps as _ImageOps
+                    _exif_orient = im.getexif().get(274)
+                    if _exif_orient not in (None, 0, 1):
+                        im = _ImageOps.exif_transpose(im)
+                        orig_w, orig_h = im.size
+                except Exception:
+                    _exif_orient = None
                 work = im.convert("RGB") if im.mode not in ("RGB", "L") else im.copy()
+                if _exif_orient not in (None, 0, 1):
+                    notes.append(f"applied EXIF orientation {_exif_orient} from metadata")
+                if im.mode not in ("RGB", "L"):
+                    notes.append(f"mode converted {im.mode}->RGB")
 
             # 1) crop, if asked
             if region:

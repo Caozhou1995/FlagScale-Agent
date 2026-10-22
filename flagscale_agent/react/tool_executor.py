@@ -231,7 +231,16 @@ class ToolExecutor:
         # Check turn cache
         cached_key = (tool_name, json.dumps(arguments, sort_keys=True))
         if cached_key in agent._tool_call_cache:
-            return agent._tool_call_cache[cached_key] + "\n[Cached result from earlier in this turn]"
+            cached = agent._tool_call_cache[cached_key]
+            # An ImageResult carries images on a str subclass. Plain concatenation
+            # would downgrade it to str and silently drop the pixels, so the model
+            # would be told "cached result" and receive only the text header while
+            # the image vanished. Re-wrap to keep the attachments.
+            images = getattr(cached, "images", None)
+            note = "\n[Cached result from earlier in this turn]"
+            if images:
+                return type(cached)(str(cached) + note, images)
+            return cached + note
 
         detail = tool_display_summary(tool_name, arguments)
         display.tool_start(tool_name, detail)

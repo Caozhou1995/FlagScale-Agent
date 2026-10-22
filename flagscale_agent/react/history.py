@@ -52,11 +52,45 @@ def _message_tokens(msg: Dict[str, Any]) -> int:
         total = 0
         for block in content:
             if isinstance(block, dict):
-                total += _estimate_tokens(json.dumps(block, ensure_ascii=False))
+                # An image block's base64 payload is not prose: counting it at
+                # 1 token / 4 chars overstates a 300 KB screenshot as ~100k
+                # tokens and can alone push pressure past the 0.85 cutoff,
+                # ending the turn (kernel.py context_pressure). Estimate from the
+                # decoded size instead, the way the API bills an image.
+                if block.get("type") == "image":
+                    total += _image_block_tokens(block)
+                elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                    total += _image_block_tokens(block)
+                else:
+                    total += _estimate_tokens(json.dumps(block, ensure_ascii=False))
             else:
                 total += _estimate_tokens(str(block))
         return total
     return _estimate_tokens(json.dumps(msg, ensure_ascii=False))
+
+
+def _image_block_tokens(block: Dict[str, Any]) -> int:
+    """Token estimate for an image (or a tool_result wrapping one).
+
+    Uses the payload's decoded byte length: base64 inflates raw by ~4/3, and a
+    vision input is billed by pixels/size rather than by characters. Falls back
+    to the character estimate only when the payload cannot be decoded.
+    """
+    blocks = block.get("content") if block.get("type") == "tool_result" else [block]
+    if not isinstance(blocks, list):
+        blocks = [block]
+    total = 0
+    for b in blocks:
+        if not isinstance(b, dict):
+            total += _estimate_tokens(str(b))
+            continue
+        if b.get("type") == "image":
+            data = ((b.get("source") or {}).get("data") or "")
+            n = len(data) * 3 // 4       # decoded bytes
+            total += max(1, n // 750)    # ~750 bytes per vision token
+        else:
+            total += _estimate_tokens(json.dumps(b, ensure_ascii=False))
+    return total
 
 
 def _is_tool_result(msg: Dict[str, Any]) -> bool:
