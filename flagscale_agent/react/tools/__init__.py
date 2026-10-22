@@ -59,7 +59,14 @@ class ToolRegistry:
             )
         result = tool.execute(**kwargs)
         if len(result) > tool.max_result_size:
-            result = result[:tool.max_result_size] + f"\n... [truncated, total {len(result)} chars]"
+            truncated = result[:tool.max_result_size] + f"\n... [truncated, total {len(result)} chars]"
+            # Preserve attached images across truncation: the text got clipped,
+            # but the images the tool handed back are the whole point of the call
+            # and must still reach the provider.
+            if getattr(result, "images", None):
+                result = type(result)(truncated, result.images)
+            else:
+                result = truncated
         return result
 
     def all_tools(self) -> List[Tool]:

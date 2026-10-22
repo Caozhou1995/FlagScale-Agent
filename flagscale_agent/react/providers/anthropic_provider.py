@@ -236,7 +236,28 @@ class AnthropicProvider(LLMProvider):
         return {"role": "assistant", "content": content_blocks}
 
     def format_tool_result(self, tool_call_id: str, content: str) -> Dict[str, Any]:
+        # A tool may attach images (ImageResult: a str subclass carrying
+        # .images). Anthropic takes them as sibling content blocks inside the
+        # SAME tool_result block, which is the documented shape for returning
+        # an image from a tool. A plain str takes the original path unchanged,
+        # so batches that never return images are byte-identical to before.
+        images = getattr(content, "images", None) or []
+        text = str(content) if content else "(empty)"
+        if images:
+            blocks = [{"type": "text", "text": text}]
+            for img in images:
+                blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img["media_type"],
+                        "data": img["data"],
+                    },
+                })
+            inner = blocks
+        else:
+            inner = text
         return {
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": tool_call_id, "content": content or "(empty)"}],
+            "content": [{"type": "tool_result", "tool_use_id": tool_call_id, "content": inner}],
         }

@@ -19,6 +19,30 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict
 
 
+class ImageResult(str):
+    """A tool result that is plain text PLUS attached images for the model to see.
+
+    Subclassing ``str`` (not tuple) is deliberate: every existing consumer of a
+    tool result — the registry's ``len()`` truncation, guard post-checks, the
+    kernel's result plumbing — keeps working unchanged, because an ImageResult
+    IS a string. The images ride along as an attribute and are only inspected by
+    the provider when it builds the request body.
+
+    ``images`` is a list of dicts ``{"media_type": "image/png", "data": <b64>}``.
+    """
+
+    images: list
+
+    def __new__(cls, text, images):
+        obj = super().__new__(cls, text)
+        obj.images = list(images or [])
+        return obj
+
+    def truncated_copy(self, text):
+        """Rebuild with replacement text but the same images (for truncation)."""
+        return ImageResult(text, self.images)
+
+
 class Tool(ABC):
     """Base class for all agent tools.
 

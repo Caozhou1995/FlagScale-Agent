@@ -58,6 +58,7 @@ from flagscale_agent.react.tools.edit_file import EditFileTool
 from flagscale_agent.react.tools.load_knowledge import LoadKnowledgeTool
 from flagscale_agent.react.tools.load_skill import LoadSkillTool
 from flagscale_agent.react.tools.read_file import ReadFileTool
+from flagscale_agent.react.tools.read_image import ReadImageTool
 from flagscale_agent.react.tools.shell import ShellTool, ShellJobsTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
@@ -475,6 +476,8 @@ class WorkerAgent:
         self.tool_registry.register(ReadFileTool())
         self.tool_registry.register(WriteFileTool())
         self.tool_registry.register(EditFileTool())
+        # Vision: let the model LOOK at an image instead of inferring it.
+        self.tool_registry.register(ReadImageTool())
         _shell_tool = ShellTool(
             remind_interval=self.config.shell_remind_interval,
             env=self.config.shell_env,
