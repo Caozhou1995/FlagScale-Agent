@@ -2061,6 +2061,51 @@ class VerificationGuard(Guard):
     # the deliverable itself. Below this fraction the gate is fully enforced.
     _COVERAGE_GATE_MIN_REMAINING = 0.25
 
+    def _latch_evidence_pass(self, ctx) -> None:
+        """Record corpus-verified evidence BEFORE any route-specific block.
+
+        Runs once per plan_update call and NEVER returns a verdict: it can only
+        raise `_acceptance_observed` / `_oracle_exercised_seen` to True. That
+        asymmetry is the point — blocking a call for an unrelated formal reason
+        must not answer "no observation happened" for a fact the harness has
+        already checked against the real tool-result corpus.
+
+        Reads the act from the top level AND from every `updates[i]` item, so
+        the batch route (whose declarations live on the item) latches too.
+        """
+        args = ctx.tool_args or {}
+        candidates = []
+        updates = args.get("updates")
+        if isinstance(updates, list):
+            for u in updates:
+                if isinstance(u, dict):
+                    candidates.append(u)
+        candidates.append(args)
+        observed = None
+        for src in candidates:
+            act = src.get("acceptance_act")
+            if act is not None:
+                if observed is None:
+                    observed = self._observed(ctx)
+                if (not self._acceptance_observed
+                        and _acceptance_act_recorded(act, observed)):
+                    miss = _constraint_coverage_missing(
+                        act, self._task_text(), observed,
+                        judge=getattr(ctx, "judge", None))
+                    # A coverage miss simply means "not latched yet"; the
+                    # per-route gate below still blocks and still names the
+                    # uncovered constraints, so nothing is weakened here.
+                    if not miss or not self._coverage_gate_affordable():
+                        self._acceptance_observed = True
+            oact = src.get("oracle_act")
+            if oact is not None and not self._oracle_exercised_seen:
+                if observed is None:
+                    observed = self._observed(ctx)
+                if _oracle_exercised(
+                        oact, observed,
+                        self._bound_oracle().get("first_exercise"), ctx.judge):
+                    self._oracle_exercised_seen = True
+
     def _coverage_gate_affordable(self) -> bool:
         """Is there enough wall left to pay for a per-constraint measurement sweep?
 
@@ -2265,6 +2310,29 @@ class VerificationGuard(Guard):
         # Timing 1: step_done requires verification evidence
         if ctx.tool_name == "plan_update":
             action = ctx.tool_args.get("action")
+
+            # EVIDENCE LATCHING PRECEDES ROUTE DISPATCH.
+            #
+            # Every plan_update route (single step_done, batch, and any future
+            # route) has its own formal-field checks that RETURN EARLY. Those
+            # returns answer a different question from the one this pass
+            # answers:
+            #   * did an observation really happen?  -> corpus-checked, durable
+            #   * is this claim formally complete?   -> the per-route checks
+            # Measured failure this prevents (10 consecutive rounds): a call
+            # carried an acceptance_act whose `observed` text had ALREADY passed
+            # the non-forgeable corpus-membership check, but the same call also
+            # missed a cheap formal field, so an early return discarded the
+            # verified evidence. The agent re-ran the probe, re-submitted, missed
+            # another field, and the latch never set — many correct probe runs
+            # and a completion boundary that never releases.
+            #
+            # Nothing is weakened: every route still blocks exactly as before.
+            # Only the EVIDENCE SURVIVES the block, so the next attempt (which
+            # still must fix the formal fields) does not re-establish facts the
+            # harness has already verified. The pass is idempotent and never
+            # returns a verdict — it can only ever raise a latch to True.
+            self._latch_evidence_pass(ctx)
             
             # Only check on step_done, other actions (step_doing/add_steps) pass through
             if action == "step_done":
@@ -2381,21 +2449,15 @@ class VerificationGuard(Guard):
                 _act = ctx.tool_args.get("acceptance_act")
                 if _acceptance_act_recorded(_act, self._observed(ctx)):
                     # Coverage gate (M10): ONE observed act is a proxy when the
-                    # statement enumerates several checkable constraints. Do not
-                    # latch acceptance until every stated constraint is covered.
+                    # statement enumerates several checkable constraints. The
+                    # LATCH itself already happened in `_latch_evidence_pass`
+                    # (which skips the latch on an uncovered act); what remains
+                    # here is the verdict — name the uncovered constraints and
+                    # block, unless the wall is nearly spent.
                     _miss = _constraint_coverage_missing(
                         _act, self._task_text(), self._observed(ctx),
                         judge=getattr(ctx, "judge", None))
-                    if _miss and not self._coverage_gate_affordable():
-                        # Budget-exhausted degrade: past the wrap-up threshold
-                        # those sweep calls are the deliverable's. Shipping an
-                        # under-covered but BANKED artifact beats spending the
-                        # remaining wall on metadata. The uncovered constraints
-                        # are still NAMED to the agent.
-                        self._acceptance_observed = True
-                    elif not _miss:
-                        self._acceptance_observed = True
-                    else:
+                    if _miss and self._coverage_gate_affordable():
                         _coverage_bad = GuardVerdict.block(
                             _completion_constraint_coverage_missing(_miss),
                             reason="acceptance_constraint_coverage_missing",
@@ -2499,22 +2561,10 @@ class VerificationGuard(Guard):
                                     asm, self._observed(ctx)),
                                 "updates[].assumptions", asm),
                         ])
-                        if bad is not None:
-                            return bad
                         if _declares_graded_reading(dr):
                             self._graded_reading_seen = True
-                        act = u.get("acceptance_act")
-                        if act is None:
-                            act = ctx.tool_args.get("acceptance_act")
-                        if _acceptance_act_recorded(act, self._observed(ctx)):
-                            self._acceptance_observed = True
-                        oact = u.get("oracle_act")
-                        if oact is None:
-                            oact = ctx.tool_args.get("oracle_act")
-                        if _oracle_exercised(oact, self._observed(ctx),
-                                             self._bound_oracle().get("first_exercise"),
-                                             ctx.judge):
-                            self._oracle_exercised_seen = True
+                        if bad is not None:
+                            return bad
 
         # Timing 2: post-recovery, inject reminder on first step_doing
         if self._post_recovery and not self._recovery_reminded:

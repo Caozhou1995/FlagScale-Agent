@@ -113,3 +113,39 @@ def test_verified_acceptance_act_still_latches_when_declarations_complete():
         assert g._acceptance_observed is True
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_batch_path_verified_act_latches_despite_missing_convention():
+    """Same independence on the BATCH route: `action='batch'` with a done item
+    carries a corpus-verified acceptance_act nested on the item, while its
+    convention declaration is missing. The item must still fail the formal
+    check, but the verified evidence must latch — otherwise a batch that misses
+    one field throws away an already-verified observation."""
+    from flagscale_agent.react.guard import GuardContext
+    d, plan = _plan_one_step()
+    try:
+        g = _guard(plan)
+        ctx = GuardContext(
+            tool_name="plan_update",
+            tool_args={
+                "action": "batch",
+                "updates": [{
+                    "step_id": 1,
+                    "status": "done",
+                    "verification": ["probe-ok observed"],
+                    "acceptance_act": {"command": "echo probe-ok",
+                                       "observed": "probe-ok"},
+                }],
+            },
+            tool_result=None,
+            assistant_text="",
+            override_reason="",
+            llm_responded=True,
+            messages=[{"role": "tool", "content": CORPUS}],
+        )
+        v = g.check_pre(ctx)
+        assert v is not None, "missing convention on a done item must still block"
+        assert g._acceptance_observed is True, (
+            "batch path must latch a corpus-verified act before the formal block")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
