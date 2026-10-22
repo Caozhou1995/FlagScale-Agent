@@ -2180,7 +2180,14 @@ class VerificationGuard(Guard):
         preserve in order. The list keeps the original severity order, so a
         caller that presents only the leader behaves exactly as before.
         """
-        pending: list[GuardVerdict] = []
+        # DISABLED per user instruction (2026-10-22): the completion gate
+        # (unfinished-steps / acceptance-observation / oracle-bound /
+        # oracle-exercised checks at [TASK_COMPLETE]) is commented out.
+        # [TASK_COMPLETE] is no longer blocked at this boundary. The original
+        # gate bodies are preserved below but unreachable; delete this return
+        # to restore the gate.
+        return []
+        pending: list[GuardVerdict] = []  # noqa: F841 (dead code, gate disabled)
         unfinished = self._unfinished_steps()
         # Release through the SAME override bar the tool route uses (registry ->
         # owner.accept_override; base default = reason longer than 5 chars), so
