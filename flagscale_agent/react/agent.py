@@ -419,7 +419,7 @@ class WorkerAgent:
         guard_registry.register(TimeBudgetGuard(stats_fn=self._task_budget_stats))
         # Progress-order guard: at 25%/50% wall-clock budget spent, block (overridable)
         # once per turn to force a write-through / first-e2e checkpoint.
-        guard_registry.register(FirstE2eRunGuard(stats_fn=self._task_budget_stats))
+        guard_registry.register(FirstE2eRunGuard(stats_fn=self._task_budget_stats, task_text_fn=lambda: self._mech_original_task()))
         # Reviewer deadline guard (always active, budget-aware): hard-stops
         # review waiting that would otherwise eat the tail of the enforced
         # wall-clock budget — 2 not-ready polls of the same reviewer-class task

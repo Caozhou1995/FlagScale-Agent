@@ -125,13 +125,21 @@ class FirstE2eRunGuard(Guard):
     # most severe pending question.
     _THRESHOLDS = (75, 50, 25)
 
-    def __init__(self, stats_fn):
+    def __init__(self, stats_fn, task_text_fn=None):
         """stats_fn() -> dict|None with keys elapsed/budget/remaining/pct.
 
         None means no external wall is enforced; the guard stays silent.
         Same contract as TimeBudgetGuard's stats_fn.
+
+        task_text_fn() -> str with the CURRENT task's instruction text (the
+        same source VerificationGuard's task_text_fn reads). When the text
+        itself states a preservation requirement, the 75% release additionally
+        demands identity evidence (see _PRESERVATION_TERMS). Never a
+        task-name table — detection runs on the task's own wording at
+        runtime.
         """
         self._stats_fn = stats_fn
+        self._task_text_fn = task_text_fn
         self._fired: set[int] = set()
         # Threshold whose block is currently pending release (the one the
         # registry surfaced last). accept_override reads it to bind the
@@ -152,6 +160,49 @@ class FirstE2eRunGuard(Guard):
     def _norm(s: str) -> str:
         """Case/whitespace-insensitive comparison form."""
         return " ".join(s.split()).lower()
+
+    # ── byte-preservation demand (75% only) ───────────────────────────────
+    # Terms are read from the CURRENT task's own instruction text at runtime
+    # (task_text_fn); there is NO task-name table. The terms themselves are
+    # generic English verbs/adjectives drawn from the phrasing real task
+    # instructions use for preservation requirements ("must remain
+    # unchanged", "byte-for-byte", "preserve as much ... as possible").
+    _PRESERVATION_TERMS = (
+        "remain unchanged",
+        "remains unchanged",
+        "should remain unchanged",
+        "must remain",
+        "stay unchanged",
+        "byte-for-byte",
+        "byte for byte",
+        "unchanged",
+        "unmodified",
+        "preserve",
+        "must not modify",
+        "do not modify",
+        "without modifying",
+        "keep the",
+        "leave the",
+    )
+
+    # Command tokens that constitute IDENTITY evidence for preserved files.
+    _IDENTITY_CMDS = (
+        "md5sum", "sha256sum", "sha1sum", "cmp ", "cksum", "diff -q",
+        "git diff --no-index",
+    )
+
+    def _demands_preservation(self) -> bool:
+        fn = self._task_text_fn
+        if not fn:
+            return False
+        try:
+            text = fn() or ""
+        except Exception:
+            return False
+        t = self._norm(text)
+        if not t:
+            return False
+        return any(term in t for term in self._PRESERVATION_TERMS)
 
     @classmethod
     def _recorded_text(cls, ctx: GuardContext) -> str:
@@ -288,6 +339,18 @@ class FirstE2eRunGuard(Guard):
         for cand in candidates:
             c = self._norm(cand.lstrip("$ ").strip())
             if len(c) >= 6 and c in recorded:
+                # 75% + a preservation-demanding task: the pasted command
+                # must additionally be IDENTITY evidence (md5/cmp/sha/diff -q)
+                # for the files the task asks to keep unchanged — "I ran the
+                # pipeline" is not identity proof, the byte-preservation miss
+                # shipped precisely because the final exercise never compared
+                # the untouched inputs.
+                if (self._last_pending_thr == 75
+                        and self._demands_preservation()
+                        and not any(cmd.strip() in c
+                                    for cmd in self._IDENTITY_CMDS)):
+                    self._fired.discard(75)
+                    return False
                 return True
         # Rejected: re-arm the 75% threshold so the gate can re-block.
         self._fired.discard(75)
