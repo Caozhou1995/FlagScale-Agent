@@ -155,10 +155,29 @@ class FirstE2eRunGuard(Guard):
 
     @classmethod
     def _recorded_text(cls, ctx: GuardContext) -> str:
-        """Everything the trial has recorded: every message's text content."""
+        """The AGENT'S OWN ACTIONS, not the guard's echo.
+
+        Scope = recent_tool_history entries (each executed tool call's result)
+        PLUS every message whose role is NOT assistant (user/task text and
+        tool results carried in messages). Assistant text and guard block
+        text are EXCLUDED on purpose: the 75% block message itself names the
+        vocabulary an honest answer needs ("run it and read the result"), so
+        a reason that merely parrots the guard's own words would otherwise
+        self-certify — the loop-echo failure measured in the 2026-10-22
+        replay (47/47 historical overrides accepted via guard-echo tokens).
+        """
         parts: list[str] = []
+        for entry in ctx.recent_tool_history or []:
+            if isinstance(entry, dict):
+                text = entry.get("result")
+                if isinstance(text, str):
+                    parts.append(text)
         for msg in ctx.messages or []:
-            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "assistant":
+                continue
+            content = msg.get("content")
             if isinstance(content, str):
                 parts.append(content)
             elif isinstance(content, list):
