@@ -133,6 +133,41 @@ class FirstE2eRunGuard(Guard):
         """
         self._stats_fn = stats_fn
         self._fired: set[int] = set()
+        # Threshold whose block is currently pending release (the one the
+        # registry surfaced last). accept_override reads it to bind the
+        # evidence check to the 75% checkpoint only.
+        self._last_pending_thr: int | None = None
+
+    # ── 75% cold-consumer override: evidence binding ─────────────────────
+    # The 75% block message demands the agent paste the command it ran against
+    # the delivery artifact and the output it produced. A reason that only
+    # SAYS "I ran it" was the observed escape: without a check, prose released
+    # the gate in 133/134 losing trials. The release is therefore bound to
+    # EVIDENCE the agent already produced: the pasted command must appear,
+    # verbatim (normalized), in the text the agent itself emitted or read back
+    # during the trial (ctx.messages — the full history the kernel already
+    # hands to every guard; no new ledger, no LLM judge).
+
+    @staticmethod
+    def _norm(s: str) -> str:
+        """Case/whitespace-insensitive comparison form."""
+        return " ".join(s.split()).lower()
+
+    @classmethod
+    def _recorded_text(cls, ctx: GuardContext) -> str:
+        """Everything the trial has recorded: every message's text content."""
+        parts: list[str] = []
+        for msg in ctx.messages or []:
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(content, str):
+                parts.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
+        return cls._norm("\n".join(parts))
 
     def reset_turn(self):
         # A new user turn restarts the per-turn budget accounting on the
@@ -177,6 +212,9 @@ class FirstE2eRunGuard(Guard):
                 for t in self._THRESHOLDS:
                     if pct >= t:
                         self._fired.add(t)
+                # Remember which checkpoint's block is being surfaced so
+                # accept_override can bind its evidence check to 75% only.
+                self._last_pending_thr = thr
                 return GuardVerdict.block(
                     message=self._message(thr, stats),
                     reason=f"first_e2e_run_{thr}pct",
@@ -192,6 +230,49 @@ class FirstE2eRunGuard(Guard):
         if not stats:
             return None
         return self._verdict_for(stats)
+
+    def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        """75% (cold-consumer) releases are EVIDENCE-bound; 25%/50% stay prose.
+
+        A reason must contain a command-shaped token (a backticked span, or a
+        line starting with a shell-like invocation) that appears — normalized
+        (case/whitespace-insensitive) — in the trial's own recorded text. A
+        reason that merely claims a run was made is rejected, and rejecting
+        RE-ARMS the 75% checkpoint so the gate can re-block next call (without
+        this, one rejected reason would release forever, since _verdict_for
+        marks thresholds spent when it fires).
+        """
+        if not reason or len(reason.strip()) <= 5:
+            return False
+        if self._last_pending_thr != 75:
+            # Non-75% overrides keep the base behavior (prose is enough at the
+            # write-through / first-exercise checkpoints — the cost of a wrong
+            # answer there is minutes, not the task).
+            return True
+        recorded = self._recorded_text(ctx)
+        reason_norm = self._norm(reason)
+        # Candidate commands: backticked spans first, then bare lines that
+        # look like invocations.
+        candidates: list[str] = []
+        import re as _re
+        candidates.extend(m.strip("` ") for m in _re.findall(r"`([^`\n]+)`", reason))
+        for line in reason.splitlines():
+            ls = line.strip()
+            if ls.startswith(("$ ", "python", "python3", "./", "bash ", "sh ", "cd ", "make ", "git ", "pip ", "cargo ", "npm ", "java ", "gcc ", "g++ ", "cat ", "ls ", "grep ", "wc ", "pytest", "cmake ")):
+                candidates.append(ls)
+        if "none apply" in reason_norm:
+            return True
+        if not candidates:
+            # Rejected: re-arm the 75% threshold so the gate can re-block.
+            self._fired.discard(75)
+            return False
+        for cand in candidates:
+            c = self._norm(cand.lstrip("$ ").strip())
+            if len(c) >= 6 and c in recorded:
+                return True
+        # Rejected: re-arm the 75% threshold so the gate can re-block.
+        self._fired.discard(75)
+        return False
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         # check_pre handles the blocks; stay silent post so a crossing never
