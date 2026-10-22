@@ -19,6 +19,20 @@ from flagscale_agent.react.guard import GuardContext, GuardRegistry
 from flagscale_agent.react.guard.verification import VerificationGuard
 from flagscale_agent.react.plan import TaskPlan
 
+# --- completion-gate opt-in (GATE_SWITCH_FIXTURE) ---
+# The [TASK_COMPLETE] gate defaults to OFF (user instruction 2026-10-22). These
+# tests exercise the GATE LOGIC, so they must switch it back on explicitly;
+# without this they would report "no block" and look like broken code.
+import pytest as _pytest_mod
+
+
+@_pytest_mod.fixture(autouse=True)
+def _enable_completion_gate(monkeypatch):
+    from flagscale_agent.react.guard.verification import VerificationGuard
+    monkeypatch.setattr(VerificationGuard, "COMPLETION_GATE_ENABLED", True)
+    yield
+# --- end completion-gate opt-in ---
+
 TASK_TEXT = (
     "Convert the checkpoint to the target format. Acceptance: running "
     "`python convert.py --check` exits 0 and prints the tensor count.\n\n"

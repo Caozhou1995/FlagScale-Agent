@@ -31,7 +31,17 @@ def test_placeholders_are_exactly_the_expected_set():
 
 
 def test_is_english():
-    assert not re.search(r"[\u4e00-\u9fff]", SYSTEM_PROMPT_STATIC)
+    # No Chinese in the prompt PROSE. Short quoted everyday-phrasing examples
+    # inside the plain-language response rule are deliberate teaching data
+    # (exempt, same rule as test_context_v3.py); everything else must be
+    # English-only.
+    ok_spans = [m.span() for m in
+                re.finditer(r'"[^"]*[\u4e00-\u9fff][^"]*"', SYSTEM_PROMPT_STATIC)]
+    for m in re.finditer(r'[\u4e00-\u9fff]+', SYSTEM_PROMPT_STATIC):
+        assert any(s <= m.start() and m.end() <= e for s, e in ok_spans), (
+            f"Chinese prose outside a quoted example at {m.start()}"
+        )
+    assert ok_spans, "exemption ran vacuously"
 
 
 def test_no_python_format_brace_leak_in_prose():

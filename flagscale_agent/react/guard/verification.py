@@ -1995,6 +1995,15 @@ class VerificationGuard(Guard):
     
     name = "verification"
     priority = 55
+
+    # Completion gate master switch.
+    #   False (default, user instruction 2026-10-22): [TASK_COMPLETE] is not
+    #     gated at all -- the obligations below are skipped.
+    #   True: the full obligation set is enforced (original behavior).
+    # The gate bodies are kept intact and stay unit-tested; tests that exercise
+    # them monkeypatch this flag on, so disabling the gate never means deleting
+    # the logic, and re-enabling it is a one-line flip here.
+    COMPLETION_GATE_ENABLED = False
     
     def __init__(self, plan=None, proposals=None, task_text_fn=None,
                  full_log_fn=None, stats_fn=None):
@@ -2180,14 +2189,14 @@ class VerificationGuard(Guard):
         preserve in order. The list keeps the original severity order, so a
         caller that presents only the leader behaves exactly as before.
         """
-        # DISABLED per user instruction (2026-10-22): the completion gate
-        # (unfinished-steps / acceptance-observation / oracle-bound /
-        # oracle-exercised checks at [TASK_COMPLETE]) is commented out.
-        # [TASK_COMPLETE] is no longer blocked at this boundary. The original
-        # gate bodies are preserved below but unreachable; delete this return
-        # to restore the gate.
-        return []
-        pending: list[GuardVerdict] = []  # noqa: F841 (dead code, gate disabled)
+        # Completion gate is DISABLED by default (user instruction 2026-10-22).
+        # The gate bodies below are preserved and still TESTED: a test that
+        # exercises them opts in via `VerificationGuard.COMPLETION_GATE_ENABLED
+        # = True` (monkeypatched), so the obligations remain verified logic
+        # rather than deleted code, and re-enabling is a one-line flip.
+        if not self.COMPLETION_GATE_ENABLED:
+            return []
+        pending: list[GuardVerdict] = []
         unfinished = self._unfinished_steps()
         # Release through the SAME override bar the tool route uses (registry ->
         # owner.accept_override; base default = reason longer than 5 chars), so

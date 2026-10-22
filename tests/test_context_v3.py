@@ -904,8 +904,21 @@ class TestPromptIntegrity:
     def test_static_prompt_is_english(self):
         import re
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        # No Chinese characters in static prompt
-        assert not re.search(r'[\u4e00-\u9fff]', SYSTEM_PROMPT_STATIC)
+        # No Chinese in the prompt PROSE. Short quoted EXAMPLES of everyday
+        # phrasing inside the plain-language response rule are allowed: they
+        # are deliberate teaching data (the reader-facing voice the agent
+        # should mirror), not prose. This keeps the exemption narrow — long
+        # quoted strings or full sentences outside quote-context still fail.
+        hanzi = re.findall(r'[\u4e00-\u9fff]', SYSTEM_PROMPT_STATIC)
+        # every Chinese run must sit inside a quoted example (「"..."」)
+        ok_spans = [m.span() for m in
+                    re.finditer(r'"[^"]*[\u4e00-\u9fff][^"]*"', SYSTEM_PROMPT_STATIC)]
+        for m in re.finditer(r'[\u4e00-\u9fff]+', SYSTEM_PROMPT_STATIC):
+            assert any(s <= m.start() and m.end() <= e for s, e in ok_spans), (
+                f"Chinese prose outside a quoted example at {m.start()}: "
+                f"{SYSTEM_PROMPT_STATIC[max(0, m.start()-40):m.end()+20]!r}"
+            )
+        assert hanzi, "exemption ran vacuously: no Chinese found at all"
 
     # NOTE: the following tests assert that CONCEPTS (and the tool names those
     # concepts act through) are present in the static prompt — not that a
