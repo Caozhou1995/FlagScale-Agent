@@ -41,9 +41,39 @@ def test_static_facet_count_is_anchored_to_the_task_text():
     assert "row count is fixed by the clause count rather than by what you happen to think of" in FLAT
 
 
+def test_static_facet_states_a_segmentation_rule_so_the_count_is_reproducible():
+    """F4: without a segmentation rule the "clause count" is self-judged.
+
+    Measured 2026-10-23: the plan-step clause defines how the task text is cut
+    ("the task text's own sentences and bullets; treat each stated constraint
+    inside a sentence ... as its own clause; when in doubt split rather than
+    merge"), but the static copy carried the count relation without the rule --
+    so two compliant agents could produce different counts and both be literal.
+    """
+    assert "segment on the task text's own sentences and bullets" in FLAT
+    assert "as its own clause" in FLAT
+    assert "when in doubt split rather than merge" in FLAT
+
+
 def test_static_facet_row_requires_an_executed_probe():
     assert "each row carries the exact probe you ran plus its observed result" in FLAT
     assert "a row without an executed probe is a sentence, not a check" in FLAT
+
+
+def test_static_facet_requires_closeout_review_of_the_manifest():
+    """The close-out duty must survive in the copy the agent actually reads.
+
+    Measured 2026-10-23: the plan-step clause ends with "Close-out reviews THIS
+    manifest row by row, not your memory of it", but prompt.py:277 -- the static
+    copy -- omitted it entirely (grep for "close-out" over the static prompt:
+    0 hits). An agent reading only the static prompt could therefore satisfy the
+    facet clause at BUILD time and never re-check the rows at delivery, which is
+    exactly the multi-round failure the clause exists to close.
+    """
+    assert "close-out reviews this manifest row by row" in FLAT
+    assert "not your memory of it" in FLAT
+    for banned in ("close-out may skim", "close-out is optional", "review it if convenient"):
+        assert banned not in FLAT
 
 
 def test_static_reading_ledger_enumerates_defensible_readings():

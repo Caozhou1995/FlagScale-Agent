@@ -40,6 +40,12 @@ MUTS = [
     ("S9 ship-both-always",
      "when extras are penalized cover with a switch defaulted to the dominant reading",
      "when extras are penalized still ship both variants"),
+    ("S10 drop-closeout-review",
+     "close-out reviews this manifest row by row",
+     "close-out may skim this manifest"),
+    ("S11 drop-segmentation-rule",
+     "segment on the task text's own sentences and bullets",
+     "group the clauses however seems clearest"),
 ]
 
 
