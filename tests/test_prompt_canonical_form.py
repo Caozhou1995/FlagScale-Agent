@@ -77,6 +77,18 @@ def test_match_the_checkers_form_clause_present():
     assert re.search(r"(self[- ]test|own test|test suite).{0,200}(same|exact|consumer).{0,80}(comparison|equality|expression)",
                      low, re.S), \
         "form-match: 'self-tests must replay the consumer's equality' missing"
+    # 6. the derivation is an IMPERATIVE probe with a recorded output
+    assert re.search(r"(run|perform).{0,40}derivation.{0,120}probe"
+                     r"|probe.{0,160}(record|output)", low, re.S), \
+        "form-match: imperative round-trip probe with recorded output missing"
+    # 7. the dominance tie-break: a permitted parsing normalization implies
+    #    the comparison parses; delivering the canonical form dominates
+    assert re.search(r"(exception|permitted|permission).{0,240}(vacuous|dominan|coincide|dominates)",
+                     low, re.S), \
+        "form-match: dominance tie-break for the permitted-normalization wording missing"
+    # 8. the byte-identity override that re-enables span surgery
+    assert re.search(r"byte.?(ident|level)|cmp|md5", low), \
+        "form-match: byte-identity override (span surgery) missing"
 
 
 def test_match_the_checkers_form_clause_is_generic_no_task_leak():
