@@ -50,7 +50,9 @@ ACCEPTANCE_FACET_CLAUSE = "Acceptance-facet manifest"
 
 def _frame_facet_text():
     """Concatenate the FRAME acceptance items that talk about the manifest."""
-    return "\n".join(i for i in _FRAME_STEP_ACCEPTANCE if "acet" in i)
+    return "\n".join(
+        i for i in _FRAME_STEP_ACCEPTANCE if i.startswith("Acceptance-facet manifest")
+    )
 
 
 def test_acceptance_facet_clause_present_in_frame_step():
