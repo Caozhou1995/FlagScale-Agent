@@ -978,6 +978,115 @@ def _normalize_for_grounding(s: str) -> str:
     return " ".join(str(s).split()).lower()
 
 
+# Per-normalized-source failure tally, so a REPEATED identical miss can be
+# reported as such ("you have now failed this same quote N times — rewording is
+# not the fix"). Module-level and intentionally not persisted: its only purpose
+# is to break a live reword-and-retry loop within one session.
+_grounding_miss_counts: dict = {}
+
+
+def _task_segments(task_text: str) -> list:
+    """Split the composite task text into its real segments (task / last turn)."""
+    t = (task_text or "").strip()
+    if not t:
+        return []
+    return [s.strip() for s in t.split("\n\n") if s.strip()]
+
+
+def _note_grounding_miss(source) -> int:
+    """Increment and return the failure count for this normalized `source`."""
+    if not _is_real_str(source):
+        return 0
+    key = _normalize_for_grounding(source)
+    _grounding_miss_counts[key] = _grounding_miss_counts.get(key, 0) + 1
+    return _grounding_miss_counts[key]
+
+
+def _reading_source_diagnosis(source, task_segments, full_task_text) -> str:
+    """Human-readable WHY a `source` failed the verbatim-grounding check, plus the fix.
+
+    Grounding is a membership test: normalize(source) must occur in
+    normalize(task_text). When it fails, the message used to say only "not
+    grounded", so the agent had to guess WHICH corpus was compared and HOW its
+    quote differed — and guessed wrong repeatedly (observed live: the agent
+    pasted its own plan title as the "task quote" six times, each time only
+    rewording, never discovering that the corpus was the user's original
+    message and that a different string was needed). Everything below is derived
+    mechanically from the agent's own declaration and the harness's own corpus —
+    no task content is invented, and no per-case text is hardcoded:
+
+      1. Echo what was checked: the normalized needle and its length.
+      2. If a substantial slice of it DOES occur in the corpus, show that real
+         slice and say: quote THIS exactly.
+      3. Otherwise say it does not occur at all and point at the two real
+         corpora (original task message / last user turn) so the agent looks in
+         the right place instead of paraphrasing again.
+      4. When the failure repeats, say so explicitly — repeating the same shape
+         of edit is the signal that the WRONG THING is being edited (rewording a
+         quote never changes membership).
+    """
+    if not _is_real_str(source):
+        return (
+            "\n\n[how to fix] `source` must be a VERBATIM quote from the user's "
+            "own task text. You passed a non-string or an empty value."
+        )
+    needle = _normalize_for_grounding(source)
+    corpus = _normalize_for_grounding(full_task_text or "")
+    out = [
+        f"\n\n[what was checked] `source` normalized to {len(needle)} chars and "
+        "was searched as a SUBSTRING of the task text (whitespace-collapsed, "
+        "case-insensitive). Nothing else is compared — not semantics, not intent."
+    ]
+    snippet = _longest_common_snippet(needle, corpus, min_len=8)
+    if snippet:
+        out.append(
+            "\n[how to fix — this is the whole problem] The longest part of your "
+            f"`source` that really occurs in the task text is the slice below. "
+            "Quote THAT text byte-for-byte (whitespace and case are ignored, "
+            "nothing else is):\n"
+            f"  ---8<--- real text from the task ---\n  {snippet}\n"
+            "  --->8---\n"
+            "Rewording the rest of your quote will never help: only a substring "
+            "of the task text can pass."
+        )
+    else:
+        out.append(
+            "\n[how to fix — this is the whole problem] NONE of your `source` "
+            f"({len(needle)} chars) occurs in the task text. That means it was "
+            "written from memory, from your own plan/notes, or paraphrased — not "
+            "quoted from the user. The corpus compared here is the user's own "
+            "message(s), not your plan title and not your summary of the task."
+        )
+    if task_segments:
+        out.append(
+            "\n[where the corpus comes from] the task text is a composite of "
+            f"{len(task_segments)} segment(s):"
+        )
+        for i, seg in enumerate(task_segments[:3], 1):
+            flat = " ".join(seg.split())
+            head = flat[:160] + ("…" if len(flat) > 160 else "")
+            out.append(f"  {i}. ({len(flat)} chars) {head}")
+        if len(task_segments) > 3:
+            out.append(f"  … plus {len(task_segments) - 3} more segment(s)")
+        out.append(
+            "  Quote from one of these verbatim (a short distinctive phrase is "
+            "enough — the whole sentence is not required)."
+        )
+    misses = globals().get("_grounding_miss_counts")
+    if isinstance(misses, dict):
+        n = misses.get(needle, 0)
+        if n >= 2:
+            out.append(
+                f"\n[repeated failure ×{n}] This exact `source` has now failed "
+                f"{n} times. Changing only the wording will not fix it — the check "
+                "is substring membership, so a reworded quote is still absent. "
+                "Either (a) copy a phrase from the segment list above, or (b) if "
+                "no phrase of the task supports this reading, the reading is not "
+                "one of the task's readings: drop it rather than re-deriving it."
+            )
+    return "".join(out)
+
+
 def _task_text_groundable(task_text: str) -> bool:
     """True when the task text can ground a verbatim quote.
 
@@ -1672,8 +1781,13 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
             _normalize_for_grounding(r.get("source"))
             not in _normalize_for_grounding(task_text)
         ):
+            _note_grounding_miss(r.get("source"))
             return GuardVerdict.block(
-                message=_READING_NOT_GROUNDED,
+                message=(_READING_NOT_GROUNDED
+                         + _reading_source_diagnosis(
+                             r.get("source"),
+                             _task_segments(task_text),
+                             task_text)),
                 reason="reading_source_not_grounded",
                 category="verification_required",
             overridable=False,
@@ -1895,8 +2009,13 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 _normalize_for_grounding(if_none.get("extras_direction_source"))
                 not in _normalize_for_grounding(task_text)
             ):
+                _note_grounding_miss(if_none.get("extras_direction_source"))
                 return GuardVerdict.block(
-                    message=_READING_NOT_GROUNDED,
+                    message=(_READING_NOT_GROUNDED
+                             + _reading_source_diagnosis(
+                                 if_none.get("extras_direction_source"),
+                                 _task_segments(task_text),
+                                 task_text)),
                     reason="extras_direction_source_not_grounded",
                     category="verification_required",
                 overridable=False,
@@ -1937,8 +2056,13 @@ def _check_deliverable_reading_field(dr, task_text: str = "", observed: str = No
                 _normalize_for_grounding(e.get("source"))
                 not in _normalize_for_grounding(task_text)
             ):
+                _note_grounding_miss(e.get("source"))
                 return GuardVerdict.block(
-                    message=_READING_NOT_GROUNDED,
+                    message=(_READING_NOT_GROUNDED
+                             + _reading_source_diagnosis(
+                                 e.get("source"),
+                                 _task_segments(task_text),
+                                 task_text)),
                     reason="rejected_source_not_grounded",
                     category="verification_required",
                 overridable=False,
