@@ -522,6 +522,18 @@ class GuardRegistry:
                     ov.message for (og, ov) in inject_pairs
                     if ov.attach_on_block and og.name != surfaced_guard.name
                 ]
+                # A generic inject suppressed by this concurrent block was
+                # CONSUMED by its guard (one-shot thresholds marked fired when
+                # the verdict was built) but never delivered — e.g. the 50%/
+                # 75%/80% TimeBudget nudges lost to a same-resolve block leave
+                # the rest of the turn unguarded. Hand the guard back its
+                # consumed state so the nudge can re-fire later (observed: a
+                # run at 84% budget had seen only the 25% advisory).
+                injected_guards = {id(og) for (og, ov) in inject_pairs
+                                   if not ov.attach_on_block}
+                for ig in self._guards:
+                    if id(ig) in injected_guards:
+                        ig.block_not_surfaced()
                 if attached:
                     surfaced.message += (
                         "\n\n[concurrent trigger-bound guard advisory]\n"

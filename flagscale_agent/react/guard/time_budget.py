@@ -121,6 +121,13 @@ class TimeBudgetGuard(Guard):
         # marked fired anyway, and the agent ran 6m34s past the 80% wrap-up with
         # no 90% gate ever reaching it.
         self._pending_block_fired: set[int] = set()
+        # Same protection for the INJECT channel: check_post consumes thresholds
+        # into _fired when building an advisory, and that advisory can be
+        # suppressed by a concurrent block in the same resolve (generic injects
+        # are dropped when a block wins). Track what was consumed so
+        # block_not_surfaced() can hand it back — otherwise a swallowed 50%/75%
+        # nudge stays spent forever and the turn runs out unguarded.
+        self._pending_inject_fired: set[int] = set()
 
     def reset_turn(self):
         # A new user message restarts the per-turn wall-clock accounting on the
@@ -130,15 +137,18 @@ class TimeBudgetGuard(Guard):
         self._pending_block_fired = set()
 
     def block_not_surfaced(self):
-        """Hand back thresholds consumed while building a block that never surfaced.
+        """Hand back thresholds consumed while building a verdict that never surfaced.
 
-        The registry calls this for every guard whose block was outranked by a
-        harder one in the same resolve. Those thresholds were never delivered to
-        the agent, so they must be re-armable — otherwise the 90% gate is dead for
+        Covers BOTH channels: check_pre blocks outranked by a harder block in the
+        same resolve, and check_post injects suppressed by a concurrent block.
+        Those thresholds were never delivered to the agent, so they must be
+        re-armable — otherwise the 90% gate or the 50-80% nudges are dead for
         the remainder of the turn while the wall-clock keeps draining.
         """
         self._fired -= self._pending_block_fired
         self._pending_block_fired = set()
+        self._fired -= self._pending_inject_fired
+        self._pending_inject_fired = set()
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         """Block at 90%+ budget to force explicit deliverable reasoning.
@@ -276,10 +286,13 @@ class TimeBudgetGuard(Guard):
                 # most severe (90% CRITICAL) and must not dribble out the milder
                 # 75%/50% advisories on later calls — that would walk urgency
                 # BACKWARDS. Lower crossed thresholds are moot once a higher one
-                # has fired.
+                # has fired. Consumed state is recorded in _pending_inject_fired
+                # so block_not_surfaced() can return it if this advisory is
+                # suppressed by a concurrent block.
                 for t in self._THRESHOLDS:
                     if pct >= t:
                         self._fired.add(t)
+                        self._pending_inject_fired.add(t)
                 return GuardVerdict.inject(
                     self._message(thr, stats),
                     reason=f"time_budget_{thr}pct",
@@ -373,10 +386,13 @@ class TimeBudgetGuard(Guard):
                 "the budget runs out? At the current rate, will a complete valid "
                 "deliverable exist at its required path in time?\n"
                 "Default actions if the honest answer is not a confident yes:\n"
+                "  - FIRST, this step: write a SKELETON deliverable to its required "
+                "path — a crude-but-complete result built from what you ALREADY "
+                "know, no new analysis. Do not write 'I will write it soon'; the "
+                "file on disk is the only thing that scores. Refine it in place "
+                "afterwards — never rewrite from scratch.\n"
                 "  - Change course now while budget remains (a different, cheaper "
                 "method-class — not more knobs on the same one).\n"
-                "  - If your best result so far is not yet at its delivery path, "
-                "write it there once NOW — before anything else.\n"
                 "  - Name any doubt you already hold about your current best "
                 "result, so it can be settled or recorded before it becomes the "
                 "final answer."
