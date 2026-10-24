@@ -68,8 +68,96 @@ class AnthropicProvider(LLMProvider):
                 chat_messages.append(msg)
         return system, chat_messages
 
+    # Transcript-level image budget: EVERY request re-sends the whole history,
+    # so N historical read_image results re-ship N images each call. Two 3MB
+    # base64 images (~4MB encoded each) alone approach the gateway's 10MB
+    # request limit and kill the session mid-run (measured: video-processing
+    # trial died with HTTP 413 "request body too large" at turn 1). The model
+    # needs the most recent image; older ones are replaceable — the tool text
+    # still carries the measured facts, and the file remains on disk to re-read.
+    MAX_REQUEST_IMAGE_BLOCKS = 1
+
+    def _trim_old_images(self, chat_messages):
+        """Keep images only in the LAST image-bearing tool_result of the history.
+
+        Image blocks live INSIDE ``tool_result.content`` lists (Anthropic shape),
+        so scan one level deep. Earlier image blocks are replaced by a text
+        placeholder naming the tool that produced them, so a later turn can
+        re-read the file if needed. Runs on the per-request copy only — history
+        keeps the full images.
+        """
+        def _find_image_blocks(content):
+            """Yield image blocks in a message's content, incl. inside tool_result."""
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "image":
+                    yield block
+                elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                    yield from _find_image_blocks(block["content"])
+
+        last_img_msg = None
+        for msg in reversed(chat_messages):
+            content = msg.get("content")
+            if isinstance(content, list) and next(_find_image_blocks(content), None) is not None:
+                last_img_msg = msg
+                break
+        if last_img_msg is None:
+            return chat_messages
+        kept = 0
+        budget = self.MAX_REQUEST_IMAGE_BLOCKS
+        for msg in reversed(chat_messages):
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            new_blocks = []
+            changed = False
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result" \
+                        and isinstance(block.get("content"), list):
+                    new_inner = []
+                    for inner in block["content"]:
+                        is_img = isinstance(inner, dict) and inner.get("type") == "image"
+                        if is_img and (msg is not last_img_msg or kept >= budget):
+                            new_inner.append({
+                                "type": "text",
+                                "text": ("[image from an earlier read_image dropped to "
+                                         "stay under the request size limit; the tool "
+                                         "text above still carries what it showed — "
+                                         "re-run read_image on the same path to view "
+                                         "it again]"),
+                            })
+                            changed = True
+                        else:
+                            if is_img:
+                                kept += 1
+                            new_inner.append(inner)
+                    if changed:
+                        block = dict(block)
+                        block["content"] = new_inner
+                    new_blocks.append(block)
+                elif isinstance(block, dict) and block.get("type") == "image" \
+                        and (msg is not last_img_msg or kept >= budget):
+                    new_blocks.append({
+                        "type": "text",
+                        "text": ("[image from an earlier read_image dropped to "
+                                 "stay under the request size limit; the tool "
+                                 "text above still carries what it showed — "
+                                 "re-run read_image on the same path to view "
+                                 "it again]"),
+                    })
+                    changed = True
+                else:
+                    if isinstance(block, dict) and block.get("type") == "image":
+                        kept += 1
+                    new_blocks.append(block)
+            if changed:
+                msg["content"] = new_blocks
+        return chat_messages
+
     def _build_kwargs(self, messages, tools):
         system, chat_messages = self._split_system(messages)
+        chat_messages = self._trim_old_images(chat_messages)
         kwargs = {"model": self._model, "max_tokens": self._max_tokens, "messages": chat_messages}
         if self._temperature is not None:
             # Route temperature via extra_body, NOT as a typed kwarg: anthropic
