@@ -42,12 +42,24 @@ def test_extension_pins_symbol_resolution_from_semantic_source():
     """Third-layer root cause (zu6rmoT): disambiguation is the agent's job in
     single-shot mode — the clause must pin the PURPOSE test (raw input to a
     downstream transformation -> upstream semantic source), plus the
-    fetch-and-diff probe."""
+    fetch-and-diff probe. The clause itself must stay GENERAL: no entity
+    literal from the concrete task may appear in it."""
     text = _clause_text()
     assert "DISAMBIGUATE by asking what the deliverable is FOR" in text
     assert "raw INPUT to a downstream transformation" in text
     assert "resolve from THAT" in text
     assert "fetch its record yourself and diff it against the handed artifact" in text
+
+
+@pytest.mark.parametrize("literal", [
+    "GYG", "SYG", "5WJ2", "Clover", "fpbase", "FPbase", "SEQADV", "MODRES",
+    "FASTA", "fasta", "chromophore", "His-tag",
+])
+def test_symbol_resolution_clause_is_general_no_task_literals(literal):
+    """Design principle: prompt clauses are class-level rules, never task-
+    specific answers. The protein run's entities must not leak into the
+    clause (anti-overfit hard-code gate)."""
+    assert literal not in _clause_text()
 
 
 def test_extension_pins_explicit_transformation_only():
