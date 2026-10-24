@@ -57,5 +57,14 @@ def test_static_axis_clause_requires_known_feature_positions():
     assert "you have a unit or column mismatch" in FLAT
 
 
+def test_static_axis_clause_pins_feature_labels_to_fitted_positions():
+    """2026-10-24 batch: both peaks were fitted correctly but their G/2D
+    labels were swapped -- labels must come from position matching, not
+    processing order."""
+    assert (
+        "never by the order you happened to encounter or process them" in FLAT
+    )
+
+
 def test_static_axis_clause_forbids_fitting_on_raw_axis_values():
     assert "never fit on raw axis values" in FLAT
