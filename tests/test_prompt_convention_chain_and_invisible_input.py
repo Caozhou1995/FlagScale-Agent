@@ -115,5 +115,5 @@ def test_multi_event_signature_and_order():
 
 def test_falsifying_question_is_run_not_inspected():
     s = _slice(INV)
-    assert "answer it by RUNNING the synthesized variant, not by inspecting" \
-        " the code" in s
+    assert "answer it by RUNNING each synthesized variant in that list" in s
+    assert "not by inspecting" in s
