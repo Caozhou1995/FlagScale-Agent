@@ -39,13 +39,15 @@ def test_extension_pins_unexpressible_symbol_as_tolerance_hint():
 
 
 def test_extension_pins_symbol_resolution_from_semantic_source():
-    """Third-layer root cause (zu6rmoT): the agent resolved X from the
-    artifact's in-file SEQADV annotation; the checker builds its expected
-    value from the semantic source (the database record the pipeline reads)."""
+    """Third-layer root cause (zu6rmoT): disambiguation is the agent's job in
+    single-shot mode — the clause must pin the PURPOSE test (raw input to a
+    downstream transformation -> upstream semantic source), plus the
+    fetch-and-diff probe."""
     text = _clause_text()
-    assert "RESOLVING AN AMBIGUOUS SYMBOL" in text
-    assert "resolve the symbol from the SEMANTIC SOURCE the pipeline reads" in text
-    assert "an in-file annotation is a provenance note" in text
+    assert "DISAMBIGUATE by asking what the deliverable is FOR" in text
+    assert "raw INPUT to a downstream transformation" in text
+    assert "resolve from THAT" in text
+    assert "fetch its record yourself and diff it against the handed artifact" in text
 
 
 def test_extension_pins_explicit_transformation_only():
