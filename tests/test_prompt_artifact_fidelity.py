@@ -62,6 +62,24 @@ def test_symbol_resolution_clause_is_general_no_task_literals(literal):
     assert literal not in _clause_text()
 
 
+def test_symbol_resolution_clause_determinism():
+    """Stability principle: the decision chain must be a total order with a
+    unique standard at every node — no branch left undefined, no
+    'either/may/consider' freedom at a decision point."""
+    text = _clause_text()
+    # every ambiguity case lands in exactly one of two mutually exclusive branches
+    assert "Exactly one reading is graded" in text
+    assert "Both readings never apply to one deliverable" in text
+    # the fallback for an undecided case is itself deterministic
+    assert "read the task's own verb" in text
+    assert "only the task text can move a case between branches" in text
+    # the fetch-and-diff probe has a deterministic tie-break, not a judgement call
+    assert "prefer the branch whose source the task text itself names" in text
+    # no permissive hedges at decision nodes
+    for hedge in ("you may", "consider resolving", "either reading is fine"):
+        assert hedge not in text
+
+
 def test_extension_pins_explicit_transformation_only():
     text = _clause_text()
     assert "ONLY the transformation the task text explicitly names" in text
