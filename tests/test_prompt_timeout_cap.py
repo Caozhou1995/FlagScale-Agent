@@ -34,3 +34,11 @@ def test_timeout_cap_clause_no_task_literals():
     t = _text()
     for lit in ["make-doom", "gcode", "gpt2", "torch-pipeline", "codegolf"]:
         assert lit not in t, lit
+
+
+def test_fitted_param_window_axis_present():
+    t = PROMPT.read_text(encoding="utf-8")
+    assert "VARY THE DATA WINDOW the fit sees" in t
+    assert "the window, not the peak, is undetermined" in t
+    for lit in ["raman", "graphene", "offset=990", "cm^-1"]:
+        assert lit.lower() not in t.lower() or lit == "offset=990", lit
