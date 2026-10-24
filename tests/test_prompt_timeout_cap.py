@@ -41,4 +41,4 @@ def test_fitted_param_window_axis_present():
     assert "VARY THE DATA WINDOW the fit sees" in t
     assert "the window, not the peak, is undetermined" in t
     for lit in ["raman", "graphene", "offset=990", "cm^-1"]:
-        assert lit.lower() not in t.lower() or lit == "offset=990", lit
+        assert lit.lower() not in t.lower(), lit
