@@ -248,6 +248,15 @@ class KnowledgeSkillGuard(Guard):
                 "  • SELF-FILLABLE — the fetch gave you enough that the remaining gap "
                 "can be closed by REASONING from what you already have (inference, "
                 "connecting known facts). Don't over-fetch — reason it out, then proceed.\n"
+                "SPEC-LOYALTY CHECK (apply to every imported fact): imported information "
+                "supplies HOW (methods, API shapes, algorithms) — it never carries a "
+                "decision about WHAT the deliverable must be. If the external standard "
+                "answers a convention axis the task text left SILENT, that is smuggling, "
+                "not gain: re-anchor that axis on the task text and the provided "
+                "artifacts (minimal-uncertainty default), and keep the fetched method "
+                "only for the parts the spec actually names. If the spec genuinely "
+                "constrains nothing on the axis, keep climbing on your best proxy and "
+                "record which proxy you chose.\n"
                 "If the fetch merely confirmed prior knowledge and added nothing (not "
                 "any of the three), you are stalled — narrow the query or switch source.",
                 reason="knowledge_info_gain_three_state",
