@@ -36,7 +36,12 @@ def _response_format_section() -> str:
     structure they qualify, not anywhere in a 290-line prompt."""
     text = SYSTEM_PROMPT_STATIC
     start = text.index("DASHBOARD & RESPONSE FORMAT")
-    end = text.index("INFORMATION — retrieval and gain")
+    # In the staged layout DASHBOARD & RESPONSE FORMAT and INFORMATION live in
+    # different stages (DELIVER vs OPERATE); the section runs to its stage's
+    # next sibling (CODE QUALITY).
+    ends = [i for i in (text.find("INFORMATION — retrieval and gain"),
+                        text.find("CODE QUALITY")) if i > start]
+    end = min(ends)
     return text[start:end]
 
 
