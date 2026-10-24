@@ -78,5 +78,21 @@ def test_static_axis_clause_tests_transforms_numerically():
     assert "an encoding you rejected without computing its numbers is not rejected" in FLAT
 
 
+def test_static_external_db_clause_pins_pipeline_and_exact_match():
+    """2026-10-24 protein-assembly: the agent queried fpbase semantically
+    ('which protein has ex_max=505') and used a Clover sequence recalled
+    from elsewhere, while the reference pipeline walked every listed pdb_id
+    through the API and selected rows by EXACT match on the API's own
+    ex/em values -- donor_idx=-1, reward=0. The clause must pin both."""
+    assert "reproduce its query pipeline" in FLAT
+    assert "exact-match on the api's own values" in FLAT
+
+
+def test_static_external_db_clause_keeps_entity_list_anchor():
+    """The pipeline must be walked over the task's OWN entity list, not an
+    open-ended query over the whole database."""
+    assert "over the task-named entity list" in FLAT
+
+
 def test_static_axis_clause_forbids_fitting_on_raw_axis_values():
     assert "never fit on raw axis values" in FLAT
