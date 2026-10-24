@@ -66,5 +66,17 @@ def test_static_axis_clause_pins_feature_labels_to_fitted_positions():
     )
 
 
+def test_static_axis_clause_tests_transforms_numerically():
+    """The same batch: the agent enumerated the reciprocal transform, then
+    REJECTED it on physical grounds (anti-Stokes conventions) without ever
+    computing 1e7/6329 = 1580.3. A physically-motivated objection must not
+    override a numerically-matching transform."""
+    assert "simplest numeric form" in FLAT
+    assert (
+        "must not override a transform that numerically matches" in FLAT
+    )
+    assert "an encoding you rejected without computing its numbers is not rejected" in FLAT
+
+
 def test_static_axis_clause_forbids_fitting_on_raw_axis_values():
     assert "never fit on raw axis values" in FLAT
