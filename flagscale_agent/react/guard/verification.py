@@ -471,6 +471,11 @@ def _collect_fixed_field_failures(checks):
         "[VerificationGuard] %d required fields are wrong in this ONE call. "
         "Fix ALL of them together and re-issue once — they are independent, so "
         "fixing one at a time costs one round each.\n" % len(bad)
+        + "MINIMAL LEGAL FORMS (copy the one matching each missing field; use "
+          "each only when its claim is true for THIS step):\n"
+        "  convention={\"name\": \"none\"}\n"
+        "  deliverable_reading={\"deliverable\": \"none\"}\n"
+        "  assumptions={\"unverified\": \"none\"}\n"
         + "\n".join(parts)
         + "\n[REJECTED FIELDS] " + ", ".join(v.reason or "?" for v in bad) + "\n"
     )
@@ -514,6 +519,12 @@ def _is_real_str(v):
     return isinstance(v, str) and v.strip().lower() not in _CONVENTION_NO_VALUE
 
 _CONVENTION_MISSING = """[VerificationGuard] Every step_done must carry the fixed `convention` field.
+
+COPY-PASTE MINIMAL LEGAL FORM (use this when no derived convention governs
+this step's output — it is an owned declaration, not a skip):
+  convention={"name": "none"}
+
+Then read WHY the field exists and when the full form is required:
 
 Declare the convention THIS step's output rests on — a base, a stride, a key
 space, a normalisation, a serialisation, a default — that you DERIVED rather
@@ -753,6 +764,12 @@ def _check_convention_field(conv):
 # under extras=ignored; intersection only under extras=penalized. If no hedge
 # exists the agent must name the rejected readings WITH independent evidence.
 _DELIVERABLE_READING_MISSING = """[VerificationGuard] Every step_done must carry the fixed `deliverable_reading` field.
+
+COPY-PASTE MINIMAL LEGAL FORM (use this when THIS step emits no graded artifact
+— it is an owned declaration, not a skip):
+  deliverable_reading={"deliverable": "none"}
+
+Then read WHY the field exists and the other two shapes:
 
 State, on the record, whether THIS step emits a graded artifact and — when the
 grader is NOT visible — the readings you produced against. This is mandatory on
@@ -1551,6 +1568,12 @@ def _oracle_exercised(act, observed, first_exercise=None, judge=None) -> bool:
 # must carry a real observation the harness can find; a premise declared
 # non-affecting must say why.
 _UNVERIFIED_ASSUMPTIONS_MISSING = """[VerificationGuard] Every step_done must carry the fixed `assumptions` field.
+
+COPY-PASTE MINIMAL LEGAL FORM (use this when NO load-bearing premise was left
+untested — it is an owned declaration, not a skip):
+  assumptions={"unverified": "none"}
+
+Then read WHY the field exists and when the full form is required:
 
 Reasoning is not evidence. You can see your whole context — your own reasoning
 trace AND the tool results — so re-read it before this step closes, and split

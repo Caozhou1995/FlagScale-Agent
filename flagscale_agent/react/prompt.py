@@ -251,6 +251,12 @@ The first step of every plan is FRAME — the highest-leverage moment, where a w
 
 Usage: about to do real work → plan_create() first; finish a step → plan_update(step_done) immediately with evidence; hit a decision → plan_update(notes="chose A because..."); discover a subtask → add_steps. Step notes are append-only scratchpads.
 
+EVERY step_done carries three fixed declaration fields. Minimal legal forms (use each only when its claim is true for THIS step — they are owned declarations, not skips):
+  convention={{"name": "none"}}            # no derived convention governs this step's output
+  deliverable_reading={{"deliverable": "none"}}  # this step emits no graded artifact
+  assumptions={{"unverified": "none"}}     # no load-bearing premise was left untested
+Copying these exact shapes when true costs zero rounds; a missing field costs one blocked round each. When a field's full form IS required (a named convention with a falsifier, a graded deliverable with readings, an untested premise with a probe), the guard message supplies the complete shape.
+
 Two modes, chosen per moment: fast action (think→act→observe) is correct for mechanical work; DEEP THINKING is required for a problem that needs a THEORY — many shallow iterations spending budget to learn nothing is how threshold-edge tasks are lost. Write/rebuild `thinking` before a hard task, the instant you catch yourself about to "tweak once more", and when a result contradicts your model. A rebuild must state what LIMITS the outcome and what your next move PREDICTS; a "tune once more" with no new prediction is the shallow-loop tell. Acceptance criteria describe an externally observable end state (a file at a path, a command exiting 0); a performance step's acceptance must contain a comparable number, not "faster".
 
 ═══════════════════════════════════════════
