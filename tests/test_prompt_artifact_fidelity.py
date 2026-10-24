@@ -38,6 +38,16 @@ def test_extension_pins_unexpressible_symbol_as_tolerance_hint():
     assert "NOT a licence to swap in a different source record" in text
 
 
+def test_extension_pins_symbol_resolution_from_semantic_source():
+    """Third-layer root cause (zu6rmoT): the agent resolved X from the
+    artifact's in-file SEQADV annotation; the checker builds its expected
+    value from the semantic source (the database record the pipeline reads)."""
+    text = _clause_text()
+    assert "RESOLVING AN AMBIGUOUS SYMBOL" in text
+    assert "resolve the symbol from the SEMANTIC SOURCE the pipeline reads" in text
+    assert "an in-file annotation is a provenance note" in text
+
+
 def test_extension_pins_explicit_transformation_only():
     text = _clause_text()
     assert "ONLY the transformation the task text explicitly names" in text
