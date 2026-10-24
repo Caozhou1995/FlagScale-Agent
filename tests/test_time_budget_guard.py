@@ -398,7 +398,9 @@ class TestTimeBudgetGateCopy:
         v = self._post(55.0)
         assert v is not None and v.reason == "time_budget_50pct"
         assert "Default actions" in v.message
-        assert "write it there once NOW" in v.message
+        assert "write a SKELETON deliverable" in v.message
+        assert "the file on disk is the only thing that scores" in v.message
+        assert "Refine it in place" in v.message
         assert "Name any doubt" in v.message
 
     # --- 100% wrap-up: protective only ----
