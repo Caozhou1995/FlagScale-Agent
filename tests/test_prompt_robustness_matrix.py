@@ -57,7 +57,7 @@ def test_each_axis_states_its_law_and_its_probe():
         ("L3 NEGATIVE CONTROL", "must NOT be reported"),
         ("L4 MARGIN", "must not flip"),
     ]
-    probes = ["Synthesize", "RUN", "synthesize", "perturb", "run"]
+    probes = ["Synthesize", "RUN", "synthesize", "perturb", "run", "SWEEP", "jitter", "sweep"]
     for axis, law in laws:
         pos = sec.index(axis)
         chunk = sec[pos:pos + 700]
