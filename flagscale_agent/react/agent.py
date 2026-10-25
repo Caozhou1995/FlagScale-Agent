@@ -1183,6 +1183,16 @@ class WorkerAgent:
     INTRA_STREAM_REPEAT_WINDOW = 16
     INTRA_STREAM_REPEAT_DISTINCT_MOST = 8
 
+    # In-stream wall-clock cap for a PURE-thinking stream. Measured on the
+    # GLM Anthropic-compat endpoint (~4.6 tok/s served): a 16384-token token
+    # cap corresponds to ~2200-3500s of wall clock, so no TOKEN-based cap can
+    # ever fire inside a 900s budget — a single slow stream eats 45% of the
+    # turn (v12.1 trial o3NAGa9: one thinking stream burned 405.8s of 781.7s
+    # and the turn ended honest-BLOCKED with only a placeholder). The cap is
+    # TIME, not tokens: abort the stream once it has been pure thinking for
+    # this many seconds and no visible output has appeared. 0 disables.
+    IN_STREAM_THINKING_WALL_SEC = 240
+
     # Char-collapse floor (see _detect_char_collapse in this module): the
     # measured v28 trial produced ONE line of 119,373 consecutive '0' bytes
     # (145KB log, 122K zeros) — filler WITHOUT newlines, which the line-window
@@ -2299,6 +2309,8 @@ class WorkerAgent:
         sentinel_stripper = display.SentinelStripper()
         thinking_text = ""
         thinking_signature = ""
+        # In-stream wall clock for the pure-thinking cap (IN_STREAM_THINKING_WALL_SEC)
+        _stream_t0 = None
 
         def compress_newlines(text, trailing_from_prev, is_first):
             if not text:
@@ -2392,6 +2404,19 @@ class WorkerAgent:
                         if not thinking_capped and not content_parts and not tool_calls:
                             thinking_counter.add(event["content"])
                             capped_now, _capped_at = thinking_counter.state(cap_budget)
+                            # ── In-stream wall-clock cap (see
+                            # IN_STREAM_THINKING_WALL_SEC) ──
+                            # Token-based caps cannot fire on slow endpoints
+                            # (~4.6 tok/s served: a 16384-token budget is
+                            # ~2000s of wall). Judge TIME since the stream
+                            # began emitting pure thinking; abort at the cap.
+                            if not capped_now:
+                                if _stream_t0 is None:
+                                    _stream_t0 = time.time()
+                                if (self.IN_STREAM_THINKING_WALL_SEC > 0
+                                        and time.time() - _stream_t0
+                                        >= self.IN_STREAM_THINKING_WALL_SEC):
+                                    capped_now = True
                             # ── Intra-stream degenerate-repeat breaker ──
                             # Detect an unbounded filler cycle inside ONE
                             # thinking stream, per completed line, and abort it
