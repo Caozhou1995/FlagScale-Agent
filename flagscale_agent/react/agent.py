@@ -154,6 +154,71 @@ def _detect_char_collapse(tail: str, min_run: int) -> bool:
     return _cnt >= min_run
 
 
+def _detect_phrase_cycle(tail: str, tail_chars: int, distinct_max: int) -> bool:
+    """Single-line filler CYCLE inside the thinking stream.
+
+    Fifth filler mode: short filler phrases repeating with NO newline at all
+    ("Go. OK. Let me run. Running. ..." over tens of KB). The line-window
+    detector only evaluates completed lines, so a cycle that never emits
+    "\\n" never reaches it; _detect_char_collapse needs a monotone run of ONE
+    byte, which a multi-phrase cycle never produces. A 4096-char window of a
+    real filler cycle repeats a tiny phrase set (<= 12 distinct bytes);
+    genuine reasoning always names new terms — calibrated on 3 healthy
+    2026-10-25 trials whose worst 4096-char window holds >= 65 distinct
+    bytes. 0 disables via tail_chars.
+    """
+    if tail_chars <= 0 or not tail:
+        return False
+    if len(tail) < tail_chars:
+        return False
+    return len(Counter(tail)) <= distinct_max
+
+
+def _intra_stream_update(buf: str, delta: str, lines: list, window: int,
+                         distinct_max: int, min_run: int, tail_chars: int,
+                         cycle_distinct_max: int):
+    """One incremental update of the intra-stream degeneracy detectors.
+
+    Consumes ONE thinking delta against the pending (newline-free) buffer.
+    `lines` is the caller-owned rolling window of completed lines — mutated
+    in place, because the line-window predicate needs the ACCUMULATED window
+    across deltas (a fresh per-call list never reaches `window` lines and
+    the mode-3 check would be dead — measured during integration).
+
+    distinct_max governs the LINE window (mode 3); cycle_distinct_max
+    governs the newline-free CYCLE window (mode 5) — two different
+    calibrations, never conflate them (conflating them with the line value
+    made mode 5 unreachable — measured during integration).
+
+    Returns (buf, fired). fired: 0 none | 1 char-collapse |
+    2 single-line phrase-cycle | 3 line-window repeat.
+    """
+    buf += delta
+    keep = 4 * window + max(min_run, tail_chars)
+
+    # Mode 4: monotone one-byte run, newline-free.
+    if _detect_char_collapse(buf[-keep:], min_run):
+        return buf[-keep:], 1
+    # Mode 5: multi-phrase cycle with no newline at all.
+    if _detect_phrase_cycle(buf[-tail_chars:], tail_chars,
+                            cycle_distinct_max):
+        return buf[-keep:], 2
+
+    while "\n" in buf:
+        ln, buf = buf.split("\n", 1)
+        ln = " ".join(ln.split())[:200]
+        if not ln:
+            continue
+        lines.append(ln)
+        if len(lines) > window:
+            del lines[:-window]
+        if len(lines) >= window and len(set(lines)) <= distinct_max:
+            return buf, 3
+    # No newline pending: all detectors are tail-based, so trim the pending
+    # line to the scan horizon (bounds memory on a long newline-free stream).
+    return buf[-keep:], 0
+
+
 def _run_single_shot_append_nudge(query, worker=False, resume=False):
     """Append the multi-agent nudge to a single-shot USER task.
 
@@ -1126,6 +1191,19 @@ class WorkerAgent:
     # one byte this long cannot be genuine reasoning (a proof sketch names its
     # terms; a payload names its delimiter). 0 disables.
     INTRA_STREAM_CHAR_COLLAPSE_MIN_RUN = 1024
+
+    # Single-line phrase-cycle detection (fifth filler mode): a newline-free
+    # cycle of short filler phrases (measured: the v28 filter-js stream also
+    # ran long single-line loops). The line-window above only evaluates
+    # completed lines, so a cycle with no newline is invisible to it. The
+    # calibration probe (/tmp/cycle_probe.py over 3 healthy trials from
+    # 2026-10-25, whole log incl. tool echo — a SUPERSET of the thinking-only
+    # stream this scans) bottoms out at 65 distinct chars in any 4096-char
+    # window; an English filler cycle repeats a tiny phrase set (a 4-6 phrase
+    # loop holds ~19-30 distinct bytes). The bound 32 keeps 2x margin under
+    # the healthy floor and catches any realistic phrase cycle. 0 disables.
+    INTRA_STREAM_CYCLE_TAIL_CHARS = 4096
+    INTRA_STREAM_CYCLE_DISTINCT_MAX = 32
 
     def _mech_original_task(self) -> str:
         """First user turn of the session = the original task text, verbatim.
@@ -2319,18 +2397,15 @@ class WorkerAgent:
                             # thinking stream, per completed line, and abort it
                             # instead of letting it consume the wall clock.
                             if _intra_window > 0:
-                                _intra_buf += event["content"]
-                                # Char-collapse check FIRST: filler may be one
-                                # newline-free run of a single byte (measured:
-                                # 119,373 consecutive '0' in the v28 trial),
-                                # which never completes a line and so never
-                                # enters the line-window below.
-                                _tail = _intra_buf[-(4 * _intra_window
-                                                     + 64):]
-                                if _detect_char_collapse(
-                                        _tail,
-                                        self.INTRA_STREAM_CHAR_COLLAPSE_MIN_RUN,
-                                ):
+                                _intra_buf, _fired = _intra_stream_update(
+                                    _intra_buf, event["content"],
+                                    _intra_lines,
+                                    _intra_window, _intra_distinct_max,
+                                    self.INTRA_STREAM_CHAR_COLLAPSE_MIN_RUN,
+                                    self.INTRA_STREAM_CYCLE_TAIL_CHARS,
+                                    self.INTRA_STREAM_CYCLE_DISTINCT_MAX,
+                                )
+                                if _fired == 1:
                                     intra_degenerate = True
                                     if display.thinking_enabled():
                                         display._write(
@@ -2341,20 +2416,21 @@ class WorkerAgent:
                                                 " — aborting this stream]"
                                             )
                                         )
-                                while "\n" in _intra_buf:
-                                    _ln, _intra_buf = _intra_buf.split("\n", 1)
-                                    _ln = " ".join(_ln.split())[:200]
-                                    if not _ln:
-                                        continue
-                                    _intra_lines.append(_ln)
-                                    if len(_intra_lines) > _intra_window:
-                                        del _intra_lines[:-_intra_window]
-                                    if (len(_intra_lines) >= _intra_window
-                                            and len(set(_intra_lines))
-                                            <= _intra_distinct_max):
-                                        intra_degenerate = True
-                                        break
-                                if intra_degenerate:
+                                elif _fired == 2:
+                                    intra_degenerate = True
+                                    if display.thinking_enabled():
+                                        display._write(
+                                            display.dim(
+                                                "\n[intra-stream filler cycle in "
+                                                "thinking stream — single line, "
+                                                f"{self.INTRA_STREAM_CYCLE_TAIL_CHARS} "
+                                                f"chars with <= "
+                                                f"{self.INTRA_STREAM_CYCLE_DISTINCT_MAX}"
+                                                " distinct bytes — aborting this stream]"
+                                            )
+                                        )
+                                elif _fired == 3:
+                                    intra_degenerate = True
                                     if display.thinking_enabled():
                                         display._write(
                                             display.dim(
@@ -2364,6 +2440,7 @@ class WorkerAgent:
                                                 " — aborting this stream]"
                                             )
                                         )
+                                if intra_degenerate:
                                     try:
                                         stream.close()
                                     except Exception:
