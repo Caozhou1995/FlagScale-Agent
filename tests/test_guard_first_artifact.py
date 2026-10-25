@@ -463,3 +463,40 @@ def test_note_write_in_history_does_not_disarm_top_loop():
     assert v is not None and v.action == "inject", (
         "a note-only history must NOT disarm the guard; the artifact is missing"
     )
+
+
+# ── Regression: the 7th "condition silently never true" defect ─────────────
+# Measured on a real trial: the advisory read "~0KB of reasoning" while the log
+# held 90KB. Cause (read from kernel.py): the provider DROPS assistant thinking
+# blocks before writing the message back into history, so reasoning that has
+# already been written back is not there to measure. A synthetic history that
+# still carries thinking blocks measured ~51KB and hid this completely.
+
+def test_reasoning_bytes_uses_inflight_response_not_only_history():
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    from flagscale_agent.react.guard import GuardContext
+    g = FirstArtifactGuard()
+    # REAL shape: thinking already stripped, only a short text block remains.
+    real = GuardContext(
+        tool_name="",
+        messages=[{"role": "assistant", "content": [{"type": "text", "text": "plan"}]}],
+        assistant_text="z" * 50000,
+        llm_responded=True,
+    )
+    assert g._reasoning_bytes(real) >= 50000, (
+        "the in-flight response must count; history alone measures ~0 because "
+        "the provider drops thinking blocks on write-back"
+    )
+    v = g.check_pre(real)
+    assert v is not None and v.action == "inject"
+
+
+def test_turn_budget_still_fires_without_any_reasoning_bytes():
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    from flagscale_agent.react.guard import GuardContext
+    hist = [{"role": "assistant", "content": [{"type": "text", "text": "plan"}]}
+            for _ in range(5)]
+    c = GuardContext(tool_name="", messages=hist)
+    assert FirstArtifactGuard()._reasoning_bytes(c) < 100  # bytes are useless here
+    v = FirstArtifactGuard().check_pre(c)
+    assert v is not None and v.action == "inject", "turn budget is the primary clock"

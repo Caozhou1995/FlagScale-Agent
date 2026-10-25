@@ -247,6 +247,7 @@ class FirstArtifactGuard(Guard):
         # not spammed every iteration (which would also defeat the registry's
         # text-based inject dedup, since the counts in the message change).
         self._injected_at_bytes = -1
+        self._injected_at_turns = -1
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _scan_history_for_write(self, ctx: GuardContext) -> bool:
@@ -325,11 +326,28 @@ class FirstArtifactGuard(Guard):
         A turn-only budget is too coarse for the target failure shape: one
         assistant turn can carry tens of KB of reasoning before its single
         tool call, and the measured failing run produced its whole trajectory
-        in 7 turns. Summing assistant text gives a clock-independent trigger
-        that fires while the run is still on its first turn with nothing on
-        disk.
+        in 7 turns.
+
+        IMPORTANT — this signal is WEAK on some providers and must never be the
+        ONLY trigger. Measured on a real trial: the injected advisory read
+        "~0KB of reasoning" while the log held 90KB, and in-container driving
+        of this function on the REAL history shape returned 4. Cause (read from
+        kernel.py): the provider DROPS assistant thinking blocks before writing
+        the message back into history ("Many providers (e.g. GLM
+        Anthropic-compat endpoint) DROP assistant thinking blocks from the
+        input"), so reasoning that has already been through the write-back is
+        simply not there to measure. Synthetic histories that still carry
+        thinking blocks measure ~51KB and therefore hide the bug.
+
+        What remains reliable is the CURRENT response, which has not been
+        through write-back yet: `ctx.assistant_text` / `ctx.llm_responded`. The
+        turn budget (`_count_assistant_turns`) is the primary clock for exactly
+        this reason.
         """
         total = 0
+        # The in-flight response is not subject to write-back stripping.
+        if ctx.llm_responded and isinstance(ctx.assistant_text, str):
+            total += len(ctx.assistant_text)
         for msg in ctx.messages or []:
             if msg.get("role") != "assistant":
                 continue
@@ -392,11 +410,17 @@ class FirstArtifactGuard(Guard):
             if ctx.tool_name != "":
                 return None  # non-artifact tool (e.g. plan_*) — not our call
             # Rate-limit: one advisory per additional budget's worth of
-            # reasoning, so a long design-only stretch gets periodic nudges
-            # rather than one per loop iteration.
-            if spent - self._injected_at_bytes < self.REASONING_BYTES_BUDGET:
+            # progress, so a long design-only stretch gets periodic nudges
+            # rather than one per loop iteration. Rate it on BOTH clocks: a
+            # byte-only limiter permanently suppresses the advisory when
+            # `spent` is stuck near 0 (the provider drops thinking blocks on
+            # write-back, so a real history measures ~4 bytes), which would
+            # silence the turn-budget trigger this guard exists for.
+            if (spent - self._injected_at_bytes < self.REASONING_BYTES_BUDGET
+                    and turns - self._injected_at_turns < self.TURN_BUDGET):
                 return None
             self._injected_at_bytes = spent
+            self._injected_at_turns = turns
             return GuardVerdict.inject(
                 message=(
                     f"[FirstArtifactGuard] {turns} turn(s) and ~{spent // 1000}KB "
