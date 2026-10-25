@@ -389,11 +389,21 @@ class TestKernelCappedNudge:
         assert kernel._empty_output_retries == 0
         # Final success reset the per-turn cap counter
         assert kernel._cap_retries == 0
-        # Every cap-trip re-injected a convergence nudge (full thinking)
+        # Every cap-trip re-injected a convergence nudge (full thinking kept
+        # for the first, bounded tail after). Contract changed with the
+        # escalating cap recovery: repeating the SAME gentle nudge was measured
+        # to be ignored (write-compressor v12.2 spent two 316s pure-thinking
+        # streams re-reading the identical 53KB recap), so cap-trip #1 asks for
+        # a concrete step and #2+ demand exactly one state-producing tool call.
         nudges = [m for m in h.history.messages
                   if m.get("role") == "user" and "previous_reasoning" in (m.get("content") or "")]
         assert len(nudges) == 6
-        assert all("Land the next concrete step NOW" in m["content"] for m in nudges)
+        assert "Land the next concrete step NOW" in nudges[0]["content"]
+        assert "HARD STOP" not in nudges[0]["content"]
+        assert all("HARD STOP" in m["content"] for m in nudges[1:])
+        # Escalation is not one-shot: every later cap keeps demanding action.
+        assert all("MUST contain exactly ONE tool call" in m["content"]
+                   for m in nudges[1:])
 
     def test_no_thinking_empty_output_unchanged(self):
         """Plain empty response (no thinking) → generic nudge, no cap mention."""

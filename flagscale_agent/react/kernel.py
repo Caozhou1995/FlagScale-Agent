@@ -205,6 +205,9 @@ class AgentKernel:
         # the nudge/retry loop iterates INSIDE this call and is not affected.
         self._last_toolcall_ts = None
         self._idle_think_rounds = 0
+        # Cap-escalation streak: consecutive runtime-cap trips in THIS turn that
+        # were answered with more pure thinking. Reset per turn.
+        self._cap_text_streak = 0
         self._turn_start_ts = time.time()
         self.iterations_live = 0
         d.judge.reset_turn()
@@ -459,6 +462,20 @@ class AgentKernel:
                                 result.stop_reason = "thinking_cap_max_retries"
                                 break
                             self._cap_retries = cap_retries + 1
+                            # Escalating cap recovery. Measured failure
+                            # (write-compressor v12.2, 2026-10-26 04-03-20,
+                            # trial EK83dj8): the in-stream wall-clock cap DID
+                            # fire (two 325.3s/316.6s pure-thinking streams cut),
+                            # but the ONE-SHOT convergence nudge was ignored —
+                            # the model re-read the same 53KB reasoning and spent
+                            # another 316.6s thinking, ending the turn with ZERO
+                            # tool calls and no deliverable (verifier 3 failed).
+                            # The saturation path below already carries the fix
+                            # (bounded recap + repeat counter + HARD STOP); this
+                            # endpoint never trips `was_saturated` (out_tok stays
+                            # below 95% of max_output_tokens), so the escalation
+                            # has to be driven by the cap count itself.
+                            self._cap_text_streak = getattr(self, "_cap_text_streak", 0) + 1
                             d.display.warn(f"Thinking reached runtime cap (cap-retry {self._cap_retries}), forcing convergence...")
                         elif was_idle_interval:
                             # Cumulative think-interval: several individually
@@ -585,19 +602,56 @@ class AgentKernel:
                                         "Do not explain, do not plan, do not reason -- emit the tool call."
                                     )
                             else:
-                                nudge = (
-                                    "[system: your reasoning reached its runtime length cap and was stopped. "
-                                    "Your reasoning so far is reproduced below — do NOT continue it. "
-                                    "Land the next concrete step NOW: either call a tool to test your "
-                                    "next hypothesis, or output your answer. Deep problems are solved "
-                                    "stepwise; experiments beat more thinking. Before that next step, "
-                                    "write_file a note or memory_write the delivery contract this "
-                                    "reasoning already fixed (deliverable path, format, constraints) — "
-                                    "this block is dropped from context on your next call.]\n\n"
-                                    "<previous_reasoning>\n"
-                                    f"{thinking_text}\n"
-                                    "</previous_reasoning>"
-                                )
+                                _cap_n = getattr(self, "_cap_text_streak", 1)
+                                _cap_tail = thinking_text[-4000:] if len(thinking_text) > 4000 else thinking_text
+                                if _cap_n >= 2:
+                                    # Second (and later) cap in the SAME turn:
+                                    # the model has now been told once to land
+                                    # a concrete step and instead spent another
+                                    # full stream thinking. Reasoning is not
+                                    # converging -- cut it off and demand the
+                                    # cheapest state-producing action.
+                                    nudge = (
+                                        "[system: HARD STOP. Your reasoning has now hit the "
+                                        f"runtime cap {_cap_n} times in this turn and each time "
+                                        "you resumed thinking instead of acting. Further "
+                                        "reasoning will be cut at the same wall every time, so "
+                                        "it cannot finish the job — only a tool call can.\n"
+                                        "Your next message MUST contain exactly ONE tool call, "
+                                        "and it must produce state on disk:\n"
+                                        "  • `write_file` the artifact you have already drafted "
+                                        "(even partial/imperfect) to the delivery path the task "
+                                        "names, or\n"
+                                        "  • `shell` ONE command that inspects the environment or "
+                                        "tests your single strongest hypothesis.\n"
+                                        "If this reasoning already fixed the delivery contract "
+                                        "(path/format/constraints), `memory_write` it first so it "
+                                        "survives, then write the file.\n"
+                                        "Do not explain, do not plan, do not summarize, do not "
+                                        "reason. Emit the tool call immediately.\n\n"
+                                        f"<previous_reasoning>\n{_cap_tail}\n"
+                                        "</previous_reasoning>"
+                                    )
+                                else:
+                                    # First cap this turn: bounded recap (not the
+                                    # whole stream) so the next call spends its
+                                    # input budget on acting, not re-reading.
+                                    nudge = (
+                                        "[system: your reasoning reached its runtime length cap "
+                                        "and was stopped. Your reasoning so far is reproduced "
+                                        "BELOW AS A BOUNDED TAIL — do NOT continue it.\n"
+                                        "Land the next concrete step NOW: either call a tool to "
+                                        "test your next hypothesis, or write your answer to "
+                                        "disk. Deep problems are solved stepwise; experiments "
+                                        "beat more thinking. If your reasoning already fixed the "
+                                        "delivery contract (deliverable path, format, "
+                                        "constraints), `memory_write` it first and then write "
+                                        "that file — an imperfect file that exists beats a "
+                                        "perfect draft that never lands.\n\n"
+                                        "<previous_reasoning>\n"
+                                        f"{_cap_tail}\n"
+                                        "</previous_reasoning>"
+                                    )
                         elif was_idle_interval:
                             # Cumulative idle think-interval: several streams
                             # each under the token cap, but TIME is draining
@@ -647,6 +701,10 @@ class AgentKernel:
                         self._empty_output_retries = 0
                         self._cap_retries = 0
                         self._intra_degen_retries = 0
+                        # A response with real visible output: the cap streak
+                        # did its job (the model broke out of the pure-thinking
+                        # loop), so later caps start the escalation over.
+                        self._cap_text_streak = 0
 
                     # Detect completion signals. Use end-anchored matching to
                     # distinguish a real sentinel (trailing the text) from a

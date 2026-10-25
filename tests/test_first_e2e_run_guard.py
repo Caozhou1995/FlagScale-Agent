@@ -24,9 +24,11 @@ from flagscale_agent.react.guard.first_e2e_run import (
 )
 
 
-def make_ctx(tool_name="shell"):
+def make_ctx(tool_name="shell", history=None):
     ctx = GuardContext()
     ctx.tool_name = tool_name
+    if history is not None:
+        ctx.recent_tool_history = history
     return ctx
 
 
@@ -93,7 +95,18 @@ class TestFirstE2eRunSilence:
 
 
 class TestFirstE2eRunBlocks:
-    def test_25_blocks_once_per_turn(self):
+    """Contract (revised 2026-10-26): a rung stays armed until the agent
+    actually RELEASES it. Each rung blocks on first crossing; it then stays
+    silent only if released (or after a new user turn). A rung that was never
+    released re-blocks — and is not silently subsumed by a later crossing.
+
+    The previous contract ("fires at most once per turn") was defeated by any
+    single-turn task: one appearance retired the rung for the whole trial, so
+    every prompt clause added for five batches was gated behind a checkpoint
+    that had already gone silent.
+    """
+
+    def test_25_blocks_once_until_released(self):
         s = _Stats()
         s.pct = 26.0
         g = FirstE2eRunGuard(stats_fn=s)
@@ -101,18 +114,29 @@ class TestFirstE2eRunBlocks:
         assert v is not None and v.action == "block"
         assert v.reason == "first_e2e_run_25pct"
         assert v.overridable is True
-        # Same turn: silent (each checkpoint fires at most once per turn).
+        # Not released: still armed (re-blocks), which is the whole point.
+        assert g.check_pre(make_ctx()) is not None
+        # Released with real write evidence: now silent.
+        assert g.accept_override("wrote the skeleton",
+                                 make_ctx(history=[{"name": "write_file",
+                                                    "result": "ok",
+                                                    "exec_error": False}])) is True
         assert g.check_pre(make_ctx()) is None
 
-    def test_50_blocks_once_per_turn(self):
+    def test_50_blocks_once_until_released(self):
         s = _Stats()
         s.pct = 60.0
         g = FirstE2eRunGuard(stats_fn=s)
         v = g.check_pre(make_ctx())
         assert v is not None and v.reason == "first_e2e_run_50pct"
+        assert g.check_pre(make_ctx()) is not None
+        assert g.accept_override("wrote it",
+                                 make_ctx(history=[{"name": "write_file",
+                                                    "result": "ok",
+                                                    "exec_error": False}])) is True
         assert g.check_pre(make_ctx()) is None
 
-    def test_75_blocks_once_per_turn(self):
+    def test_75_blocks_once_until_released(self):
         s = _Stats()
         s.pct = 76.0
         g = FirstE2eRunGuard(stats_fn=s)
@@ -120,8 +144,8 @@ class TestFirstE2eRunBlocks:
         assert v is not None and v.action == "block"
         assert v.reason == "first_e2e_run_75pct"
         assert v.overridable is True
-        # Same turn: silent after fired once.
-        assert g.check_pre(make_ctx()) is None
+        # Prose does not release the 75% rung either (evidence-bound).
+        assert g.check_pre(make_ctx()) is not None
 
     def test_75_boundary_exactly_blocks(self):
         s = _Stats()
@@ -130,31 +154,33 @@ class TestFirstE2eRunBlocks:
         v = g.check_pre(make_ctx())
         assert v is not None and v.reason == "first_e2e_run_75pct"
 
-    def test_jump_past_all_fires_only_75(self):
+    def test_jump_past_all_asks_75_then_lower_rungs_when_crossed(self):
         s = _Stats()
         s.pct = 80.0
         g = FirstE2eRunGuard(stats_fn=s)
         v = g.check_pre(make_ctx())
         assert v is not None and v.reason == "first_e2e_run_75pct"
-        # All three thresholds marked spent; none fire on their own after a jump.
-        assert g._fired == {75, 50, 25}
-        assert g.check_pre(make_ctx()) is None
+        # The severe rung surfaces first; the lower ones are NOT retired —
+        # they are questions still owed an answer.
+        assert 50 not in g._released and 25 not in g._released
 
-    def test_jump_past_both_fires_only_50(self):
+    def test_jump_past_both_asks_50(self):
         s = _Stats()
         s.pct = 70.0
         g = FirstE2eRunGuard(stats_fn=s)
         v = g.check_pre(make_ctx())
         assert v is not None and v.reason == "first_e2e_run_50pct"
-        # Both thresholds marked spent; 25 never fires on its own after a jump.
-        assert g._fired == {50, 25}
-        assert g.check_pre(make_ctx()) is None
+        assert 25 not in g._released
 
     def test_reset_turn_rearms(self):
         s = _Stats()
         s.pct = 30.0
         g = FirstE2eRunGuard(stats_fn=s)
         assert g.check_pre(make_ctx()) is not None
+        assert g.accept_override("wrote it",
+                                 make_ctx(history=[{"name": "write_file",
+                                                    "result": "ok",
+                                                    "exec_error": False}])) is True
         assert g.check_pre(make_ctx()) is None
         g.reset_turn()
         assert g.check_pre(make_ctx()) is not None
