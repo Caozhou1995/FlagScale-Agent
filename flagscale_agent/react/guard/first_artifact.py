@@ -1,0 +1,217 @@
+# Copyright 2026 FlagOS Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""FirstArtifactGuard — force the FIRST write to the delivery path early.
+
+Why this guard exists (measured, not hypothesized):
+
+A run can spend its WHOLE wall clock inside design reasoning and deliver no
+file at all. Measured on a real trial: the agent produced ~200KB of reasoning
+across 4 turns while issuing ONE shell command and ZERO file writes; the
+verifier's first read was "no such file". The same failure shape had already
+recurred in an earlier full batch on the same task family.
+
+A prompt clause alone does not fix this, and the reason is mechanical, not
+rhetorical: the clause lives in the attention layer, and this failure mode
+produces very FEW turns — each turn is a huge reasoning block ending in one
+tool call — so every existing "you responded N times with text only" nudge
+stays UNREACHABLE (measured: all three text-only nudges fired 0 times on the
+failing run). The quantity that actually distinguishes the failure is
+"turns consumed before the delivery path was first mutated", and nothing in
+the harness measured it.
+
+This guard measures that quantity and blocks the NEXT tool call once a
+mutation-free budget is exhausted, forcing a minimal valid artifact onto disk
+before the design is allowed to continue. Once any artifact-producing write is
+observed, the guard disarms permanently for the session.
+"""
+
+from __future__ import annotations
+
+from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+
+
+# Tools that can put bytes on disk. `shell` counts because a heredoc /
+# redirection / `tee` is how most deliverables are actually written.
+_ARTIFACT_TOOLS = frozenset({"write_file", "edit_file", "shell"})
+
+
+# Shell fragments that unambiguously write. A read-only shell command
+# (`ls`, `cat`, `grep`) must NOT disarm the guard — disarming on any shell
+# call is exactly how a "design forever, look around, write nothing" run
+# would slip through.
+_WRITE_MARKERS = (
+    ">",
+    ">>",
+    "tee ",
+    "cp ",
+    "mv ",
+    "install ",
+    "touch ",
+    "mkdir ",
+    "patch ",
+    "sed -i",
+    "python -c",
+    "python3 -c",
+    "cat <<",
+    "dd ",
+    "truncate ",
+)
+
+
+def _shell_writes_bytes(command: str) -> bool:
+    """True when a shell command looks like it puts content on disk.
+
+    Deliberately conservative: a redirect to /dev/null, a `2>&1` merge, or a
+    pipe into `grep` must NOT count as writing the deliverable — otherwise a
+    read-only orientation pass disarms the guard and the failure shape it
+    targets slips through. Only writes that can plausibly create the graded
+    artifact count.
+    """
+    if not command:
+        return False
+    # Strip pure-redirect noise that never creates a real file.
+    scrubbed = command
+    for noise in ("2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"):
+        scrubbed = scrubbed.replace(noise, " ")
+    if not any(marker in scrubbed for marker in _WRITE_MARKERS):
+        return False
+    return True
+
+
+class FirstArtifactGuard(Guard):
+    """Block tool use until the delivery path has been written at least once.
+
+    Fires at most ONCE per session (after the turn budget is exhausted with no
+    artifact-producing write observed). It is overridable: an agent that
+    genuinely cannot write yet (needs one more probe to learn the format) can
+    explain why and proceed — the override disarms the guard so it never
+    becomes a livelock.
+    """
+
+    name = "first_artifact"
+
+    # After this many turns with no artifact write, the next tool call is
+    # blocked. Deliberately small: a 3-4 turn budget still leaves room for an
+    # initial orientation pass (`ls`, read the task spec, read the checker),
+    # while a run that reaches turn 5 having written nothing is, by measurement,
+    # the failure shape this guard targets.
+    TURN_BUDGET = 4
+
+    priority = 18  # after the startup pipeline (5) and safety guards (10-16),
+    # before the generic text/verification gates.
+
+    def __init__(self):
+        self._wrote_artifact = False
+        self._blocked_once = False
+
+    # ── helpers ────────────────────────────────────────────────────────────
+    def _scan_history_for_write(self, ctx: GuardContext) -> bool:
+        """True when any prior tool call in history already wrote bytes.
+
+        Reads the message history rather than trusting a per-call flag, so a
+        write issued in an EARLIER turn (possibly before this guard's
+        bookkeeping was live) still counts.
+        """
+        for msg in ctx.messages or []:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                tool = block.get("name", "")
+                args = block.get("input") or {}
+                if tool in ("write_file", "edit_file"):
+                    return True
+                if tool == "shell" and _shell_writes_bytes(
+                    str(args.get("command", ""))
+                ):
+                    return True
+        return False
+
+    # ── guard protocol ─────────────────────────────────────────────────────
+    def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        if self._wrote_artifact or self._blocked_once:
+            return None
+        if ctx.tool_name not in _ARTIFACT_TOOLS:
+            return None
+
+        # A write already in history disarms the guard.
+        if self._scan_history_for_write(ctx):
+            self._wrote_artifact = True
+            return None
+
+        if ctx.turn_count < self.TURN_BUDGET:
+            return None
+
+        # This call is itself about to write — let it through, it is the fix.
+        if ctx.tool_name in ("write_file", "edit_file"):
+            self._wrote_artifact = True
+            return None
+        if ctx.tool_name == "shell" and _shell_writes_bytes(
+            str((ctx.tool_args or {}).get("command", ""))
+        ):
+            self._wrote_artifact = True
+            return None
+
+        return GuardVerdict.block(
+            message=(
+                f"[FirstArtifactGuard] {ctx.turn_count} turns in, no file has "
+                "been written to the delivery path yet — every action so far "
+                "has read or inspected, none has produced the artifact the "
+                "task is graded on.\n\n"
+                "Reasoning has no natural end. A plan that waits for the "
+                "design to settle before the first write never reaches the "
+                "write: the clock runs out with nothing on disk, and the "
+                "grader's very first read fails with 'no such file' regardless "
+                "of how good the design was.\n\n"
+                "Your next tool call must PUT A FILE ON DISK at the delivery "
+                "path — a stub, an identity transform, a minimal valid "
+                "version, a placeholder that parses. It does not need to be "
+                "correct yet; it needs to EXIST, so every later improvement "
+                "becomes an in-place replacement of a real file instead of a "
+                "rewrite from nothing.\n\n"
+                "If you genuinely need one more read to learn the required "
+                "format, override this with a reason that names that specific "
+                "read, and the guard will not fire again this session."
+            ),
+            reason="no_artifact_write_yet",
+            category="first_artifact",
+            overridable=True,
+        )
+
+    def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        """A real acknowledgement disarms the guard for the whole session."""
+        accepted = bool(reason and len(reason.strip()) > 5)
+        if accepted:
+            self._blocked_once = True
+        return accepted
+
+    def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Belt and braces: a successful write anywhere disarms permanently.
+        if self._wrote_artifact:
+            return None
+        if ctx.tool_name in ("write_file", "edit_file"):
+            self._wrote_artifact = True
+        elif ctx.tool_name == "shell" and _shell_writes_bytes(
+            str((ctx.tool_args or {}).get("command", ""))
+        ):
+            self._wrote_artifact = True
+        return None
+
+    def reset_turn(self):
+        # Session-scoped, not turn-scoped: a run that wrote nothing in turn 3
+        # and nothing in turn 4 must still be stopped at turn 5.
+        pass

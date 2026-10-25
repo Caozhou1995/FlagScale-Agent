@@ -358,6 +358,18 @@ class WorkerAgent:
         # stay legitimate).
         from flagscale_agent.react.guard.sleep_spacing import SleepSpacingGuard
         guard_registry.register(SleepSpacingGuard())
+        # FirstArtifactGuard: block the next tool call once a run has spent its
+        # turn budget with no write to the delivery path. Measured failure: a
+        # run produced ~200KB of design reasoning across 4 turns, issued one
+        # shell command and ZERO writes, and the verifier's first read was
+        # 'no such file'. Every existing text-only nudge stayed unreachable
+        # (all three fired 0 times) because that run makes FEW turns each with
+        # one tool call — so the distinguishing quantity is "turns consumed
+        # before the delivery path was first mutated", which only this guard
+        # measures. One-shot and overridable, so a healthy run is never
+        # livelocked.
+        from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+        guard_registry.register(FirstArtifactGuard())
 
         # Reliability guards (P7)
 
