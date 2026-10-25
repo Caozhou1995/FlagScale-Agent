@@ -251,6 +251,19 @@ class FirstArtifactGuard(Guard):
         for msg in ctx.messages or []:
             if msg.get("role") != "assistant":
                 continue
+            # Reasoning lives in a dedicated `thinking` key on this harness's
+            # provider messages (openai_provider.format_assistant_message puts
+            # it there and only puts the visible answer in `content`). Reading
+            # `content` alone measured ~0KB on a run that had emitted >100KB
+            # of reasoning — an observed false negative that left the byte
+            # budget permanently unreachable.
+            thinking = msg.get("thinking")
+            if isinstance(thinking, str):
+                total += len(thinking)
+            elif isinstance(thinking, list):
+                for block in thinking:
+                    if isinstance(block, dict):
+                        total += len(str(block.get("text", "")))
             content = msg.get("content")
             if isinstance(content, str):
                 total += len(content)

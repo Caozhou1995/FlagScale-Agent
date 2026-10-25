@@ -348,3 +348,48 @@ def test_top_of_loop_silent_below_budget():
         assistant_text=small, llm_responded=False,
     )
     assert FirstArtifactGuard().check_pre(ctx) is None
+
+
+def test_reasoning_bytes_reads_the_thinking_key():
+    """Regression: reasoning lives in `thinking`, not `content`.
+
+    Measured false negative: a real trial emitted >100KB of reasoning but the
+    guard's advisory printed "~0KB", because provider assistant messages keep
+    reasoning in a dedicated `thinking` key and only the visible answer in
+    `content`. The byte budget was therefore unreachable in production while
+    every unit test (which put text in `content`) passed.
+    """
+    from flagscale_agent.react.guard import GuardContext
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "assistant", "thinking": "x" * 60000},
+        {"role": "assistant", "thinking": "y" * 5000,
+         "tool_calls": [{"function": {"name": "shell", "arguments": "{}"}}]},
+    ]
+    ctx = GuardContext(
+        tool_name="", tool_args={}, tool_result=None, turn_count=0,
+        recent_tool_names=[], recent_tool_history=[], context_pressure=10,
+        evictable_indexes=[], messages=msgs, assistant_text="", llm_responded=False,
+    )
+    assert FirstArtifactGuard()._reasoning_bytes(ctx) == 65000
+
+
+def test_injects_on_the_measured_failure_shape():
+    """The exact shape that motivated the guard: 1 turn, 111KB, 0 tool calls."""
+    from flagscale_agent.react.guard import GuardContext
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+
+    msgs = [
+        {"role": "system", "content": "task"},
+        {"role": "assistant", "thinking": "x" * 111000},
+    ]
+    ctx = GuardContext(
+        tool_name="", tool_args={}, tool_result=None, turn_count=0,
+        recent_tool_names=[], recent_tool_history=[], context_pressure=10,
+        evictable_indexes=[], messages=msgs, assistant_text="", llm_responded=False,
+    )
+    v = FirstArtifactGuard().check_pre(ctx)
+    assert v is not None and v.action == "inject"
+    assert v.reason == "reasoning_exceeded_without_artifact"
