@@ -28,7 +28,7 @@ import signal
 import sys
 import time
 import uuid
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -132,6 +132,27 @@ from flagscale_agent.react.commands import CommandHandler
 
 
 # ── WorkerAgent ──────────────────────────────────────────────────────────────
+
+def _detect_char_collapse(tail: str, min_run: int) -> bool:
+    """Char-level collapse inside ONE line of the thinking stream.
+
+    Fourth filler mode (measured, v28 filter-js trial 2026-10-25 16-27-04):
+    the stream emitted a single line of 119,373 consecutive '0' bytes —
+    122K of the 145KB log was one byte value. The line-window detector is
+    structurally blind to this: it only evaluates on completed lines
+    (`while "\n" in _intra_buf`), so one newline-free filler run never
+    reaches the window. Scan the buffered tail of the CURRENT line for a
+    monotone run of one byte >= min_run; such a run cannot be genuine
+    reasoning (a proof names its terms; a payload names its delimiter).
+    """
+    if min_run <= 0 or not tail:
+        return False
+    if len(tail) < min_run:
+        return False
+    counts = Counter(tail)
+    ch, _cnt = counts.most_common(1)[0]
+    return _cnt >= min_run
+
 
 def _run_single_shot_append_nudge(query, worker=False, resume=False):
     """Append the multi-agent nudge to a single-shot USER task.
@@ -1096,6 +1117,15 @@ class WorkerAgent:
     # without reaching genuine reasoning's 16. 0 disables.
     INTRA_STREAM_REPEAT_WINDOW = 16
     INTRA_STREAM_REPEAT_DISTINCT_MOST = 8
+
+    # Char-collapse floor (see _detect_char_collapse in this module): the
+    # measured v28 trial produced ONE line of 119,373 consecutive '0' bytes
+    # (145KB log, 122K zeros) — filler WITHOUT newlines, which the line-window
+    # above never evaluates (its `while "\n" in _intra_buf` gate stays closed).
+    # The tail buffer is scanned after every thinking delta; a monotone run of
+    # one byte this long cannot be genuine reasoning (a proof sketch names its
+    # terms; a payload names its delimiter). 0 disables.
+    INTRA_STREAM_CHAR_COLLAPSE_MIN_RUN = 1024
 
     def _mech_original_task(self) -> str:
         """First user turn of the session = the original task text, verbatim.
@@ -2290,6 +2320,27 @@ class WorkerAgent:
                             # instead of letting it consume the wall clock.
                             if _intra_window > 0:
                                 _intra_buf += event["content"]
+                                # Char-collapse check FIRST: filler may be one
+                                # newline-free run of a single byte (measured:
+                                # 119,373 consecutive '0' in the v28 trial),
+                                # which never completes a line and so never
+                                # enters the line-window below.
+                                _tail = _intra_buf[-(4 * _intra_window
+                                                     + 64):]
+                                if _detect_char_collapse(
+                                        _tail,
+                                        self.INTRA_STREAM_CHAR_COLLAPSE_MIN_RUN,
+                                ):
+                                    intra_degenerate = True
+                                    if display.thinking_enabled():
+                                        display._write(
+                                            display.dim(
+                                                "\n[char-collapse in thinking "
+                                                f"stream — run of one byte >= "
+                                                f"{self.INTRA_STREAM_CHAR_COLLAPSE_MIN_RUN}"
+                                                " — aborting this stream]"
+                                            )
+                                        )
                                 while "\n" in _intra_buf:
                                     _ln, _intra_buf = _intra_buf.split("\n", 1)
                                     _ln = " ".join(_ln.split())[:200]
