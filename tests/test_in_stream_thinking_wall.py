@@ -31,6 +31,8 @@ Contract:
   - once text has appeared, the wall cap never fires (pure-thinking only)
 """
 
+import threading
+import time
 import types
 from unittest.mock import MagicMock, patch
 
@@ -92,9 +94,19 @@ class TestInStreamThinkingWallCap:
         assert resp["thinking_capped"] is True
         assert resp["reasoning_only"] is True
         assert resp["content"] is None
-        # deltas 1-3 absorbed; the cap trips DURING delta 3 (300s >= 240s),
-        # matching the token-cap semantics (tripping delta is preserved)
-        assert resp["thinking"] == deltas[0] + deltas[1] + deltas[2]
+        # The wall clock now starts at STREAM CREATION, not at the first
+        # thinking delta (a stream that never emits a delta, or whose
+        # time-to-first-token alone exceeds the cap, must still be aborted —
+        # measured: 325s of socket silence with zero deltas). The reference
+        # point therefore moves earlier, so with a 100s/read fake clock the cap
+        # trips on the first delta rather than the third. What the contract
+        # pins is the SEMANTICS (capped + reasoning_only + no content + a
+        # non-empty preserved prefix of the thinking), not the delta index.
+        absorbed = resp["thinking"]
+        full = "".join(deltas)
+        assert absorbed, "the tripping stream's reasoning must be preserved"
+        assert full.startswith(absorbed), (
+            "preserved reasoning must be a prefix of the stream's thinking")
 
     def test_wall_cap_disabled_when_zero(self):
         """0 disables the wall cap entirely; the stream completes."""
@@ -132,3 +144,102 @@ class TestInStreamThinkingWallCap:
             resp, usage = agent._call_llm_stream([], [])
         assert resp["content"] == "answer"
         assert resp["thinking_capped"] is False
+
+
+class TestSilentStreamWallCap:
+    """The measured failure mode: NO thinking delta arrives at all.
+
+    v12.2 write-compressor (2026-10-26): the last delta landed at 20:05:38 and
+    the next byte at 20:11:03 — 325s of socket silence. Because the provider's
+    `chat_stream` is a blocking read, the per-delta wall-clock check never ran,
+    so the 240s cap could not fire and the run burned its budget. The cap is
+    therefore also evaluated at the TOP of the event loop, and its clock starts
+    at stream creation rather than at the first delta.
+    """
+
+    def test_silent_stream_aborts_on_wall_clock(self):
+        """Only keep-alive/empty events; the cap must still abort the stream."""
+        agent = _fake_agent(wall_sec=240)
+        # usage-only heartbeats: no thinking, no text, no tool calls
+        events = [{"type": "usage", "input_tokens": 0, "output_tokens": 0}
+                  for _ in range(10)]
+        events.append({"type": "text", "content": "answer"})
+        agent.provider = MagicMock()
+        agent.provider.chat_stream.side_effect = lambda m, s: iter(events)
+
+        def slow_time():
+            slow_time.t += 100.0
+            return slow_time.t
+        slow_time.t = 0.0
+
+        with patch("flagscale_agent.react.agent.time.time", slow_time):
+            resp, usage = agent._call_llm_stream([], [])
+        assert resp["thinking_capped"] is True, (
+            "a silent thinking stream must trip the wall-clock cap")
+        assert resp["content"] is None, (
+            "the stream must be aborted before the trailing answer event")
+
+    def test_silent_stream_below_cap_is_not_aborted(self):
+        """Below the cap, silence alone must NOT abort a stream."""
+        agent = _fake_agent(wall_sec=240)
+        events = [{"type": "usage", "input_tokens": 0, "output_tokens": 0}
+                  for _ in range(3)]
+        events.append({"type": "text", "content": "answer"})
+        agent.provider = MagicMock()
+        agent.provider.chat_stream.side_effect = lambda m, s: iter(events)
+
+        def slow_time():
+            slow_time.t += 10.0
+            return slow_time.t
+        slow_time.t = 0.0
+
+        with patch("flagscale_agent.react.agent.time.time", slow_time):
+            resp, usage = agent._call_llm_stream([], [])
+        assert resp["content"] == "answer"
+        assert resp["thinking_capped"] is False
+
+
+class TestSilentSocketWatchdog:
+    """A stream that yields NO events at all must still be aborted.
+
+    This is the shape the event-loop check cannot cover: the SSE decoder drops
+    keep-alive/comment lines, so a silent socket produces zero events and the
+    `for event in stream` body never executes. A watchdog thread closes the
+    stream instead.
+    """
+
+    def test_watchdog_closes_a_never_yielding_stream(self):
+        agent = _fake_agent(wall_sec=0.3)  # tiny cap keeps the test fast
+        closed = {"n": 0}
+
+        class _SilentStream:
+            """Emulates a blocking socket read that a close() can interrupt."""
+
+            def __init__(self):
+                self._closed = threading.Event()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                # Block like a socket waiting for bytes; close() wakes it the
+                # way httpx's response.close() raises on a pending read.
+                self._closed.wait(5)
+                raise StopIteration
+
+            def close(self):
+                closed["n"] += 1
+                self._closed.set()
+
+        agent.provider = MagicMock()
+        agent.provider.chat_stream.side_effect = lambda m, s: _SilentStream()
+
+        started = time.time()
+        resp, usage = agent._call_llm_stream([], [])
+        elapsed = time.time() - started
+
+        assert closed["n"] >= 1, "watchdog must close the silent stream"
+        assert elapsed < 4.5, (
+            f"the call must return shortly after the cap, took {elapsed:.1f}s")
+        assert resp["thinking_capped"] is True
+        assert resp["reasoning_only"] is True

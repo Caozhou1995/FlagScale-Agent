@@ -26,8 +26,10 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
 import uuid
+import weakref
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -2310,7 +2312,13 @@ class WorkerAgent:
         thinking_text = ""
         thinking_signature = ""
         # In-stream wall clock for the pure-thinking cap (IN_STREAM_THINKING_WALL_SEC)
-        _stream_t0 = None
+        # Started at stream creation, NOT at the first thinking delta: an
+        # endpoint that accepts the request and then returns nothing (or only
+        # keep-alive chunks) would otherwise never start the clock, so the cap
+        # could not fire on the exact case it exists for. Measured on a real
+        # trial, the last delta landed at 20:05:38 and the next byte at
+        # 20:11:03 — 325s of silence — so silence is the dominant failure mode.
+        _stream_t0 = time.time()
 
         def compress_newlines(text, trailing_from_prev, is_first):
             if not text:
@@ -2341,12 +2349,100 @@ class WorkerAgent:
             return text, new_trailing
 
         max_stream_retries = 2
+
+        # ── Wall-clock watchdog for a SILENT stream ──
+        # The event loop below cannot police connection silence: the SSE
+        # decoder discards keep-alive/comment lines, so a socket that stops
+        # producing data frames delivers ZERO events and the loop body never
+        # runs. Only a watchdog that closes the stream from another thread can
+        # break a blocking read. It fires only while the response is still
+        # pure-thinking (no visible text, no tool calls) so genuine long
+        # generations are never touched.
+        _wd_done = threading.Event()
+        # Self-terminating: the thread must never outlive the call, including on
+        # exception paths that skip the explicit stop below. It therefore holds
+        # only a WEAK reference to the stream when the iterator supports one and
+        # exits as soon as the stream is garbage-collected — a lingering thread
+        # would make a later multiprocessing test fork a multi-threaded process.
+        # Plain iterators (list_iterator etc.) do not support weak references;
+        # the explicit stop on the return path covers them.
+        try:
+            _stream_ref = weakref.ref(stream)
+        except TypeError:
+            def _stream_ref():
+                return stream
+        _silence_state = {"tripped_at": None}
+
+        def _silence_watchdog():
+            limit = self.IN_STREAM_THINKING_WALL_SEC
+            if limit <= 0:
+                return
+            while not _wd_done.wait(1.0):
+                target = _stream_ref()
+                if target is None:
+                    return  # stream released -> the consuming call is over
+                if (time.time() - _stream_t0) < limit:
+                    continue
+                if content_parts or tool_calls or thinking_capped:
+                    return
+                _silence_state["tripped_at"] = time.time() - _stream_t0
+                try:
+                    target.close()
+                except Exception:
+                    pass
+                return
+
+        if self.IN_STREAM_THINKING_WALL_SEC > 0:
+            _wd = threading.Thread(
+                target=_silence_watchdog, name="stream-silence-watch",
+                daemon=True)
+            _wd.start()
+
         for _stream_attempt in range(1 + max_stream_retries):
             try:
                 for event in stream:
                     if not thinking_cleared:
                         display.thinking_done()
                         thinking_cleared = True
+                    # ── In-stream wall-clock cap, evaluated on EVERY event ──
+                    # The same cap is also checked inside the thinking branch,
+                    # but that placement is structurally blind to the failure
+                    # it targets: the provider loop above is a blocking socket
+                    # read, so when the endpoint goes SILENT no thinking delta
+                    # is dispatched and the per-delta check never runs. Measured
+                    # on a real trial: timestamps stop at 20:05:38 and the next
+                    # byte is 20:11:03 -- 325s of silence, with the per-delta
+                    # wall-clock branch (240s) never firing.
+                    #
+                    # This event-level check covers the case where the endpoint
+                    # keeps sending REAL chunks (usage/empty deltas) but no
+                    # visible output. It does NOT cover pure connection silence:
+                    # the SSE decoder discards comment/keep-alive lines (`:`
+                    # prefixed) and emits nothing for them, so a silent socket
+                    # delivers zero events and this loop never iterates. The
+                    # watchdog thread started above closes the stream to break
+                    # that state.
+                    if (not thinking_capped and not content_parts
+                            and not tool_calls and _stream_t0 is not None
+                            and self.IN_STREAM_THINKING_WALL_SEC > 0
+                            and time.time() - _stream_t0
+                            >= self.IN_STREAM_THINKING_WALL_SEC):
+                        capped_now = True
+                        thinking_capped = True
+                        reasoning_only = True
+                        if display.thinking_enabled():
+                            display._write(
+                                display.dim(
+                                    f"\n[thinking stream ran "
+                                    f"{time.time() - _stream_t0:.0f}s of wall clock "
+                                    f"with no visible output — aborting this stream]"
+                                )
+                            )
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+                        break
                     if event["type"] == "text":
                         # Keep the RAW text for the kernel's completion gate...
                         content_parts.append(event["content"])
@@ -2558,6 +2654,16 @@ class WorkerAgent:
                 print()
             elif streaming_trailing_newlines == 0:
                 print()
+
+        # Stop the silence watchdog: the stream is finished, so it must not
+        # close anything later. If it already tripped, honour the abort with
+        # the same "capped" semantics as the token cap — the kernel reinjects
+        # the accumulated reasoning with a convergence directive, so nothing
+        # reasoned during that window is lost.
+        _wd_done.set()
+        if _silence_state["tripped_at"] is not None and not content_parts:
+            thinking_capped = True
+            reasoning_only = True
 
         parsed_tool_calls = None
         if tool_calls:
