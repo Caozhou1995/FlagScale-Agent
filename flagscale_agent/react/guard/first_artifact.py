@@ -268,9 +268,16 @@ class FirstArtifactGuard(Guard):
             if isinstance(content, str):
                 total += len(content)
             elif isinstance(content, list):
+                # BOTH block kinds count: the Anthropic-shaped provider stores
+                # reasoning as {"type": "thinking"} blocks inside `content`,
+                # while the visible answer is {"type": "text"}. Counting only
+                # "text" measured ~0KB on a run that had emitted >100KB of
+                # thinking — the exact symptom observed in the trial log.
                 for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        total += len(str(block.get("text", "")))
+                    if isinstance(block, dict) and block.get("type") in (
+                        "text", "thinking", "redacted_thinking",
+                    ):
+                        total += len(str(block.get("text") or block.get("thinking") or ""))
         return total
 
     # ── guard protocol ─────────────────────────────────────────────────────

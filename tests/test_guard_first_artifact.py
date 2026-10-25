@@ -393,3 +393,29 @@ def test_injects_on_the_measured_failure_shape():
     v = FirstArtifactGuard().check_pre(ctx)
     assert v is not None and v.action == "inject"
     assert v.reason == "reasoning_exceeded_without_artifact"
+
+
+def test_reasoning_bytes_reads_anthropic_thinking_blocks():
+    """Regression: the live provider stores reasoning as content blocks.
+
+    Measured in the running trial: the advisory printed "~0KB of reasoning in"
+    while the log held >70KB, because the message carries reasoning as
+    {"type": "thinking"} blocks inside `content` — not as a top-level
+    `thinking` string and not as a {"type": "text"} block.
+    """
+    from flagscale_agent.react.guard import GuardContext
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+
+    msgs = [
+        {"role": "system", "content": "task"},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "x" * 70000},
+            {"type": "text", "text": "short answer"},
+        ]},
+    ]
+    ctx = GuardContext(
+        tool_name="", tool_args={}, tool_result=None, turn_count=0,
+        recent_tool_names=[], recent_tool_history=[], context_pressure=10,
+        evictable_indexes=[], messages=msgs, assistant_text="", llm_responded=False,
+    )
+    assert FirstArtifactGuard()._reasoning_bytes(ctx) == 70012
