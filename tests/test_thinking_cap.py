@@ -172,9 +172,16 @@ class TestStreamCap:
         assert len(consumed) == 3  # start, d1, d2 (abort inside d2) — no tail
 
     def test_cap_disabled_streams_to_completion(self):
-        """thinking_budget=0 → no cap; full stream consumed; no capped flag."""
+        """thinking_budget=0 → no cap; full stream consumed; no capped flag.
+
+        The thinking text must look like real reasoning (mixed tokens, no
+        monotone run): the intra-stream char-collapse breaker aborts a
+        2000-char single-byte stream even with the cap disabled, by design.
+        """
         agent = _fake_agent(thinking_budget=0)
-        deltas = ["a" * 1000, "a" * 1000]
+        thinking = ("I will start by listing the candidate conventions, "
+                    "then diff each one against the delivered bytes. " * 20)
+        deltas = [thinking[:1000], thinking[1000:2000]]
         agent.provider = MagicMock()
         agent.provider.chat_stream.side_effect = (
             lambda m, s: iter(_stream_events(deltas)))
@@ -182,7 +189,7 @@ class TestStreamCap:
         assert resp["thinking_capped"] is False
         assert resp["reasoning_only"] is False
         assert resp["content"] == "answer"
-        assert resp["thinking"] == "a" * 2000
+        assert resp["thinking"] == thinking[:2000]
         assert resp["signature"] == "sig"
 
     def test_cap_does_not_trip_once_text_started(self):

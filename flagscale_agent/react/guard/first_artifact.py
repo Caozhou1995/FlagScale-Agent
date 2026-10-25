@@ -242,7 +242,7 @@ class FirstArtifactGuard(Guard):
         self._wrote_artifact = False
         self._blocked_once = False
         # Last reasoning volume at which the top-of-loop advisory was emitted.
-        # Rate-limits the inject: re-fires only after another full budget of
+        # Throttles the inject: re-fires only after another full budget of
         # reasoning has been burned with still nothing on disk, so the agent is
         # not spammed every iteration (which would also defeat the registry's
         # text-based inject dedup, since the counts in the message change).
@@ -409,7 +409,7 @@ class FirstArtifactGuard(Guard):
                 return None
             if ctx.tool_name != "":
                 return None  # non-artifact tool (e.g. plan_*) — not our call
-            # Rate-limit: one advisory per additional budget's worth of
+            # Throttle: one advisory per additional budget's worth of
             # progress, so a long design-only stretch gets periodic nudges
             # rather than one per loop iteration. Rate it on BOTH clocks: a
             # byte-only limiter permanently suppresses the advisory when
