@@ -153,6 +153,12 @@ class FirstArtifactGuard(Guard):
     def __init__(self):
         self._wrote_artifact = False
         self._blocked_once = False
+        # Last reasoning volume at which the top-of-loop advisory was emitted.
+        # Rate-limits the inject: re-fires only after another full budget of
+        # reasoning has been burned with still nothing on disk, so the agent is
+        # not spammed every iteration (which would also defeat the registry's
+        # text-based inject dedup, since the counts in the message change).
+        self._injected_at_bytes = -1
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _scan_history_for_write(self, ctx: GuardContext) -> bool:
@@ -258,8 +264,55 @@ class FirstArtifactGuard(Guard):
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if self._wrote_artifact or self._blocked_once:
             return None
+
+        # ── Top-of-loop consultation (tool_name == "") ──────────────────────
+        # This is the ONLY point that runs BEFORE the LLM is called. The
+        # failure shape this guard targets produces very FEW tool calls, so a
+        # guard that only speaks when a tool call exists can stay silent for
+        # the entire trial: measured on the k2 run, 111KB of reasoning and
+        # 2 thinking blocks arrived with ZERO tool calls, so the artifact-path
+        # consultation never ran and no message was ever delivered.
+        #
+        # Emit an INJECT here (not a block): `_apply_verdict` returns False for
+        # inject, so the loop proceeds into the LLM call with the advisory now
+        # in history — the agent actually reads it. A block would `continue`
+        # back to this same check without the LLM ever running, so the message
+        # would never be seen.
         if ctx.tool_name not in _ARTIFACT_TOOLS:
-            return None
+            if self._scan_history_for_write(ctx):
+                self._wrote_artifact = True
+                return None
+            turns = self._count_assistant_turns(ctx)
+            spent = self._reasoning_bytes(ctx)
+            if not (turns >= self.TURN_BUDGET
+                    or spent >= self.REASONING_BYTES_BUDGET):
+                return None
+            if ctx.tool_name != "":
+                return None  # non-artifact tool (e.g. plan_*) — not our call
+            # Rate-limit: one advisory per additional budget's worth of
+            # reasoning, so a long design-only stretch gets periodic nudges
+            # rather than one per loop iteration.
+            if spent - self._injected_at_bytes < self.REASONING_BYTES_BUDGET:
+                return None
+            self._injected_at_bytes = spent
+            return GuardVerdict.inject(
+                message=(
+                    f"[FirstArtifactGuard] {turns} turn(s) and ~{spent // 1000}KB "
+                    "of reasoning consumed; nothing has been written to the "
+                    "delivery path yet.\n\n"
+                    "Reasoning has no natural end — a plan that waits for the "
+                    "design to settle before the first write never reaches the "
+                    "write. Long before the clock runs out, put a file on disk "
+                    "at the delivery path: a stub, an identity transform, a "
+                    "minimal valid version, a placeholder that parses. It does "
+                    "not need to be correct yet; it needs to EXIST so every "
+                    "later improvement has something to improve, and so the "
+                    "grader's first read does not fail with 'no such file'.\n\n"
+                    "Do this in your NEXT tool call, then continue designing."
+                ),
+                reason="reasoning_exceeded_without_artifact",
+                category="first_artifact",
+            )
 
         # A write already in history disarms the guard.
         if self._scan_history_for_write(ctx):

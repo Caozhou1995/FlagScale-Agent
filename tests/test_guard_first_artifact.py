@@ -259,3 +259,92 @@ def test_read_only_shell_does_not_count_as_write(command):
 )
 def test_write_shell_counts_as_write(command):
     assert _shell_writes_bytes(command) is True
+
+
+# ── Top-of-loop consultation (tool_name == "") ─────────────────────────────
+# The failure shape this guard targets (measured: 111KB reasoning, 2 thinking
+# blocks, ZERO tool calls) never reaches the tool-call consultation at all.
+# The top-of-loop check_pre runs BEFORE the LLM call and is the only point
+# that can deliver the advisory in that shape. It must INJECT (loop proceeds
+# into the LLM call, so the message is read) — a block would `continue` back
+# to the same check without the LLM ever running, and the message would never
+# be seen.
+
+def _ctx_two_turns_of_reasoning(msgs=None):
+    from flagscale_agent.react.guard import GuardContext
+    big = "x" * 50000
+    messages = msgs if msgs is not None else [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": big},
+    ]
+    return GuardContext(
+        tool_name="", tool_args={}, tool_result=None, turn_count=0,
+        recent_tool_names=[], recent_tool_history=[], context_pressure=10,
+        evictable_indexes=[], messages=messages, assistant_text=big,
+        llm_responded=False,
+    )
+
+
+def test_top_of_loop_injects_when_reasoning_budget_exceeded():
+    """No tool call yet — the advisory must still be delivered, as an inject."""
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    v = FirstArtifactGuard().check_pre(_ctx_two_turns_of_reasoning())
+    assert v is not None, "guard must speak even with zero tool calls"
+    assert v.action == "inject", "block would never reach the LLM in this shape"
+    assert v.reason == "reasoning_exceeded_without_artifact"
+
+
+def test_top_of_loop_inject_is_rate_limited():
+    """Re-injecting every iteration would spam; one per budget's worth only."""
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    g = FirstArtifactGuard()
+    ctx = _ctx_two_turns_of_reasoning()
+    assert g.check_pre(ctx) is not None
+    assert g.check_pre(ctx) is None, "second identical consultation must be silent"
+
+
+def test_top_of_loop_refires_after_more_reasoning():
+    from flagscale_agent.react.guard import GuardContext
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    g = FirstArtifactGuard()
+    g.check_pre(_ctx_two_turns_of_reasoning())
+    big = "x" * 100000
+    ctx2 = GuardContext(
+        tool_name="", tool_args={}, tool_result=None, turn_count=0,
+        recent_tool_names=[], recent_tool_history=[], context_pressure=10,
+        evictable_indexes=[],
+        messages=[{"role": "system", "content": "sys"},
+                  {"role": "assistant", "content": big}],
+        assistant_text=big, llm_responded=False,
+    )
+    v = g.check_pre(ctx2)
+    assert v is not None and v.action == "inject"
+
+
+def test_top_of_loop_silent_when_artifact_already_written():
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    big = "x" * 50000
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": big},
+        {"role": "assistant", "content": "writing",
+         "tool_calls": [{"id": "1", "type": "function",
+                         "function": {"name": "write_file", "arguments": "{}"}}]},
+    ]
+    g = FirstArtifactGuard()
+    assert g.check_pre(_ctx_two_turns_of_reasoning(msgs)) is None
+
+
+def test_top_of_loop_silent_below_budget():
+    from flagscale_agent.react.guard import GuardContext
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    small = "x" * 500
+    ctx = GuardContext(
+        tool_name="", tool_args={}, tool_result=None, turn_count=0,
+        recent_tool_names=[], recent_tool_history=[], context_pressure=10,
+        evictable_indexes=[],
+        messages=[{"role": "system", "content": "s"},
+                  {"role": "assistant", "content": small}],
+        assistant_text=small, llm_responded=False,
+    )
+    assert FirstArtifactGuard().check_pre(ctx) is None
