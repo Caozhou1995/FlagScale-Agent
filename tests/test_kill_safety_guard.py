@@ -206,3 +206,31 @@ class TestOverride:
         g = KillSafetyGuard()
         assert g.accept_override("the pid is a stale leftover job", _shell("kill -9 1")) is True
         assert g.accept_override("", _shell("kill -9 1")) is False
+
+class TestLoopSelectionKill:
+    """kv-store-grpc 2026-10-25 shape: the kill sits in a for-loop over
+    /proc/*/cmdline, so the SELECTION code (grep over cmdlines) is in an
+    EARLIER clause of the same compound command — outside the kill's own
+    argument region. The selection provably reads process cmdlines, so the
+    target set can include the agent (whose argv embeds the task text that
+    mentions the matched filename). This must BLOCK, not advise."""
+
+    def test_proc_glob_loop_kill_blocks(self, monkeypatch):
+        _pin_agent_pids(monkeypatch)
+        g = KillSafetyGuard()
+        cmd = (
+            'cd /app && for p in /proc/[0-9]*; do if grep -qa "server.py" '
+            '$p/cmdline 2>/dev/null; then echo "killing $(basename $p)"; '
+            "kill -TERM $(basename $p) 2>/dev/null; fi; done"
+        )
+        v = g.check_pre(_shell(cmd))
+        assert v is not None and v.action == "block"
+        assert v.reason == "kill_from_process_list_may_select_agent"
+
+    def test_while_read_proc_kill_blocks(self, monkeypatch):
+        _pin_agent_pids(monkeypatch)
+        g = KillSafetyGuard()
+        v = g.check_pre(
+            _shell('while read pid; do grep -q "worker.py" /proc/$pid/cmdline && kill $pid; done < <(ls /proc)')
+        )
+        assert v is not None and v.action == "block"

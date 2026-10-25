@@ -49,6 +49,14 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 # rather than a literal pid.
 _PROC_FEED_RE = re.compile(r"\b(pgrep|ps|grep)\b")
 
+# A /proc cmdline scan: a loop that walks /proc/<pid>/cmdline to SELECT targets
+# (kv-store-grpc 2026-10-25: the kill sat in a for-loop over /proc/*/cmdline, so
+# the selection code was in an EARLIER clause of the same compound command and
+# the kill's own argument region saw only `kill -TERM $(basename $p)`). The
+# selection provably reads process cmdlines, so the target set can include the
+# agent — same hazard class as Rule 2.
+_PROC_SCAN_RE = re.compile(r"/proc/\*?/?|cmdline")
+
 # Literal numeric pid arguments to a kill (e.g. `kill -9 12345 6789`).
 _NUMERIC_PID_RE = re.compile(r"\b(\d{2,7})\b")
 
@@ -168,11 +176,26 @@ class KillSafetyGuard(Guard):
                 )
 
         # Rule 2 (PROVABLE-ISH): the target set is SELECTED by a process-list
-        # feed (ps/grep/pgrep) — either inside the kill's args (`kill $(...)`)
-        # or in the pipeline feeding it (`... | xargs kill`). The match pattern
-        # lives in the wrapper shell's own command line, so the selection can
-        # include the agent. Block (overridable) — the qemu-startup self-kill shape.
-        if _PROC_FEED_RE.search(region):
+        # feed (ps/grep/pgrep) — either inside the kill's args (`kill $(...)`),
+        # in the pipeline feeding it (`... | xargs kill`), or anywhere inside
+        # the same `for ...; do ... done` / `while ...; do ... done` loop body
+        # as the kill (kv-store-grpc shape: the /proc/*/cmdline grep lives in
+        # the loop that wraps the kill, outside the kill's own argument
+        # region). All three select targets at runtime, so the selection can
+        # include the agent. Block (overridable) — the qemu-startup /
+        # kv-store self-kill shapes.
+        # Loop body, not last clause: a `for/while ... do` HEADER preceding the
+        # kill means the kill sits INSIDE a loop body — the loop's selection
+        # clauses (header + earlier iterations) also feed the target set, so
+        # the region must start at that `do `, even though a later `; ` sits
+        # closer to the kill (kv-store-grpc: `for p in /proc/*; do grep
+        # ...server.py...; kill $p; done` — do2=34, semi2=119, kill=121).
+        _do2 = cmd.rfind("do ", 0, kpos)
+        _semi2 = cmd.rfind("; ", 0, kpos)
+        _stmt_start = (_do2 if _do2 != -1 else _semi2) + 1
+        _done = cmd.find("done", kpos)
+        stmt_region = cmd[_stmt_start:_done if _done != -1 else len(cmd)]
+        if _PROC_FEED_RE.search(region) or _PROC_SCAN_RE.search(stmt_region):
             return GuardVerdict.block(
                 "[KillSafety] This command kills processes SELECTED by a "
                 "process-list pipeline (ps/grep/pgrep). Your own command line "
