@@ -62,6 +62,15 @@ from __future__ import annotations
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
+
+def _none_apply(reason: str) -> bool:
+    """True when the reason asserts the rung's option (b): no delivery path
+    applies (a data file, a passive artifact). Kept narrow on purpose — a
+    blanket "none apply" would be a universal escape hatch, so the phrasing
+    must be explicit."""
+    r = " ".join(reason.split()).lower()
+    return ("none apply" in r) or ("no delivery path" in r) or ("no end-to-end path" in r)
+
 _MSG_25 = (
     "[ProgressOrder] 25% of the enforced wall-clock budget is spent — this is "
     "the WRITE-THROUGH checkpoint, an ORDER question not a pacing tip: does a "
@@ -76,7 +85,11 @@ _MSG_25 = (
     "that dies after design scores zero though every step worked. Before this "
     "tool, state in _override_reason either (a) the path already holds a usable "
     "skeleton (cite path and contents), or (b) a delivery path does not apply, "
-    "with the reason, or (c) this call WRITES the first version to the path."
+    "with the reason, or (c) this call WRITES the first version to the path. "
+    "The release is MECHANICAL: a write must have EXECUTED this turn (a "
+    "write_file/edit_file that ran, or a shell call that landed bytes). An "
+    "intention to write later — \"once the design settles I will write it\" — "
+    "does NOT release this checkpoint; write the skeleton first, then think."
 )
 
 _MSG_50 = (
@@ -141,6 +154,13 @@ class FirstE2eRunGuard(Guard):
         self._stats_fn = stats_fn
         self._task_text_fn = task_text_fn
         self._fired: set[int] = set()
+        # Rungs whose release was ACCEPTED. A rung's block marks every crossed
+        # threshold spent at fire time (`_fired`); only a rung the agent
+        # actually released may stay spent. Without this set a rejected reason
+        # silently ends the checkpoint for the whole trial — the observed
+        # 2026-10-26 escape, where a single-turn task (no reset_turn) let one
+        # prose sentence retire the 25% and 50% rungs forever.
+        self._released: set[int] = set()
         # Threshold whose block is currently pending release (the one the
         # registry surfaced last). accept_override reads it to bind the
         # evidence check to the 75% checkpoint only.
@@ -239,11 +259,60 @@ class FirstE2eRunGuard(Guard):
                             parts.append(text)
         return cls._norm("\n".join(parts))
 
+    # The harness's own writers. This is the AUTHORITATIVE signal for "a file
+    # landed": the tool ran and the kernel ledger recorded it. Deliberately NOT
+    # a list of shell idioms (heredoc / tee / sed -i ...) — enumerating the
+    # shapes a write can take is an open-ended detector that always misses the
+    # next one, and a `grep` whose OUTPUT contains such a token would
+    # false-pass. A shell call is counted only through its own args (the
+    # command it ran), never through its output text.
+    _WRITE_TOOLS = ("write_file", "edit_file")
+
+    def _has_write_evidence(self, ctx: GuardContext) -> bool:
+        """True when the harness's own writer actually executed this turn (or
+        this call IS that write).
+
+        Reads the kernel's execution ledger (ctx.recent_tool_history), which
+        records only calls that really ran — blocked calls are excluded — so a
+        promise to write cannot manufacture an entry. A call that errored does
+        not count either: `exec_error` is set by the kernel for those.
+        """
+        for entry in ctx.recent_tool_history or []:
+            if not isinstance(entry, dict) or entry.get("exec_error"):
+                continue
+            if str(entry.get("name", "")) in self._WRITE_TOOLS:
+                return True
+        # This very call may be the first landing (the rung's option (c)).
+        return ctx.tool_name in self._WRITE_TOOLS
+
+    def _release(self, thr: int):
+        """Accept a rung AND every lower rung it subsumes.
+
+        Evidence that satisfies a later checkpoint also answers the earlier
+        question (a write seen at 50% is exactly what the 25% write-through
+        rung asks about), so an agent that gets one real landing should not be
+        blocked again for the rung it already satisfied.
+        """
+        for t in self._THRESHOLDS:
+            if t <= thr:
+                self._released.add(t)
+        self._last_pending_thr = None
+
+    def _rearm(self, thr: int):
+        """Un-spend a rung so a REJECTED release re-blocks instead of silently
+        releasing forever. _verdict_for marks the rung spent at fire time; only
+        an accepted release may keep it spent."""
+        if thr in self._fired:
+            self._fired.discard(thr)
+        self._last_pending_thr = None
+
     def reset_turn(self):
         # A new user turn restarts the per-turn budget accounting on the
         # agent side; clear which checkpoints have already fired so the
         # ORDER question is asked again in the new turn.
         self._fired = set()
+        self._released = set()
+        self._last_pending_thr = None
 
     def _stats(self) -> dict | None:
         try:
@@ -278,12 +347,13 @@ class FirstE2eRunGuard(Guard):
         """
         pct = stats.get("pct", 0.0)
         for thr in self._THRESHOLDS:  # (75, 50, 25): high→low
-            if pct >= thr and thr not in self._fired:
-                for t in self._THRESHOLDS:
-                    if pct >= t:
-                        self._fired.add(t)
-                # Remember which checkpoint's block is being surfaced so
-                # accept_override can bind its evidence check to 75% only.
+            if pct >= thr and thr not in self._released:
+                # Mark ONLY this rung as surfaced; the higher rungs stay
+                # pending until they are themselves crossed AND released, so a
+                # jump straight past several thresholds asks the most severe
+                # one now and the earlier ones later (they are not subsumed —
+                # an un-released rung is a question still owed an answer).
+                self._fired.add(thr)
                 self._last_pending_thr = thr
                 return GuardVerdict.block(
                     message=self._message(thr, stats),
@@ -302,23 +372,36 @@ class FirstE2eRunGuard(Guard):
         return self._verdict_for(stats)
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
-        """75% (cold-consumer) releases are EVIDENCE-bound; 25%/50% stay prose.
+        """75% (cold-consumer) releases are EVIDENCE-bound; 25%/50% are
+        PROGRESS-bound.
 
-        A reason must contain a command-shaped token (a backticked span, or a
-        line starting with a shell-like invocation) that appears — normalized
-        (case/whitespace-insensitive) — in the trial's own recorded text. A
-        reason that merely claims a run was made is rejected, and rejecting
-        RE-ARMS the 75% checkpoint so the gate can re-block next call (without
-        this, one rejected reason would release forever, since _verdict_for
-        marks thresholds spent when it fires).
+        Observed escape this closes (2026-10-26, two independent trials): the
+        25% and 50% rungs used to release on ANY prose reason, and both losing
+        runs wrote a sentence like "next step: write the encoder" and kept
+        reasoning for another 45% of the wall-clock without a single tool call
+        — one run's first delivery was at 76% of budget, the other's real
+        implementation only appeared at 60%. A promise to write is not a
+        write. So the release is bound to the trial's own EXECUTION LEDGER
+        (ctx.recent_tool_history): the rung releases only when a write-shaped
+        tool actually executed (or this very call IS that write), or the agent
+        states "none apply" for a deliverable with no path. Rejection RE-ARMS
+        the rung so the gate can block again instead of staying silent.
+
+        The 75% rung keeps its stricter evidence binding: the pasted command
+        must appear in the trial's own recorded text.
         """
         if not reason or len(reason.strip()) <= 5:
             return False
-        if self._last_pending_thr != 75:
-            # Non-75% overrides keep the base behavior (prose is enough at the
-            # write-through / first-exercise checkpoints — the cost of a wrong
-            # answer there is minutes, not the task).
+        thr = self._last_pending_thr
+        if thr is None:
             return True
+        if thr != 75:
+            # 25% / 50%: progress evidence, not prose.
+            if self._has_write_evidence(ctx) or _none_apply(reason):
+                self._release(thr)
+                return True
+            self._rearm(thr)
+            return False
         recorded = self._recorded_text(ctx)
         reason_norm = self._norm(reason)
         # Candidate commands: backticked spans first, then bare lines that
@@ -331,10 +414,11 @@ class FirstE2eRunGuard(Guard):
             if ls.startswith(("$ ", "python", "python3", "./", "bash ", "sh ", "cd ", "make ", "git ", "pip ", "cargo ", "npm ", "java ", "gcc ", "g++ ", "cat ", "ls ", "grep ", "wc ", "pytest", "cmake ")):
                 candidates.append(ls)
         if "none apply" in reason_norm:
+            self._release(75)
             return True
         if not candidates:
             # Rejected: re-arm the 75% threshold so the gate can re-block.
-            self._fired.discard(75)
+            self._rearm(75)
             return False
         for cand in candidates:
             c = self._norm(cand.lstrip("$ ").strip())
@@ -349,11 +433,12 @@ class FirstE2eRunGuard(Guard):
                         and self._demands_preservation()
                         and not any(cmd.strip() in c
                                     for cmd in self._IDENTITY_CMDS)):
-                    self._fired.discard(75)
+                    self._rearm(75)
                     return False
+                self._release(75)
                 return True
         # Rejected: re-arm the 75% threshold so the gate can re-block.
-        self._fired.discard(75)
+        self._rearm(75)
         return False
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:

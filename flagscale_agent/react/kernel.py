@@ -167,6 +167,16 @@ class AgentKernel:
         # in-turn admission decision.
         self.iterations_live: int = 0
 
+    # Cumulative idle think-interval pacing (see run_turn gate): if this much
+    # wall-clock accumulates across consecutive think round-trips with NO tool
+    # call between them, the kernel aborts the stream and injects a convergence
+    # nudge. Keyed on TIME since the last tool call — never on one stream's
+    # token size, which is how six individually-legal streams spent ~620s with
+    # zero state produced (write-compressor v11/v12). 240s ≈ the elapsed gap
+    # between the observed rungs (159s + 112s) so the intervention lands after
+    # the second legal stream, not the first.
+    IDLE_THINK_INTERVAL_SEC = 240
+
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
 
@@ -189,6 +199,13 @@ class AgentKernel:
         # once the agent has clearly stalled on the gate.
         self._consecutive_completion_blocks = 0
         self._recent_tool_history = []  # reset the per-turn execution ledger
+        # Idle think-interval accounting: when did a tool last actually run, and
+        # how many consecutive think round-trips have passed since. Each
+        # run_turn() is one user turn, so the debt does not carry across turns;
+        # the nudge/retry loop iterates INSIDE this call and is not affected.
+        self._last_toolcall_ts = None
+        self._idle_think_rounds = 0
+        self._turn_start_ts = time.time()
         self.iterations_live = 0
         d.judge.reset_turn()
         d.guard_registry.reset_turn()
@@ -354,6 +371,34 @@ class AgentKernel:
                         was_intra_degenerate = bool(response.get("intra_degenerate"))
                         if was_intra_degenerate:
                             was_thinking_capped = False
+                        # ── Idle think-interval gate (cumulative, not per-stream) ──
+                        # The convergence machinery above is keyed on ONE stream's
+                        # TOKEN size (cap budget / saturation). Measured failure
+                        # (write-compressor, v11 job 02-33-28 and v12 03-12-08):
+                        # 73% of the log and ~620s of wall clock were spent in SIX
+                        # separate think round-trips, each under the 16384-token
+                        # cap, with ZERO tool calls between them — the first file
+                        # write landed at 76% of the budget. Every stream was
+                        # individually legal, so no threshold fired; the kill was
+                        # cumulative time with no state produced. The guards cannot
+                        # catch this (check_pre returns early with no tool call to
+                        # intercept), so the pacing decision has to live here.
+                        # Judge by time+round-trips since the last tool call, never
+                        # by token count.
+                        _idle_now = time.time()
+                        _idle_since = getattr(self, "_last_toolcall_ts", None)
+                        if _idle_since is None:
+                            _idle_since = getattr(self, "_turn_start_ts", _idle_now)
+                        _idle_secs = _idle_now - _idle_since
+                        _idle_rounds = getattr(self, "_idle_think_rounds", 0) + 1
+                        # Persist immediately: the count must survive across
+                        # iterations of THIS turn's loop (each think round-trip
+                        # is one iteration), or it can never reach 3.
+                        self._idle_think_rounds = _idle_rounds
+                        was_idle_interval = bool(
+                            _idle_rounds >= 3
+                            and _idle_secs >= self.IDLE_THINK_INTERVAL_SEC
+                        )
                         # ── Output saturation with no visible text ──
                         # A reasoning model can burn the ENTIRE output budget on
                         # one monolithic thinking stream, then be cut off before
@@ -415,6 +460,23 @@ class AgentKernel:
                                 break
                             self._cap_retries = cap_retries + 1
                             d.display.warn(f"Thinking reached runtime cap (cap-retry {self._cap_retries}), forcing convergence...")
+                        elif was_idle_interval:
+                            # Cumulative think-interval: several individually
+                            # legal streams in a row with no tool call. Charge it
+                            # to the SAME generous cap budget (it is a pacing
+                            # event, not a failure) so a model that ignores the
+                            # nudge 50 times still terminates the turn.
+                            if cap_retries >= 50:
+                                self._cap_retries = 0
+                                result.stop_reason = "idle_interval_max_retries"
+                                break
+                            self._cap_retries = cap_retries + 1
+                            d.display.warn(
+                                "Idle think-interval "
+                                f"({_idle_secs:.0f}s across {_idle_rounds} round-trips "
+                                f"with no tool call) — forcing convergence "
+                                f"(cap-retry {self._cap_retries})..."
+                            )
                         elif empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
                             if was_reasoning_only:
@@ -536,6 +598,31 @@ class AgentKernel:
                                     f"{thinking_text}\n"
                                     "</previous_reasoning>"
                                 )
+                        elif was_idle_interval:
+                            # Cumulative idle think-interval: several streams
+                            # each under the token cap, but TIME is draining
+                            # with no state produced. (A saturated stream never
+                            # reaches this branch: was_saturated sets
+                            # was_thinking_capped above, and that branch
+                            # preempts.) Own directive: it names the measured
+                            # cause (cumulative time, not tokens) so the model
+                            # does not mistake this for a length error.
+                            nudge = (
+                                "[system: Idle think-interval — "
+                                f"{_idle_secs:.0f}s of wall-clock accumulated across "
+                                f"{_idle_rounds} reasoning round-trips with no tool call "
+                                "between them. Each stream was individually legal, so no "
+                                "length cap fired; the cost is CUMULATIVE TIME, not tokens.\n"
+                                "STOP reasoning. Land the next concrete step NOW, in your "
+                                "very next output: call the ONE tool that converts your best "
+                                "current hypothesis into state (write_file / edit_file / "
+                                "shell), or output [NEED_USER_INPUT] with the specific "
+                                "question blocking you. An imperfect file that exists beats "
+                                "a perfect plan that never lands.\n\n"
+                                "<previous_reasoning>\n"
+                                f"{thinking_text}\n"
+                                "</previous_reasoning>"
+                            )
                         elif was_reasoning_only:
                             # Many providers (e.g. GLM Anthropic-compat endpoint)
                             # DROP assistant thinking blocks from the input, so
@@ -879,6 +966,9 @@ class AgentKernel:
                     for tc, r in zip(tool_calls, results)
                 ]
                 d.append_tool_results_fn(tool_results)
+                # A tool really ran: the idle think-interval clock restarts here.
+                self._last_toolcall_ts = time.time()
+                self._idle_think_rounds = 0
 
                 # Apply deferred pre-guard verdicts AFTER tool_results are in history,
                 # so inject/block messages don't break tool_use → tool_result pairing.
