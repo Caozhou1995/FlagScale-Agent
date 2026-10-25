@@ -175,6 +175,12 @@ def test_override_disarms_for_session():
         "cd /app && ls -la && cat check.py",
         "ls -la /app 2>&1",
         "cat /app/x >/dev/null",
+        # REGRESSION: this exact command disarmed the guard in a real run.
+        # Pure introspection, no file created, yet inline python used to be a
+        # write marker by itself.
+        'ls -la /app; echo ---; cat /app/check.py 2>/dev/null; '
+        'python3 -c "import chess; print(chess.__version__, chess.__file__)"',
+        'python3 -c "import json; print(json.load(open(\'/app/x.json\')))"',
     ],
 )
 def test_read_only_shell_does_not_count_as_write(command):

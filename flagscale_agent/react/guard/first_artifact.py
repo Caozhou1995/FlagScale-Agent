@@ -62,8 +62,6 @@ _WRITE_MARKERS = (
     "mkdir ",
     "patch ",
     "sed -i",
-    "python -c",
-    "python3 -c",
     "cat <<",
     "dd ",
     "truncate ",
@@ -78,6 +76,13 @@ def _shell_writes_bytes(command: str) -> bool:
     read-only orientation pass disarms the guard and the failure shape it
     targets slips through. Only writes that can plausibly create the graded
     artifact count.
+
+    `python -c` is NOT a write marker by itself. Measured false positive: an
+    agent's first command was
+    `ls -la /app; cat /app/check.py; python3 -c "import chess; print(...)"`
+    — pure introspection — and treating `python3 -c` as a write disarmed the
+    guard before it could ever fire. Inline python counts only when it
+    actually opens a file for writing.
     """
     if not command:
         return False
@@ -86,8 +91,31 @@ def _shell_writes_bytes(command: str) -> bool:
     for noise in ("2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"):
         scrubbed = scrubbed.replace(noise, " ")
     if not any(marker in scrubbed for marker in _WRITE_MARKERS):
-        return False
+        return _python_writes_file(scrubbed)
     return True
+
+
+_PY_WRITE_HINTS = (
+    "open(",
+    ".write(",
+    "shutil.copy",
+    "shutil.move",
+    "pathlib",
+    "os.makedirs",
+    "os.rename",
+)
+
+
+def _python_writes_file(command: str) -> bool:
+    """Treat inline python as a write only when it opens/writes a file."""
+    if "python" not in command:
+        return False
+    if "open(" not in command and ".write(" not in command:
+        return False
+    # A read-mode open is introspection, not a write.
+    if "'w'" in command or '"w"' in command or "'a'" in command or '"a"' in command:
+        return True
+    return any(hint in command for hint in _PY_WRITE_HINTS if hint != "open(")
 
 
 class FirstArtifactGuard(Guard):
