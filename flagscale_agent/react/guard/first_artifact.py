@@ -151,8 +151,39 @@ class FirstArtifactGuard(Guard):
         Reads the message history rather than trusting a per-call flag, so a
         write issued in an EARLIER turn (possibly before this guard's
         bookkeeping was live) still counts.
+
+        Both message dialects must be handled: this harness emits OpenAI-style
+        `msg["tool_calls"]` (history.py reads exactly that), while the
+        Anthropic-style `content: [{type: "tool_use"}]` shape is also present
+        in the codebase. Scanning only one dialect silently finds nothing and
+        the guard's disarm check stops working.
         """
         for msg in ctx.messages or []:
+            if msg.get("role") != "assistant":
+                continue
+
+            # OpenAI-style tool calls.
+            for tc in msg.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") or {}
+                name = fn.get("name") or tc.get("name", "")
+                args = fn.get("arguments", tc.get("input") or {})
+                if isinstance(args, str):
+                    try:
+                        import json
+
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+                if name in ("write_file", "edit_file"):
+                    return True
+                if name == "shell" and _shell_writes_bytes(
+                    str((args or {}).get("command", ""))
+                ):
+                    return True
+
+            # Anthropic-style content blocks.
             content = msg.get("content")
             if not isinstance(content, list):
                 continue
@@ -167,6 +198,7 @@ class FirstArtifactGuard(Guard):
                     str(args.get("command", ""))
                 ):
                     return True
+
         return False
 
     def _count_assistant_turns(self, ctx: GuardContext) -> int:

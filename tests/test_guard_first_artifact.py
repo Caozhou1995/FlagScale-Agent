@@ -153,6 +153,40 @@ def test_earlier_write_disarms_guard():
     assert guard.check_pre(ctx) is None
 
 
+def test_openai_style_history_write_disarms_guard():
+    """REGRESSION: this harness emits OpenAI-style msg["tool_calls"].
+
+    Scanning only Anthropic-style content blocks found nothing here, so the
+    disarm check silently failed and the guard could block a run that had
+    already written its artifact.
+    """
+    guard = FirstArtifactGuard()
+    msgs = _turns(99) + [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"function": {"name": "write_file", "arguments": '{"path": "/app/re.json"}'}}
+            ],
+        }
+    ]
+    ctx = _ctx(tool_args={"command": "ls -la /app"}, messages=msgs)
+    assert guard.check_pre(ctx) is None
+
+
+def test_openai_style_shell_write_disarms_guard():
+    guard = FirstArtifactGuard()
+    msgs = _turns(99) + [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"function": {"name": "shell", "arguments": '{"command": "cat > /app/re.json <<EOF"}'}}
+            ],
+        }
+    ]
+    ctx = _ctx(tool_args={"command": "ls -la /app"}, messages=msgs)
+    assert guard.check_pre(ctx) is None
+
+
 def test_override_disarms_for_session():
     """Overriding must stop the guard firing again (no livelock)."""
     guard = FirstArtifactGuard()
