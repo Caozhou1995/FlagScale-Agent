@@ -141,6 +141,26 @@ class FirstArtifactGuard(Guard):
                     return True
         return False
 
+    def _count_assistant_turns(self, ctx: GuardContext) -> int:
+        """Count assistant turns from the message history.
+
+        Do NOT use ctx.turn_count: kernel.py builds it from
+        `getattr(d.config, "_turn_count", 0)`, and no code ever assigns that
+        attribute (the only `_turn_count` in the package belongs to
+        PromptBuilder, a different object). It is therefore always 0, and a
+        turn-budget check reading it could never fire. Measured on k2: the
+        guard stayed silent on a run whose history already held several
+        assistant turns.
+
+        The message history is the authoritative record, so derive the count
+        from it.
+        """
+        turns = 0
+        for msg in ctx.messages or []:
+            if msg.get("role") == "assistant":
+                turns += 1
+        return turns
+
     # ── guard protocol ─────────────────────────────────────────────────────
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if self._wrote_artifact or self._blocked_once:
@@ -153,7 +173,8 @@ class FirstArtifactGuard(Guard):
             self._wrote_artifact = True
             return None
 
-        if ctx.turn_count < self.TURN_BUDGET:
+        turns = self._count_assistant_turns(ctx)
+        if turns < self.TURN_BUDGET:
             return None
 
         # This call is itself about to write — let it through, it is the fix.
@@ -168,7 +189,7 @@ class FirstArtifactGuard(Guard):
 
         return GuardVerdict.block(
             message=(
-                f"[FirstArtifactGuard] {ctx.turn_count} turns in, no file has "
+                f"[FirstArtifactGuard] {turns} turns in, no file has "
                 "been written to the delivery path yet — every action so far "
                 "has read or inspected, none has produced the artifact the "
                 "task is graded on.\n\n"

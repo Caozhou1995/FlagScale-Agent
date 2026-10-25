@@ -33,13 +33,25 @@ from flagscale_agent.react.guard.first_artifact import (
 )
 
 
-def _ctx(tool_name="shell", tool_args=None, turn_count=0, messages=None):
+def _ctx(tool_name="shell", tool_args=None, messages=None):
     return GuardContext(
         tool_name=tool_name,
         tool_args=tool_args or {},
-        turn_count=turn_count,
         messages=messages or [],
     )
+
+
+def _turns(n: int, command: str = "cat /app/check.py"):
+    """n assistant turns, each reading something and writing nothing."""
+    return [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "name": "shell", "input": {"command": command}},
+            ],
+        }
+        for _ in range(n)
+    ]
 
 
 def _history_with(tool: str, args: dict):
@@ -57,13 +69,12 @@ def _history_with(tool: str, args: dict):
 
 
 def test_blocks_read_only_shell_after_turn_budget():
-    """The measured failure: 4+ turns of `ls`/`cat`, no write. Must block."""
+    """The measured failure: N+ turns of `ls`/`cat`, no write. Must block."""
     guard = FirstArtifactGuard()
     ctx = _ctx(
         tool_name="shell",
         tool_args={"command": "cd /app && ls -la && cat check.py"},
-        turn_count=FirstArtifactGuard.TURN_BUDGET,
-        messages=_history_with("shell", {"command": "cat /app/check.py"}),
+        messages=_turns(FirstArtifactGuard.TURN_BUDGET),
     )
     verdict = guard.check_pre(ctx)
     assert verdict is not None, "a design-only run past the budget must be blocked"
@@ -74,15 +85,40 @@ def test_blocks_read_only_shell_after_turn_budget():
 def test_does_not_block_before_budget():
     """Orientation is legitimate — the guard must not fire on turn 1."""
     guard = FirstArtifactGuard()
-    ctx = _ctx(tool_args={"command": "ls -la /app"}, turn_count=0)
+    ctx = _ctx(tool_args={"command": "ls -la /app"}, messages=_turns(1))
     assert guard.check_pre(ctx) is None
 
 
 def test_does_not_block_non_artifact_tools():
     """read_file/plan_update are not delivery-surface mutations."""
     guard = FirstArtifactGuard()
-    ctx = _ctx(tool_name="read_file", turn_count=99)
+    ctx = _ctx(tool_name="read_file", messages=_turns(99))
     assert guard.check_pre(ctx) is None
+
+
+# ── regression: ctx.turn_count is always 0 ───────────────────────────────
+
+
+def test_turn_count_field_is_not_used_as_the_clock():
+    """REGRESSION: the budget must come from history, not ctx.turn_count.
+
+    kernel.py builds GuardContext.turn_count from
+    `getattr(d.config, "_turn_count", 0)`, but nothing in the package ever
+    assigns that attribute (the only `_turn_count` belongs to PromptBuilder).
+    A guard that trusted it could never fire. This test drives exactly that
+    world: turn_count stays 0 while the history clearly holds enough turns.
+    """
+    guard = FirstArtifactGuard()
+    ctx = _ctx(
+        tool_args={"command": "ls -la /app"},
+        messages=_turns(FirstArtifactGuard.TURN_BUDGET + 3),
+    )
+    assert ctx.turn_count == 0, "precondition: the context field really is 0"
+    verdict = guard.check_pre(ctx)
+    assert verdict is not None, (
+        "guard must count turns from history; relying on ctx.turn_count (always "
+        "0) makes it unreachable"
+    )
 
 
 # ── the healthy shape: must never livelock ────────────────────────────────
@@ -94,7 +130,7 @@ def test_write_file_through_after_budget():
     ctx = _ctx(
         tool_name="write_file",
         tool_args={"path": "/app/re.json", "content": "[]"},
-        turn_count=99,
+        messages=_turns(99),
     )
     assert guard.check_pre(ctx) is None
 
@@ -104,7 +140,7 @@ def test_shell_write_through_after_budget():
     guard = FirstArtifactGuard()
     ctx = _ctx(
         tool_args={"command": "cat > /app/re.json <<'EOF'\n[]\nEOF"},
-        turn_count=99,
+        messages=_turns(99),
     )
     assert guard.check_pre(ctx) is None
 
@@ -112,18 +148,15 @@ def test_shell_write_through_after_budget():
 def test_earlier_write_disarms_guard():
     """A write in an EARLIER turn must disarm — history is authoritative."""
     guard = FirstArtifactGuard()
-    ctx = _ctx(
-        tool_args={"command": "ls -la /app"},
-        turn_count=99,
-        messages=_history_with("write_file", {"path": "/app/re.json"}),
-    )
+    msgs = _turns(99) + _history_with("write_file", {"path": "/app/re.json"})
+    ctx = _ctx(tool_args={"command": "ls -la /app"}, messages=msgs)
     assert guard.check_pre(ctx) is None
 
 
 def test_override_disarms_for_session():
     """Overriding must stop the guard firing again (no livelock)."""
     guard = FirstArtifactGuard()
-    ctx = _ctx(tool_args={"command": "cat /app/spec.md"}, turn_count=99)
+    ctx = _ctx(tool_args={"command": "cat /app/spec.md"}, messages=_turns(99))
     verdict = guard.check_pre(ctx)
     assert verdict is not None
     assert guard.accept_override("I must read the spec format first", ctx) is True
