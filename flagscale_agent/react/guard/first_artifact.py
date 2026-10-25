@@ -106,6 +106,94 @@ _PY_WRITE_HINTS = (
 )
 
 
+# Basenames that are bookkeeping, never the graded artifact. Measured failure:
+# the agent's FIRST write was `/app/NOTES.md` (a plan note), and treating any
+# write as "the artifact exists" disarmed this guard permanently for the whole
+# trial — the graded file was never created, yet the guard stayed silent for
+# the remaining 80KB of reasoning. A note is not a deliverable.
+_NOTE_BASENAMES = (
+    "notes", "note", "readme", "plan", "todo", "scratch", "log", "journal",
+    "design", "analysis", "thoughts", "draft",
+)
+_NOTE_SUFFIXES = (".md", ".log", ".bak", ".tmp", ".orig", ".swp", ".rst")
+
+
+def _is_note_path(path: str) -> bool:
+    """True when a write target is bookkeeping rather than a deliverable."""
+    base = str(path or "").strip().strip("'\"").rsplit("/", 1)[-1].lower()
+    if not base:
+        return False
+    if base.endswith(_NOTE_SUFFIXES):
+        return True
+    stem = base.rsplit(".", 1)[0]
+    return stem in _NOTE_BASENAMES or any(stem.startswith(p + "_") for p in _NOTE_BASENAMES)
+
+
+def _artifact_write(name: str, args: dict) -> bool:
+    """True when this tool call writes a plausible DELIVERABLE (not a note).
+
+    Both write tools and shell writes are filtered: a write to `.md`/`.log`/
+    NOTES-style paths must not disarm the guard, whether it arrives as a
+    write_file call or as a shell heredoc.
+    """
+    args = args or {}
+    if name in ("write_file", "edit_file"):
+        target = (
+            args.get("path") or args.get("file_path")
+            or args.get("filename") or args.get("file") or ""
+        )
+        return not _is_note_path(str(target))
+    if name == "shell":
+        command = str(args.get("command", ""))
+        if not _shell_writes_bytes(command):
+            return False
+        # Extract every redirection target and check whether ANY of them is a
+        # plausible deliverable. Taking the raw tail after ">" misreads a
+        # heredoc (`cat > /app/NOTES.md <<'EOF'\n...`), whose body follows the
+        # target — that let a note heredoc pass as an artifact write.
+        targets = []
+        for tok in command.replace(">>", " > ").replace(">", " > ").split():
+            if tok.startswith("/") or tok.startswith("./") or tok.startswith("~"):
+                targets.append(tok)
+        targets = [t.strip("'\"") for t in targets]
+        if targets:
+            return any(not _is_note_path(t) for t in targets)
+        # No explicit path (e.g. `tee`, `touch`, `sed -i`, `cp`) — treat as a
+        # real write; the note filter only applies when a path is visible.
+        return True
+    return False
+
+
+def _write_landed(result) -> bool:
+    """True when a tool_result is evidence the write actually reached disk.
+
+    Measured failure this closes: another guard blocked an edit
+    ("[PostEditBlocked] This edit did NOT land ... NOTHING changed at
+    /app/NOTES.md") and the target file was never created, yet taking the tool
+    NAME as proof disarmed this guard for the rest of the trial. Positive
+    evidence is required instead:
+
+      * `write_file` success -> "Wrote N chars to <path> (total file size: ...)"
+      * `edit_file`  success -> "Successfully edited <path>"
+      * failures             -> "ERROR: ..." (incl. "Cannot write to protected
+                                system path", "old_string not found")
+      * a blocked write      -> the PostEditBlocked advisory text
+    """
+    if result is None:
+        return False
+    text = result if isinstance(result, str) else str(result)
+    if not text.strip():
+        return False
+    lowered = text.lower()
+    for marker in (
+        "error:", "did not land", "nothing changed", "not found",
+        "cannot write", "permission denied", "is a directory",
+    ):
+        if marker in lowered:
+            return False
+    return True
+
+
 def _python_writes_file(command: str) -> bool:
     """Treat inline python as a write only when it opens/writes a file."""
     if "python" not in command:
@@ -192,12 +280,9 @@ class FirstArtifactGuard(Guard):
                         args = json.loads(args)
                     except Exception:
                         args = {}
-                if name in ("write_file", "edit_file"):
-                    return True
-                if name == "shell" and _shell_writes_bytes(
-                    str((args or {}).get("command", ""))
-                ):
-                    return True
+                if name in ("write_file", "edit_file") or name == "shell":
+                    if _artifact_write(name, args):
+                        return True
 
             # Anthropic-style content blocks.
             content = msg.get("content")
@@ -208,12 +293,9 @@ class FirstArtifactGuard(Guard):
                     continue
                 tool = block.get("name", "")
                 args = block.get("input") or {}
-                if tool in ("write_file", "edit_file"):
-                    return True
-                if tool == "shell" and _shell_writes_bytes(
-                    str(args.get("command", ""))
-                ):
-                    return True
+                if tool in ("write_file", "edit_file") or tool == "shell":
+                    if _artifact_write(tool, args):
+                        return True
 
         return False
 
@@ -346,13 +428,10 @@ class FirstArtifactGuard(Guard):
         if not (over_turns or over_bytes):
             return None
 
-        # This call is itself about to write — let it through, it is the fix.
-        if ctx.tool_name in ("write_file", "edit_file"):
-            self._wrote_artifact = True
-            return None
-        if ctx.tool_name == "shell" and _shell_writes_bytes(
-            str((ctx.tool_args or {}).get("command", ""))
-        ):
+        # This call is itself about to write the artifact — let it through, it
+        # is the fix. A note write must NOT disarm (measured: a blocked
+        # /app/NOTES.md write permanently silenced this guard).
+        if _artifact_write(ctx.tool_name, ctx.tool_args or {}):
             self._wrote_artifact = True
             return None
 
@@ -390,14 +469,23 @@ class FirstArtifactGuard(Guard):
         return accepted
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        # Belt and braces: a successful write anywhere disarms permanently.
+        # Belt and braces: a SUCCESSFUL artifact write disarms permanently.
+        #
+        # Two independent false-disarm paths were measured on real trials and
+        # both are closed here:
+        #  1. Any write counted, so a bookkeeping file (`/app/NOTES.md`)
+        #     disarmed the guard for the whole trial while the graded file was
+        #     never created -> `_artifact_write` rejects note-shaped targets.
+        #  2. The write was BLOCKED by another guard and NOTHING landed
+        #     (measured: "[PostEditBlocked] This edit did NOT land ... /app/
+        #     NOTES.md", with /app still holding only check.py), yet the tool
+        #     NAME alone was taken as proof -> require positive evidence in the
+        #     tool_result before disarming.
         if self._wrote_artifact:
             return None
-        if ctx.tool_name in ("write_file", "edit_file"):
-            self._wrote_artifact = True
-        elif ctx.tool_name == "shell" and _shell_writes_bytes(
-            str((ctx.tool_args or {}).get("command", ""))
-        ):
+        if not _artifact_write(ctx.tool_name, ctx.tool_args or {}):
+            return None
+        if _write_landed(ctx.tool_result):
             self._wrote_artifact = True
         return None
 

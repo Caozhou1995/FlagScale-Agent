@@ -419,3 +419,47 @@ def test_reasoning_bytes_reads_anthropic_thinking_blocks():
         evictable_indexes=[], messages=msgs, assistant_text="", llm_responded=False,
     )
     assert FirstArtifactGuard()._reasoning_bytes(ctx) == 70012
+
+
+# ── Regression: the 6th "condition silently never true" defect ────────────
+# Measured on a real trial: the agent's first write was `/app/NOTES.md`, the
+# write was BLOCKED by another guard ("[PostEditBlocked] ... did NOT land"),
+# /app still held only check.py, and yet the guard disarmed permanently for
+# the remaining 80KB of reasoning. Two independent bugs: (a) any path counted
+# as the artifact, (b) the tool NAME alone counted as proof of a landed write.
+
+def test_note_target_is_not_a_deliverable():
+    from flagscale_agent.react.guard.first_artifact import _artifact_write
+    assert _artifact_write("write_file", {"path": "/app/NOTES.md"}) is False
+    assert _artifact_write("write_file", {"path": "/app/re.json"}) is True
+    assert _artifact_write("shell", {"command": "cat > /app/NOTES.md <<'EOF'\nx\nEOF"}) is False
+    assert _artifact_write("shell", {"command": "cat > /app/re.json <<'EOF'\n[]\nEOF"}) is True
+
+
+def test_blocked_write_does_not_disarm():
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    from flagscale_agent.react.guard import GuardContext
+    g = FirstArtifactGuard()
+    blocked = ("[PostEditBlocked] This edit did NOT land - a guard blocked it and "
+               "NOTHING changed at /app/NOTES.md.")
+    g.check_post(GuardContext(tool_name="write_file",
+                              tool_args={"path": "/app/re.json"},
+                              tool_result=blocked))
+    assert g._wrote_artifact is False, "a blocked write must not disarm the guard"
+    g.check_post(GuardContext(tool_name="write_file",
+                              tool_args={"path": "/app/re.json"},
+                              tool_result="Wrote 12 chars to /app/re.json (total file size: 12 bytes)"))
+    assert g._wrote_artifact is True
+
+
+def test_note_write_in_history_does_not_disarm_top_loop():
+    from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
+    from flagscale_agent.react.guard import GuardContext
+    hist = [{"role": "assistant", "thinking": "x" * 80000, "tool_calls": [
+        {"function": {"name": "write_file", "arguments": '{"path": "/app/NOTES.md"}'}}]}]
+    for _ in range(4):
+        hist.append({"role": "assistant", "thinking": "y" * 1000})
+    v = FirstArtifactGuard().check_pre(GuardContext(tool_name="", messages=hist))
+    assert v is not None and v.action == "inject", (
+        "a note-only history must NOT disarm the guard; the artifact is missing"
+    )
