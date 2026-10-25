@@ -121,6 +121,31 @@ def test_turn_count_field_is_not_used_as_the_clock():
     )
 
 
+def test_byte_budget_fires_on_a_single_huge_turn():
+    """REGRESSION: the target failure shape makes very FEW turns.
+
+    Measured: the whole failing run produced 7 thinking turns and one tool
+    call across 540KB. A turn-only budget can therefore fire too late — one
+    turn can carry tens of KB of reasoning before its single tool call. The
+    byte trigger must catch a run that is still on turn 1 with nothing on disk.
+    """
+    guard = FirstArtifactGuard()
+    huge = "x" * (FirstArtifactGuard.REASONING_BYTES_BUDGET + 1)
+    msgs = [{"role": "assistant", "content": huge}]
+    ctx = _ctx(tool_args={"command": "ls -la /app"}, messages=msgs)
+    verdict = guard.check_pre(ctx)
+    assert verdict is not None, "a single huge reasoning turn must trigger the guard"
+    assert verdict.reason == "no_artifact_write_yet"
+
+
+def test_byte_budget_not_reached_early():
+    """A short orientation turn must not trigger the byte trigger."""
+    guard = FirstArtifactGuard()
+    msgs = [{"role": "assistant", "content": "let me look around" }]
+    ctx = _ctx(tool_args={"command": "ls -la /app"}, messages=msgs)
+    assert guard.check_pre(ctx) is None
+
+
 # ── the healthy shape: must never livelock ────────────────────────────────
 
 

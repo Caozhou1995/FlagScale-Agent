@@ -130,12 +130,22 @@ class FirstArtifactGuard(Guard):
 
     name = "first_artifact"
 
-    # After this many turns with no artifact write, the next tool call is
-    # blocked. Deliberately small: a 3-4 turn budget still leaves room for an
-    # initial orientation pass (`ls`, read the task spec, read the checker),
-    # while a run that reaches turn 5 having written nothing is, by measurement,
-    # the failure shape this guard targets.
+    # Turn budget. Deliberately SMALL, and paired with a byte-based trigger
+    # below, because the target failure shape makes very FEW turns: measured
+    # on the failing run, the whole trial produced 7 thinking turns and ONE
+    # tool call across 540KB of log. A budget expressed only in turns can
+    # therefore fire too late (or never) for exactly the agent it targets --
+    # a single turn can consume tens of KB of reasoning before the next tool
+    # call even happens.
     TURN_BUDGET = 4
+
+    # Byte-based trigger: reasoning volume consumed with no artifact written.
+    # This is the wall-clock-independent signal that actually distinguishes the
+    # failure -- the failing run had emitted ~70KB of reasoning while still on
+    # its first turn with nothing on disk. 40KB leaves room for one honest
+    # orientation pass but catches a design-only run long before the clock
+    # runs out.
+    REASONING_BYTES_BUDGET = 40_000
 
     priority = 18  # after the startup pipeline (5) and safety guards (10-16),
     # before the generic text/verification gates.
@@ -221,6 +231,29 @@ class FirstArtifactGuard(Guard):
                 turns += 1
         return turns
 
+    def _reasoning_bytes(self, ctx: GuardContext) -> int:
+        """Approximate reasoning volume already spent, in characters.
+
+        A turn-only budget is too coarse for the target failure shape: one
+        assistant turn can carry tens of KB of reasoning before its single
+        tool call, and the measured failing run produced its whole trajectory
+        in 7 turns. Summing assistant text gives a clock-independent trigger
+        that fires while the run is still on its first turn with nothing on
+        disk.
+        """
+        total = 0
+        for msg in ctx.messages or []:
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        total += len(str(block.get("text", "")))
+        return total
+
     # ── guard protocol ─────────────────────────────────────────────────────
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if self._wrote_artifact or self._blocked_once:
@@ -234,7 +267,10 @@ class FirstArtifactGuard(Guard):
             return None
 
         turns = self._count_assistant_turns(ctx)
-        if turns < self.TURN_BUDGET:
+        spent = self._reasoning_bytes(ctx)
+        over_turns = turns >= self.TURN_BUDGET
+        over_bytes = spent >= self.REASONING_BYTES_BUDGET
+        if not (over_turns or over_bytes):
             return None
 
         # This call is itself about to write — let it through, it is the fix.
@@ -249,10 +285,10 @@ class FirstArtifactGuard(Guard):
 
         return GuardVerdict.block(
             message=(
-                f"[FirstArtifactGuard] {turns} turns in, no file has "
-                "been written to the delivery path yet — every action so far "
-                "has read or inspected, none has produced the artifact the "
-                "task is graded on.\n\n"
+                f"[FirstArtifactGuard] {turns} turns and ~{spent // 1000}KB of "
+                "reasoning in, no file has been written to the delivery path "
+                "yet — every action so far has read or inspected, none has "
+                "produced the artifact the task is graded on.\n\n"
                 "Reasoning has no natural end. A plan that waits for the "
                 "design to settle before the first write never reaches the "
                 "write: the clock runs out with nothing on disk, and the "
