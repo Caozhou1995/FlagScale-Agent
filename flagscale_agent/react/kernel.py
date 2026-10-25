@@ -441,6 +441,16 @@ class AgentKernel:
                             # Do NOT reproduce the degenerate text: it is pure
                             # filler and re-sending it invites the same loop.
                             # Demand one concrete tool call instead.
+                            # Measured failure (write-compressor, 2026-10-25
+                            # 12-16-04 batch): the model had ALREADY drafted the
+                            # full encoder (~2000 chars) inside the aborted
+                            # thinking stream, then spent 4300+ lines in a 4-line
+                            # cycle ("Let me write / OK / I'll write the file /
+                            # Let me go") — the generic "one tool call" menu
+                            # left it PLANNING to write instead of writing. The
+                            # nudge must name the ONE action that converts
+                            # thought into state: put the drafted file on disk
+                            # NOW, unconditionally, before any further design.
                             _intra_n = getattr(self, "_intra_degen_retries", 1)
                             nudge = (
                                 "[system: your reasoning stream entered a degenerate "
@@ -448,15 +458,20 @@ class AgentKernel:
                                 "produced was filler (short phrases repeated with no "
                                 "progress), so it has been discarded.\n"
                                 f"This is occurrence #{_intra_n} in this turn.\n"
-                                "Your very next message MUST contain ONE tool call — no "
-                                "prose, no plan, no repeated phrases. Pick the single most "
-                                "useful action you were about to take and DO it now:\n"
-                                "  1. `write_file` the deliverable (or the next section of "
-                                "it) at its required path with what you already know, or\n"
-                                "  2. `shell` the one command that tests your strongest "
-                                "remaining hypothesis, or\n"
-                                "  3. output [NEED_USER_INPUT] with the specific question "
-                                "blocking you."
+                                "STOP designing. Your next message MUST contain ONE tool "
+                                "call, and the ONLY acceptable first call is `write_file`: "
+                                "take the solution you have ALREADY drafted in your "
+                                "reasoning (it is complete enough — you were about to "
+                                "write it), paste it in full, and put it on disk at the "
+                                "delivery path the task names (the exact filename under "
+                                "/app the task text specifies). Do not re-derive, do not "
+                                "improve it first, do not explain — WRITE THE FILE as "
+                                "your very next tool call. If it later proves wrong, "
+                                "edit the file on disk; an imperfect file that exists "
+                                "beats a perfect draft that never lands.\n"
+                                "Only if you truly have nothing to write yet, the "
+                                "fallback is ONE `shell` command that tests your "
+                                "strongest remaining hypothesis — but prefer the write."
                             )
                         elif was_thinking_capped:
                             # The runtime cap aborted a monolithic thinking
