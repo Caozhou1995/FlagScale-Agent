@@ -241,6 +241,61 @@ class TestIdleThinkIntervalGate:
         assert len(recap) < 6000, f"recap not bounded: {len(recap)} chars"
         assert "X" * 4000 in recap
 
+    def test_blocked_roundtrip_does_not_rearm_the_clock(self):
+        """A round-trip whose EVERY tool call was blocked produced no state, so
+        it must not restart the idle clock.
+
+        Measured failure (job 2026-10-26__14-19-59, write-compressor): 8
+        round-trips inside one turn, only ONE executed call, three of them
+        entirely blocked (StartupGuard, Plan, ProgressOrder). The
+        unconditional `_last_toolcall_ts = time.time()` after tool_results let
+        each blocked round re-arm the clock, so ~300s of wall clock accumulated
+        with ZERO "Idle think-interval" lines -- the gate that exists for
+        exactly this shape stayed inert.
+
+        The reset must follow the same rule as the M6 repeat-block streak:
+        fire only when at least one call actually executed.
+        """
+        h = _Harness()
+
+        # A registry whose pre-check blocks real tool calls (the measured
+        # shape). It must stay transparent for the kernel's own top-of-loop
+        # pre-guard (tool_name == "") — blocking that one would stop the turn
+        # before the LLM is ever called again, which is a different failure.
+        blocking = MagicMock()
+
+        def _check_pre(ctx):
+            if getattr(ctx, "tool_name", ""):
+                return types.SimpleNamespace(
+                    action="block",
+                    message="[BLOCKED BY GUARD] blocked for test",
+                    reason="test")
+            return None
+
+        blocking.check_pre.side_effect = _check_pre
+        blocking.check_post.return_value = None
+        h.registry = blocking
+
+        blocked_call = {
+            "content": None,
+            "tool_calls": [{"id": "t1", "name": "shell",
+                            "arguments": {"command": "ls"}}],
+        }
+        kernel = h.build([blocked_call] * 4 + [_DONE])
+        kernel.IDLE_THINK_INTERVAL_SEC = 1
+        clock = _SteppingClock(step=100.0)
+        with patch("flagscale_agent.react.kernel.time.time", clock):
+            result = kernel.run_turn()
+
+        nudges = [m for m in h.history.messages
+                  if m.get("role") == "user"
+                  and "Idle think-interval" in (m.get("content") or "")]
+        assert len(nudges) >= 1, (
+            "blocked round-trips re-armed the idle clock, so the gate never "
+            "fired on a run that produced no state")
+        assert result.stop_reason in (
+            "explicit_signal", "idle_interval_max_retries")
+
     def test_idle_exhaustion_stops_turn_with_own_reason(self):
         """White-box (per test_thinking_cap's cap_retry_sanity pattern):
         pre-set the cap counter to its exhaustion bound and one more idle
