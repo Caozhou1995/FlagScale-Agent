@@ -175,7 +175,15 @@ class AgentKernel:
     # zero state produced (write-compressor v11/v12). 240s ≈ the elapsed gap
     # between the observed rungs (159s + 112s) so the intervention lands after
     # the second legal stream, not the first.
-    IDLE_THINK_INTERVAL_SEC = 240
+    # Measured across 7 trials (job 12-14-17): per-round latency p50 is 3-16s, and
+    # the agent produces many SHORT idle gaps (3-8 round streaks, 36-141s total)
+    # rather than one long absence. A 240s/3-round floor therefore left the gate
+    # silent in 6 of 7 runs even though no-tool round-trips were 49% of all LLM
+    # time (2018s of 4122s). 90s over the 2-round floor matches the observed
+    # median shape; the cap budget plus the exhausted escape valve keep it bounded.
+    IDLE_THINK_INTERVAL_SEC = 90
+    # Minimum consecutive no-tool round-trips before the idle gate may fire.
+    IDLE_THINK_MIN_ROUNDS = 2
 
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
@@ -399,7 +407,7 @@ class AgentKernel:
                         # is one iteration), or it can never reach 3.
                         self._idle_think_rounds = _idle_rounds
                         was_idle_interval = bool(
-                            _idle_rounds >= 3
+                            _idle_rounds >= self.IDLE_THINK_MIN_ROUNDS
                             and _idle_secs >= self.IDLE_THINK_INTERVAL_SEC
                         )
                         # ── Output saturation with no visible text ──
@@ -488,6 +496,14 @@ class AgentKernel:
                                 result.stop_reason = "idle_interval_max_retries"
                                 break
                             self._cap_retries = cap_retries + 1
+                            # RE-ARM THE CLOCK. The elapsed-time anchor is the
+                            # last TOOL call, so without this the predicate stays
+                            # true on every following round-trip and the nudge
+                            # repeats every single round -- noise, not pacing.
+                            # Resetting makes the cadence "another full interval
+                            # of silence earns another nudge".
+                            self._last_toolcall_ts = _idle_now
+                            self._idle_think_rounds = 0
                             d.display.warn(
                                 "Idle think-interval "
                                 f"({_idle_secs:.0f}s across {_idle_rounds} round-trips "
@@ -661,6 +677,17 @@ class AgentKernel:
                             # preempts.) Own directive: it names the measured
                             # cause (cumulative time, not tokens) so the model
                             # does not mistake this for a length error.
+                            #
+                            # BOUNDED RECAP, same as the cap path: injecting the
+                            # FULL thinking_text here re-feeds tens of thousands
+                            # of tokens of the very reasoning we are asking the
+                            # model to stop, which pushes it to CONTINUE thinking
+                            # instead of converging -- a self-defeating nudge.
+                            # Measured: write-compressor accumulated 450s across
+                            # 18 tool-less round-trips with the full-text form.
+                            _idle_tail = (thinking_text[-4000:]
+                                          if len(thinking_text) > 4000
+                                          else thinking_text)
                             nudge = (
                                 "[system: Idle think-interval — "
                                 f"{_idle_secs:.0f}s of wall-clock accumulated across "
@@ -674,7 +701,7 @@ class AgentKernel:
                                 "question blocking you. An imperfect file that exists beats "
                                 "a perfect plan that never lands.\n\n"
                                 "<previous_reasoning>\n"
-                                f"{thinking_text}\n"
+                                f"{_idle_tail}\n"
                                 "</previous_reasoning>"
                             )
                         elif was_reasoning_only:

@@ -22,13 +22,15 @@ machinery is keyed on one stream's TOKEN size; the guards only evaluate on
 tool calls. So six individually-legal streams bypass every threshold.
 
 Behavior contract:
-  - the 3rd+ consecutive think round-trip once >= IDLE_THINK_INTERVAL_SEC of
+  - the 2nd+ consecutive think round-trip once >= IDLE_THINK_INTERVAL_SEC of
     wall-clock has accumulated since the last tool call -> idle-interval
     branch: an "Idle think-interval" convergence nudge is injected and the
     cap-retry counter (not the 3-strike empty budget) is charged
   - below either bound (fewer rounds OR less time) -> gate silent, resume
     nudge unchanged
-  - a tool call resets both the clock and the round-trip count
+  - a tool call resets both the clock and the round-trip count, and so does a
+    trip itself (otherwise the predicate stays true forever and the nudge
+    repeats every round, which is noise rather than pacing)
   - 50 consecutive idle trips stop the turn with the gate's OWN stop reason
 """
 
@@ -58,6 +60,10 @@ class _Harness:
             self.call_count["n"] += 1
             return llm_responses[idx], {"input_tokens": 1, "output_tokens": 1}
 
+        return self.build_with(call_llm_fn)
+
+    def build_with(self, call_llm_fn):
+        self.call_count["n"] = 0
         provider = MagicMock()
         provider.format_assistant_message.side_effect = lambda resp: {
             "role": "assistant", "content": resp.get("content") or "",
@@ -94,6 +100,16 @@ _THINK = {"content": None, "tool_calls": None, "thinking": "still thinking",
 _DONE = {"content": "[TASK_COMPLETE]", "tool_calls": []}
 
 
+class _ManualClock:
+    """A clock the caller advances explicitly, once per simulated round."""
+
+    def __init__(self, start=0.0):
+        self.t = start
+
+    def __call__(self):
+        return self.t
+
+
 class _SteppingClock:
     """time.time() replacement that advances `step` seconds per call, so the
     gate's elapsed-time arithmetic sees real passage (a constant mock yields
@@ -109,12 +125,12 @@ class _SteppingClock:
 
 
 class TestIdleThinkIntervalGate:
-    def test_three_think_roundtrips_trip_the_gate(self):
-        """3 consecutive think round-trips (fake clock past the threshold) ->
+    def test_two_think_roundtrips_trip_the_gate(self):
+        """2 consecutive think round-trips (fake clock past the threshold) ->
         idle branch: 'Idle think-interval' nudge injected, cap counter charged,
         empty-output budget untouched, turn completes on the canned answer."""
         h = _Harness()
-        kernel = h.build([_THINK] * 3 + [_DONE])
+        kernel = h.build([_THINK] * 2 + [_DONE])
         kernel.IDLE_THINK_INTERVAL_SEC = 1
         clock = _SteppingClock(step=100.0)
         with patch("flagscale_agent.react.kernel.time.time", clock):
@@ -127,15 +143,15 @@ class TestIdleThinkIntervalGate:
         nudges = [m for m in h.history.messages
                   if m.get("role") == "user"
                   and "Idle think-interval" in (m.get("content") or "")]
-        assert len(nudges) == 1  # trips exactly on the 3rd round-trip
+        assert len(nudges) == 1  # trips exactly on the 2nd round-trip
         assert "CUMULATIVE TIME" in nudges[0]["content"]
         assert "Land the next concrete step NOW" in nudges[0]["content"]
         assert "<previous_reasoning>" in nudges[0]["content"]
 
-    def test_first_two_roundtrips_stay_silent(self):
-        """Below 3 round-trips -> no idle nudge; plain resume nudge instead."""
+    def test_first_roundtrip_stays_silent(self):
+        """Below the 2-round floor -> no idle nudge; plain resume nudge instead."""
         h = _Harness()
-        kernel = h.build([_THINK] * 2 + [_DONE])
+        kernel = h.build([_THINK] + [_DONE])
         kernel.IDLE_THINK_INTERVAL_SEC = 1
         clock = _SteppingClock(step=100.0)
         with patch("flagscale_agent.react.kernel.time.time", clock):
@@ -148,11 +164,11 @@ class TestIdleThinkIntervalGate:
                    for m in h.history.messages if m.get("role") == "user")
 
     def test_tool_call_resets_clock_and_rounds(self):
-        """A think burst + tool run + think burst: the tool restarts both
-        counters, so the second burst never reaches 3 consecutive rounds."""
+        """A think round + tool run + think round: the tool restarts both
+        counters, so neither single round reaches the 2-round floor."""
         h = _Harness()
         kernel = h.build([
-            _THINK, _THINK,
+            _THINK,
             {"content": None,
              "tool_calls": [{"id": "t1", "name": "shell",
                              "arguments": {"command": "ls"}}]},
@@ -167,6 +183,63 @@ class TestIdleThinkIntervalGate:
         assert all("Idle think-interval" not in (m.get("content") or "")
                    for m in h.history.messages)
         assert kernel._idle_think_rounds == 1
+
+    def test_trip_rearms_clock_instead_of_repeating(self):
+        """A trip resets the elapsed-time anchor, so the nudge fires once per
+        silent interval, not once per round.
+
+        Uses a clock that advances once PER ROUND (not per time.time() call),
+        so the elapsed arithmetic reflects the round's latency rather than the
+        number of internal clock reads."""
+        h = _Harness()
+        clock = _ManualClock()
+
+        def call_llm_fn(messages, schemas):
+            idx = min(h.call_count["n"], 4)
+            h.call_count["n"] += 1
+            clock.t += 100.0          # this round took 100s
+            resp = (_THINK, _THINK, _THINK, _THINK, _DONE)[idx]
+            return resp, {"input_tokens": 1, "output_tokens": 1}
+
+        kernel = h.build_with(call_llm_fn)
+        # 250s interval vs 100s rounds. Rounds 1-2 stay under 250s; round 3
+        # passes it (1st trip). Without re-arming, round 4 passes it again and
+        # logs a 2nd nudge; with re-arming the anchor moved and round 4 does not.
+        kernel.IDLE_THINK_INTERVAL_SEC = 250
+        with patch("flagscale_agent.react.kernel.time.time", clock):
+            result = kernel.run_turn()
+        nudges = [m for m in h.history.messages
+                  if m.get("role") == "user"
+                  and "Idle think-interval" in (m.get("content") or "")]
+        assert len(nudges) == 1, f"expected 1 trip (re-armed), got {len(nudges)}"
+        # The turn's stop reason is decided by the pre-existing empty-output
+        # budget, not by the idle gate -- that is unchanged behavior.
+        assert result.stop_reason in ("explicit_signal", "empty_output_max_retries")
+
+    def test_nudge_recap_is_bounded_to_tail(self):
+        """The idle nudge must inject a BOUNDED recap, not the full reasoning.
+
+        Re-feeding tens of thousands of tokens of the very reasoning we ask the
+        model to stop pushes it to continue thinking -- the opposite of the
+        nudge's intent. The cap path already bounds its recap to the last 4000
+        chars; the idle path must match it."""
+        h = _Harness()
+        huge = "X" * 20000
+        think = {"content": None, "tool_calls": None, "thinking": huge,
+                 "reasoning_only": True}
+        kernel = h.build([think, think, _DONE])
+        kernel.IDLE_THINK_INTERVAL_SEC = 1
+        clock = _SteppingClock(step=100.0)
+        with patch("flagscale_agent.react.kernel.time.time", clock):
+            result = kernel.run_turn()
+        assert result.stop_reason == "explicit_signal"
+        nudges = [m for m in h.history.messages
+                  if m.get("role") == "user"
+                  and "Idle think-interval" in (m.get("content") or "")]
+        assert len(nudges) == 1
+        recap = nudges[0]["content"].split("<previous_reasoning>")[1]
+        assert len(recap) < 6000, f"recap not bounded: {len(recap)} chars"
+        assert "X" * 4000 in recap
 
     def test_idle_exhaustion_stops_turn_with_own_reason(self):
         """White-box (per test_thinking_cap's cap_retry_sanity pattern):
