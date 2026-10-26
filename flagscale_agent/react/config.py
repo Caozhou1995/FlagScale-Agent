@@ -90,7 +90,8 @@ class AgentConfig:
     max_continuations: int = 200
     time_budget_sec: float = 0.0  # 0 = unset; >0 = per-turn wall-clock budget driving time warnings + wrap-up (NOT a hard kill)
     show_thinking: bool = False  # display model thinking CONTENT (💭 label, dim streamed text); False (default) hides it for a cleaner terminal. The ⏳ spinner is shown unconditionally regardless. Set True or FLAGSCALE_AGENT_SHOW_THINKING=1 to show content
-    show_guard_advisory: bool = False  # display soft guard advisory injects (🛡); False (default) hides them; block (🚫) / escalate (⚠️) verdicts are ALWAYS shown. Set True or FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY=1 to show
+    show_guard_advisory: bool = False  # display soft guard advisory injects (🛡); False (default) hides them; escalate (⚠️) verdicts are ALWAYS shown. Set True or FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY=1 to show
+    show_guard_block: bool = False  # display guard BLOCK echoes (🚫); False (default) hides them from the terminal, since a block is overridable and its echo is noise for a human reader. The block still reaches the model and still prevents the tool call. Set True or FLAGSCALE_AGENT_SHOW_GUARD_BLOCK=1 to show. Escalate (⚠️) is never hideable
     _config_path: Optional[str] = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -138,6 +139,9 @@ class AgentConfig:
         show_advisory_env = _env_flag("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY")
         if show_advisory_env is not None:
             self.show_guard_advisory = show_advisory_env
+        show_block_env = _env_flag("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK")
+        if show_block_env is not None:
+            self.show_guard_block = show_block_env
 
         if not self.skill_dirs:
             from flagscale_agent.react.paths import get_skill_dir
@@ -252,6 +256,9 @@ class AgentConfig:
         show_advisory_env = _env_flag("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY")
         if show_advisory_env is not None:
             self.show_guard_advisory = show_advisory_env
+        show_block_env = _env_flag("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK")
+        if show_block_env is not None:
+            self.show_guard_block = show_block_env
         # Re-run post-init validation
         for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"):
             if var not in self.shell_env:

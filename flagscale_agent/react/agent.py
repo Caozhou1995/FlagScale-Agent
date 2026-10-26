@@ -685,6 +685,7 @@ class WorkerAgent:
         _display_mod.set_policy(
             show_thinking=self.config.show_thinking,
             show_guard_advisory=self.config.show_guard_advisory,
+            show_guard_block=self.config.show_guard_block,
         )
 
     # ── System prompt ────────────────────────────────────────────────────────

@@ -59,7 +59,8 @@ def main(
     thinking_budget: int = typer.Option(0, "--thinking-budget", help="Thinking budget tokens (0=disabled, >0=enable thinking)"),
     time_budget_sec: float = typer.Option(0.0, "--time-budget-sec", help="Per-turn wall-clock budget in seconds (0=unset). Drives time-remaining warnings and a wrap-up reminder at 100%; NOT a hard kill. Equivalent to env FLAGSCALE_AGENT_TIME_BUDGET_SEC."),
     show_thinking: Optional[bool] = typer.Option(None, "--show-thinking/--no-show-thinking", help="Display model thinking CONTENT (💭 label, dim streamed text). The ⏳ spinner is always shown. Default: from config/env (FLAGSCALE_AGENT_SHOW_THINKING)."),
-    show_guard_advisory: Optional[bool] = typer.Option(None, "--show-guard-advisory/--no-show-guard-advisory", help="Display soft guard advisory injects (🛡). Guard block/escalate are always shown. Default: from config/env (FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY)."),
+    show_guard_advisory: Optional[bool] = typer.Option(None, "--show-guard-advisory/--no-show-guard-advisory", help="Display soft guard advisory injects (🛡). Guard escalate is always shown. Default: from config/env (FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY)."),
+    show_guard_block: Optional[bool] = typer.Option(None, "--show-guard-block/--no-show-guard-block", help="Display guard BLOCK echoes (🚫). Hidden by default (a block is overridable and its echo is noise). The block still prevents the tool call and still reaches the model. Escalate is always shown. Default: from config/env (FLAGSCALE_AGENT_SHOW_GUARD_BLOCK)."),
     version: bool = typer.Option(None, "--version", "-v", is_eager=True, help="Show version"),
 ):
     """Start the FlagScale Agent, or run a single query."""
@@ -96,6 +97,8 @@ def main(
         cfg.show_thinking = show_thinking
     if show_guard_advisory is not None:
         cfg.show_guard_advisory = show_guard_advisory
+    if show_guard_block is not None:
+        cfg.show_guard_block = show_guard_block
 
     agent_instance = WorkerAgent(cfg)
 

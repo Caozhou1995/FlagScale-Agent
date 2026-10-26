@@ -367,21 +367,28 @@ def _tool_icon(name):
 #   still thinks; only the CONTENT display is suppressed). The ⏳ spinner
 #   is the "thinking mode" busy indicator and is shown UNCONDITIONALLY —
 #   it is NOT policy-controlled.
-# guard advisory: soft 🛡 inject echoes. Guard BLOCK (🚫) and ESCALATE (⚠️)
-#   verdicts are deliberately NOT policy-controlled: they explain why a tool
-#   did not run and are part of the agent's safety contract, not decoration.
+# guard advisory: soft 🛡 inject echoes. guard block: 🚫 "this tool did not run"
+#   echoes. Both are POLICY-CONTROLLED so a terminal can stay quiet.
+#   Guard ESCALATE (⚠️) is deliberately NOT policy-controlled: it is the
+#   last-resort, non-overridable enforcement and remains part of the agent's
+#   safety contract rather than decoration. Hiding any of these only mutes the
+#   TERMINAL echo — the message still reaches the model in every case.
 
 _show_thinking = False
 _show_guard_advisory = False
+_show_guard_block = False
 
 
-def set_policy(show_thinking=None, show_guard_advisory=None):
+def set_policy(show_thinking=None, show_guard_advisory=None,
+               show_guard_block=None):
     """Set the display policy. None leaves the corresponding flag unchanged."""
-    global _show_thinking, _show_guard_advisory
+    global _show_thinking, _show_guard_advisory, _show_guard_block
     if show_thinking is not None:
         _show_thinking = bool(show_thinking)
     if show_guard_advisory is not None:
         _show_guard_advisory = bool(show_guard_advisory)
+    if show_guard_block is not None:
+        _show_guard_block = bool(show_guard_block)
 
 
 def thinking_enabled():
@@ -390,6 +397,10 @@ def thinking_enabled():
 
 def guard_advisory_enabled():
     return _show_guard_advisory
+
+
+def guard_block_enabled():
+    return _show_guard_block
 
 
 # ── Spinner for long-running tools ──────────────────────────────────────
@@ -888,10 +899,19 @@ def completion_signal(sentinel):
 
 def guard_block(message):
     """Display a guard block message to the terminal (visible to user).
-    
+
     First line: red icon + summary. Subsequent lines indented.
     No truncation for reviewer visibility.
+
+    Policy-gated: the 🚫 echo is hidden when show_guard_block is off (default),
+    because a blocked guard firing on every trivial call is noise for a human
+    reader. The block STILL reaches the model (kernel._apply_verdict injects the
+    message) and the tool call is still prevented; only the terminal echo is
+    muted. Unlike escalate, a block is overridable, so hiding its echo does not
+    hide an irreversible decision from the operator.
     """
+    if not _show_guard_block:
+        return
     lines = [l for l in message.strip().split('\n') if l.strip()]
     if not lines:
         return

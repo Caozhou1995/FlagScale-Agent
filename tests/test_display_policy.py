@@ -33,9 +33,11 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def _reset_display_policy():
-    display.set_policy(show_thinking=False, show_guard_advisory=False)
+    display.set_policy(show_thinking=False, show_guard_advisory=False,
+                       show_guard_block=False)
     yield
-    display.set_policy(show_thinking=False, show_guard_advisory=False)
+    display.set_policy(show_thinking=False, show_guard_advisory=False,
+                       show_guard_block=False)
 
 
 class TestDisplayGating:
@@ -50,13 +52,29 @@ class TestDisplayGating:
         out = capsys.readouterr().out
         assert "🛡" in out and "advisory text" in out
 
-    def test_guard_block_always_visible_even_when_advisory_off(self, capsys):
-        # Block/escalate explain why a tool did not run — never hideable.
-        display.set_policy(show_thinking=False, show_guard_advisory=False)
+    def test_guard_block_hidden_when_off(self, capsys):
+        # A block is overridable, so its 🚫 echo is policy-controlled: hidden by
+        # default to keep a human-readable terminal quiet. The block itself
+        # still prevents the tool call and still reaches the model (see
+        # TestBlockBehaviorNeutrality below).
+        display.set_policy(show_guard_block=False)
         display.guard_block("[Blocked] reason")
+        assert capsys.readouterr().out == ""
+
+    def test_guard_block_visible_when_on(self, capsys):
+        display.set_policy(show_guard_block=True)
+        display.guard_block("[Blocked] reason")
+        out = capsys.readouterr().out
+        assert "🚫" in out and "reason" in out
+
+    def test_guard_escalate_always_visible_even_when_all_policies_off(self, capsys):
+        # Escalate is non-overridable enforcement — the one verdict that can
+        # never be muted, regardless of every display policy being off.
+        display.set_policy(show_thinking=False, show_guard_advisory=False,
+                           show_guard_block=False)
         display.guard_escalate("[Escalated] reason")
         out = capsys.readouterr().out
-        assert "🚫" in out and "⚠️" in out
+        assert "⚠️" in out and "reason" in out
 
     def test_thinking_off_still_starts_spinner(self, capsys):
         # The ⏳ spinner is the "thinking mode" busy indicator and is shown
@@ -113,24 +131,55 @@ class TestDisplayGating:
         assert display._thinking_anim is None
 
     def test_policy_accessors(self):
-        display.set_policy(show_thinking=False, show_guard_advisory=False)
+        display.set_policy(show_thinking=False, show_guard_advisory=False,
+                           show_guard_block=False)
         assert display.thinking_enabled() is False
         assert display.guard_advisory_enabled() is False
+        assert display.guard_block_enabled() is False
         display.set_policy(show_thinking=True)
         assert display.thinking_enabled() is True
-        # Unspecified arg leaves the other flag untouched.
+        # Unspecified arg leaves the other flags untouched.
         assert display.guard_advisory_enabled() is False
+        assert display.guard_block_enabled() is False
 
 
 class TestConfigEnvOverride:
     def test_defaults_hide(self, monkeypatch):
-        # Default is OFF (cleaner terminal) — thinking + advisory hidden unless
-        # explicitly enabled via env/YAML/CLI.
+        # Default is OFF (cleaner terminal) — thinking + advisory + block hidden
+        # unless explicitly enabled via env/YAML/CLI.
         monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_THINKING", raising=False)
         monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY", raising=False)
+        monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK", raising=False)
         c = AgentConfig(provider="anthropic", model="m1")
         assert c.show_thinking is False
         assert c.show_guard_advisory is False
+        assert c.show_guard_block is False
+
+    def test_guard_block_env_can_enable_from_default_off(self, monkeypatch):
+        monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_THINKING", raising=False)
+        monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_GUARD_ADVISORY", raising=False)
+        monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK", "1")
+        c = AgentConfig(provider="anthropic", model="m1")
+        assert c.show_guard_block is True
+        # Independent of the advisory flag — the two are separate surfaces.
+        assert c.show_guard_advisory is False
+
+    def test_guard_block_env_beats_yaml(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK", "true")
+        p = tmp_path / "c.yaml"
+        p.write_text("provider: anthropic\nmodel: m1\nshow_guard_block: false\n")
+        c = AgentConfig.from_yaml(str(p))
+        assert c.show_guard_block is True  # env wins over YAML false
+
+    def test_reload_reapplies_block_env(self, monkeypatch, tmp_path):
+        p = tmp_path / "c.yaml"
+        p.write_text("provider: anthropic\nmodel: m1\nshow_guard_block: true\n")
+        monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK", "0")
+        c = AgentConfig.from_yaml(str(p))
+        assert c.show_guard_block is False
+        c.show_guard_block = True  # simulate a post-init flip
+        assert c.reload() is True
+        assert c.show_guard_block is False  # env still wins after reload
 
     def test_env_can_enable_from_default_off(self, monkeypatch):
         # The OFF default must be overridable OFF->ON via each explicit channel.
@@ -217,6 +266,23 @@ def test_cli_no_flag_leaves_env(monkeypatch):
     assert _CaptureAgent.last_cfg.show_guard_advisory is True
 
 
+def test_cli_show_guard_block(monkeypatch):
+    _patch_worker_agent(monkeypatch)
+    monkeypatch.delenv("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK", raising=False)
+    result = runner.invoke(app, ["--show-guard-block", "--model", "test-model-x"])
+    assert result.exit_code == 0
+    assert _CaptureAgent.last_cfg.show_guard_block is True
+
+
+def test_cli_no_show_guard_block(monkeypatch):
+    _patch_worker_agent(monkeypatch)
+    # Opposite-of-default baseline proves the flag ACTIVELY overrides env=1.
+    monkeypatch.setenv("FLAGSCALE_AGENT_SHOW_GUARD_BLOCK", "1")
+    result = runner.invoke(app, ["--no-show-guard-block", "--model", "test-model-x"])
+    assert result.exit_code == 0
+    assert _CaptureAgent.last_cfg.show_guard_block is False
+
+
 class TestBehaviorNeutrality:
     """Hiding advisory display must not change what the model receives."""
 
@@ -292,6 +358,79 @@ class TestBehaviorNeutrality:
         assert "hidden-but-delivered" in blob
         # ...while the terminal echo was suppressed (capsys captured nothing).
         assert "🛡" not in capsys.readouterr().out
+
+
+class TestBlockBehaviorNeutrality:
+    """Hiding the 🚫 block echo must not change what the model receives, and
+    must not let the blocked tool call through."""
+
+    def _kernel_with_block_guard(self, shared_display, history):
+        import types
+        from unittest.mock import MagicMock
+        from flagscale_agent.react.kernel import AgentKernel, KernelDeps
+        from flagscale_agent.react.guard import GuardRegistry, Guard, GuardVerdict
+
+        class _BlockGuard(Guard):
+            name = "stub_block"
+            priority = 90
+
+            def check_pre(self, ctx):
+                return GuardVerdict.block(
+                    "[StubBlock] blocked-but-delivered",
+                    reason="stub", category="stub")
+
+        registry = GuardRegistry()
+        registry.register(_BlockGuard())
+        config = types.SimpleNamespace(
+            max_iterations=10, max_continuations=200, mode="auto", _turn_count=0)
+        provider = MagicMock()
+        deps = KernelDeps(
+            provider=provider, history=history, tool_registry=MagicMock(),
+            judge=MagicMock(), guard_registry=registry, config=config,
+            display=shared_display, get_schemas_fn=lambda: [],
+            inject_message_fn=lambda m: history.append({"role": "user", "content": m}),
+            append_tool_results_fn=lambda r: None,
+            format_tool_result_fn=lambda tid, r: {},
+            execute_tools_fn=lambda t: [],
+            is_context_limit_error_fn=lambda e: False,
+            call_llm_fn=lambda m, s: ({"content": "", "tool_calls": []},
+                                      {"input_tokens": 1, "output_tokens": 1}),
+        )
+        return AgentKernel(deps)
+
+    def test_block_reaches_model_and_still_blocks_when_display_hidden(
+            self, monkeypatch, capsys):
+        from unittest.mock import MagicMock
+        import flagscale_agent.react.kernel as kernel_mod
+        from flagscale_agent.react.guard import GuardVerdict
+
+        shared = MagicMock()
+        monkeypatch.setattr(kernel_mod, "display", shared)
+        display.set_policy(show_guard_block=False)
+
+        class _History:
+            def __init__(self):
+                self.messages = [{"role": "user", "content": "go"}]
+
+            def append(self, m):
+                self.messages.append(m)
+
+            def get_messages(self):
+                return self.messages
+
+        history = _History()
+        kernel = self._kernel_with_block_guard(shared, history)
+        blocked = kernel._apply_verdict(
+            GuardVerdict.block("[StubBlock] blocked-but-delivered",
+                               reason="stub", category="stub"), pre=True)
+        # FAR END 1: the tool call is still prevented.
+        assert blocked is True
+        # FAR END 2: the message still reached the model.
+        blob = " ".join(str(m.get("content", "")) for m in history.get_messages())
+        assert "blocked-but-delivered" in blob
+        # FAR END 3: the terminal echo was suppressed by the policy.
+        assert shared.guard_block.call_count == 1  # dispatched...
+        assert capsys.readouterr().out == ""       # ...but the real impl prints nothing
 
 
 

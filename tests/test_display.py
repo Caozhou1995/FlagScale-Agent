@@ -28,11 +28,12 @@ def strip_ansi(text):
 
 @pytest.fixture(autouse=True)
 def _enable_advisory_display():
-    # These tests exercise guard_inject FORMATTING; the advisory display is now
-    # OFF by default, so force it on for this module and restore after.
-    display.set_policy(show_guard_advisory=True)
+    # These tests exercise guard_inject/guard_block FORMATTING; the advisory and
+    # block displays are now OFF by default, so force them on for this module
+    # and restore after.
+    display.set_policy(show_guard_advisory=True, show_guard_block=True)
     yield
-    display.set_policy(show_guard_advisory=False)
+    display.set_policy(show_guard_advisory=False, show_guard_block=False)
 
 
 class TestGuardDisplayFunctions:
