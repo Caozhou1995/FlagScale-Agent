@@ -278,6 +278,18 @@ class Guard(abc.ABC):
         once the winning block clears. Default: no-op."""
         pass
 
+    def note_merged_refusal(self, verdict):
+        """Called by the registry when THIS guard's block was MERGED into
+        another guard's surfaced message (`also_failing`) — i.e. the agent was
+        shown and refused by this gate too, on this same turn.
+
+        A gate that keeps losing the ranking to a co-firing gate is still
+        doing work: it is asking the agent a question and getting refused. A
+        guard with an escape valve must count that here, otherwise a gate that
+        is ALWAYS the lower-ranked partner in a cascade can never exhaust —
+        the valve starves and the pair stays deadlocked. Default: no-op."""
+        pass
+
 
 class GuardRegistry:
     """Manages all guards, runs them in priority order, deduplicates injects."""
@@ -497,6 +509,21 @@ class GuardRegistry:
                     extra = []
                     for ex_guard, ex_verdict in also_failing:
                         ex_owner = ex_verdict.guard_name or ex_guard.name
+                        # A merged block is DELIVERED to the agent, so this turn
+                        # already spent one refusal on it: tell the guard so its
+                        # escape valve can count. Without this, a rung that is
+                        # always the LOWER-ranked partner in a cascade never
+                        # accumulates denials — measured 2026-10-26
+                        # (write-compressor): first_e2e_run's 25% rung was
+                        # surfaced 11 times as `also_failing` beside the plan
+                        # guard, so its _MAX_DENIALS valve never fired and the
+                        # pair stayed deadlocked until the wall-clock ran out.
+                        # Only blocks count: an inject was never refused.
+                        if ex_verdict.action == "block" and ex_verdict.overridable:
+                            try:
+                                ex_guard.note_merged_refusal(ex_verdict)
+                            except AttributeError:
+                                pass
                         ex_text = ex_verdict.message
                         if ex_owner:
                             ex_text += f"\n\n[blocked by guard: {ex_owner}]"

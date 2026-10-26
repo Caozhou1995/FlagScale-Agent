@@ -274,6 +274,16 @@ class FirstE2eRunGuard(Guard):
     # command it ran), never through its output text.
     _WRITE_TOOLS = ("write_file", "edit_file")
 
+    # Tools whose ONLY purpose is to satisfy another guard's prerequisite.
+    # Gating one of these behind a rung the agent can only clear by calling
+    # this tool is a closed loop: measured 2026-10-26 (write-compressor),
+    # `plan` blocked write_file ("call plan_create first"), `first_e2e_run`'s
+    # 25% rung blocked plan_create ("a write must have EXECUTED this turn"),
+    # and neither could ever run — 11 consecutive identical blocks while the
+    # agent reasoned "deadlock... circular" and burned 5% of the trial. A
+    # gate may never block the call that is its own prerequisite.
+    _PREREQ_TOOLS = ("plan_create", "plan_update", "memory_write")
+
     def _has_write_evidence(self, ctx: GuardContext) -> bool:
         """True when the harness's own writer actually executed this turn (or
         this call IS that write).
@@ -324,6 +334,39 @@ class FirstE2eRunGuard(Guard):
             self._fired.discard(thr)
         self._denials[thr] = self._denials.get(thr, 0) + 1
         self._last_pending_thr = None
+
+    def _pending_thr_for(self, verdict) -> int | None:
+        """Recover which rung a verdict belongs to from its reason slug
+        (`first_e2e_run_<thr>pct[_exhausted]`).
+
+        The rung number is already encoded in the reason this guard itself
+        emitted, so read that naming instead of keeping a parallel map that can
+        drift out of sync with `_verdict_for`.
+        """
+        reason = str(getattr(verdict, "reason", "") or "")
+        for thr in self._THRESHOLDS:
+            if reason.startswith(f"first_e2e_run_{thr}pct"):
+                return thr
+        return None
+
+    def note_merged_refusal(self, verdict):
+        """Count a refusal that was DELIVERED but merged under another guard's
+        message.
+
+        This rung is lower priority than the plan guard, so whenever both fire
+        the plan guard's block is the surfaced one and this verdict rode along
+        as `also_failing` — seen by the agent, refused by it, yet never counted
+        because accept_override is only called for the surfaced block. Measured
+        2026-10-26 (write-compressor): 11 consecutive identical 25% blocks, the
+        valve never fired, and the plan/write loop stayed deadlocked until the
+        wall-clock expired. Counting the merged refusal spends the valve on
+        schedule and lets the rung degrade to its non-blocking demand.
+        """
+        thr = self._pending_thr_for(verdict)
+        if thr is None:
+            return
+        self._last_pending_thr = thr
+        self._rearm(thr)
 
     def reset_turn(self):
         # A new user turn restarts the per-turn budget accounting on the
@@ -424,6 +467,15 @@ class FirstE2eRunGuard(Guard):
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if not ctx.tool_name:
+            return None
+        # A gate must never block the call that is its own prerequisite. The
+        # plan guard requires plan_create before any write, while the 25% rung
+        # requires a write before anything else — gating plan_create here makes
+        # the two mutually unsatisfiable (measured deadlock, see _PREREQ_TOOLS).
+        # These tools cannot land the deliverable, so letting them through
+        # costs the checkpoint nothing: the write it asks for is still demanded
+        # on the very next call.
+        if ctx.tool_name in self._PREREQ_TOOLS:
             return None
         stats = self._stats()
         if not stats:
