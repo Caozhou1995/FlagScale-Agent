@@ -454,6 +454,15 @@ CONSTRUCTION from the first line you write, with margin, and re-measure after
 every write. Landing exactly on a bound, or finding the overage at the deadline,
 is how a working result dies to an arithmetic detail. Shrinking is never free
 once the design is committed, so the encoding strategy is chosen BEFORE the code.
+And because a bound must hold when the clock stops — not when you finish — the
+delivered state has to be legal at every instant in the endgame: never leave a
+known-over-limit artifact on the delivery path while you plan the next shave.
+If a reduction is going to take another round-trip, apply a cheap decisive cut
+first (a whole feature, a debug block, a short-option flag away) so the artifact
+is under the bound now, then continue trimming for quality. A multi-round shave
+that converges toward the bound from above is the wrong shape: its landing point
+is set by when the clock runs out, not by you, so it can stop one unit short with
+the fix already written.
 
 SAY WHAT YOU DID NOT REACH. If the wall cuts the plan short, state which part ran
 and which did not. A silently narrowed delivery reads as incomplete work; a
