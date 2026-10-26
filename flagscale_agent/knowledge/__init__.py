@@ -30,12 +30,34 @@ class KnowledgeManager:
 
     def _load_config(self):
         """Load knowledge_config.yaml."""
+        self._config_mtime = None
         if self.config_path.exists():
             with open(self.config_path, "r", encoding="utf-8") as f:
                 self._config = yaml.safe_load(f) or {}
+            try:
+                self._config_mtime = self.config_path.stat().st_mtime
+            except OSError:
+                self._config_mtime = None
+
+    def _maybe_reload(self) -> None:
+        """Re-read the config when the file changed since the last load.
+
+        The manager lives for the whole process (Agent.__init__ builds it once),
+        so without this a knowledge group added by an update — a git pull, a
+        deployment sync — stays invisible until the process restarts, even
+        though the index and docs are already on disk. Cheap: one stat() per
+        lookup, and the parse only happens when the mtime actually moved.
+        """
+        try:
+            mtime = self.config_path.stat().st_mtime
+        except OSError:
+            return
+        if mtime != self._config_mtime:
+            self._load_config()
 
     def list_groups(self) -> list[dict]:
         """List all available knowledge groups with descriptions."""
+        self._maybe_reload()
         groups = []
         for name, cfg in self._config.items():
             if name.startswith("_"):
@@ -49,6 +71,7 @@ class KnowledgeManager:
 
     def get_index(self, group_name: str) -> Optional[str]:
         """Get the index content for a knowledge group."""
+        self._maybe_reload()
         idx_file = self.indexes_path / f"{group_name}.idx"
         if idx_file.exists():
             return idx_file.read_text(encoding="utf-8")
@@ -70,6 +93,7 @@ class KnowledgeManager:
 
     def get_group_docs(self, group_name: str) -> list[str]:
         """Get list of doc paths for a group."""
+        self._maybe_reload()
         cfg = self._config.get(group_name, {})
         return cfg.get("docs", [])
 
@@ -80,6 +104,7 @@ class KnowledgeManager:
         all document contents. For large groups, caller may want to
         use get_index() first and then selectively load docs.
         """
+        self._maybe_reload()
         if group_name not in self._config:
             return None
 
@@ -100,4 +125,5 @@ class KnowledgeManager:
     @property
     def available_groups(self) -> list[str]:
         """Return list of group names."""
+        self._maybe_reload()
         return [k for k in self._config.keys() if not k.startswith("_")]
