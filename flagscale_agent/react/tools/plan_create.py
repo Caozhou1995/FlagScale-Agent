@@ -275,6 +275,21 @@ class PlanCreateTool(Tool):
                                     "type": "array",
                                     "items": {"type": "string"},
                                 },
+                                "est_sec": {
+                                    "type": "number",
+                                    "description": (
+                                        "Your PLANNING-TIME estimate of how many "
+                                        "seconds this step will cost against the "
+                                        "wall. Commit to a number here: an "
+                                        "unestimated step is a step you have not "
+                                        "actually planned, and the ledger cannot "
+                                        "warn you about a budget you never "
+                                        "allocated. Estimate from the work's own "
+                                        "shape (how many probes/builds/reads it "
+                                        "needs times what each costs here), not "
+                                        "from what you hope it takes."
+                                    ),
+                                },
                             },
                             "required": ["title"],
                         },
@@ -464,7 +479,85 @@ class PlanCreateTool(Tool):
                 "and provide verification evidence for each acceptance criterion. All "
                 "fixed steps are SKIPPABLE with a reasonable reason, but do not skip "
                 "them silently.\n\n"
-                f"{self._plan.summary()}"
+                + self._time_budget_report(normalized)
+                + f"{self._plan.summary()}"
             )
         except Exception as e:
             return f"ERROR: {e}"
+
+    def _time_budget_report(self, steps: list) -> str:
+        """Frame-time accounting for the plan the agent just committed to.
+
+        The plan is only worth the time it can actually fit, so this reports the
+        arithmetic AT CREATION — the one moment when a plan that cannot finish is
+        still cheap to replace. It deliberately does NOT reject the plan: a wall
+        the agent beats by re-scoping is the agent's call, but it must SEE the
+        overrun now rather than discover it at the deadline. With no injected
+        budget there is nothing to compare against, so it stays silent rather than
+        inventing a deadline.
+        """
+        budget = self._plan.budget_sec() if hasattr(self._plan, "budget_sec") else None
+        if not budget:
+            return ""
+        estimates = [
+            s.get("est_sec") for s in steps
+            if isinstance(s, dict) and s.get("est_sec")
+        ]
+        # Harness-appended fixed steps carry no estimate; they are small but not
+        # free, so they are reported as an unnamed slack allowance instead of
+        # being silently counted as zero.
+        from flagscale_agent.react.plan import (
+            DEFAULT_RESERVE_FRACTION, _fmt_sec, is_fixed_step,
+        )
+        missing = sum(
+            1 for s in steps
+            if isinstance(s, dict) and not s.get("est_sec")
+            and not is_fixed_step(s)
+        )
+        reserve = round(budget * DEFAULT_RESERVE_FRACTION, 1)
+        lines = ["── TIME BUDGET (frame-time accounting) ──"]
+        lines.append(
+            f"wall {_fmt_sec(budget)} | reserve for wrap-up/verification "
+            f"{_fmt_sec(reserve)} | spendable on steps {_fmt_sec(budget - reserve)}"
+        )
+        if not estimates:
+            lines.append(
+                "⚠ NONE of your steps carries an est_sec. You have committed to a "
+                "sequence of actions without saying what any of them costs against "
+                "the wall — that is not a plan, it is a wish list. Give every step "
+                "an est_sec (plan_update can amend them) BEFORE you start working: "
+                "you cannot cut scope you never priced."
+            )
+            return "\n".join(lines) + "\n\n"
+        total = round(sum(estimates), 1)
+        lines.append(
+            f"your steps estimate to {_fmt_sec(total)} "
+            f"({len(estimates)} estimated, {missing} unestimated)"
+            + (f" + reserve {_fmt_sec(reserve)}" if reserve else "")
+        )
+        planned = total + reserve
+        if planned > budget:
+            over = round(planned - budget, 1)
+            lines.append(
+                f"⚠ THIS PLAN DOES NOT FIT: estimate+reserve {_fmt_sec(planned)} "
+                f"exceeds the wall {_fmt_sec(budget)} by {_fmt_sec(over)}."
+            )
+            lines.append(
+                "DECIDE NOW, not at the deadline — you still have the whole wall "
+                "in front of you. Re-scope in this order: (1) drop or defer the "
+                "single most expensive step if a cheaper path reaches a SCORABLE "
+                "artifact; (2) shrink the cheapest-sufficient version of each step "
+                "so a complete minimal deliverable lands first and is refined in "
+                "place; (3) replace an open-ended search with a bounded "
+                "discriminating experiment whose outcomes eliminate candidates. "
+                "What you must NOT do is keep the plan and hope: a plan whose "
+                "estimate already exceeds the wall fails by arithmetic, and every "
+                "step you start on it spends budget that a fitting plan needed."
+            )
+        else:
+            lines.append(
+                f"fits with {_fmt_sec(round(budget - planned, 1))} slack "
+                "— re-check this ledger after each step and re-scope the moment "
+                "actuals run over their estimates"
+            )
+        return "\n".join(lines) + "\n\n"

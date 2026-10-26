@@ -14,6 +14,7 @@
 
 """Task plan — structured multi-step planning with persistence."""
 
+import math
 import os
 import re
 import tempfile
@@ -43,12 +44,105 @@ STATUS_ICONS = {
 }
 
 
+def _coerce_sec(value) -> Optional[float]:
+    """Coerce a planning-time seconds estimate to a positive float, else None.
+
+    Accepts a number (or numeric string) of seconds. Anything non-positive,
+    boolean, or unparseable is treated as "no estimate given" rather than as a
+    zero — a zero estimate would silently satisfy a budget check that the agent
+    never actually did.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        sec = float(value)
+    except (TypeError, ValueError):
+        return None
+    # `nan`/`inf` parse successfully but are not durations: `nan <= 0` is False
+    # and `inf <= 0` is False, so they would slip past the guard below and then
+    # raise inside every render (`int(round(nan))` → ValueError). Reachable from
+    # a real input path: the wall can arrive as the env string "inf".
+    if not math.isfinite(sec) or sec <= 0:
+        return None
+    return sec
+
+
+def _fmt_sec(sec: Optional[float]) -> str:
+    """Compact human duration for the ledger ('45s', '3m20s', '1h05m')."""
+    if sec is None:
+        return "?"
+    try:
+        numeric = float(sec)
+    except (TypeError, ValueError):
+        return "?"
+    if not math.isfinite(numeric):
+        # Never let a bad number take down the whole render: a ledger that
+        # raises is worse than one that admits it has no figure.
+        return "?"
+    total = int(round(numeric))
+    if total < 60:
+        return f"{total}s"
+    minutes, seconds = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m{seconds:02d}s" if seconds else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+# Default reserve fraction: the part of the wall deliberately NOT allocated to
+# steps, so wrap-up/verification is never the thing that gets squeezed. Stated
+# as a fraction of the budget rather than a fixed number of seconds so it scales
+# with however long the task actually has.
+DEFAULT_RESERVE_FRACTION = 0.15
+
+
+def is_fixed_step(step: dict) -> bool:
+    """True for harness-appended template steps (Frame/Review/RSI).
+
+    One predicate shared by every render path: two copies of this rule drifting
+    apart made the per-turn ledger exempt a step that the plan_create report
+    still counted as "unestimated", so a template rename silently reactivated
+    the nag on one surface only.
+    """
+    title = str(step.get("title", ""))
+    return "fixed template" in title or "fixed step" in title
+
+
 class TaskPlan:
     """Manages structured task plans with YAML persistence."""
 
     def __init__(self, plan_dir: str):
         self._dir = plan_dir
         self._lock = threading.RLock()
+        # Wall-clock the agent was given, set by the owner (agent.py) from the
+        # SAME resolved budget the rest of the harness uses. None means "no
+        # deadline was injected" — every time-aware rendering then stays silent
+        # rather than inventing one.
+        self._budget_sec: Optional[float] = None
+        # The wall the budget describes belongs to THIS process's session, not
+        # to whenever the plan happened to be born. Persisted `started` values
+        # from an earlier session are therefore not usable as the elapsed
+        # origin (a resumed plan would report a day of elapsed time and tell a
+        # full-budget run to stop). This is the anchor used for that case.
+        self._session_start = time.time()
+
+    def set_budget_sec(self, budget_sec) -> None:
+        """Record the wall-clock budget this plan should account against.
+
+        Passing None (or a non-positive value) clears it, which is the correct
+        state for a standalone/interactive session where no real deadline exists.
+        """
+        self._budget_sec = _coerce_sec(budget_sec)
+
+    def budget_sec(self) -> Optional[float]:
+        """The wall this plan accounts against, or None if none was injected.
+
+        Public so other surfaces (the plan_create frame-time report) read the
+        same value through a supported accessor instead of reaching for a
+        private attribute — a silent getattr failure there turned the whole
+        feature off with no observer.
+        """
+        return self._budget_sec
 
     def _plan_path(self, plan_id: str) -> str:
         # Prevent path traversal
@@ -163,6 +257,17 @@ class TaskPlan:
                     }
                 else:
                     raise ValueError(f"Step must be str or dict, got {type(step_input)}")
+                # Time ledger per step: `est_sec` is the PLANNING-TIME estimate the
+                # agent commits to; `started_at`/`ended_at`/`actual_sec` are filled
+                # by update_step as the step is worked, so the plan can compare
+                # estimate against reality instead of only discovering at the end
+                # that the whole budget is gone.
+                step_dict["est_sec"] = _coerce_sec(
+                    step_input.get("est_sec") if isinstance(step_input, dict) else None
+                )
+                step_dict["started_at"] = 0.0
+                step_dict["ended_at"] = 0.0
+                step_dict["actual_sec"] = None
                 step_list.append(step_dict)
 
             plan = {
@@ -181,6 +286,20 @@ class TaskPlan:
                 # check it was EXERCISED -- a declaration becomes load-bearing
                 # only when the presentation path can see it.
                 "oracle": dict(oracle) if isinstance(oracle, dict) else {},
+                # Plan-level time ledger. `budget_sec` is the wall the agent was
+                # actually given (None when nobody injected one — never fabricate
+                # a deadline); `started` is when this plan was created so elapsed
+                # is measured from the planning moment; `reserve_sec` is the slice
+                # deliberately held back from steps for wrap-up/verification.
+                "time_budget": {
+                    "budget_sec": self._budget_sec,
+                    "started": time.time(),
+                    "reserve_sec": (
+                        round(self._budget_sec * DEFAULT_RESERVE_FRACTION, 1)
+                        if self._budget_sec
+                        else None
+                    ),
+                },
             }
             self._save(plan)
             return plan
@@ -266,7 +385,37 @@ class TaskPlan:
                 raise ValueError(f"Invalid status: {status}")
 
             step = self._find_step(plan, step_id)
+            prev_status = step.get("status")
             step["status"] = status
+            # ── Time ledger: stamp the wall-clock cost of THIS step ──────────
+            # `started_at` is stamped the moment a step becomes `doing`, and
+            # `actual_sec` is frozen when it reaches a terminal status. Together
+            # with the plan-level `started` this is what lets the ledger compare
+            # estimate against reality DURING the run rather than after it.
+            now = time.time()
+            if status == "doing" and not step.get("started_at"):
+                step["started_at"] = now
+            if status in ("done", "skipped", "blocked"):
+                if not step.get("started_at"):
+                    # A step can be closed without ever being marked `doing`
+                    # (a one-shot close, or a whole plan closed in one batch).
+                    # Charging it the plan's entire elapsed time would report N
+                    # steps each "costing" the whole run, inflating the actual
+                    # total by the step count — the ledger would then compare
+                    # estimates against a fabricated baseline. The step's own
+                    # measured cost is genuinely unknown here, so record it as
+                    # unknown (None) and leave it out of the actual total
+                    # instead of inventing a number.
+                    step["started_at"] = now
+                    step["ended_at"] = now
+                    step["actual_sec"] = None
+                    step["actual_unknown"] = True
+                if not step.get("ended_at"):
+                    step["ended_at"] = now
+                    if step.get("actual_sec") is None and not step.get("actual_unknown"):
+                        step["actual_sec"] = round(
+                            max(0.0, step["ended_at"] - step["started_at"]), 1
+                        )
             if notes:
                 # Append mode: notes accumulate as a log, one line per update
                 existing = step.get("notes", "")
@@ -348,6 +497,10 @@ class TaskPlan:
                         "depends_on": [],
                         "acceptance": [],
                         "verification": [],
+                        "est_sec": None,
+                        "started_at": 0.0,
+                        "ended_at": 0.0,
+                        "actual_sec": None,
                     })
                 elif isinstance(step_input, dict):
                     new_steps.append({
@@ -358,6 +511,10 @@ class TaskPlan:
                         "depends_on": [],
                         "acceptance": step_input.get("acceptance", []),
                         "verification": [],
+                        "est_sec": _coerce_sec(step_input.get("est_sec")),
+                        "started_at": 0.0,
+                        "ended_at": 0.0,
+                        "actual_sec": None,
                     })
                 else:
                     raise ValueError(f"Step must be str or dict, got {type(step_input)}")
@@ -486,6 +643,166 @@ class TaskPlan:
             })
         return results
 
+    def _time_ledger_lines(self, plan: dict) -> List[str]:
+        """Render the plan's time ledger: what was planned, what is left, drift.
+
+        This is the ACTIVE time awareness the plan carries — every plan_status /
+        summary / prompt injection shows it, so the agent knows where it stands
+        against the wall at ALL times instead of learning it from a threshold
+        nag. When no budget was injected (interactive/standalone), it renders
+        only the per-step estimates that exist and never invents a deadline.
+        """
+        tb = plan.get("time_budget") or {}
+        budget = tb.get("budget_sec")
+        if budget is None:
+            # A plan written before this feature (or by a writer that skipped
+            # the key) has no time_budget block. Fall back to the budget this
+            # TaskPlan instance resolved, so the ledger stays ACTIVE instead of
+            # silently disappearing — a missing key must not turn time
+            # awareness off.
+            budget = self._budget_sec
+        reserve = tb.get("reserve_sec")
+        if reserve is None and budget:
+            reserve = round(float(budget) * DEFAULT_RESERVE_FRACTION, 1)
+        reserve = reserve or 0.0
+        started = tb.get("started") or plan.get("created") or 0.0
+        # Only trust `started` when it belongs to THIS session: a plan resumed
+        # in a later session carries a frozen origin from the old session, and
+        # measuring from it reports the whole gap as elapsed — turning a
+        # full-budget run into "0 remaining, wrap up only". A stale origin is
+        # replaced by this session's start rather than by zero (zero would
+        # report the epoch and be just as wrong in the other direction).
+        try:
+            started_f = float(started)
+        except (TypeError, ValueError):
+            started_f = 0.0
+        if not math.isfinite(started_f) or started_f < self._session_start:
+            started = self._session_start
+        steps = plan.get("steps", [])
+
+        # Harness-appended fixed steps (Frame/Review/RSI) carry no estimate by
+        # design — they are not the agent's to price. Counting them as
+        # "unestimated" would nag about work the ledger was never meant to cover.
+        def _is_fixed(s) -> bool:
+            return is_fixed_step(s)
+
+        planned = [s.get("est_sec") for s in steps if s.get("est_sec")]
+        estimated_total = round(sum(planned), 1) if planned else None
+        unestimated = sum(
+            1
+            for s in steps
+            if not s.get("est_sec")
+            and s.get("status") not in ("done", "skipped")
+            and not _is_fixed(s)
+        )
+        actual_total = round(
+            sum(s.get("actual_sec") or 0.0 for s in steps), 1
+        )
+
+        lines: List[str] = []
+        if not budget:
+            # No injected wall: still show the per-step commitments the agent
+            # made, because an estimate nobody ever re-reads is not a plan.
+            if estimated_total is None and actual_total <= 0:
+                return lines
+            lines.append("时间账 (TIME LEDGER) — 未注入预算，无 deadline：")
+            if estimated_total is not None:
+                lines.append(
+                    f"   预计合计: {_fmt_sec(estimated_total)}"
+                    + (
+                        f"  ({unestimated} 步未估时)"
+                        if unestimated
+                        else "  (全部步骤已估时)"
+                    )
+                )
+            if actual_total > 0:
+                lines.append(f"   已实际消耗: {_fmt_sec(actual_total)}")
+            return lines
+
+        budget = float(budget)
+        elapsed = max(0.0, time.time() - float(started))
+        remaining = budget - elapsed
+        # A resumed/legacy plan can carry a `created` from long ago, making
+        # elapsed many times the wall. Report that state honestly (the budget IS
+        # spent) instead of printing a four-digit percentage that reads like a
+        # formatting bug and hides the one actionable fact: nothing is left.
+        if remaining <= 0:
+            lines.append("时间账 (TIME LEDGER):")
+            lines.append(
+                f"   预算 {_fmt_sec(budget)} | 已用 {_fmt_sec(elapsed)} "
+                f"→ 剩余 0（预算已耗尽或被更早的会话用完）"
+            )
+            lines.append(
+                "   现在只做收尾：把已有交付物固化到交付路径并验证，"
+                "不要再开新方向"
+            )
+            return lines
+        num = f"{remaining / budget * 100:.0f}%"
+
+        lines.append("时间账 (TIME LEDGER):")
+        lines.append(
+            f"   预算 {_fmt_sec(budget)} | 已用 {_fmt_sec(elapsed)} "
+            f"({elapsed / budget * 100:.0f}%) | 剩余 {_fmt_sec(remaining)} ({num})"
+        )
+        lines.append(f"   预留 wrap-up {_fmt_sec(reserve)}（不含在任何步骤估时内）")
+
+        if estimated_total is not None:
+            lines.append(
+                f"   计划估时合计 {_fmt_sec(estimated_total)}"
+                + (f" + 预留 {_fmt_sec(reserve)}" if reserve else "")
+            )
+            planned_with_reserve = estimated_total + reserve
+            if planned_with_reserve > budget:
+                lines.append(
+                    f"   ⚠ 计划已超预算 {_fmt_sec(planned_with_reserve - budget)}"
+                    f"（估时+预留 {_fmt_sec(planned_with_reserve)} > 预算 {_fmt_sec(budget)}）"
+                    " — 必须砍范围或放弃最贵的一步，而不是压缩后续每一步"
+                )
+            else:
+                lines.append(
+                    f"   计划余量 {_fmt_sec(budget - planned_with_reserve)}"
+                    " （按计划走可完成）"
+                )
+        if unestimated:
+            lines.append(
+                f"   ⚠ {unestimated} 个未完成步骤还没有估时 — 未估时的步骤等于没有计划，"
+                f"现在就补 est_sec（剩余可用 {_fmt_sec(remaining - reserve)}，"
+                "按这个数给每步分配）"
+            )
+        elif estimated_total is None:
+            # Nothing estimated at all, but a real wall exists: say where the
+            # agent stands anyway, because "how much is left" is exactly the
+            # fact it needs in order to produce the estimates.
+            lines.append(
+                f"   未估时的计划无法判断可行性；剩余可用 {_fmt_sec(remaining - reserve)}，"
+                "先给每步分配再开工"
+            )
+        if actual_total > 0:
+            lines.append(f"   已实际消耗（已关闭步骤）: {_fmt_sec(actual_total)}")
+
+        # Drift check: are the remaining steps still affordable with what's left?
+        pending_est = [
+            s.get("est_sec") or 0.0
+            for s in steps
+            if s.get("status") not in ("done", "skipped") and s.get("est_sec")
+        ]
+        if pending_est:
+            need = round(sum(pending_est), 1)
+            usable = remaining - reserve
+            if need > usable:
+                lines.append(
+                    f"   ⚠ 漂移: 剩余步骤还需 {_fmt_sec(need)}，可用只有 "
+                    f"{_fmt_sec(usable)}（=剩余-预留）→ 差 {_fmt_sec(need - usable)}。"
+                    " 现在就重排：砍范围/换更便宜的方法/放弃最贵的一步，"
+                    "不要等余量耗尽"
+                )
+            else:
+                lines.append(
+                    f"   剩余步骤估时需要 {_fmt_sec(need)}，可用 {_fmt_sec(usable)}"
+                    f" → 尚余 {_fmt_sec(usable - need)}"
+                )
+        return lines
+
     def summary(self) -> str:
         plan = self.get_active()
         if not plan:
@@ -497,6 +814,10 @@ class TaskPlan:
         if not plan:
             return ""
         lines = []
+        ledger = self._time_ledger_lines(plan)
+        if ledger:
+            lines.extend(ledger)
+            lines.append("")
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
             lines.append("当前问题模型 (thinking):")
@@ -506,6 +827,22 @@ class TaskPlan:
         for s in plan["steps"]:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"{s['id']}. [{icon}] {s['title']}"
+            # Per-step time commitment, visible right next to the title so the
+            # agent reads "this step was supposed to cost X" every single turn.
+            est = s.get("est_sec")
+            actual = s.get("actual_sec")
+            if est or actual:
+                bits = []
+                if est:
+                    bits.append(f"估{_fmt_sec(est)}")
+                if actual is not None:
+                    bits.append(f"实{_fmt_sec(actual)}")
+                    if est:
+                        drift = actual - est
+                        bits.append(
+                            f"{'超出' if drift > 0 else '省'}{_fmt_sec(abs(drift))}"
+                        )
+                line += f"  ⏱ {' / '.join(bits)}"
             lines.append(line)
             
             # Show acceptance criteria
@@ -534,6 +871,9 @@ class TaskPlan:
 
     def _format_plan(self, plan: dict) -> str:
         lines = [f"Plan: {plan['title']} [{plan['status']}]"]
+        ledger = self._time_ledger_lines(plan)
+        if ledger:
+            lines.extend(ledger)
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
             lines.append("  当前问题模型 (thinking):")
@@ -542,6 +882,20 @@ class TaskPlan:
         for s in plan["steps"]:
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"  {s['id']}. [{icon}] {s['title']}"
+            est = s.get("est_sec")
+            actual = s.get("actual_sec")
+            if est or actual:
+                bits = []
+                if est:
+                    bits.append(f"估{_fmt_sec(est)}")
+                if actual is not None:
+                    bits.append(f"实{_fmt_sec(actual)}")
+                    if est:
+                        drift = actual - est
+                        bits.append(
+                            f"{'超出' if drift > 0 else '省'}{_fmt_sec(abs(drift))}"
+                        )
+                line += f"  ⏱ {' / '.join(bits)}"
             lines.append(line)
             
             # Show acceptance criteria

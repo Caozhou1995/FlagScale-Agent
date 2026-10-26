@@ -235,6 +235,33 @@ def _run_single_shot_append_nudge(query, worker=False, resume=False):
     return f"{query}\n\n{MULTI_AGENT_NUDGE_SUFFIX}"
 
 
+def _resolve_budget_sec_impl(config) -> float | None:
+    """Resolve the injected wall-clock budget in seconds, or None.
+
+    Module-level so every reader shares ONE definition — and so callers that
+    hold only a bare config (unit tests build a SimpleNamespace) can use it.
+    Reading it through an instance method tied `_task_budget_stats` to a helper
+    that the test double does not have, turning a shared definition into a
+    crash for every existing caller.
+
+    Config field wins over the env var that an external harness injects.
+    Returns None when nobody injected a wall (standalone/interactive) or when
+    the value is unparseable/non-positive — the caller must stay silent rather
+    than invent a deadline.
+    """
+    cfg_budget = getattr(config, "time_budget_sec", 0.0) or 0.0
+    if cfg_budget and cfg_budget > 0:
+        return float(cfg_budget)
+    raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "").strip()
+    if not raw:
+        return None
+    try:
+        budget = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return budget if budget > 0 else None
+
+
 class WorkerAgent:
     """Single agent class with composable Guard/Judge architecture.
 
@@ -321,6 +348,19 @@ class WorkerAgent:
 
         plan_dir = os.path.join(session_dir, "plans")
         self.task_plan = _task_plan or TaskPlan(plan_dir)
+        # Wire the SAME resolved wall the guards read into the plan's time
+        # ledger, so every plan_status/summary/prompt injection can show the
+        # agent its own estimated-vs-actual-vs-remaining account. Resolved via a
+        # turn-independent helper (NOT _task_budget_stats, which dereferences
+        # self._turn_start — defined further down __init__, so calling it here
+        # would raise and the ledger would silently stay empty).
+        try:
+            self.task_plan.set_budget_sec(self._resolve_budget_sec())
+        except Exception:
+            # A broken/absent budget source must NEVER take the agent down: the
+            # ledger degrades to "no budget", which is the safe direction (no
+            # fabricated deadline).
+            pass
 
         # Global, cross-session improvement-proposal registry. Lives outside the
         # per-session dir on purpose: an unreviewed proposal raised in one
@@ -740,6 +780,20 @@ class WorkerAgent:
             task_budget=self._task_budget_summary(),
         )
 
+    def _resolve_budget_sec(self) -> float | None:
+        """Resolve the injected wall-clock budget in seconds, or None.
+
+        Turn-INDEPENDENT on purpose: the plan's time ledger needs the budget at
+        construction time, before `_turn_start` exists, so this helper must not
+        touch any per-turn state. `_task_budget_stats` delegates here so both the
+        guards and the ledger read ONE definition and cannot drift apart.
+
+        Returns None when nobody injected a wall (standalone/interactive) or when
+        the value is unparseable/non-positive — in those cases the caller must
+        stay silent rather than invent a deadline.
+        """
+        return _resolve_budget_sec_impl(self.config)
+
     def _task_budget_stats(self) -> dict | None:
         """Resolve the per-turn wall-clock budget as structured numbers.
 
@@ -771,23 +825,8 @@ class WorkerAgent:
         # to the env var that an external harness injects. Either source carries
         # the same meaning: a per-turn wall-clock budget that drives time
         # warnings + wrap-up (it is NOT a hard kill on its own).
-        budget = None
-        cfg_budget = getattr(self.config, "time_budget_sec", 0.0) or 0.0
-        if cfg_budget and cfg_budget > 0:
-            budget = float(cfg_budget)
-        else:
-            raw = os.environ.get("FLAGSCALE_AGENT_TIME_BUDGET_SEC", "").strip()
-            if not raw:
-                # No external harness enforcing a wall -> no real deadline exists.
-                return None
-            try:
-                budget = float(raw)
-            except (TypeError, ValueError):
-                # Unparseable -> treat as no injected wall rather than fabricating
-                # the 24h default.
-                return None
-        if budget <= 0:
-            # Explicit 0 / negative disables budget reporting.
+        budget = _resolve_budget_sec_impl(self.config)
+        if budget is None:
             return None
         elapsed = max(0.0, time.time() - self._turn_start)
         remaining = budget - elapsed

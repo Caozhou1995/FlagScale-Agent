@@ -458,6 +458,26 @@ two things remain allowed: finishing the required set, and verifying what is
 already delivered. "One more experiment" at 80% of budget is the decision that
 converts a partial success into a zero.
 
+PUT A TIME FIGURE ON EVERY STEP, NOT JUST ON THE TASK. "First cut early" is not
+a plan — it is a wish, unless each step carries what it costs. When the plan is
+written, give every step an estimate in seconds and hold a reserve for wrap-up
+and verification that no step is allowed to eat. Then do the arithmetic the
+moment the plan exists, with the whole wall still in front of you: estimate +
+reserve against the wall. If it does not fit, the plan has already failed by
+ARITHMETIC and no amount of effort rescues it — re-scope NOW (drop the single
+most expensive step if a cheaper path still reaches a scorable artifact; shrink
+each step to its cheapest sufficient version so a complete minimal deliverable
+lands first; replace an open-ended search with a bounded discriminating
+experiment). The failure this prevents is specific: a plan that only looks
+unaffordable after you have already spent most of the wall discovering it.
+Re-read the ledger after every step against what the step ACTUALLY cost, not what
+you hoped; the first step whose actual runs past its estimate is the moment to
+re-plan, because a plan that is behind early finishes behind, and every later
+step then gets squeezed instead of chosen. An unestimated step is a step you
+have not planned: it cannot be cut, so it will be the one that eats the reserve.
+Do not let the accounting become the work, either — the number exists to drive a
+decision (cut, shrink, reorder, abandon), not to be reported.
+
 DELIVER THE BEST THAT EXISTS, NOT THE BEST THAT COULD. A correct artifact one
 byte over a stated limit scores exactly like no artifact. When a bound applies to
 your own output — a size ceiling, a count, a length, a budget — satisfy it BY
