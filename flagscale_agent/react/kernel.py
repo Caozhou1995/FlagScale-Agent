@@ -352,6 +352,118 @@ class AgentKernel:
                 # ── No tool calls → done ──
                 if not response.get("tool_calls"):
                     result.iterations = iteration + 1
+                    # ── Idle think-interval gate: cumulative time with no tool call ──
+                    # MUST live here, OUTSIDE the empty-output branch below.
+                    # Measured failure (2026-10-26, job 13-52-28, write-compressor):
+                    # one stream ran 218.4s emitting 30,284 output tokens WITH
+                    # visible text. Because the predicate used to sit inside
+                    # `if not assistant_text.strip():`, that response never
+                    # reached it — 24% of the 900s budget burned in a single
+                    # tool-less round-trip with the gate 100% inert
+                    # (grep 'idle|abort|capped' = 0).
+                    # Judges ACCUMULATED TIME, never token count: individual
+                    # streams stay under every length cap yet the sum with no
+                    # state produced is what kills the wall.
+                    # Never pre-empt an explicit stop signal: a response that
+                    # already ended with [TASK_COMPLETE] / [NEED_USER_INPUT] has
+                    # produced its decision, so the normal stop handling below
+                    # must win instead of spending the round on another nudge.
+                    _early_text = ""
+                    if isinstance(response.get("content"), str):
+                        _early_text = response["content"].strip()
+                    elif isinstance(response.get("content"), list):
+                        _early_text = "".join(
+                            b.get("text", "") for b in response["content"]
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ).strip()
+                    _early_stop = bool(
+                        _early_text
+                        and (
+                            trailing_sentinel(_early_text)
+                            in ("[TASK_COMPLETE]", "[NEED_USER_INPUT]")
+                            or has_override_completion(_early_text)
+                        )
+                    )
+                    _idle_secs = time.time() - (
+                        getattr(self, "_last_toolcall_ts", None)
+                        or getattr(self, "_turn_start_ts", time.time())
+                    )
+                    # Round-trip floor + shared-budget accounting.
+                    # Two wires the hoist dropped, both measured regressions:
+                    # (a) PERSIST the consecutive tool-free round-trip count —
+                    #     each think round is one loop iteration, so a
+                    #     non-persisted count never reaches IDLE_THINK_MIN_ROUNDS
+                    #     and the gate fires on round-trip #1 (floor lost).
+                    # (b) Charge the SHARED _cap_retries budget, never a private
+                    #     counter: the exhausted escape valve and every white-box
+                    #     test that pre-sets it key on _cap_retries, so a private
+                    #     counter makes exhaustion unreachable (measured: a
+                    #     pre-exhausted budget still never stopped the turn).
+                    # A round-trip that already carries an explicit stop signal
+                    # is NOT a think round: it produced a decision, so it must
+                    # neither advance the floor nor pay for a nudge the normal
+                    # stop handling below would pre-empt anyway.
+                    if not _early_stop:
+                        self._idle_think_rounds = (
+                            getattr(self, "_idle_think_rounds", 0) + 1
+                        )
+                    if (not _early_stop
+                            and self._idle_think_rounds
+                            >= self.IDLE_THINK_MIN_ROUNDS
+                            and _idle_secs >= self.IDLE_THINK_INTERVAL_SEC):
+                        _idle_retries = getattr(self, "_cap_retries", 0)
+                        if _idle_retries >= 50:
+                            self._cap_retries = 0
+                            result.stop_reason = "idle_interval_max_retries"
+                            break
+                        self._cap_retries = _idle_retries + 1
+                        # RE-ARM BOTH. The elapsed anchor is the last TOOL call
+                        # and the round floor counts consecutive tool-free
+                        # rounds, so without resetting them the predicate stays
+                        # true on every following round and the nudge repeats
+                        # every single round-trip — noise, not pacing. Resetting
+                        # makes the cadence "another full interval of silence
+                        # earns another nudge".
+                        self._last_toolcall_ts = time.time()
+                        self._idle_think_rounds = 0
+                        # BOUNDED recap, matching the cap path. Re-injecting the
+                        # full thinking_text re-feeds tens of thousands of tokens
+                        # of the very reasoning we are asking the model to stop,
+                        # which pushes it to CONTINUE thinking — a
+                        # self-defeating nudge (measured: write-compressor
+                        # accumulated 450s across 18 tool-less round-trips with
+                        # the full-text form).
+                        _idle_think = response.get("thinking") or ""
+                        _idle_tail = (_idle_think[-4000:]
+                                      if len(_idle_think) > 4000
+                                      else _idle_think)
+                        d.display.warn(
+                            f"Idle think-interval ({_idle_secs:.0f}s with no tool "
+                            f"call) — forcing convergence "
+                            f"(idle-retry {_idle_retries + 1})..."
+                        )
+                        d.history.append({
+                            "role": "user",
+                            "content": (
+                                "[system: Idle think-interval — "
+                                f"{_idle_secs:.0f}s of wall-clock has accumulated "
+                                "since your last tool call. Each response was "
+                                "individually legal; no length cap fired. The cost "
+                                "is CUMULATIVE TIME WITH NO STATE PRODUCED.\n"
+                                "STOP reasoning. Land the next concrete step NOW, "
+                                "in your very next output: call the ONE tool that "
+                                "converts your best current hypothesis into state "
+                                "(write_file / edit_file / shell), or output "
+                                "[NEED_USER_INPUT] with the specific question "
+                                "blocking you. An imperfect file that exists beats "
+                                "a perfect plan that never lands.\n"
+                                + (f"\n<previous_reasoning>\n{_idle_tail}\n"
+                                   "</previous_reasoning>"
+                                   if _idle_tail.strip() else "")
+                            ),
+                        })
+                        iteration += 1
+                        continue
                     # Check for explicit stop signals in assistant response
                     assistant_text = ""
                     if isinstance(response.get("content"), str):
@@ -396,20 +508,16 @@ class AgentKernel:
                         # intercept), so the pacing decision has to live here.
                         # Judge by time+round-trips since the last tool call, never
                         # by token count.
-                        _idle_now = time.time()
-                        _idle_since = getattr(self, "_last_toolcall_ts", None)
-                        if _idle_since is None:
-                            _idle_since = getattr(self, "_turn_start_ts", _idle_now)
-                        _idle_secs = _idle_now - _idle_since
-                        _idle_rounds = getattr(self, "_idle_think_rounds", 0) + 1
-                        # Persist immediately: the count must survive across
-                        # iterations of THIS turn's loop (each think round-trip
-                        # is one iteration), or it can never reach 3.
-                        self._idle_think_rounds = _idle_rounds
-                        was_idle_interval = bool(
-                            _idle_rounds >= self.IDLE_THINK_MIN_ROUNDS
-                            and _idle_secs >= self.IDLE_THINK_INTERVAL_SEC
-                        )
+                        # NOTE: the idle think-interval decision is made in the
+                        # tool-free block ABOVE, before this empty-output branch.
+                        # It lives there because a tool-less response WITH visible
+                        # text must also be judged (measured: 218.4s / 30,284
+                        # tokens in one such round-trip, gate 100% inert). The
+                        # counter (_idle_think_rounds), the re-arm
+                        # (_last_toolcall_ts) and the budget (_cap_retries) are
+                        # therefore owned exclusively by that block; duplicating
+                        # the increment here double-counts each round-trip and
+                        # trips the gate a round early.
                         # ── Output saturation with no visible text ──
                         # A reasoning model can burn the ENTIRE output budget on
                         # one monolithic thinking stream, then be cut off before
@@ -485,31 +593,6 @@ class AgentKernel:
                             # has to be driven by the cap count itself.
                             self._cap_text_streak = getattr(self, "_cap_text_streak", 0) + 1
                             d.display.warn(f"Thinking reached runtime cap (cap-retry {self._cap_retries}), forcing convergence...")
-                        elif was_idle_interval:
-                            # Cumulative think-interval: several individually
-                            # legal streams in a row with no tool call. Charge it
-                            # to the SAME generous cap budget (it is a pacing
-                            # event, not a failure) so a model that ignores the
-                            # nudge 50 times still terminates the turn.
-                            if cap_retries >= 50:
-                                self._cap_retries = 0
-                                result.stop_reason = "idle_interval_max_retries"
-                                break
-                            self._cap_retries = cap_retries + 1
-                            # RE-ARM THE CLOCK. The elapsed-time anchor is the
-                            # last TOOL call, so without this the predicate stays
-                            # true on every following round-trip and the nudge
-                            # repeats every single round -- noise, not pacing.
-                            # Resetting makes the cadence "another full interval
-                            # of silence earns another nudge".
-                            self._last_toolcall_ts = _idle_now
-                            self._idle_think_rounds = 0
-                            d.display.warn(
-                                "Idle think-interval "
-                                f"({_idle_secs:.0f}s across {_idle_rounds} round-trips "
-                                f"with no tool call) — forcing convergence "
-                                f"(cap-retry {self._cap_retries})..."
-                            )
                         elif empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
                             if was_reasoning_only:
@@ -668,42 +751,6 @@ class AgentKernel:
                                         f"{_cap_tail}\n"
                                         "</previous_reasoning>"
                                     )
-                        elif was_idle_interval:
-                            # Cumulative idle think-interval: several streams
-                            # each under the token cap, but TIME is draining
-                            # with no state produced. (A saturated stream never
-                            # reaches this branch: was_saturated sets
-                            # was_thinking_capped above, and that branch
-                            # preempts.) Own directive: it names the measured
-                            # cause (cumulative time, not tokens) so the model
-                            # does not mistake this for a length error.
-                            #
-                            # BOUNDED RECAP, same as the cap path: injecting the
-                            # FULL thinking_text here re-feeds tens of thousands
-                            # of tokens of the very reasoning we are asking the
-                            # model to stop, which pushes it to CONTINUE thinking
-                            # instead of converging -- a self-defeating nudge.
-                            # Measured: write-compressor accumulated 450s across
-                            # 18 tool-less round-trips with the full-text form.
-                            _idle_tail = (thinking_text[-4000:]
-                                          if len(thinking_text) > 4000
-                                          else thinking_text)
-                            nudge = (
-                                "[system: Idle think-interval — "
-                                f"{_idle_secs:.0f}s of wall-clock accumulated across "
-                                f"{_idle_rounds} reasoning round-trips with no tool call "
-                                "between them. Each stream was individually legal, so no "
-                                "length cap fired; the cost is CUMULATIVE TIME, not tokens.\n"
-                                "STOP reasoning. Land the next concrete step NOW, in your "
-                                "very next output: call the ONE tool that converts your best "
-                                "current hypothesis into state (write_file / edit_file / "
-                                "shell), or output [NEED_USER_INPUT] with the specific "
-                                "question blocking you. An imperfect file that exists beats "
-                                "a perfect plan that never lands.\n\n"
-                                "<previous_reasoning>\n"
-                                f"{_idle_tail}\n"
-                                "</previous_reasoning>"
-                            )
                         elif was_reasoning_only:
                             # Many providers (e.g. GLM Anthropic-compat endpoint)
                             # DROP assistant thinking blocks from the input, so
