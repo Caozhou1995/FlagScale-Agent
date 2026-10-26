@@ -67,6 +67,166 @@ def _coerce_sec(value) -> Optional[float]:
     return sec
 
 
+def _coerce_deps(value, default):
+    """Coerce a caller-supplied dependency list, falling back to `default`.
+
+    `depends_on` decides whether the time ledger sums steps end to end or runs
+    them concurrently, so a malformed value must not silently become a serial
+    chain OR a bogus graph. Accepts a list of 1-based ints (numeric strings
+    tolerated, duplicates dropped, order kept). An EMPTY list is a real answer
+    ("this step can start immediately") and is preserved. Anything that is not a
+    list, or that yields no usable ids at all while being non-empty, falls back
+    to `default` — the previous-step chain — so old callers and junk input both
+    keep the historical serial semantics.
+    """
+    if not isinstance(value, (list, tuple)):
+        return list(default)
+    out = []
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            dep = int(item)
+        except (TypeError, ValueError):
+            continue
+        if dep >= 1 and dep not in out:
+            out.append(dep)
+    if value and not out:
+        # Non-empty but nothing usable: treat as "caller said something we
+        # cannot honour" and keep the safe serial default.
+        return list(default)
+    return out
+
+
+def _id_list(ids) -> str:
+    """Render step ids as `第2、3步` for the ledger.
+
+    An empty set renders as the empty string, not `第步`: callers that report a
+    saving for "no parallel steps" would otherwise print garbage (latent today,
+    one code path away from live).
+    """
+    if not ids:
+        return ""
+    return "第" + "、".join(str(i) for i in ids) + "步"
+
+
+def _critical_path_secs(steps: List[dict]) -> dict:
+    """Serial sum vs critical path (longest dependency chain) over `depends_on`.
+
+    The ledger used to add every estimate end to end, which is only correct for
+    a pure chain. When two steps are independent they can run at the same time,
+    so what actually bounds the clock is the LONGEST chain, not the sum. This
+    computes both so the ledger can tell the two cases apart instead of calling
+    every plan over budget.
+
+    Returns a dict with:
+      serial     -- sum of every step's estimate (the old behaviour)
+      critical   -- longest path length through the dependency DAG
+      gain       -- serial - critical (how much time running branches in
+                    parallel would actually save; ~0 means a real chain)
+      constraint -- id of the step that finishes last (the one to shrink)
+      free       -- ids of steps with no unmet prerequisite (startable now,
+                    i.e. the roots a fan-out would launch)
+      parallel   -- ids of steps that can run concurrently with another step
+    """
+    ids: List[int] = []
+    seen_ids: set = set()
+    for idx, s in enumerate(steps, 1):
+        if not isinstance(s, dict):
+            # F8: tolerate junk entries instead of raising AttributeError from a
+            # module-level helper (callers already filter, but a latent crash in
+            # a render path takes down the whole ledger).
+            steps = [x for x in steps if isinstance(x, dict)]
+            return _critical_path_secs(steps)
+        sid = s.get("id")
+        sid = sid if isinstance(sid, int) else idx
+        # F5: duplicate ids collapsed the estimate map, silently DROPPING work
+        # (two steps with id=1 priced 10s and 500s reported serial=500). Key by
+        # a unique id instead: keep the caller's number for display when it is
+        # unused, otherwise allocate the next free integer.
+        if sid in seen_ids:
+            nxt = max(list(seen_ids) + [idx]) + 1
+            while nxt in seen_ids:
+                nxt += 1
+            sid = nxt
+        seen_ids.add(sid)
+        ids.append(sid)
+
+    est: dict = {}
+    for sid, s in zip(ids, steps):
+        raw = s.get("est_sec")
+        try:
+            val = float(raw) if raw is not None else 0.0
+        except (TypeError, ValueError):
+            val = 0.0
+        if not math.isfinite(val) or val < 0:
+            val = 0.0
+        est[sid] = val
+
+    dep: dict = {}
+    for sid, s in zip(ids, steps):
+        raw = s.get("depends_on") or []
+        if not isinstance(raw, (list, tuple)):
+            raw = []
+        dep[sid] = [d for d in raw if d in est and d != sid]
+
+    # Longest path by relaxation. Bounded iterations so a malformed (cyclic)
+    # graph cannot hang the render — it degrades to a finite overestimate.
+    fin = dict(est)
+    for _ in range(len(ids) + 1):
+        changed = False
+        for sid in ids:
+            if dep[sid]:
+                cand = est[sid] + max(fin[d] for d in dep[sid])
+                if cand > fin[sid] + 1e-9:
+                    fin[sid] = cand
+                    changed = True
+        if not changed:
+            break
+
+    serial = round(sum(est.values()), 1)
+    critical = round(max(fin.values()), 1) if fin else 0.0
+    last = max(fin.items(), key=lambda kv: kv[1])[0] if fin else None
+    free = [sid for sid in ids if not dep[sid]]
+    # `constraint` must be the step to SHRINK, not merely the one that finishes
+    # last: a 2-minute step at the tail of a chain is the last to complete but
+    # cutting it saves 2 minutes. Walk the longest path back from `last` and
+    # keep the step carrying the most of its own estimate — that is the one
+    # whose scope actually bounds the clock.
+    path_ids: List = []
+    cursor = last
+    seen = set()
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        path_ids.append(cursor)
+        if not dep[cursor]:
+            break
+        cursor = max(dep[cursor], key=lambda d: fin[d])
+    constraint = (
+        max(path_ids, key=lambda sid: est[sid]) if path_ids else last
+    )
+    # A step is parallelizable when some OTHER step could run at the same time
+    # as it: same "level" (equal longest-path start offset) and neither depends
+    # on the other. Compute start offsets = finish - own estimate.
+    start = {sid: round(fin[sid] - est[sid], 1) for sid in ids}
+    parallel = []
+    for sid in ids:
+        for other in ids:
+            if other == sid:
+                continue
+            if start[sid] == start[other] and other not in dep[sid] and sid not in dep[other]:
+                parallel.append(sid)
+                break
+    return {
+        "serial": serial,
+        "critical": critical,
+        "gain": round(serial - critical, 1),
+        "constraint": constraint,
+        "free": free,
+        "parallel": parallel,
+    }
+
+
 def _fmt_sec(sec: Optional[float]) -> str:
     """Compact human duration for the ledger ('45s', '3m20s', '1h05m')."""
     if sec is None:
@@ -251,7 +411,10 @@ class TaskPlan:
                         "title": step_input.get("title", f"Step {i}"),
                         "status": "pending",
                         "notes": "",
-                        "depends_on": [i - 1] if i > 1 else [],
+                        "depends_on": _coerce_deps(
+                            step_input.get("depends_on"),
+                            [i - 1] if i > 1 else [],
+                        ),
                         "acceptance": step_input.get("acceptance", []),
                         "verification": [],
                     }
@@ -503,12 +666,23 @@ class TaskPlan:
                         "actual_sec": None,
                     })
                 elif isinstance(step_input, dict):
+                    # F4: this branch used to hard-code `depends_on: []` and then
+                    # overwrite it with the serial chain below, so a caller that
+                    # declared parallelism on a LATER-added step (including the
+                    # documented `[]` = start immediately) lost it, and the ledger
+                    # then reported a real chain and prescribed a scope cut.
+                    # Honour the caller exactly as `create` does; only fall back
+                    # to the chain when nothing was given.
                     new_steps.append({
                         "id": sid,
                         "title": step_input.get("title", f"Step {sid}"),
                         "status": "pending",
                         "notes": "",
-                        "depends_on": [],
+                        "depends_on": _coerce_deps(
+                            step_input.get("depends_on"),
+                            [sid - 1] if sid > 1 else [],
+                        ),
+                        "depends_on_given": "depends_on" in step_input,
                         "acceptance": step_input.get("acceptance", []),
                         "verification": [],
                         "est_sec": _coerce_sec(step_input.get("est_sec")),
@@ -527,15 +701,24 @@ class TaskPlan:
                 if idx is None:
                     raise ValueError(f"Step {after_step_id} not found")
                 for ns in new_steps:
-                    ns["depends_on"] = [after_step_id]
+                    if not ns.pop("depends_on_given", False):
+                        ns["depends_on"] = [after_step_id]
+                    else:
+                        ns.pop("depends_on_given", None)
                 insert_pos = idx + 1
                 plan["steps"] = plan["steps"][:insert_pos] + new_steps + plan["steps"][insert_pos:]
             else:
                 if plan["steps"]:
                     last_id = plan["steps"][-1]["id"]
                     for ns in new_steps:
-                        ns["depends_on"] = [last_id]
-                        last_id = ns["id"]
+                        if not ns.pop("depends_on_given", False):
+                            ns["depends_on"] = [last_id]
+                            last_id = ns["id"]
+                        else:
+                            ns.pop("depends_on_given", None)
+                            last_id = ns["id"]
+                for ns in new_steps:
+                    ns.pop("depends_on_given", None)
                 plan["steps"].extend(new_steps)
 
             self._save(plan)
@@ -747,21 +930,88 @@ class TaskPlan:
         lines.append(f"   预留 wrap-up {_fmt_sec(reserve)}（不含在任何步骤估时内）")
 
         if estimated_total is not None:
+            # F3: judge the plan against what is STILL ON THE CLOCK. Computing
+            # the plan-level chain over every step (including done/skipped) makes
+            # `constraint` name finished work and prescribes cutting a step that
+            # was already paid for — while the drift block below filters
+            # correctly, so the same render contradicted itself.
+            live_steps = [
+                s for s in steps if s.get("status") not in ("done", "skipped")
+            ] or steps
+            cp = _critical_path_secs(live_steps)
+            live_est = round(
+                sum(s.get("est_sec") or 0.0 for s in live_steps), 1
+            )
+            # F2: an unestimated step was coerced to 0.0, so a plan with an
+            # unestimated prefix was told it FITS on the strength of the work it
+            # had not yet priced. Any unestimated non-terminal step makes the
+            # verdict unknown — say so instead of certifying a number.
+            verdict_known = unestimated == 0
             lines.append(
                 f"   计划估时合计 {_fmt_sec(estimated_total)}"
                 + (f" + 预留 {_fmt_sec(reserve)}" if reserve else "")
             )
-            planned_with_reserve = estimated_total + reserve
-            if planned_with_reserve > budget:
+            # Serial sum is only the answer for a pure chain. Report the
+            # critical path whenever it differs, so a plan is not called over
+            # budget when independent branches could run at the same time.
+            if cp["gain"] > 0.5:
                 lines.append(
-                    f"   ⚠ 计划已超预算 {_fmt_sec(planned_with_reserve - budget)}"
-                    f"（估时+预留 {_fmt_sec(planned_with_reserve)} > 预算 {_fmt_sec(budget)}）"
-                    " — 必须砍范围或放弃最贵的一步，而不是压缩后续每一步"
+                    f"   关键路径 {_fmt_sec(cp['critical'])}（串行相加 {_fmt_sec(cp['serial'])}）"
+                    f" — 并行可省 {_fmt_sec(cp['gain'])}："
+                    + _id_list(cp["parallel"])
+                    + " 互不依赖，可同时推进（把其中一条分支交给 worker，"
+                    "主线程走最长链）"
                 )
+                bounded = cp["critical"]
+            else:
+                bounded = live_est
+                if len(live_steps) > 2:
+                    lines.append(
+                        f"   关键路径 = 串行相加 = {_fmt_sec(cp['serial'])}"
+                        f"（依赖链是真的，没有可并行的支线；瓶颈在第 "
+                        f"{cp['constraint']} 步）"
+                    )
+            # Judge the LIVE remainder against the REMAINING wall — not the
+            # absolute total against the original budget. Mixed units made one
+            # render report "over budget by 5m35s" while the drift block below
+            # reported "9m25s to spare" for the same plan: finished steps were
+            # being charged to a clock that no longer had to pay for them.
+            usable_now = remaining - reserve
+            # Label follows the clock being judged: with nothing closed yet the
+            # remaining wall IS the original budget, so say "over budget";
+            # once steps are closed the honest word is "over the remaining
+            # allowance" (charging finished steps to a clock that no longer
+            # pays for them is the mixed-unit bug).
+            nothing_closed = actual_total <= 0
+            over_label = (
+                f"⚠ 计划已超预算 {_fmt_sec(bounded - usable_now)}"
+                if nothing_closed
+                else f"⚠ 计划已超剩余可用 {_fmt_sec(bounded - usable_now)}"
+            )
+            if bounded > usable_now:
+                lines.append(
+                    over_label
+                    + f"（{'关键路径' if cp['gain'] > 0.5 else '剩余估时'} {_fmt_sec(bounded)}"
+                    f" > {'预算-预留' if nothing_closed else '剩余-预留'} {_fmt_sec(usable_now)}）"
+                )
+                if cp["gain"] > 0.5:
+                    lines.append(
+                        "   → 先扇出：把互不依赖的支线并行做掉再判断。"
+                        "只有并行后仍然超，才动范围"
+                    )
+                else:
+                    lines.append(
+                        f"   → 并行救不了（依赖链是真的）：砍第 {cp['constraint']} 步的范围，"
+                        "或换更便宜的方法，而不是压缩后续每一步"
+                    )
             else:
                 lines.append(
-                    f"   计划余量 {_fmt_sec(budget - planned_with_reserve)}"
-                    " （按计划走可完成）"
+                    f"   计划余量 {_fmt_sec(usable_now - bounded)}"
+                    + (
+                        " （按已知估时可完成；未估时的步骤未计入，补上再判断）"
+                        if not verdict_known
+                        else " （按计划走可完成）"
+                    )
                 )
         if unestimated:
             lines.append(
@@ -787,15 +1037,44 @@ class TaskPlan:
             if s.get("status") not in ("done", "skipped") and s.get("est_sec")
         ]
         if pending_est:
+            # The same trap as the plan-level total: summing the REMAINING
+            # steps end to end overstates what is needed when independent
+            # branches can run together. Measure what is actually still on the
+            # clock, and separate "needs more time" from "needs a fan-out".
+            pending_steps = [
+                s for s in steps
+                if s.get("status") not in ("done", "skipped")
+            ]
+            cp_pending = _critical_path_secs(pending_steps)
             need = round(sum(pending_est), 1)
+            need_critical = cp_pending["critical"]
             usable = remaining - reserve
-            if need > usable:
+            if cp_pending["gain"] > 0.5 and need_critical <= usable < need:
                 lines.append(
-                    f"   ⚠ 漂移: 剩余步骤还需 {_fmt_sec(need)}，可用只有 "
-                    f"{_fmt_sec(usable)}（=剩余-预留）→ 差 {_fmt_sec(need - usable)}。"
-                    " 现在就重排：砍范围/换更便宜的方法/放弃最贵的一步，"
-                    "不要等余量耗尽"
+                    f"   剩余步骤串行需 {_fmt_sec(need)} > 可用 {_fmt_sec(usable)}，"
+                    f"但关键路径只要 {_fmt_sec(need_critical)} → 可完成。"
+                    " 并行做掉"
+                    + _id_list(cp_pending["parallel"])
+                    + "：把一条支线交给 worker，主线程走最长链"
                 )
+            elif need_critical > usable:
+                lines.append(
+                    f"   ⚠ 漂移: 剩余步骤关键路径还需 {_fmt_sec(need_critical)}"
+                    + (f"（串行 {_fmt_sec(need)}）" if need != need_critical else "")
+                    + f"，可用只有 {_fmt_sec(usable)}（=剩余-预留）"
+                    f" → 差 {_fmt_sec(need_critical - usable)}。"
+                )
+                if cp_pending["gain"] > 0.5:
+                    lines.append(
+                        "   先扇出并行支线"
+                        + _id_list(cp_pending["parallel"])
+                        + "；仍不够再砍范围"
+                    )
+                else:
+                    lines.append(
+                        "   依赖链是真的，并行救不了：现在砍范围/换更便宜的方法/"
+                        "放弃最贵的一步，不要等余量耗尽"
+                    )
             else:
                 lines.append(
                     f"   剩余步骤估时需要 {_fmt_sec(need)}，可用 {_fmt_sec(usable)}"

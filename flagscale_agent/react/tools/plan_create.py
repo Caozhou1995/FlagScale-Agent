@@ -290,6 +290,26 @@ class PlanCreateTool(Tool):
                                         "from what you hope it takes."
                                     ),
                                 },
+                                "depends_on": {
+                                    "type": "array",
+                                    "items": {"type": "integer"},
+                                    "description": (
+                                        "1-based step ids this step must wait "
+                                        "for. DEFAULT: the previous step, i.e. a "
+                                        "single serial chain. Override it when "
+                                        "work is genuinely parallel: give two "
+                                        "steps that do not consume each other's "
+                                        "output the SAME preceding dependency, "
+                                        "and the ledger will stop adding them "
+                                        "end to end and report the real critical "
+                                        "path instead. Expressing parallelism "
+                                        "here is what lets the ledger (and you) "
+                                        "see that a plan that looks over budget "
+                                        "serially may fit once independent "
+                                        "branches run at the same time. Use [] "
+                                        "for a step that can start immediately."
+                                    ),
+                                },
                             },
                             "required": ["title"],
                         },
@@ -530,30 +550,66 @@ class PlanCreateTool(Tool):
             )
             return "\n".join(lines) + "\n\n"
         total = round(sum(estimates), 1)
+        # Same trap as the ledger: summing estimates end to end is only the
+        # answer for a pure chain. Two independent steps can run at the same
+        # time, so the wall is bounded by the LONGEST chain. Measuring both
+        # stops this message from prescribing a scope cut for a plan that only
+        # needs a fan-out.
+        from flagscale_agent.react.plan import _critical_path_secs, _id_list
+        cp = _critical_path_secs([s for s in steps if isinstance(s, dict)])
+        path = cp["critical"] if cp["gain"] > 0.5 else total
         lines.append(
-            f"your steps estimate to {_fmt_sec(total)} "
+            f"your steps estimate to {_fmt_sec(total)} serially "
             f"({len(estimates)} estimated, {missing} unestimated)"
             + (f" + reserve {_fmt_sec(reserve)}" if reserve else "")
         )
-        planned = total + reserve
+        if cp["gain"] > 0.5:
+            lines.append(
+                f"critical path {_fmt_sec(cp['critical'])} — running "
+                f"{_id_list(cp['parallel'])} concurrently saves {_fmt_sec(cp['gain'])}"
+            )
+        planned = path + reserve
         if planned > budget:
             over = round(planned - budget, 1)
             lines.append(
-                f"⚠ THIS PLAN DOES NOT FIT: estimate+reserve {_fmt_sec(planned)} "
-                f"exceeds the wall {_fmt_sec(budget)} by {_fmt_sec(over)}."
+                f"⚠ THIS PLAN DOES NOT FIT: "
+                f"{'critical path' if cp['gain'] > 0.5 else 'estimate'}"
+                f"+reserve {_fmt_sec(planned)} exceeds the wall "
+                f"{_fmt_sec(budget)} by {_fmt_sec(over)}."
             )
-            lines.append(
-                "DECIDE NOW, not at the deadline — you still have the whole wall "
-                "in front of you. Re-scope in this order: (1) drop or defer the "
-                "single most expensive step if a cheaper path reaches a SCORABLE "
-                "artifact; (2) shrink the cheapest-sufficient version of each step "
-                "so a complete minimal deliverable lands first and is refined in "
-                "place; (3) replace an open-ended search with a bounded "
-                "discriminating experiment whose outcomes eliminate candidates. "
-                "What you must NOT do is keep the plan and hope: a plan whose "
-                "estimate already exceeds the wall fails by arithmetic, and every "
-                "step you start on it spends budget that a fitting plan needed."
-            )
+            if cp["gain"] > 0.5:
+                lines.append(
+                    "DECIDE NOW, not at the deadline. (1) FAN OUT FIRST: the "
+                    f"steps {_id_list(cp['parallel'])} do not depend on each "
+                    "other — give one branch to a worker (spawn_worker / "
+                    "dispatch_many) while you take the longest chain. Fan-out is "
+                    "not an optimization here, it is the only way the required "
+                    "set fits. (2) Only if the plan STILL does not fit after "
+                    "counting the parallel saving, shrink scope: keep the step "
+                    f"that bounds the clock (step {cp['constraint']}) at its "
+                    "cheapest sufficient version, and drop or defer the single "
+                    "most expensive step only if a cheaper path still reaches a "
+                    "SCORABLE artifact. Never delete the step that VERIFIES the "
+                    "deliverable — an unverified artifact scores zero, so the "
+                    "checking step is the last thing to cut, not the first."
+                )
+            else:
+                lines.append(
+                    "DECIDE NOW, not at the deadline — you still have the whole "
+                    "wall in front of you. The dependency chain is real (no "
+                    "independent branches to run concurrently), so parallelism "
+                    "cannot rescue it; the fix is scope. Re-scope in this order: "
+                    f"(1) the clock is bounded by step {cp['constraint']} — take "
+                    "its cheapest sufficient version first; (2) drop or defer the "
+                    "single most expensive step only if a cheaper path still "
+                    "reaches a SCORABLE artifact; (3) replace an open-ended "
+                    "search with a bounded discriminating experiment whose "
+                    "outcomes eliminate candidates. Never delete the step that "
+                    "VERIFIES the deliverable — an unverified artifact scores "
+                    "zero, so the checking step is the last thing to cut. What "
+                    "you must NOT do is keep the plan and hope: a plan whose "
+                    "estimate already exceeds the wall fails by arithmetic."
+                )
         else:
             lines.append(
                 f"fits with {_fmt_sec(round(budget - planned, 1))} slack "
