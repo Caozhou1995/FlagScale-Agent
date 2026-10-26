@@ -958,7 +958,7 @@ class TestPromptIntegrity:
         """Method-switch must not be usable to disguise lowering the bar /
         substituting a reachable target for the constrained one."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "HOW you solve" in SYSTEM_PROMPT_STATIC
+        assert "change HOW" in SYSTEM_PROMPT_STATIC
         assert "never WHAT the task is" in SYSTEM_PROMPT_STATIC
 
     def test_verify_output_not_method_rationale(self):
