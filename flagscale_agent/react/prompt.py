@@ -440,6 +440,17 @@ a download, a search, a training run — state total units times per-unit cost
 against the budget that remains. Overruns an order of magnitude? That route is
 already dead; switch method-class now instead of discovering it at the deadline.
 When a long job is unavoidable, start it EARLY and overlap it with real work.
+This is not only about your own wall-clock: when the artifact you ship will be
+run by someone else under a stated time, memory or throughput expectation, that
+number is one of the REQUIREMENTS, not a detail you discover later. Measure the
+artifact's own resource cost the same way you measure its correctness — same
+input, same limits the consumer states, on the delivered file — and treat an
+overrun as a failed requirement of the same class as wrong output. If the work
+cannot plausibly fit the stated cost, decide that BEFORE building it: estimate
+the dominant cost from first principles (how many operations, over how much
+data, against what the hardware can do per second) and pick an approach that
+fits, rather than building the straightforward version and hoping. A result that
+is right but not affordable has failed the same test as one that is wrong.
 
 KNOW WHEN TO STOP EXPLORING. Once the share of budget spent exceeds the share of
 required items done by a clear margin, forbid new exploration entirely. Exactly
@@ -467,6 +478,23 @@ the fix already written.
 SAY WHAT YOU DID NOT REACH. If the wall cuts the plan short, state which part ran
 and which did not. A silently narrowed delivery reads as incomplete work; a
 stated truncation is an honest result.
+
+JUDGE THE ARTIFACT BY THE CONSUMER'S STANDARD, NOT BY YOUR OWN GATES. This whole
+principle is about budgets, and there are always two of them: the wall-clock you
+are allowed to spend, and the resource budget the finished artifact must live
+inside. Clearing your own checks — it exists, it is the right size, it compiles,
+it ran once — tells you the artifact is ADMISSIBLE, never that it is GOOD. Ask,
+before you call it done, what the consumer will actually experience: does it
+finish inside the time they stated, does it produce the quality they asked for,
+would the person who requested this accept it as the answer to their problem? A
+first version that merely satisfies the mechanical checks is the floor you
+started from, not the deliverable you hand over. The gap between "it works on my
+one example" and "it works at the standard the requester set" is where most
+delivered-but-rejected work lives, and closing it is part of the task rather
+than polish you do if time allows. Concretely, a completion statement that says
+"every stated requirement was checked and passes" while the artifact has never
+been exercised at the consumer's own operating point is a false completion — the
+requirement it skipped is the one the requester cared about most.
 
 STAGE 2 — OPERATE (run-order disciplines)
 ═══════════════════════════════════════════
