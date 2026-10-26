@@ -31,10 +31,12 @@ Key design decisions:
     injected (standalone / interactive runs). In that case this guard stays
     completely silent — it never invents a deadline, and never nags a session
     that has no real time pressure.
-  • Percentage thresholds, not absolute seconds. The same 25/50/75/80/90/100% ladder
+  • Percentage thresholds, not absolute seconds. The same 25/50/65/75/80/90/100% ladder
     works for a 20-minute wall and a 1-hour wall without any per-task tuning.
   • Two modes on the ladder:
       - 25/50/75%   → check_post inject (pacing / health-check advisories).
+      - 65%         → check_post inject (pre-completion falsification: prove
+                      you are DONE before declaring it; see first_e2e_run.py).
       - 80%         → check_post inject (early WRAP-UP WINDOW — protective actions only).
       - 90%         → check_pre BLOCK (overridable) — forces the agent to SHOW
                       (evidence, not claim) that a deliverable exists, that

@@ -6,9 +6,9 @@ that 72.7% of ALL losses are "artifact exists, runs, produces WRONG CONTENT"
 while "never delivered" is only ~30%. The prior mechanism message asked the
 agent to "RUN it and READ the result" — a check that CANNOT fail: an artifact
 re-reading its own output agrees with itself wherever the shared idea is wrong.
-The clearest measured instance (gpt2-codegolf): the winning trial built an
-independent reference and diffed token-by-token; the losing trials ran their own
-artifact, saw plausible output, and shipped.
+Measured instance: the winning trial built an independent reference and diffed
+output element-by-element; the losing trials ran their own artifact, saw
+plausible output, and shipped.
 
 So the message must name the discriminating question, and must accept an honest
 confession of a self-only anchor instead of forcing the agent to phrase a

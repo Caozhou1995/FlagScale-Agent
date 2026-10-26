@@ -41,7 +41,7 @@ def test_older_rungs_unchanged_by_65():
     assert "PROVE it" not in _msg(50, 50)
 
 
-def test_65_fires_between_50_and_75(monkeypatch):
+def test_65_fires_between_50_and_75():
     g = TimeBudgetGuard(lambda: None)
     ctx = GuardContext()
     ctx.tool_name = "read_file"

@@ -441,16 +441,28 @@ class FirstE2eRunGuard(Guard):
             body = _MSG_25
         return body + " " + head
 
-    def _verdict_for(self, stats: dict) -> GuardVerdict | None:
+    def _verdict_for(self, stats: dict, ctx: GuardContext | None = None) -> GuardVerdict | None:
         """Shared crossing logic for check_pre and check_post.
 
         Returns the block for the most severe crossed-but-unfired threshold,
         marking every crossed threshold as spent (a jump straight past both
         fires only the later checkpoint — the earlier question is subsumed).
+
+        A rung whose OWN question the execution ledger already answers is
+        released rather than asked. The 25%/50% rungs ask "has a write already
+        landed this turn?"; when the ledger says yes (or this very call IS that
+        write) blocking would demand the answer and refuse it in the same
+        breath — a closed loop. Measured recurrence (2026-10-27, two
+        independent episodes incl. a review worker writing its own deliverable):
+        write_file blocked by the 25% rung, released only by pasting a prose
+        reason, one wasted round-trip each time.
         """
         pct = stats.get("pct", 0.0)
         for thr in self._THRESHOLDS:  # (75, 50, 25): high→low
             if pct >= thr and thr not in self._released:
+                if thr <= 50 and ctx is not None and self._has_write_evidence(ctx):
+                    self._release(thr)
+                    continue
                 # Mark ONLY this rung as surfaced; the higher rungs stay
                 # pending until they are themselves crossed AND released, so a
                 # jump straight past several thresholds asks the most severe
@@ -496,7 +508,7 @@ class FirstE2eRunGuard(Guard):
         stats = self._stats()
         if not stats:
             return None
-        return self._verdict_for(stats)
+        return self._verdict_for(stats, ctx)
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
         """75% (cold-consumer) releases are EVIDENCE-bound; 25%/50% are
