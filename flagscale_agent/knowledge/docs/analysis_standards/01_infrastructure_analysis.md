@@ -202,7 +202,7 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 
 ## 六、示例产出指标
 
-基于知识库已有的 **89 篇文档**实践数据（覆盖 19 个知识组，总计 ~34,387 行）：
+基于知识库已有的 **97 篇文档**实践数据（覆盖 20 个知识组，总计 ~37,481 行）：
 
 ### know-megatron-model（7章，平均 ~561 行）
 
@@ -226,6 +226,19 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 | 04_context_parallel_sequence_parallel | 04 - Context Parallelism (CP) & Sequence Parallelism (SP) 源码深度分析 | 710 |
 | 05_expert_parallelism | 05 - Expert Parallelism (EP) & Mixture-of-Experts 源码深度分析 | 604 |
 | 15_parallel_state | parallel_state 进程组管理 深度源码分析 | 461 |
+
+### know-flaggems（8章，平均 ~385 行）
+
+| 章节 | 主题 | 行数 |
+|------|------|------|
+| 01_flaggems_source_analysis | FlagGems 源码分析：FlagOS 生态的 Triton 通用算子库与四组件集成 | 455 |
+| 02_registration_dispatch | FlagGems 第2章：注册与调度机制深度源码分析 | 563 |
+| 03_operator_codegen | FlagGems 深度源码分析 · 第三章：算子实现与自动 Codegen | 367 |
+| 04_multi_backend_vendor | FlagGems 第四章：多后端厂商适配系统（runtime/backend）深度源码分析 | 576 |
+| 05_fused_ops_fla | FlagGems 深度源码分析 · 第05章：fused/ 推理融合算子与 FLA 训练 kernel | 394 |
+| 06_inference_integration | 06 推理集成：vLLM 补丁层、modules 封装与 torch.compile（pt2） | 255 |
+| 07_component_integration | 第七章：FlagGems 与 FlagScale 四组件集成关系 深度源码分析 | 395 |
+| 08_index_and_usage | 第 8 章：know-flaggems 知识组索引与深度使用指南 | 75 |
 
 ### know-te-comm（5章，平均 ~562 行）
 
@@ -336,11 +349,11 @@ Delayed Scaling 用前 N 步的 amax 历史推导 scale factor：
 | NCCL运行时 | 4 | ~452 | 430-477 |
 | TransformerEngine FP8量化 | 3 | ~441 | 316-514 |
 | MoE预训练性能优化 | 3 | ~277 | 86-532 |
-| 分析标准方法论 | 4 | ~229 | 132-345 |
+| 分析标准方法论 | 4 | ~232 | 132-359 |
 
 ### 总结
 
-- 全库 89 篇文档，总计 **~34,387 行**
+- 全库 97 篇文档，总计 **~37,481 行**
 - 核心深度分析章节：平均 **511 行**
-- 专题分析：平均 **298 行**
+- 专题分析：平均 **306 行**
 - 推荐标准：核心模块 ≥ 450 行，专题/工具类 ≥ 250 行

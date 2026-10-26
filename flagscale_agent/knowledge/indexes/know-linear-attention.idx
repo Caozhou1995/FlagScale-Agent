@@ -1,6 +1,6 @@
 # know-linear-attention
 # 线性注意力FLA：GDN/GLA layer集成、chunk分块与WY三角解、递推状态kernel(chunk_delta_h)、门控cumsum、autograd管线、CP状态接力、dispatch/autotune缓存、平台坑表与调优
-# Source: flash-linear-attention @ main-2026-09
+# Source: flash-linear-attention @ f470469e
 
 # To read a section: load_knowledge(name='know-linear-attention', doc='<path below>', start_line=<L>, end_line=<L>)
 # Do NOT pass these doc paths to read_file — they are knowledge-internal.

@@ -198,3 +198,15 @@ know-linear-attention:
   description: "线性注意力FLA：GDN/GLA layer集成、chunk分块与WY三角解、递推状态kernel(chunk_delta_h)、门控cumsum、autograd管线、CP状态接力、dispatch/autotune缓存、平台坑表与调优"
   docs:
     - linear_attention/01_fla_source_analysis.md
+
+know-flaggems:
+  description: "FlagGems：FlagOS生态Triton通用算子库——ATen IMPL注册与调度(enable/_FULL_CONFIG/Register/LibEntry)、pointwise codegen、多vendor后端、训练/推理集成链(FlagScale --enable-flag-gems、vLLM patch与空vLLM注入、USE_FLAGGEMS语义)、与Megatron-LM-FL(零直接接触)和TransformerEngine-FL(flagos backend直接消费FlagGems API)的分层关系"
+  docs:
+    - flaggems/01_flaggems_source_analysis.md
+    - flaggems/02_registration_dispatch.md
+    - flaggems/03_operator_codegen.md
+    - flaggems/04_multi_backend_vendor.md
+    - flaggems/05_fused_ops_fla.md
+    - flaggems/06_inference_integration.md
+    - flaggems/07_component_integration.md
+    - flaggems/08_index_and_usage.md
