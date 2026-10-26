@@ -9,23 +9,29 @@ Guardrails asserted here:
 - zero task-specific literals (no protein/gene/tag names, no database names, no
   sequence motifs) — the clause is a general capability rule, not a task recipe.
 """
+import pathlib
 import re
 
-PROMPT = (
-    "/nfs/caozhou/fa_eval/FlagScale-Agent/flagscale_agent/react/prompt.py"
-)
-_SRC = open(PROMPT).read()
+REPO = pathlib.Path(__file__).resolve().parents[1]
+PROMPT = REPO / "flagscale_agent" / "react" / "prompt.py"
+
+
+def _src() -> str:
+    """Read the prompt lazily so a missing file is a test failure, not a
+    collection error that gets mistaken for an environment problem."""
+    assert PROMPT.is_file(), f"prompt.py not found at {PROMPT}"
+    return PROMPT.read_text(encoding="utf-8")
 
 
 def _clause_text() -> str:
-    assert "ONE source of truth" in _SRC, "sequence-of-record clause missing from prompt"
-    m = re.search(r"A provided sequence or record has ONE source of truth.*?(?=\n\n)", _SRC, re.S)
+    assert "ONE source of truth" in _src(), "sequence-of-record clause missing from prompt"
+    m = re.search(r"A provided sequence or record has ONE source of truth.*?(?=\n\n)", _src(), re.S)
     assert m, "sequence-of-record paragraph not found as a single block"
     return m.group(0)
 
 
 def _frame_text() -> str:
-    m = re.search(r"Audit the FRAME, not the entries.*?(?=\n\n)", _SRC, re.S)
+    m = re.search(r"Audit the FRAME, not the entries.*?(?=\n\n)", _src(), re.S)
     assert m, "FRAME-audit paragraph not found"
     return m.group(0)
 

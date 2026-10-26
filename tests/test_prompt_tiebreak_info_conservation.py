@@ -12,10 +12,15 @@ task text and every provided artifact never contained.
 import pathlib
 import re
 
-PROMPT = (
-    "/nfs/caozhou/fa_eval/FlagScale-Agent/flagscale_agent/react/prompt.py"
-)
-_SRC = open(PROMPT).read()
+REPO = pathlib.Path(__file__).resolve().parents[1]
+PROMPT = REPO / "flagscale_agent" / "react" / "prompt.py"
+
+
+def _src() -> str:
+    """Read the prompt lazily so a missing file is a test failure, not a
+    collection error that gets mistaken for an environment problem."""
+    assert PROMPT.is_file(), f"prompt.py not found at {PROMPT}"
+    return PROMPT.read_text(encoding="utf-8")
 
 _MUST = [
     # the tie-break key itself
@@ -34,7 +39,7 @@ _MUST = [
 def test_tie_break_key_is_information_conservation():
     m = re.search(
         r"Imported information does not carry imported decisions\..*?(?=\n\n)",
-        _SRC,
+        _src(),
         re.S,
     )
     assert m, "the imported-info clause is missing"
@@ -46,7 +51,7 @@ def test_tie_break_key_is_information_conservation():
 def test_tie_break_has_no_task_literals():
     clause = re.search(
         r"Imported information does not carry imported decisions\..*?(?=\n\n)",
-        _SRC,
+        _src(),
         re.S,
     ).group(0)
     for forbidden in (
