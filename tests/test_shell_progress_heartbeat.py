@@ -105,15 +105,19 @@ class TestIdleHangKill:
 
     def test_idle_sleep_killed_fast(self):
         import time
-        tool = ShellTool(remind_interval=1)  # check_interval = 1s
+        # The grace window is a mechanism parameter, not a policy: inject a
+        # small one so this test asserts the PROPERTY (a silent long command
+        # does not block the caller for the full 60s) without spending the
+        # production default's 30s of real wall clock. The default value and
+        # the 30s-alignment itself are pinned in tests/test_shell_auto_detach.py.
+        tool = ShellTool(remind_interval=1, auto_detach_grace_secs=2)
         t0 = time.time()
         # sleep 60 would hang for a full minute. Current behavior: the
-        # foreground grace window (30s) detaches it to a background job —
-        # the agent decides from there (advisory downgrade, not a kill).
-        # The idle heuristic itself is now advisory-only (see
-        # TestAdvisoryDowngrade in tests/test_process_health.py); what must
-        # still hold here is that a silent sleep does NOT block the caller
-        # for the full 60s.
+        # foreground grace window detaches it to a background job — the agent
+        # decides from there (advisory downgrade, not a kill). The idle
+        # heuristic itself is now advisory-only (see TestAdvisoryDowngrade in
+        # tests/test_process_health.py); what must still hold here is that a
+        # silent sleep does NOT block the caller for the full 60s.
         progress, result = _run_capturing_stdout(tool, "sleep 60")
         elapsed = time.time() - t0
         detached_or_terminated = (
