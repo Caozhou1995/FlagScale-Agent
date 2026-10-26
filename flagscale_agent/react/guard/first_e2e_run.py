@@ -138,6 +138,12 @@ class FirstE2eRunGuard(Guard):
     # most severe pending question.
     _THRESHOLDS = (75, 50, 25)
 
+    # How many times one rung may BLOCK before it hands back a non-blocking
+    # demand. Two is enough to ask twice (the agent gets a second look after
+    # fixing its reason) without letting an unsatisfiable form consume the
+    # rest of the trial. Measured 2026-10-26: 8 and 9 consecutive blocks.
+    _MAX_DENIALS = 2
+
     def __init__(self, stats_fn, task_text_fn=None):
         """stats_fn() -> dict|None with keys elapsed/budget/remaining/pct.
 
@@ -165,8 +171,8 @@ class FirstE2eRunGuard(Guard):
         # registry surfaced last). accept_override reads it to bind the
         # evidence check to the 75% checkpoint only.
         self._last_pending_thr: int | None = None
-
-    # ── 75% cold-consumer override: evidence binding ─────────────────────
+        # Per-rung rejection counts feeding the escape valve in `_rearm`.
+        self._denials: dict[int, int] = {}
     # The 75% block message demands the agent paste the command it ran against
     # the delivery artifact and the output it produced. A reason that only
     # SAYS "I ran it" was the observed escape: without a check, prose released
@@ -301,9 +307,22 @@ class FirstE2eRunGuard(Guard):
     def _rearm(self, thr: int):
         """Un-spend a rung so a REJECTED release re-blocks instead of silently
         releasing forever. _verdict_for marks the rung spent at fire time; only
-        an accepted release may keep it spent."""
+        an accepted release may keep it spent.
+
+        Every rejection also counts against the rung's escape valve: a rung the
+        agent structurally CANNOT satisfy (the 75% rung asks for a run of an
+        artifact that is not finished yet; a task whose environment lacks the
+        runtime the artifact needs can never produce the pasted output) must not
+        degrade into an unbounded block. Measured 2026-10-26: two trials were
+        blocked 8 and 9 times on the 75% rung until the wall-clock ran out, the
+        gate converting from a speed bump into the thing that killed the run.
+        After _MAX_DENIALS the rung stops blocking and speaks once more as an
+        advisory-shaped demand instead, so the agent spends its remaining
+        budget shipping what it has rather than answering an unanswerable form.
+        """
         if thr in self._fired:
             self._fired.discard(thr)
+        self._denials[thr] = self._denials.get(thr, 0) + 1
         self._last_pending_thr = None
 
     def reset_turn(self):
@@ -312,6 +331,7 @@ class FirstE2eRunGuard(Guard):
         # ORDER question is asked again in the new turn.
         self._fired = set()
         self._released = set()
+        self._denials = {}
         self._last_pending_thr = None
 
     def _stats(self) -> dict | None:
@@ -320,6 +340,30 @@ class FirstE2eRunGuard(Guard):
         except Exception:
             # A stats_fn hiccup must never break tool execution — fail silent.
             return None
+
+    def _exhausted_message(self, thr: int, stats: dict) -> str:
+        """Non-blocking replacement after a rung's denials are used up.
+
+        Names the honest exit explicitly: the rung stops being a gate, and the
+        remaining budget belongs to shipping and stating what was not verified —
+        not to satisfying a form the environment may make unsatisfiable.
+        """
+        from flagscale_agent.react.guard.time_budget import _fmt
+
+        remaining = _fmt(stats.get("remaining", 0.0))
+        return (
+            f"This checkpoint ({thr}% of the wall-clock) has now blocked {self._MAX_DENIALS} "
+            f"times without being released for the same call — it will NOT block again, so "
+            f"do not spend more turns on its form. Treat it as settled and switch to the "
+            f"honest exit: (1) if your artifact is INCOMPLETE, land the missing bytes first — "
+            f"a partial deliverable on disk at the delivery path beats a perfect one that "
+            f"never got written; (2) if it exists but cannot be executed here (missing "
+            f"runtime/dependency/corpus), STATE plainly in your final message which command "
+            f"you tried, its real error output, and what remains unverified — an honest "
+            f"'ran it, it failed like this' is an accepted answer, a claim of success is not; "
+            f"(3) do not re-issue the same declaration. (~{remaining} left before the harness "
+            f"terminates the whole task.)"
+        )
 
     def _message(self, thr: int, stats: dict) -> str:
         from flagscale_agent.react.guard.time_budget import _fmt
@@ -355,6 +399,21 @@ class FirstE2eRunGuard(Guard):
                 # an un-released rung is a question still owed an answer).
                 self._fired.add(thr)
                 self._last_pending_thr = thr
+                if self._denials.get(thr, 0) >= self._MAX_DENIALS:
+                    # Escape valve: this rung has been answered and rejected
+                    # as many times as it is allowed to block. Stop spending
+                    # the remaining budget on it — hand back a non-blocking
+                    # demand naming the honest exit. _release (not a bare add)
+                    # also retires every LOWER rung: an agent already past 75%
+                    # has been asked the most severe question there is, so
+                    # re-asking the 50%/25% rungs afterwards is pure noise that
+                    # burns the budget the valve is trying to protect.
+                    self._release(thr)
+                    return GuardVerdict.inject(
+                        message=self._exhausted_message(thr, stats),
+                        reason=f"first_e2e_run_{thr}pct_exhausted",
+                        category="progress_order",
+                    )
                 return GuardVerdict.block(
                     message=self._message(thr, stats),
                     reason=f"first_e2e_run_{thr}pct",
@@ -391,13 +450,32 @@ class FirstE2eRunGuard(Guard):
         must appear in the trial's own recorded text.
         """
         if not reason or len(reason.strip()) <= 5:
+            # A too-short reason is still a DENIAL: it must count against the
+            # escape valve, otherwise an agent that re-issues a five-character
+            # filler is blocked forever (the exact livelock the valve exists to
+            # stop). Count via _rearm so the budget is spent either way.
+            if self._last_pending_thr is not None:
+                self._rearm(self._last_pending_thr)
             return False
         thr = self._last_pending_thr
         if thr is None:
             return True
+        # A real landing answers EVERY rung, including the 75% one. The 75%
+        # question is "have you run the thing you are about to ship?" — but a
+        # run needs the artifact to exist first, and gating the landing on a
+        # run of the not-yet-landed artifact is a closed loop. Measured cost of
+        # missing this (2026-10-26, gpt2-codegolf): the first write landed a
+        # 1200-byte skeleton, every APPEND that would have completed it was
+        # blocked 9 times on the 75% rung, the agent diagnosed it itself
+        # ("guards keep blocking appends") and died at 91% budget with the
+        # skeleton still the deliverable. So: progress evidence releases.
+        if self._has_write_evidence(ctx):
+            self._release(thr)
+            self._denials.pop(thr, None)
+            return True
         if thr != 75:
             # 25% / 50%: progress evidence, not prose.
-            if self._has_write_evidence(ctx) or _none_apply(reason):
+            if _none_apply(reason):
                 self._release(thr)
                 return True
             self._rearm(thr)
