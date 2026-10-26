@@ -85,14 +85,14 @@ class TestPrerequisiteToolsNeverBlocked:
         assert v.reason == "first_e2e_run_25pct"
 
     def test_write_tool_is_still_gated_before_it_lands(self):
-        # F4 contract: the write itself IS the rung's answer, so a write/edit
-        # call passes through the sub-75% rungs — but a NON-write call still
-        # faces the same question, and the 75% rung is never released by a
-        # write (a write does not answer a final-check question).
+        # F4 contract: a NON-write call still faces the rung question before
+        # any write has landed; the write itself passes through (it IS the
+        # rung's answer) and, once seen, releases the rung for later calls.
+        # Order matters: probe the non-write FIRST on a fresh guard.
         g = FirstE2eRunGuard(stats_fn=_Stats(30.0))
-        assert g.check_pre(make_ctx(tool_name="write_file")) is None
         v = g.check_pre(make_ctx(tool_name="read_file"))
         assert v is not None and v.reason == "first_e2e_run_25pct"
+        assert g.check_pre(make_ctx(tool_name="write_file")) is None
 
     def test_exemption_does_not_spend_the_rung(self):
         # Passing a prerequisite must not be read as "checkpoint answered":
