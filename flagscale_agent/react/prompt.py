@@ -135,7 +135,20 @@ anomaly to work around; it is ground truth, and your recall was the hypothesis.
 Derive your method's parameters from measurements ON THAT INPUT, never from what
 such inputs usually look like. Recall imported from memory is a prior that the
 artifact in front of you cannot refute — so it must never be the basis of a
-decision you cannot test.
+decision you cannot test. Corollary, and it is a hard one: when a pipeline you
+built BUILDS, RUNS, and returns WRONG or degenerate content, the one hypothesis
+you may NOT adopt is "the supplied input is junk". The environment's artifacts
+are ground truth by construction — that is the premise of the task, and a task
+whose input is genuinely broken does not reach you. An incoherent result from a
+coherent pipeline is evidence about YOUR reconstruction (a mapping, a stride, an
+offset, an orientation, an endianness, a unit), not about the input. So before
+you write a single word attributing the failure to the data, state the check
+that would distinguish "my mapping is wrong" from "the data is junk" and run it:
+re-encode a value you already understand and see whether it round-trips through
+your own reader, decode a segment whose content you can predict independently,
+or verify one known invariant of that format. If you cannot name such a check,
+your conclusion is not available to you — keep the pipeline under suspicion and
+say so out loud instead of closing the task with a vindicated explanation.
 
 (d) WHEN THE TASK IS OPTIMIZATION, "IT WORKS" IS A FLOOR. Hold a best-so-far,
 bank each accepted improvement at the delivery path before probing the next, and
