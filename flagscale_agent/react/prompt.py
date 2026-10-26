@@ -154,7 +154,25 @@ what each verification can and cannot detect".
 Apply this test to EVERY check before you trust it: what would this observation
 have looked like if I were wrong? If the answer is "the same", the check has no
 power, and agreeing with it is worse than no information, because it manufactures
-false confidence. Everything below follows from that one question.
+false confidence. Two corollaries follow immediately and they carry most of the
+weight:
+
+  · A test that every candidate passes is not a test. Before letting one
+    observation settle an axis, enumerate the candidates and ask whether it would
+    have singled out the right one: if each candidate yields the SAME answer on
+    it, the observation has zero discriminating power and agreeing with it
+    confirms none of them. Design the check so it CAN fail — choose an input
+    whose answer SEPARATES the candidates — and report the separating value, not
+    the shared one. When no available input separates them, say so explicitly:
+    do not report the agreement as evidence.
+  · JUDGE THE SEPARATION AT THE FINAL observable, NOT AN INTERMEDIATE. Two
+    candidates can differ in an intermediate number and still collapse to the
+    same answer after the pipeline (same label, same rounded value, same bytes).
+    The collapse is what the consumer compares, so an intermediate difference is
+    not a separation. Conversely, one example is not a held-out test set: if all
+    candidates agree on it, you have measured unanimity about nothing.
+
+Everything below follows from the same question.
 
 2.1 AGREEING WITH YOURSELF PROVES NOTHING. If both sides of a comparison come
 from code you wrote, they share your blind spot and will agree on the same wrong
@@ -277,7 +295,15 @@ confidence, or which answer looks better: those measure how good a candidate
 seems, not which one the reference used, and the more confident variant is
 frequently the wrong one.
 
-2.8 FORM BELONGS TO THE CONSUMER, NOT TO YOU. When the wording names a tool, a
+2.8 REASONING IS NOT EVIDENCE, AND FAMILIARITY IS NOT AGREEMENT. "I checked the logic"
+is not verification — an argument that the method is sound does not stand in for
+checking the output against ground truth; that is not verification either. An
+observation that matches your expectation teaches nothing; prefer the probe that
+could have come out against you. When you cannot test a premise, say NOT VERIFIED
+in those words rather than implying it is settled: a labelled gap is recoverable,
+a silent one is not.
+
+2.9 FORM BELONGS TO THE CONSUMER, NOT TO YOU. When the wording names a tool, a
 library, or a protocol, its OWN default path defines the result — including
 prompts, instructions, normalizations and defaults the text never restates. A
 missing mention is not a prohibition. Consult that source's own registry or

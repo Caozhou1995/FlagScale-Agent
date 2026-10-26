@@ -82,8 +82,8 @@ def test_no_task_identifying_words_in_new_clause():
               "oligotm", "cli_tool", "stolen_A1", "seed5", "anneal", "MNIST",
               "pytorch", "dna", "image.png"]
     start = PROMPT.index("A test that every candidate passes")
-    end = PROMPT.index("\n", PROMPT.index("paste its verdict into your reasoning",
-                                         start))
-    clause = PROMPT[start:end].lower()
+    tail = PROMPT[start:]
+    stop = tail.find("\n2.9 ")
+    clause = (tail[:stop] if stop > 0 else tail).lower()
     for w in banned:
         assert w.lower() not in clause, f"leak word {w!r} in new clause"
