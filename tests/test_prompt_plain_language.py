@@ -73,17 +73,18 @@ def test_unexplained_internal_coinage_is_named_a_defect():
 
 def test_coinage_list_still_enumerates_the_measured_offenders():
     # The rule must stay actionable: the measured offenders are pinned as an
-    # English description of the leak class (the static prompt itself must
-    # remain English-only, per test_context_v3), naming the register-level
-    # mechanism — bookkeeping shorthand that leaks into Chinese replies — so
+    # English description of the leak class (the static prompt is English-only
+    # outside the author note, per test_context_v3), naming the register-level
+    # mechanism — bookkeeping shorthand that leaks into plain replies — so
     # the model can recognise NEW offenders rather than a frozen word list.
     sec = _response_format_section()
     assert "bookkeeping states" in sec
     assert "latch" in sec and "anchor" in sec
-    assert "Chinese" in sec
-    # the everyday-replacement examples survived
-    assert "系统没记录到" in sec
-    assert "对不上" in sec
+    assert "internal" in sec and "shorthand" in sec
+    # the everyday-replacement examples survived, in English
+    assert "the system never recorded it" in sec
+    assert "they don't line up" in sec
+    assert not re.search(r"[\u4e00-\u9fff]", sec)
 
 
 def test_close_must_stay_short():
