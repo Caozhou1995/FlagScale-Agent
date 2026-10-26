@@ -90,7 +90,7 @@ class TimeBudgetGuard(Guard):
     # dataset download at ~13% budget and gave up at ~40% would never even see a
     # 50% nudge). Firing at 25% puts the pacing guidance where the agent has
     # enough trajectory to gauge its burn rate AND enough budget left to correct.
-    _THRESHOLDS = (100, 90, 80, 75, 50, 25)
+    _THRESHOLDS = (100, 90, 80, 75, 65, 50, 25)
 
     # A turn dies with the budget, not with a percentage: what matters is how
     # many more ACTIONS fit. This is the number of remaining action-rounds the
@@ -377,6 +377,18 @@ class TimeBudgetGuard(Guard):
                 "  2b. Any doubt you cannot resolve now: record it explicitly next "
                 "to the banked value — why the current value is still your strongest "
                 "anchor. An audited degrade beats a silent one."
+            )
+        elif thr >= 65:
+            tail = (
+                " Two-thirds in. If you believe you are DONE or nearly done, PROVE it "
+                "before declaring completion: re-run the verifier's own decisive check "
+                "(or the closest equivalent you can construct from the task's stated "
+                "requirements — expected file, exact value, exact format) against the "
+                "artifact at its delivery path, and READ the result. Do not count a "
+                "self-check as proof: an artifact agrees with its own generator. If you "
+                "are NOT nearly done, spend this checkpoint re-planning the tail: name "
+                "the one step that still blocks completion and give it the next "
+                "consecutive block of time."
             )
         elif thr >= 50:
             tail = (

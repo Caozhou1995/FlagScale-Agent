@@ -40,7 +40,13 @@ def test_75_message_accepts_honest_self_anchor_confession():
 
 def test_75_message_names_falsifiable_anchor_kinds():
     # Generic wording only: the anchors named must be classes of evidence, never
-    # a task-specific artifact (no leakage of any task's answer).
+    # a task-specific artifact (no leakage of any task's answer). The
+    # verbatim-named-value anchor covers the measured failure class "right
+    # numbers under the wrong name" — a wrong name passes every numeric
+    # comparison and every self-consistent run, so only an external anchor
+    # (the task text's own words) can catch it.
     assert "reference artifact the task or" in _MSG_75
     assert "different route" in _MSG_75
     assert "never asserts" in _MSG_75
+    assert "named values" in _MSG_75
+    assert "verbatim" in _MSG_75
