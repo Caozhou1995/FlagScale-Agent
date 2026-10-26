@@ -248,3 +248,45 @@ def test_critical_path_two_independent_roots():
     assert r["serial"] == 600.0
     assert r["critical"] == 500.0        # the lone 500s root dominates
     assert r["free"] == [1, 2]
+
+
+def test_report_and_ledger_agree_on_the_same_steps():
+    """plan_create's report and the persisted ledger must not contradict.
+
+    `create()` materialises the default serial chain, so a report computed on
+    the raw (pre-create) dicts reads "no depends_on" as "no dependencies" and
+    announces a fan-out saving the plan does not have — the two blocks then
+    disagree inside ONE response.
+    """
+    from flagscale_agent.react.plan import _critical_path_secs, _with_default_chain
+
+    raw = [
+        {"id": 1, "est_sec": 60.0},
+        {"id": 2, "est_sec": 30.0},
+        {"id": 3, "est_sec": 240.0},
+        {"id": 4, "est_sec": 300.0},
+        {"id": 5, "est_sec": None},
+    ]
+    persisted = [
+        dict(s, depends_on=[s["id"] - 1] if s["id"] > 1 else []) for s in raw
+    ]
+    report_side = _critical_path_secs(_with_default_chain(raw))
+    ledger_side = _critical_path_secs(persisted)
+    assert report_side == ledger_side, (
+        f"report {report_side} != ledger {ledger_side}"
+    )
+    assert report_side["gain"] == 0.0
+
+
+def test_default_chain_keeps_an_explicit_fan_out():
+    """Canonicalising must not flatten a dependency graph the caller DID state."""
+    from flagscale_agent.react.plan import _critical_path_secs, _with_default_chain
+
+    steps = [
+        {"id": 1, "est_sec": 120.0},
+        {"id": 2, "est_sec": 120.0, "depends_on": [1]},
+        {"id": 3, "est_sec": 120.0, "depends_on": [1]},
+    ]
+    cp = _critical_path_secs(_with_default_chain(steps))
+    assert cp["gain"] == 120.0, cp
+    assert cp["parallel"] == [2, 3], cp

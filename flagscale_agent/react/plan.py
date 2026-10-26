@@ -110,6 +110,37 @@ def _id_list(ids) -> str:
     return "第" + "、".join(str(i) for i in ids) + "步"
 
 
+def _with_default_chain(steps: List[dict]) -> List[dict]:
+    """Fill in the default serial `depends_on` chain `create()` will persist.
+
+    `create()` materialises `depends_on=[i-1]` for every step that does not
+    declare one, so ANY reader that measures a plan's schedule BEFORE that
+    materialisation sees a different graph than the plan actually has. For
+    `_critical_path_secs` the difference is not cosmetic: a missing
+    `depends_on` key reads as "no dependencies", which makes every step look
+    concurrently runnable and invents a fan-out saving that does not exist.
+    Callers that reason about a not-yet-created plan must run their steps
+    through this first, so their numbers agree with the persisted ledger.
+
+    Ids are taken from the step's own `id` when present, else its 1-based
+    position — the same numbering `create()` assigns.
+    """
+    out = []
+    for i, step in enumerate(steps, 1):
+        if not isinstance(step, dict):
+            continue
+        step_id = step.get("id", i)
+        if not isinstance(step_id, int) or isinstance(step_id, bool):
+            step_id = i
+        materialised = dict(step)
+        materialised["id"] = step_id
+        materialised["depends_on"] = _coerce_deps(
+            step.get("depends_on"), [step_id - 1] if step_id > 1 else [],
+        )
+        out.append(materialised)
+    return out
+
+
 def _critical_path_secs(steps: List[dict]) -> dict:
     """Serial sum vs critical path (longest dependency chain) over `depends_on`.
 

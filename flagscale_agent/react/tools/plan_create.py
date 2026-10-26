@@ -555,8 +555,18 @@ class PlanCreateTool(Tool):
         # time, so the wall is bounded by the LONGEST chain. Measuring both
         # stops this message from prescribing a scope cut for a plan that only
         # needs a fan-out.
-        from flagscale_agent.react.plan import _critical_path_secs, _id_list
-        cp = _critical_path_secs([s for s in steps if isinstance(s, dict)])
+        from flagscale_agent.react.plan import (
+            _critical_path_secs, _id_list, _with_default_chain,
+        )
+        # Compute the critical path over the SAME dependency shape `create()`
+        # will persist. `create()` fills in the default serial chain for every
+        # step that does not declare `depends_on`, so measuring the raw dicts
+        # here would read "no depends_on" as "no dependencies" and report a
+        # fan-out saving that the persisted plan does not have — the report and
+        # the ledger below would then contradict each other in ONE response.
+        cp = _critical_path_secs(
+            _with_default_chain([s for s in steps if isinstance(s, dict)])
+        )
         path = cp["critical"] if cp["gain"] > 0.5 else total
         lines.append(
             f"your steps estimate to {_fmt_sec(total)} serially "
