@@ -213,6 +213,26 @@ class PlanUpdateTool(Tool):
                     "bare \"ok\" is refused because it proves nothing)."
                 ),
             },
+            "bound_margin": {
+                "type": "object",
+                "description": (
+                    "Instrument 5 (bound margin). Declare it on a step_done whose "
+                    "output claims a quantity is INSIDE a bound the problem states "
+                    "(a stated max/min: a length limit, a timeout, a size cap, a "
+                    "temperature window). The harness does the arithmetic and "
+                    "passes it only when |value - bound| > rival_shift. Keys: "
+                    "value (the number your check produced), bound (the stated "
+                    "limit), direction (\"max\" or \"min\"), rival_shift (HOW MUCH "
+                    "another defensible definition of the SAME quantity would "
+                    "change that number, 0 when you can defend no rival exists), "
+                    "rival_definition (WHAT that other definition is, one line; "
+                    "required whenever rival_shift > 0). Measured case: your value "
+                    "44 vs a stated maximum of 45 — margin 1 — while the "
+                    "construction the task's arbiter uses for the same quantity "
+                    "came out 4 larger (48, outside). Reporting the margin and the "
+                    "size of the disagreement is what makes the pass decidable."
+                ),
+            },
             "acceptance": {
                 "type": "array",
                 "items": {"type": "string"},

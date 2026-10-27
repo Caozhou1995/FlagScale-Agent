@@ -57,6 +57,7 @@ from flagscale_agent.react.oracle import (
     named_arbiter_obligation,
 )
 from flagscale_agent.react.instruments import (
+    check_bound_margin,
     check_differential,
     check_negative_control,
     calibration_needs_negative_control,
@@ -2809,10 +2810,12 @@ class VerificationGuard(Guard):
                         self._instrument_obligation(
                             ctx.tool_args.get("convention"),
                             ctx.tool_args.get("differential"),
-                            ctx.tool_args.get("negative_control")),
-                        "differential/negative_control",
+                            ctx.tool_args.get("negative_control"),
+                            ctx.tool_args.get("bound_margin")),
+                        "differential/negative_control/bound_margin",
                         {"differential": ctx.tool_args.get("differential"),
-                         "negative_control": ctx.tool_args.get("negative_control")}),
+                         "negative_control": ctx.tool_args.get("negative_control"),
+                         "bound_margin": ctx.tool_args.get("bound_margin")}),
                 ])
                 # EVIDENCE LATCHING PRECEDES FORMAL BLOCKING.
                 #
@@ -3034,7 +3037,8 @@ class VerificationGuard(Guard):
             return None
         return _observed_corpus(msgs or [], full_log)
 
-    def _instrument_obligation(self, conv, differential, negative_control):
+    def _instrument_obligation(self, conv, differential, negative_control,
+                              bound_margin=None):
         """Instruments 2 & 4: the obligations that follow from what was DECLARED.
 
         Both are conditional by design — the point of the measured lesson is that
@@ -3111,6 +3115,32 @@ class VerificationGuard(Guard):
                 cal = {}
         if calibration_needs_negative_control(cal):
             verdict = check_negative_control(negative_control)
+            if verdict is not None:
+                reason, msg = verdict
+                return GuardVerdict.block(
+                    message=msg,
+                    reason=reason,
+                    category="verification_required",
+                )
+
+        # Instrument 5: a BOUND claim whose margin is smaller than the shift a
+        # rival definition of the same quantity would cause.
+        #
+        # Fires only when the step DECLARES a bound_margin at all. It is not a
+        # new required field on every step: a step making no bound claim has
+        # nothing to decide this way, and demanding the declaration everywhere is
+        # the ceremony that gets routed around. The declaration creates the
+        # obligation, exactly as `convention` and `calibration` do.
+        #
+        # The measured loss this targets: the agent's own number sat one unit
+        # inside a stated upper limit while the construction that the task's
+        # named arbiter uses for that same quantity came out several units
+        # larger -- outside the limit. Its self-check reported PASS, and the
+        # margin was never compared against the size of that disagreement. The
+        # harness now does that comparison instead of trusting a
+        # `within_tolerance` claim.
+        if bound_margin is not None:
+            verdict = check_bound_margin(bound_margin)
             if verdict is not None:
                 reason, msg = verdict
                 return GuardVerdict.block(

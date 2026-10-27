@@ -36,6 +36,8 @@ from flagscale_agent.react.instruments import (
     calibration_needs_negative_control,
     negative_control_fired,
     differential_satisfied,
+    check_bound_margin,
+    bound_margin_decided,
 )
 from flagscale_agent.react.plan import TaskPlan
 from flagscale_agent.react.guard import GuardContext
@@ -209,6 +211,52 @@ def test_differential_cannot_compute_is_an_accepted_gap():
           "tolerance_basis": "task states none"}
     assert differential_satisfied(ok) is True
     assert check_differential(ok) is None
+
+
+# ---------------------------------------------------- BOUND MARGIN (instrument 5)
+def test_bound_margin_tight_is_refused_by_the_real_guard():
+    """THE MEASURED CASE through the REAL guard: value 44 vs bound 45, rival
+    shift 4 (the grader's construction of the same quantity). The self-check
+    said PASS; the arithmetic says UNDECIDED."""
+    g = _guard(_mk_plan(calibration={"instrument": "i", "matches": "yes"}))
+    bm = {"value": 44, "bound": 45, "direction": "max", "rival_shift": 4,
+          "rival_definition": "annealing tract incl. the overhang match"}
+    v = g._instrument_obligation(None, None, None, bound_margin=bm)
+    assert v is not None and v.reason == "bound_margin_too_tight"
+    # refusal echoes both numbers so the next attempt can self-correct
+    assert "44" in v.message and "45" in v.message
+
+
+def test_bound_margin_roomy_passes_the_real_guard():
+    """The negative control for the gate: margin 15 > shift 4 must NOT block."""
+    g = _guard(_mk_plan(calibration={"instrument": "i", "matches": "yes"}))
+    bm = {"value": 30, "bound": 45, "direction": "max", "rival_shift": 4,
+          "rival_definition": "same rival"}
+    assert g._instrument_obligation(None, None, None, bound_margin=bm) is None
+
+
+def test_bound_margin_absent_does_not_block():
+    """Declaration creates the obligation: no declaration, no gate. A step that
+    makes no bound claim has nothing to decide this way."""
+    g = _guard(_mk_plan(calibration={"instrument": "i", "matches": "yes"}))
+    assert g._instrument_obligation(None, None, None, bound_margin=None) is None
+
+
+def test_bound_margin_missing_required_field_is_refused():
+    g = _guard(_mk_plan(calibration={"instrument": "i", "matches": "yes"}))
+    v = g._instrument_obligation(None, None, None,
+                                 bound_margin={"value": 44, "bound": 45})
+    assert v is not None and v.reason == "bound_margin_field_missing"
+
+
+def test_bound_margin_exposed_in_tool_schema():
+    """The tool the model calls must DECLARE the parameter -- the calibration
+    outage (forced field, undeclared schema) is the failure this pins."""
+    props = PlanUpdateTool.parameters["properties"]
+    assert "bound_margin" in props
+    assert props["bound_margin"]["type"] == "object"
+    for f in ("value", "bound", "direction", "rival_shift", "rival_definition"):
+        assert f in props["bound_margin"]["description"], f
 
 
 # ------------------------------------------------------------ NEGATIVE CONTROL

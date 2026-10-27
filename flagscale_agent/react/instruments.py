@@ -343,6 +343,129 @@ def differential_satisfied(diff) -> bool:
     """True when a differential declaration is present and fully resolved."""
     return check_differential(diff) is None
 
+# ------------------------------------------------------------ BOUND MARGIN
+_MISSING_BOUND_MARGIN = (
+    "This step claims its quantity is INSIDE a bound the problem states "
+    "({bound}), but it does not report the MARGIN or the rival definition that "
+    "could move the number.\n"
+    "\n"
+    "A self-check that reports \"inside the bound\" decides nothing when the "
+    "value sits closer to the bound than the shift another defensible "
+    "definition of the same quantity would cause. Measured shape: a value one "
+    "unit inside a stated limit, while the construction the evaluator used for "
+    "that same quantity came out several units larger -- outside the limit. The "
+    "check passed on the definition that fit; the answer failed on the "
+    "definition that decided.\n"
+    "\n"
+    "Declare, for this quantity:\n"
+    "  value            -- the number your check produced\n"
+    "  bound            -- the stated limit it was compared against\n"
+    "  direction        -- \"max\" (value must be <= bound) or \"min\" "
+    "(value must be >= bound)\n"
+    "  rival_shift      -- HOW MUCH another defensible definition of the SAME "
+    "quantity would change that number (an integer, 0 when you can defend that "
+    "no rival definition exists)\n"
+    "  rival_definition -- WHAT that other definition is, in one line (\"none\" "
+    "is not accepted unless rival_shift is 0)\n"
+    "\n"
+    "The harness does the arithmetic: it passes only when |value - bound| > "
+    "rival_shift. You are not asked to claim you are right; you are asked to "
+    "report the two numbers and the size of the disagreement, and the "
+    "comparison is made outside your head."
+)
+
+_BOUND_MARGIN_TOO_TIGHT = (
+    "`bound_margin` is UNDECIDED, and the arithmetic is not a matter of "
+    "opinion: |value - bound| = {margin}, while a rival definition of the same "
+    "quantity shifts it by {shift}.\n"
+    "\n"
+    "  your value    : {value}\n"
+    "  stated bound  : {bound} ({direction})\n"
+    "  margin        : {margin}\n"
+    "  rival shift   : {shift}  ({rival})\n"
+    "\n"
+    "So the answer you get depends on WHICH definition of the quantity is used, "
+    "and your check cannot tell the two apart -- a PASS here is a coin flip "
+    "that happens to land inside the bound. Do not tighten the number by "
+    "tuning; decide the DEFINITION. One of:\n"
+    "  (a) find which construction the consumer of this quantity uses -- the "
+    "tool the task names run its own default path, or the task's own stated "
+    "construction -- compute the quantity THAT way, and report its margin; or\n"
+    "  (b) if the two definitions are genuinely indistinguishable to you, move "
+    "the value so the margin exceeds the rival shift on the definition you can "
+    "defend, and say which definition you moved it for; or\n"
+    "  (c) state the rival definition is impossible, with the reason, and set "
+    "rival_shift to 0.\n"
+    "\n"
+    "Echoing the same numbers back with a smaller rival_shift does not resolve "
+    "this: the point is that the two definitions must be distinguished, not "
+    "that the disagreement must be shrunk."
+)
+
+
+def check_bound_margin(bm):
+    """Validate that a bound claim is decided by more than the bound itself.
+
+    Returns (reason, message) or None. The harness -- not the caller -- owns
+    the comparison |value - bound| > rival_shift, so a declaration cannot pass
+    by asserting that it is fine.
+    """
+    if bm is None:
+        return ("bound_margin_missing", _MISSING_BOUND_MARGIN.format(
+            bound="a stated limit"))
+    if not isinstance(bm, dict):
+        return ("bound_margin_not_dict",
+                "`bound_margin` must be an object, got "
+                f"{type(bm).__name__}. " + _MISSING_BOUND_MARGIN.format(
+                    bound="a stated limit"))
+    for f in ("value", "bound", "direction", "rival_shift", "rival_definition"):
+        if f not in bm:
+            return ("bound_margin_field_missing",
+                    f"Required key `{f}` is absent. "
+                    + _MISSING_BOUND_MARGIN.format(bound=bm.get("bound", "?")))
+    direction = str(bm.get("direction") or "").strip().lower()
+    if direction not in ("max", "min"):
+        return ("bound_margin_bad_direction",
+                f"`direction` was {bm.get('direction')!r}; it must be \"max\" "
+                "or \"min\". "
+                + _MISSING_BOUND_MARGIN.format(bound=bm.get("bound", "?")))
+    # Numeric fields: accept ints/floats and numeric strings, refuse the rest
+    # (a string like "big" makes the comparison meaningless, not generous).
+    try:
+        value = float(str(bm.get("value")).strip())
+        bound = float(str(bm.get("bound")).strip())
+        shift = float(str(bm.get("rival_shift")).strip())
+    except (TypeError, ValueError):
+        return ("bound_margin_bad_shift",
+                "`value`, `bound` and `rival_shift` must be numbers; got "
+                f"value={bm.get('value')!r} bound={bm.get('bound')!r} "
+                f"rival_shift={bm.get('rival_shift')!r}. "
+                + _MISSING_BOUND_MARGIN.format(bound=bm.get("bound", "?")))
+    if shift < 0:
+        return ("bound_margin_bad_shift",
+                "`rival_shift` is a MAGNITUDE: it must be >= 0. Got "
+                f"{bm.get('rival_shift')!r}.")
+    rival = str(bm.get("rival_definition") or "").strip()
+    if shift > 0 and (not rival or rival.lower() in ("none", "n/a")):
+        return ("bound_margin_blank_rival",
+                "`rival_shift` is "
+                f"{shift:g} but `rival_definition` names no rival definition. A "
+                "shift with no stated cause is unauditable -- say WHAT other "
+                "definition produces it, in one line.")
+    margin = abs(value - bound)
+    if margin <= shift:
+        shown_direction = "<=" if direction == "max" else ">="
+        return ("bound_margin_too_tight", _BOUND_MARGIN_TOO_TIGHT.format(
+            margin=f"{margin:g}", shift=f"{shift:g}", value=f"{value:g}",
+            bound=f"{bound:g}", direction=f"value must be {shown_direction} bound",
+            rival=rival or "none"))
+    return None
+
+
+def bound_margin_decided(bm) -> bool:
+    """True only when the margin strictly exceeds the rival-definition shift."""
+    return check_bound_margin(bm) is None
+
 
 def check_negative_control(nc):
     """Validate that a self-authored check was observed going RED."""
