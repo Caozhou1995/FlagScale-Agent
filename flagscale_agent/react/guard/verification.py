@@ -235,15 +235,15 @@ choose:
     "command": "python3 audit.py",
     "observed": "3/3 clauses PASS",
     "constraints": [
-      {"quote": "each primer must be at least 18 nt",
+      {"quote": "each artifact must be at least the minimum stated length",
        "command": "python3 audit.py",
-       "observed": "min_len=21 PASS"},
-      {"quote": "Tm must be between 58 and 72 C",
-       "command": "oligotm -tp 1 -sc 1 -mv 50 -dv 2 -n 0.8 -d 500 ATGCATGCATGCATGCATGC",
+       "observed": "min_length=21 PASS"},
+      {"quote": "the measured reading must stay within the stated interval",
+       "command": "python3 measure.py --input artifact.bin",
        "observed": "61.83"},
-      {"quote": "no internal recognition sites",
+      {"quote": "no disallowed site may appear inside the artifact",
        "command": "python3 audit.py",
-       "observed": "internal_sites=none"}
+       "observed": "disallowed_sites=none"}
     ]
   }
 
