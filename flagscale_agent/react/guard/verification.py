@@ -52,6 +52,10 @@ import re
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.multi_agent.wiring import CONTRACT_PATH_ENV, is_worker
 from flagscale_agent.react.display import has_override_completion, trailing_sentinel
+from flagscale_agent.react.oracle import (
+    arbiter_observation_matches,
+    named_arbiter_obligation,
+)
 
 
 def _normalize_step_id(raw) -> int | None:
@@ -319,6 +323,52 @@ Do ONE of these, then complete again:
   • If the remaining steps truly do not apply, re-issue this completion with an
     "_override_reason" naming which steps you are abandoning and why that is safe.
 """
+
+_PLAN_COMPLETE_NO_NAMED_ARBITER = """[VerificationGuard] You are closing the plan, but the DECIDER named by the task text was never pointed at the DELIVERED bytes.
+
+A task's own wording often names who decides a disputed quantity ("consider X's
+output the ground truth", "must match the reference implementation", "verified
+with tool Y"). That sentence is in the task text you can read — it is not the
+hidden checker. It is the one external anchor you are allowed to use, and it is
+the only one that cannot be made to agree with your own definition of the
+quantity.
+
+Three distinct ways this is currently unmet, each with its own exit:
+
+  (a) NOT DECLARED. The plan's oracle never said which tool the task text names.
+      Exit: plan_create(oracle={..., "named_arbiter": "<the tool/library the task
+      text names, quoted from the task text>", "deliverable_path": "<the file you
+      deliver>"}). If the task text names NO deciding tool, declare that
+      explicitly as "named_arbiter": "none" — the point is that you LOOKED.
+
+  (b) DECLARED, NEVER RUN ON THE DELIVERABLE. An observation must exist whose
+      command runs the named arbiter AND names the delivered artifact's path.
+      Exit: run it, on the artifact, and record it on a step_done as
+      arbiter_act={"command": "<the exact command>", "observed": "<its ACTUAL
+      output>"}.
+
+  (c) RUN, BUT ON SOMETHING YOU CONSTRUCTED. Pointing the arbiter at a hand-typed
+      sample, a re-derived substring, or your own scratch instance measures the
+      arbiter's arithmetic, not your shipped bytes. The definition of WHICH
+      bytes get measured is exactly where a self-authored check goes wrong
+      silently — so the command must name the delivered path.
+
+WHEN YOUR OWN READING AND THE ARBITER DISAGREE, THE ARBITER WINS.
+A disagreement between your verifier and the task's named decider is the single
+most informative observation in the run — it means one of the two DEFINITIONS of
+the quantity is wrong, and it is not the arbiter's job to be wrong. Do not
+explain the gap away as a bug in your own script and re-run until your number is
+clean: that converts the one measurement that could have saved the task into
+noise you deleted. Resolve it by asking WHICH DEFINITION the arbiter's own
+default path applies (the boundary IT uses, the prompt IT adds, the unit IT
+reports), then compute both and diff them. If you still cannot reconcile them,
+say so explicitly — a stated residual disagreement is an honest close; a
+silently re-derived number is not.
+
+Nothing here reads or guesses a hidden checker: the arbiter name must come from
+the task text, and the obligation is satisfied by a command you run yourself.
+"""
+
 
 _STEP_DONE_RECHECK_REMINDER = """[VerificationGuard] Before this step is marked done — check your premises once.
 
@@ -2203,6 +2253,13 @@ class VerificationGuard(Guard):
         # be EXERCISED before the task may close, however the plan is later
         # mutated. Empty dict == no oracle bound this run.
         self._oracle_bound = {}
+        # Per-RUN: the last corpus-verified `arbiter_act` — a command that ran the
+        # task's NAMED decider, with output the harness really recorded. Latched
+        # like the oracle act (survives plan mutation and the active-pointer
+        # clear at complete()); the TARGET check (does the command name the
+        # arbiter and the delivered path) is evaluated at the plan-complete
+        # decision point, NOT here, so this pass can never return a verdict.
+        self._arbiter_act_seen = None
 
     def reset_turn(self):
         """Reset per-turn state on a new user message — clears the step_done
@@ -2261,6 +2318,18 @@ class VerificationGuard(Guard):
                         oact, observed,
                         self._bound_oracle().get("first_exercise"), ctx.judge):
                     self._oracle_exercised_seen = True
+            # The plan-complete arbiter obligation reads its OWN act field, on the
+            # same corpus-verified observation source: a command whose `observed`
+            # text the harness never recorded is not an act. The target check
+            # (arbiter name + delivered path in the command) is deferred to the
+            # decision point so this pass stays a pure latch — it must never
+            # return a verdict and never un-latch.
+            aact = src.get("arbiter_act")
+            if aact is not None and not self._arbiter_act_seen:
+                if observed is None:
+                    observed = self._observed(ctx)
+                if _evidence_observed(aact, observed):
+                    self._arbiter_act_seen = aact
 
     def _coverage_gate_affordable(self) -> bool:
         """Is there enough wall left to pay for a per-constraint measurement sweep?
@@ -2395,18 +2464,110 @@ class VerificationGuard(Guard):
             ))
         return pending
 
+    def _plan_complete_obligations(self, ctx: GuardContext) -> list[GuardVerdict]:
+        """Obligations at the moment the agent CLOSES THE PLAN — not at [TASK_COMPLETE].
+
+        WHY THIS ANCHOR AND NOT THE COMPLETION SENTINEL. An obligation parked on
+        the completion sentinel puts the agent in a trap with no next action: it
+        has decided it is done, the harness says it is not, and the only way
+        forward is to argue — which is exactly the 20+ round livelock this gate
+        was switched off for on 2026-10-22. ``plan_update(action="complete")`` is
+        a DIFFERENT shape: it is a voluntary act with an obvious refusal path
+        (finish the step, then close again). The tool route already refuses and
+        teaches the next move ("Cannot complete plan: 1 step(s) not finished …
+        Mark them as done/skipped first"), and the agent demonstrably recovers
+        from it inside one round. So the same substantive obligation costs a
+        round here instead of a livelock there.
+
+        WHAT IS CHECKED. Only the independently-decidable half of "did you point
+        the task's own named decider at the delivered bytes":
+
+          * the plan's oracle declared a ``named_arbiter`` (or explicitly
+            declared that the task names none), and
+          * a recorded ``arbiter_act`` runs that arbiter against the delivered
+            path, with ``observed`` text the harness really recorded.
+
+        Nothing here can verify that the named tool IS the right decider — a
+        name quoted from the task text is a declaration, auditable by a reader.
+        That limit is stated rather than papered over: the check catches "never
+        looked, or looked and pointed it at a scratch sample", which is the
+        measured loss, not every possible mislabel.
+
+        Returns ALL unmet obligations (not just the first) so one round-trip
+        surfaces the whole set, matching ``_completion_obligations``' rationale.
+        """
+        pending: list[GuardVerdict] = []
+        decl = self._bound_oracle()
+        if not decl:
+            # No oracle declaration at all. The plan-complete path does NOT
+            # require one (that obligation stays where it was, and the framing
+            # acceptance already asks for it) — requiring it here would add a
+            # round to every plan close without catching the measured loss.
+            return pending
+
+        arbiter = named_arbiter_obligation(decl)
+        if arbiter == "":
+            pending.append(GuardVerdict.block(
+                message=_PLAN_COMPLETE_NO_NAMED_ARBITER,
+                reason="plan_complete_arbiter_malformed",
+                category="verification_required",
+            ))
+            return pending
+        if arbiter is None:
+            # Declared "none" (task text names no deciding tool) or the key is
+            # absent. Only the explicit declaration is an exit; an absent key is
+            # not, because "did not look" must not read the same as "nothing
+            # there". The message's (a) branch teaches the declaration.
+            if "named_arbiter" not in decl:
+                pending.append(GuardVerdict.block(
+                    message=_PLAN_COMPLETE_NO_NAMED_ARBITER,
+                    reason="plan_complete_arbiter_undeclared",
+                    category="verification_required",
+                ))
+            return pending
+
+        act = self._arbiter_act_seen
+        if not act:
+            pending.append(GuardVerdict.block(
+                message=_PLAN_COMPLETE_NO_NAMED_ARBITER,
+                reason="plan_complete_arbiter_not_exercised",
+                category="verification_required",
+            ))
+            return pending
+
+        path = decl.get("deliverable_path")
+        path = path.strip() if isinstance(path, str) else ""
+        if not arbiter_observation_matches(act, arbiter, path):
+            pending.append(GuardVerdict.block(
+                message=_PLAN_COMPLETE_NO_NAMED_ARBITER,
+                reason="plan_complete_arbiter_wrong_target",
+                category="verification_required",
+            ))
+        return pending
+
     def check_all_pre(self, ctx: GuardContext) -> list[GuardVerdict]:
         """Every unmet requirement at this decision point, not just the first.
 
-        Only the COMPLETION boundary evaluates several INDEPENDENT obligations at
-        one decision point (see _completion_obligations). Every other route this
-        guard covers is a single sequential pipeline over ONE declaration — the
-        step_done route already merges its own fixed fields via
-        _collect_fixed_field_failures — so those keep check_pre's first-failure
-        shape and this method delegates.
+        Only the two COMPLETION boundaries evaluate several INDEPENDENT
+        obligations at one decision point (see _completion_obligations and
+        _plan_complete_obligations). Every other route this guard covers is a
+        single sequential pipeline over ONE declaration — the step_done route
+        already merges its own fixed fields via _collect_fixed_field_failures —
+        so those keep check_pre's first-failure shape and this method delegates.
+
+        Both completion arms are collected in full so one round trip surfaces the
+        whole set; leaving either on the base-class default would report only the
+        first violation and cost a round trip per remaining obligation.
         """
         if self._at_task_complete(ctx):
             return self._completion_obligations(ctx)
+        if (ctx.tool_name == "plan_update"
+                and (ctx.tool_args or {}).get("action") == "complete"):
+            # Same latch-before-judge order as check_pre's plan-close arm: the
+            # registry enters through THIS method, so the act supplied on the
+            # complete call itself must latch here too, or every retry blocks.
+            self._latch_evidence_pass(ctx)
+            return self._plan_complete_obligations(ctx)
         verdict = self.check_pre(ctx)
         return [] if verdict is None else [verdict]
 
@@ -2451,6 +2612,29 @@ class VerificationGuard(Guard):
             if _pending:
                 return _pending[0]
             return None
+
+        # Plan-close arm: the voluntary act of closing the plan is where the
+        # "point the task's own named decider at the delivered bytes" obligation
+        # is checked. Deliberately NOT on [TASK_COMPLETE]: a refusal here leaves
+        # an obvious next action (finish the step, close again), whereas a
+        # refusal on the completion sentinel leaves only an argument — the exact
+        # livelock that got the old gate switched off. Evaluated before the
+        # step_done route so the two never interleave.
+        if ctx.tool_name == "plan_update":
+            if ctx.tool_args.get("action") == "complete":
+                # LATCH BEFORE JUDGING. The agent may supply `arbiter_act` on the
+                # very call that closes the plan — that is a natural thing to do
+                # ("here is the reading, done"). If the obligation were evaluated
+                # first, the act would never reach the latch pass (whose normal
+                # call site sits below, past this early return), so the guard
+                # would block every retry forever: a livelock with the fix
+                # already in hand. The pass is verdict-free and idempotent, so
+                # running it here can only let the SAME submission satisfy the
+                # check it is being judged against.
+                self._latch_evidence_pass(ctx)
+                _pending = self._plan_complete_obligations(ctx)
+                if _pending:
+                    return _pending[0]
 
         # Timing 0: acceptance is frozen once a step leaves "pending".
         # Once implementation has begun, letting the criteria change means the

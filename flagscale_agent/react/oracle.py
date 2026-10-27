@@ -44,7 +44,24 @@ PREMISE_SOURCES = ("differential", "provided", "consumer")
 
 # Fields a declaration may carry; any other key is rejected (F6): an incriminating
 # annex ("note: my own script") must not ride along a passing declaration.
-_DECLARATION_KEYS = frozenset(("oracle", "premise_source", "first_exercise"))
+#
+# `named_arbiter` / `deliverable_path` extend the declaration with the ONE thing a
+# self-authored oracle structurally cannot supply: WHICH external tool the task
+# text itself names as the decider, and which delivered bytes that tool must run
+# on. The loss signature this targets: an agent calibrates its own instrument
+# (its two Tm implementations agree to 0.00) but never points the task's named
+# arbiter at the delivered artifact, so the definition it chose -- not the
+# arbiter's -- decides. Observed: the run recorded the arbiter's own reading
+# (a delta the task bounded) mid-run, then explained it away as its own script
+# bug and shipped one unit of that delta over the bound.
+_DECLARATION_KEYS = frozenset(
+    ("oracle", "premise_source", "first_exercise", "named_arbiter", "deliverable_path")
+)
+
+# The value an agent writes when the task text names NO deciding tool at all.
+# Explicitly recorded as a declaration (not an omission) so "the task named
+# nothing" is auditable instead of silently equal to "I did not look".
+ARBITER_NONE = "none"
 
 # The FRAME acceptance item the harness injects into every plan. It carries the
 # framing-time discipline as ORDINARY acceptance text (worked by the agent like
@@ -65,7 +82,19 @@ ORACLE_ACCEPTANCE_ITEM = (
     "step first, or pass its index), so the acceptance->verification channel "
     "forces its evidence to exist early, while the premise is still cheap to "
     "revise. If no external-premise oracle exists for this task, say so "
-    "explicitly -- that is a load-bearing gap, not a pass."
+    "explicitly -- that is a load-bearing gap, not a pass. "
+    "NAMED ARBITER (declare it on the oracle): when the task text itself names "
+    "who decides a disputed quantity -- a sentence like 'consider X's output the "
+    "ground truth', 'must match the reference implementation', or 'verify with "
+    "tool Y' -- record that tool as the oracle's named_arbiter (quote it from the "
+    "task text; it is in the text you can read, it is NOT the hidden checker), "
+    "and the file you will deliver as deliverable_path. Before closing the plan, "
+    "run THAT tool against YOUR delivered file and record the reading -- an "
+    "instrument that only your own code calibrates agrees with your own "
+    "definition of the quantity by construction, and the arbiter's definition is "
+    "what decides. If the task text names no deciding tool, declare "
+    "named_arbiter: 'none' -- the point is that you LOOKED; an omitted key reads "
+    "as never having looked."
 )
 
 
@@ -164,6 +193,69 @@ def declares_external_premise(declaration):
         val = declaration.get(key)
         if not isinstance(val, str) or not val.strip():
             return False
+    return True
+
+
+def named_arbiter_obligation(declaration):
+    """Return the arbiter this declaration OBLIGES, or None when it obliges none.
+
+    Three outcomes, deliberately distinguishable:
+
+      * ``None``  -- no obligation. Either no declaration exists, or the agent
+        explicitly recorded ``named_arbiter: "none"`` (the task text names no
+        deciding tool). The second case is a DECLARATION, not an omission: the
+        agent had to look at the task text and say so, which is auditable.
+      * a non-empty str -- the task text NAMES this tool as the decider, so the
+        completion boundary must find an observation that ran THIS tool on the
+        DELIVERED artifact. Nothing here checks that the name is the right one;
+        the arbiter name is quoted from the task text and a reviewer can read it.
+      * ``""`` (empty/malformed) -- the agent wrote the key but left it blank or
+        non-string. Returned as ``""`` so a caller can refuse it as malformed
+        rather than silently treating it as a declaration of "none".
+    """
+    if not isinstance(declaration, dict):
+        return None
+    if "named_arbiter" not in declaration:
+        return None
+    raw = declaration.get("named_arbiter")
+    if not isinstance(raw, str):
+        return ""
+    name = raw.strip()
+    if not name:
+        return ""
+    if name.lower() == ARBITER_NONE:
+        return None
+    return name
+
+
+def arbiter_observation_matches(act, arbiter, deliverable_path=""):
+    """Does this recorded act run ``arbiter`` against ``deliverable_path``?
+
+    Both halves are required, and each closes a distinct escape:
+
+      * the ARBITER NAME must appear in the command. An act that runs the agent's
+        own verifier script never satisfies the obligation -- that is the whole
+        point (its script agrees with its own definition by construction).
+      * the DELIVERABLE PATH must appear in the command when the declaration
+        named one. Otherwise the arbiter runs on a scratch sample the agent
+        constructed (a hand-typed sequence, a re-derived substring), which
+        measures the arbiter's arithmetic and not the shipped bytes.
+
+    Matching is plain case-insensitive substring on the command text. That is
+    deliberately weak and honest: it catches "never ran the arbiter", not a
+    determined disguise.
+    """
+    if not isinstance(act, dict):
+        return False
+    cmd = act.get("command")
+    if not isinstance(cmd, str) or not cmd.strip():
+        return False
+    low = cmd.lower()
+    if arbiter.lower() not in low:
+        return False
+    path = (deliverable_path or "").strip()
+    if path and path.lower() not in low:
+        return False
     return True
 
 

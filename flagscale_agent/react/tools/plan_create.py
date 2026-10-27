@@ -390,6 +390,30 @@ class PlanCreateTool(Tool):
                     "premise_source": {"type": "string"},
                     "oracle": {"type": "string"},
                     "first_exercise": {"type": "string"},
+                    "named_arbiter": {
+                        "type": "string",
+                        "description": (
+                            "The tool/library the TASK TEXT itself names as the "
+                            "decider of a disputed quantity — quote it from the "
+                            "task text (the sentence saying whose output is the "
+                            "ground truth). This is not the hidden checker: it is "
+                            "a name the task gives you to read. Write \"none\" only "
+                            "after checking that the task text names no deciding "
+                            "tool: an OMITTED key reads as 'never looked' and is "
+                            "refused at plan close, while \"none\" is an explicit, "
+                            "auditable declaration."
+                        ),
+                    },
+                    "deliverable_path": {
+                        "type": "string",
+                        "description": (
+                            "The artifact path you actually deliver. When set, the "
+                            "named arbiter must be run against THIS path before the "
+                            "plan may close — pointing it at a hand-typed sample or "
+                            "a re-derived substring measures the tool's arithmetic, "
+                            "not your shipped bytes."
+                        ),
+                    },
                 },
             },
             "oracle_step_id": {
