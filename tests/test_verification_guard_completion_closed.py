@@ -635,6 +635,11 @@ def test_tc_unobservable_with_fabricated_attempt_still_blocks():
 
     As with the bare form, the step_done is now also blocked formally (the
     per-step `acceptance_act` obligation), and the latch question is unchanged.
+    The rejection reason is the UNGROUNDED arm, not the missing-field arm: the
+    field WAS received and well-shaped — what failed is corpus membership. The
+    message must say which (measured: a live trial agent was told its field was
+    missing while its own echo showed it present, and burned its remaining wall
+    re-adding the field instead of fixing the text).
     """
     d, plan = _plan_with_statuses(["done"])
     try:
@@ -646,7 +651,9 @@ def test_tc_unobservable_with_fabricated_attempt_still_blocks():
                 "observed": "I could not find the grader",
             })
         )
-        assert v is not None and v.reason == "step_done_without_acceptance_act", v
+        assert v is not None, v
+        assert v.reason == "step_done_acceptance_act_ungrounded", v
+        assert "WAS received" in v.message, v
         assert g._acceptance_observed is False
     finally:
         _close(d)

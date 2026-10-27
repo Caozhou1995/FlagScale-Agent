@@ -218,7 +218,7 @@ done, you re-checked the result against what that step was supposed to satisfy.
 If a step deserves real evidence, mark it via plan_update(step_done, verification=[...])
 individually rather than folding it into a batch."""
 
-_STEP_DONE_NO_ACCEPTANCE_ACT = """[VerificationGuard] This step reports done with no `acceptance_act`, so the requirement-coverage sweep cannot run.
+_STEP_DONE_NO_ACCEPTANCE_ACT = """[VerificationGuard] This step reports done with no `{field}`, so the requirement-coverage sweep cannot run.
 
 Measured failure this prevents: a trial reported 21 step_done calls and submitted
 `acceptance_act` ZERO times, so the coverage gate never executed once; it later
@@ -248,6 +248,10 @@ standard (a clause of the form "the design must satisfy <named standard>") — a
 deferred requirement is still a requirement, and it is the one most easily
 dropped. When the wall is nearly spent the N-requirement sweep degrades to
 advisory rather than blocking delivery; the field itself is still owed."""
+
+_STEP_DONE_UNGROUNDED_ACT = """[VerificationGuard] `{field}` WAS received, but its `observed` text is not a verbatim
+slice of this session's recorded tool results -- so it is not an ACCEPTANCE
+RECORD yet. Do not re-send the same text: diagnose below."""
 
 
 _COMPLETION_NO_ACCEPTANCE_OBSERVED = """[VerificationGuard] You are declaring the task complete, but you never recorded a real ACCEPTANCE OBSERVATION.
@@ -2445,8 +2449,19 @@ class VerificationGuard(Guard):
                 if _evidence_observed(aact, observed):
                     self._arbiter_act_seen = aact
 
-    def _acceptance_act_obligation(self, ctx: GuardContext):
+    def _acceptance_act_obligation(self, act, ctx, field_label: str = "acceptance_act"):
         """Per-step acceptance-observation obligation (FIXED required field).
+
+        `act` is passed EXPLICITLY rather than read off `ctx.tool_args`: a plan
+        update reaches "done" through more than one route (a single `step_done`,
+        a `batch` whose `updates[i]` items carry their own declarations), and
+        reading the top level from inside this method means any route that nests
+        the field escapes the obligation entirely. Measured: a trial used the
+        batch route on every step (10 `plan_update` calls, one batch), the batch
+        branch's fixed-field list carried only the three earlier declarations,
+        and `acceptance_act` appeared ZERO times in 2664 log lines -- the
+        coverage sweep never ran. Keeping the reader outside makes "which routes
+        are covered" a visible list in one place instead of a hidden default.
 
         Returns None when satisfied or when the obligation does not apply, a
         GuardVerdict.block otherwise.
@@ -2468,11 +2483,27 @@ class VerificationGuard(Guard):
         """
         if not _task_text_groundable(self._task_text()):
             return None
-        act = ctx.tool_args.get("acceptance_act")
         if _acceptance_act_recorded(act, self._observed(ctx)):
             return None
+        if isinstance(act, dict) and _is_real_str(act.get("observed")):
+            # The field EXISTS and is well-shaped; what failed is corpus
+            # membership of `observed`. Measured (trial 19-21-11): the agent
+            # submitted a real act, was told the field was MISSING, read the
+            # received-echo, and spent its final minutes guessing -- "the guard
+            # says acceptance_act missing but I did pass it". The lie is worse
+            # than the gate: it sends a correct submission into a blind loop.
+            # The diagnosis names the longest real slice of the agent's own
+            # text that DOES occur in the corpus, so the fix is a paste, not a
+            # guess. Same reason the message must name the field it checked
+            # rather than a generic "required fields are wrong".
+            return GuardVerdict.block(
+                _STEP_DONE_UNGROUNDED_ACT.format(field=field_label)
+                + _evidence_observed_diagnosis(act, self._observed(ctx)),
+                reason="step_done_acceptance_act_ungrounded",
+                category="verification_required",
+            )
         return GuardVerdict.block(
-            _STEP_DONE_NO_ACCEPTANCE_ACT,
+            _STEP_DONE_NO_ACCEPTANCE_ACT.format(field=field_label),
             reason="step_done_without_acceptance_act",
             category="verification_required",
         )
@@ -3004,7 +3035,8 @@ class VerificationGuard(Guard):
                     # agent should be running anyway, so it is not degraded --
                     # degrading it would re-open the exact hole being closed.
                     _echo_received(
-                        self._acceptance_act_obligation(ctx),
+                        self._acceptance_act_obligation(
+                            ctx.tool_args.get("acceptance_act"), ctx, "acceptance_act"),
                         "acceptance_act", ctx.tool_args.get("acceptance_act")),
                 ])
                 # EVIDENCE LATCHING PRECEDES FORMAL BLOCKING.
@@ -3129,6 +3161,16 @@ class VerificationGuard(Guard):
                         asm = u.get("assumptions")
                         if asm is None:
                             asm = ctx.tool_args.get("assumptions")
+                        # Same bar for the acceptance observation: the item's OWN
+                        # act first, top level as fallback -- exactly the shape of
+                        # the conv/dr/asm fallback above. Without this the batch
+                        # route is the escape hatch: measured trial used the batch
+                        # route on every step, the fixed-field list below carried
+                        # only the three earlier declarations, and
+                        # `acceptance_act` appeared ZERO times in 2664 log lines.
+                        act = u.get("acceptance_act")
+                        if act is None:
+                            act = ctx.tool_args.get("acceptance_act")
                         bad = _collect_fixed_field_failures([
                             _echo_received(
                                 _check_convention_field(conv),
@@ -3141,6 +3183,10 @@ class VerificationGuard(Guard):
                                 _check_unverified_assumptions_field(
                                     asm, self._observed(ctx)),
                                 "updates[].assumptions", asm),
+                            _echo_received(
+                                self._acceptance_act_obligation(
+                                    act, ctx, "updates[].acceptance_act"),
+                                "updates[].acceptance_act", act),
                         ])
                         if _declares_graded_reading(dr):
                             self._graded_reading_seen = True
