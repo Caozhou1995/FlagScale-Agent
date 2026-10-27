@@ -155,6 +155,24 @@ class AgentKernel:
     # text is never rewritten. 0 disables.
     AUTO_APPEND_NEED_INPUT_AT = 12
 
+    # Edit-churn stop-rule (the FINAL ladder rung, before the text-only
+    # fallback). After this many CONSECUTIVE edit-family calls with NO
+    # successful non-edit execution interleaved, inject a directive naming
+    # the churn and (when a plan with a forbidden list is active) the actual
+    # prohibition(s), then END the turn with an honest [NEED_USER_INPUT]
+    # hand-back — never a fabricated [TASK_COMPLETE]. The detector requires
+    # BOTH conditions so a legitimate TDD cadence (edit, passing test, edit,
+    # passing test) never triggers. Fires once per streak (the counter
+    # resets after firing); a model that answers the directive with real
+    # evidence keeps working. 0 disables.
+    FORBIDDEN_STOP_AFTER = 6
+    # Tool names treated as "edit" by the churn detector.
+    FORBIDDEN_EDIT_TOOLS = frozenset({"edit_file", "write_file"})
+    # How many times the rung may fire on consecutive churn streaks before
+    # it stays quiet (directive-fatigue guard: a model ignoring the directive
+    # twice will not be re-nudged forever).
+    FORBIDDEN_STOP_MAX_FIRES = 2
+
     def __init__(self, deps: KernelDeps):
         self.deps = deps
         self._interrupted = False
@@ -169,6 +187,10 @@ class AgentKernel:
         # run_turn to avoid re-appending on every later turn of a truly
         # stuck stream — one hand-back per incident.
         self._auto_appended_this_turn = False
+        # Edit-churn stop-rule state (FORBIDDEN_STOP_AFTER). Counted across
+        # the whole turn; reset by any successful non-edit execution.
+        self._edit_churn_streak = 0
+        self._forbidden_stop_fires = 0
         # Structured execution ledger for the current turn: one entry per tool
         # call that ACTUALLY ran (blocked calls excluded), each carrying the
         # `exec_error` flag so an evidence gate can tell "something executed"
@@ -1017,6 +1039,32 @@ class AgentKernel:
                 # an evidence gate can tell execution from REAL execution.
                 self._record_tool_ledger(tool_calls, results, blocked_indices)
 
+                # Edit-churn stop-rule (FORBIDDEN_STOP_AFTER): a run of edit-
+                # family calls with NO successful non-edit execution between
+                # them. Count only EXECUTED calls (blocked ones never ran).
+                # A successful non-edit execution resets the streak — that is
+                # the calibration that spares a legitimate TDD cadence.
+                if self.FORBIDDEN_STOP_AFTER > 0:
+                    for i, tc in enumerate(tool_calls):
+                        if i in blocked_indices:
+                            continue
+                        _name = tc.get("name", "")
+                        _err = (results[i] if i < len(results) else "") or ""
+                        if _name in self.FORBIDDEN_EDIT_TOOLS:
+                            self._edit_churn_streak += 1
+                        elif not str(_err).startswith("Error executing tool:"):
+                            self._edit_churn_streak = 0
+                    if (self._edit_churn_streak >= self.FORBIDDEN_STOP_AFTER
+                            and self._forbidden_stop_fires
+                            < self.FORBIDDEN_STOP_MAX_FIRES):
+                        self._forbidden_stop_fires += 1
+                        self._edit_churn_streak = 0
+                        _directive = self._generate_forbidden_stop_directive()
+                        d.history.append({"role": "user", "content": _directive})
+                        d.display.completion_signal("[NEED_USER_INPUT]")
+                        result.stop_reason = "forbidden_edit_churn_stop"
+                        break
+
                 # M6: reset the repeat-block convergence streak ONLY when a tool
                 # actually EXECUTED this cycle (real progress past whatever blocked
                 # before). This MUST NOT fire when every call was blocked — a
@@ -1323,6 +1371,46 @@ class AgentKernel:
                              if isinstance(b, dict) and b.get("type") == "text"]
                     return "".join(texts)
         return ""
+
+    def _generate_forbidden_stop_directive(self) -> str:
+        """Directive for the edit-churn stop-rule: name the churn, quote the
+        plan's relevant prohibition(s) when available, and force a binary
+        choice. Never claims completion — the terminal option is an honest
+        [NEED_USER_INPUT] hand-back."""
+        plan = None
+        task_plan = getattr(self.deps, "task_plan", None)
+        if task_plan:
+            try:
+                plan = task_plan.get_active() or {}
+            except Exception:
+                plan = {}
+        quoted = []
+        if plan:
+            for item in (plan.get("forbidden") or []):
+                action = str(item.get("action", "")) if isinstance(item, dict) else str(item)
+                if action.strip():
+                    quoted.append(action.strip())
+        lines = [
+            "[system: FORBIDDEN — you have now made "
+            f"{self.FORBIDDEN_STOP_AFTER} consecutive edit-family calls with "
+            "no successful execution in between. Your own plan's 不做清单 "
+            "exists for exactly this state.",
+        ]
+        if quoted:
+            lines.append("Items you wrote that this pattern most likely violates:")
+            for q in quoted[:3]:
+                lines.append(f"  ✗ {q}")
+        lines.append(
+            "Repeating the edit a 7th time is NOT one of your options. "
+            "Your next response must contain EXACTLY ONE of:\n"
+            "1. The new EVIDENCE that justifies another attempt — a command "
+            "you ran and its actual output (not another edit).\n"
+            "2. A DIFFERENT method entirely, executed as a tool call now.\n"
+            "3. The single line [NEED_USER_INPUT] — hand the task back honestly; "
+            "no deliverable was verified."
+        )
+        lines.append("Do not re-emit the same edit with tweaked arguments.]")
+        return "\n".join(lines)
 
     def _generate_continuation(self, text_only: bool = False,
                                saturated: bool = False) -> str:
