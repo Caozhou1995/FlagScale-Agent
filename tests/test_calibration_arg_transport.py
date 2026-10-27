@@ -29,6 +29,11 @@ CAL = {
     "known_case": "no_known_case",
     "observed": "no_known_case",
     "matches": "no_known_case",
+    "instrument_input": {
+        "expression": "tm = run(seq[start:end])",
+        "source": "the span the task text fixes",
+        "mismatch_checked": "second span read 61.8 vs 67.4",
+    },
 }
 ORACLE = {
     "premise_source": "provided",

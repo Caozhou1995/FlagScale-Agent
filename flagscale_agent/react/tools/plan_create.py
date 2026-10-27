@@ -18,6 +18,7 @@ import json
 
 from flagscale_agent.react.tools.base import Tool
 from flagscale_agent.react.instruments import check_calibration
+from flagscale_agent.react.instruments import check_instrument_input
 from flagscale_agent.react.oracle import (
     ORACLE_ACCEPTANCE_ITEM,
     STATED_CONSTRAINT_ITEM,
@@ -644,6 +645,19 @@ class PlanCreateTool(Tool):
         _cal_refusal = check_calibration(calibration)
         if _cal_refusal is not None:
             return f"ERROR: {_cal_refusal[1]}"
+
+        # INSTRUMENT 1b GATE: the calibration binds the INSTRUMENT; this binds
+        # the INPUT it is handed. Measured losses in this class were all inputs,
+        # not instruments: a correctly calibrated tool fed a span the agent
+        # picked (skipping the prefix the consumer's own construction includes)
+        # returned a value inside the bound while the consumer's construction of
+        # the same quantity crossed it. Both readings were defensible; only one
+        # decided the reward. Refusing here -- not at plan close -- because this
+        # is the moment the construction is being chosen, and a declaration
+        # demanded 20 steps later cannot change that choice.
+        _inp_refusal = check_instrument_input(calibration)
+        if _inp_refusal is not None:
+            return f"ERROR: {_inp_refusal[1]}"
 
         try:
             plan = self._plan.create(title, normalized, self._session_id, thinking=thinking,

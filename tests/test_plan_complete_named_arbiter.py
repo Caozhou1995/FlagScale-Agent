@@ -41,7 +41,18 @@ CORPUS = (
 def _plan():
     d = tempfile.mkdtemp()
     plan = TaskPlan(d)
-    plan.create("T", [{"title": "s1", "acceptance": ["a1"]}])
+    plan.create("T", [{"title": "s1", "acceptance": ["a1"]}],
+                calibration={
+                    "instrument": "test shim instrument",
+                    "known_case": "test shim known case",
+                    "observed": "test shim observation",
+                    "matches": "yes",
+                    "instrument_input": {
+                        "expression": "value = check(shim_path)",
+                        "source": "the shim names its own path as the input",
+                        "mismatch_checked": "recomputed from the same path: identical",
+                    },
+                })
     return plan
 
 

@@ -10,6 +10,11 @@ _CAL_SHIM = {
     "known_case": "shim known case",
     "observed": "shim observed",
     "matches": "yes",
+    "instrument_input": {
+        "expression": "value = check(shim_path)",
+        "source": "the shim names its own path as the input",
+        "mismatch_checked": "recomputed from the same path: identical value",
+    },
 }
 
 

@@ -61,6 +61,7 @@ from flagscale_agent.react.oracle import (
 from flagscale_agent.react.instruments import (
     check_bound_margin,
     check_differential,
+    check_instrument_input,
     check_negative_control,
     calibration_needs_negative_control,
     differential_satisfied,
@@ -2800,6 +2801,31 @@ class VerificationGuard(Guard):
             pending.append(GuardVerdict.block(
                 message=_PLAN_COMPLETE_ONE_READING,
                 reason="plan_complete_rival_not_distinct",
+                category="verification_required",
+            ))
+
+        # INSTRUMENT 1b backstop: the input-construction declaration is demanded
+        # at creation time, but plans created BEFORE this mechanism (resumed
+        # sessions) persisted a calibration without it. The backstop is the one
+        # boundary a mixed tree cannot outflank: whenever the plan closes, its
+        # calibration must either carry the construction declaration (or an
+        # explicit not_applicable), or the close names the gap. A refusal here
+        # has an obvious next action: re-frame the plan with the field filled,
+        # or re-issue plan_create with the declaration added -- the same
+        # recoverable shape the plan-close gates above use.
+        _cal = {}
+        if self._plan:
+            try:
+                _active = self._plan.get_active()
+                if isinstance(_active, dict):
+                    _cal = _active.get("calibration") or {}
+            except Exception:
+                _cal = {}
+        _inp = check_instrument_input(_cal)
+        if _inp is not None:
+            pending.append(GuardVerdict.block(
+                message=_inp[1],
+                reason=_inp[0],
                 category="verification_required",
             ))
         return pending

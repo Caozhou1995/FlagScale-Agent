@@ -311,6 +311,129 @@ def check_calibration(cal):
     return None
 
 
+_MISSING_INSTRUMENT_INPUT = """`calibration.instrument_input` is REQUIRED and is missing.
+
+`instrument` names WHICH check you rely on. It does not say WHAT you feed into
+it, and that is where the measured losses live: an agent calibrated its
+measurement tool correctly, then fed it a slice it constructed itself (skipping
+a prefix the tool's own consumer includes), read a value inside the stated bound,
+and shipped -- while the same tool on the consumer's construction of the same
+quantity landed outside the bound. The instrument was calibrated and the answer
+was still wrong, because the INPUT was chosen, not derived.
+
+So state the construction, not the intent. COPY THIS SHAPE, filled in:
+
+  "instrument_input": {
+    "expression": "reading = measure(template[fs + head_len : fs + head_len + bind_len])",
+    "source": "the task says the measured span must start after the fixed 4-position head, so the head is inside the span the consumer measures",
+    "mismatch_checked": "recomputed with the head INCLUDED as well: same reading 61.8 vs 67.4"
+  }
+
+What each key is for (all three are free text -- nothing parses them):
+  · expression        -- the span/slice/query you actually construct, as code.
+  · source            -- WHY that boundary: the task sentence, or the named
+                         tool's own default path. Not "I chose it" -- say which
+                         external wording or default decided the edge.
+  · mismatch_checked  -- the second construction you ran and its number. This is
+                         the differential half: if moving the boundary changes
+                         the verdict, the value was DEFINED by you, not measured.
+
+If the instrument consumes no constructed input (its input IS the delivered
+artifact, whose path the task names), say so explicitly instead of inventing one:
+  "instrument_input": {"not_applicable": "the check runs against delivered.bin,
+   the path the task names; there is no span or query I choose"}
+
+Forbidden values: absent, blank, "unknown", "n/a", "TODO". Each of those is the
+silent guess this field exists to surface."""
+
+
+def check_instrument_input(cal):
+    """Validate ``calibration.instrument_input`` (the construction declaration).
+
+    Returns ``(reason, message)`` when it must be refused, else None.
+
+    WHY THIS IS SEPARATE FROM ``instrument``. Calibration answers "does my
+    instrument report correctly on a case whose answer I know?" -- it binds the
+    INSTRUMENT. It says nothing about the INPUT, and every measured loss in this
+    class was an input-construction choice: the agent fed its tool a span it
+    picked (skipping a prefix the consumer's own construction includes), read a
+    value inside the bound, and shipped while the consumer's construction of the
+    same quantity crossed it. A calibrated instrument on a chosen input still
+    returns a confident wrong answer.
+
+    Two legal shapes, both refused when they are only a gesture:
+      * the construction form -- `expression` (the actual slice/query), `source`
+        (which external wording or default decided the boundary) and
+        `mismatch_checked` (the second construction and its number). Requiring
+        the third is the point: if the boundary was never moved, the agent does
+        not know whether the value is measured or DEFINED.
+      * the not-applicable form -- `not_applicable` stating why no input is
+        constructed (the input is the delivered file the task names).
+
+    A blank/"unknown"/"n/a" value is refused: it is the guess dressed as a
+    declaration.
+    """
+    if not isinstance(cal, dict):
+        return ("calibration_instrument_input_missing",
+                _MISSING_INSTRUMENT_INPUT)
+    decl = coerce_structured(cal.get("instrument_input"))
+    if decl is None or (isinstance(decl, str)
+                        and not decl.strip()):
+        return ("calibration_instrument_input_missing",
+                _MISSING_INSTRUMENT_INPUT)
+    if isinstance(decl, str):
+        return ("calibration_instrument_input_not_object",
+                _cal_malformed((
+                    "`instrument_input` must be an object, not a bare string. "
+                    + _describe_received(decl))))
+    if not isinstance(decl, dict):
+        return ("calibration_instrument_input_not_object",
+                _cal_malformed(_describe_received(decl)))
+
+    na = decl.get("not_applicable")
+    if _is_real_str(na):
+        return None if not _is_vague(na) else (
+            "calibration_instrument_input_vague",
+            _cal_malformed(
+                "`instrument_input.not_applicable` says "
+                f"{na!r}, which does not state WHY no input is constructed. "
+                "Name the artifact the check consumes and why its span is not "
+                "yours to choose."))
+
+    missing = [k for k in ("expression", "source", "mismatch_checked")
+               if not _is_real_str(decl.get(k))]
+    if missing:
+        return ("calibration_instrument_input_incomplete",
+                _cal_malformed((
+                    "`instrument_input` is missing or blank on: "
+                    + ", ".join(missing) + ". "
+                    + _describe_received(decl))))
+    vague = [k for k in ("expression", "source", "mismatch_checked")
+             if _is_vague(decl.get(k))]
+    if vague:
+        return ("calibration_instrument_input_vague",
+                _cal_malformed((
+                    "These keys read as placeholders, not declarations: "
+                    + ", ".join(f"{k}={decl.get(k)!r}" for k in vague)
+                    + ". State the actual construction, the external wording "
+                      "that fixed its boundary, and the second construction's "
+                      "number. " + _describe_received(decl))))
+    return None
+
+
+#: Values that look like a declaration but carry no information. Kept small and
+#: literal on purpose: this list decides only whether a field is a gesture.
+_VAGUE_VALUES = {"unknown", "n/a", "na", "none", "todo", "tbd", "?", "-",
+                 "not sure", "unsure", "as appropriate"}
+
+
+def _is_vague(value) -> bool:
+    """True when a string is a placeholder rather than a declaration."""
+    if not _is_real_str(value):
+        return True
+    return " ".join(str(value).split()).strip().lower() in _VAGUE_VALUES
+
+
 def calibration_needs_negative_control(cal) -> bool:
     """True when the instrument was never checked against a known answer."""
     if not isinstance(cal, dict):

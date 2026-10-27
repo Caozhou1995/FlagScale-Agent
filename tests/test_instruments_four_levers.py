@@ -95,7 +95,12 @@ def test_calibration_no_known_case_is_accepted_and_recorded():
     out = tool.execute(
         title="x", steps=["a"], oracle=dict(ORACLE),
         calibration={"instrument": "oligotm on annealing region",
-                     "matches": "no_known_case"},
+                     "matches": "no_known_case",
+                     "instrument_input": {
+                         "expression": "tm = run(seq[start:end])",
+                         "source": "the span the task text fixes",
+                         "mismatch_checked": "second span read 61.8 vs 67.4",
+                     }},
     )
     assert out.startswith("Plan created.")
     stored = p.get_active()["calibration"]

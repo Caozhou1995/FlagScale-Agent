@@ -24,6 +24,11 @@ DEFAULT_CALIBRATION = {
     "known_case": "fixture-supplied known case",
     "observed": "fixture-supplied observation",
     "matches": "yes",
+    "instrument_input": {
+        "expression": "value = check(fixture_path)",
+        "source": "the fixture names its own path as the input",
+        "mismatch_checked": "recomputed from the same path: identical value",
+    },
 }
 
 
