@@ -227,21 +227,45 @@ down earlier in its own log. The requirement was known and unmeasured — that i
 exactly the gap this field closes, one step at a time, instead of only at
 plan-close.
 
-Add to THIS call:
+COPY THIS SHAPE — filled in, not placeholders. Every string below is replaced by
+something you actually ran and actually read; nothing about the FORM is yours to
+choose:
 
-  acceptance_act = {{
-    "command": "<the exact command you ran>",
-    "observed": "<its ACTUAL output text>",       # must appear in a real tool result
-    "constraints": [                              # ONE row per requirement
-      {{"quote": "<the requirement, in the task's or the standard's words>",
-        "command": "<how you measured it>",
-        "observed": "<the value you read>"}}
+  acceptance_act = {
+    "command": "python3 audit.py",
+    "observed": "3/3 clauses PASS",
+    "constraints": [
+      {"quote": "each primer must be at least 18 nt",
+       "command": "python3 audit.py",
+       "observed": "min_len=21 PASS"},
+      {"quote": "Tm must be between 58 and 72 C",
+       "command": "oligotm -tp 1 -sc 1 -mv 50 -dv 2 -n 0.8 -d 500 ATGCATGCATGCATGCATGC",
+       "observed": "61.83"},
+      {"quote": "no internal recognition sites",
+       "command": "python3 audit.py",
+       "observed": "internal_sites=none"}
     ]
-  }}
+  }
 
-If the acceptance has no runnable check, use the UNOBSERVABLE form instead:
-{{"unobservable": "<dimension + why>", "command": "<probe you ran>", "observed":
-"<what it returned>"}} — a bare claim is refused.
+HOW EXACT IS "EXACT" — this is the part that wastes turns guessing, so here it is:
+  · `command` and `observed` are FREE TEXT. Nothing parses them. Any length, any
+    wording, several commands joined with `;` — all fine.
+  · The ONE rule: the `observed` string must be text that a tool really printed
+    in this session. Copy it, do not retype it from memory.
+  · Whitespace and letter case are ignored in that comparison. An ellipsis, a
+    summary, a paraphrase, or a number you recalled instead of saw is NOT ignored
+    and will not match.
+  · `constraints` is optional as a list, but for a task that enumerates its
+    requirements it is how the coverage sweep runs: one row per requirement, each
+    row's `quote` copied from the requirement's own words.
+  · If you do not have the text handy, print it and copy that:
+    `python3 audit.py | head -c 400` then paste those characters verbatim.
+
+If the acceptance has no runnable check, use the UNOBSERVABLE form instead —
+same rule, an attempt still costs a real probe:
+  {"unobservable": "grader corpus is hidden so I cannot observe the score",
+   "command": "ls /grader",
+   "observed": "No such file or directory"}
 
 Cover the requirements the task STATES and the ones it DEFERS to an external
 standard (a clause of the form "the design must satisfy <named standard>") — a
@@ -249,9 +273,12 @@ deferred requirement is still a requirement, and it is the one most easily
 dropped. When the wall is nearly spent the N-requirement sweep degrades to
 advisory rather than blocking delivery; the field itself is still owed."""
 
-_STEP_DONE_UNGROUNDED_ACT = """[VerificationGuard] `{field}` WAS received, but its `observed` text is not a verbatim
-slice of this session's recorded tool results -- so it is not an ACCEPTANCE
-RECORD yet. Do not re-send the same text: diagnose below."""
+_STEP_DONE_UNGROUNDED_ACT = """[VerificationGuard] `{field}` WAS received — its shape is fine. What failed is ONE thing: the `observed` string is not text this session's tools actually printed.
+
+Do not re-send the field and do not change its shape. Only the text of `observed`
+needs to become real output. You do not have to guess which part is wrong: the
+diagnosis below names the longest piece of YOUR string that actually does occur
+in your recorded tool results, when such a piece exists."""
 
 
 _COMPLETION_NO_ACCEPTANCE_OBSERVED = """[VerificationGuard] You are declaring the task complete, but you never recorded a real ACCEPTANCE OBSERVATION.
@@ -2497,13 +2524,13 @@ class VerificationGuard(Guard):
             # guess. Same reason the message must name the field it checked
             # rather than a generic "required fields are wrong".
             return GuardVerdict.block(
-                _STEP_DONE_UNGROUNDED_ACT.format(field=field_label)
+                _STEP_DONE_UNGROUNDED_ACT.replace("{field}", field_label)
                 + _evidence_observed_diagnosis(act, self._observed(ctx)),
                 reason="step_done_acceptance_act_ungrounded",
                 category="verification_required",
             )
         return GuardVerdict.block(
-            _STEP_DONE_NO_ACCEPTANCE_ACT.format(field=field_label),
+            _STEP_DONE_NO_ACCEPTANCE_ACT.replace("{field}", field_label),
             reason="step_done_without_acceptance_act",
             category="verification_required",
         )
