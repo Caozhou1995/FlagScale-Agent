@@ -454,8 +454,9 @@ class PlanUpdateTool(Tool):
                 for pp in pending:
                     lines.append(f"  - {pp['id']}: {pp['statement']}")
                 lines.append(
-                    "现在去跑。跑完必须结算（action='settle'，outcome 只能是 "
-                    "hit / miss / not_run）——plan complete 会拒绝未结算的预注册。"
+                    "Go run it now. Settle it afterwards (action='settle', outcome is one of "
+                    "hit / miss / not_run) — plan complete refuses while a "
+                    "pre-registration is unsettled."
                 )
                 return "\n".join(lines)
             elif action == "settle":
@@ -489,10 +490,12 @@ class PlanUpdateTool(Tool):
                 if not added:
                     if res.get("at_cap"):
                         return (
-                            f"不做清单已满（{total}/{res.get('max', '?')} 条）。新条目未加入。"
-                            "清单的价值在于每条都被反复读到——第 9 条不是更多保护，是稀释。"
-                            "如果你刚发现的新坑比某条已有禁令更致命，用同一 action 名重发以刷新"
-                            "该条的 why/instead，而不是继续追加。"
+                            f"Forbidden list is full ({total}/{res.get('max', '?')} items). "
+                            "The new item was NOT added. The list's value is that every item "
+                            "gets re-read every turn — a 9th item is not more protection, "
+                            "it is dilution. If the newly discovered trap is deadlier than an "
+                            "existing one, re-send with the SAME action name to refresh that "
+                            "item's why/instead instead of appending."
                         )
                     skipped = res.get("skipped_duplicates", 0)
                     return (
@@ -505,7 +508,7 @@ class PlanUpdateTool(Tool):
                 for i, e in enumerate(res.get("forbidden") or [], 1):
                     seg = f"  {i}. ✗ {e.get('action', '')}"
                     if e.get("instead"):
-                        seg += f" → 改为：{e['instead']}"
+                        seg += f" → instead: {e['instead']}"
                     out.append(seg)
                 if res.get("at_cap"):
                     out.append(

@@ -301,7 +301,7 @@ class PromptBuilder:
         if forbidden_block:
             return (
                 " | ".join(parts)
-                + f"\n\n不做清单 (forbidden — every turn, self-authored):\n{forbidden_block}"
+                + f"\n\nForbidden list (what NOT to do — every turn, self-authored):\n{forbidden_block}"
                 + (f"\n\nHypothesis (current problem model):\n{hypothesis}" if hypothesis else "")
             )
 

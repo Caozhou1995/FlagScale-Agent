@@ -100,15 +100,15 @@ def _coerce_deps(value, default):
 
 
 def _id_list(ids) -> str:
-    """Render step ids as `第2、3步` for the ledger.
+    """Render step ids as `steps 2,3` for the ledger.
 
-    An empty set renders as the empty string, not `第步`: callers that report a
-    saving for "no parallel steps" would otherwise print garbage (latent today,
-    one code path away from live).
+    An empty set renders as the empty string, not a bare `steps`: callers that
+    report a saving for "no parallel steps" would otherwise print garbage
+    (latent today, one code path away from live).
     """
     if not ids:
         return ""
-    return "第" + "、".join(str(i) for i in ids) + "步"
+    return "step " + ",".join(str(i) for i in ids)
 
 
 # Hard cap on the number of prohibitions a plan carries. The list is meant to be
@@ -1007,20 +1007,21 @@ class TaskPlan:
         lines: List[str] = []
         if not preds:
             return lines
-        lines.append("预注册 (predictions) — 跑之前写下的预期，跑完必须结算：")
+        lines.append("Pre-registrations (predictions) — written before the run, must be settled after:")
         for p in preds:
             oc = p.get("outcome")
             mark = f"[{oc}]" if oc else "[UNSETTLED]"
             seg = f"   {mark} {p.get('id')}: {p.get('statement', '')}"
             if p.get("expected"):
-                seg += f" → 预期 {p['expected']}"
+                seg += f" → expected {p['expected']}"
             if p.get("observed"):
-                seg += f"；实测 {p['observed']}"
+                seg += f"; observed {p['observed']}"
             lines.append(seg)
         if any(not p.get("outcome") for p in preds):
             lines.append(
-                "   还有未结算的预注册 —— 用 plan_update(action='settle', "
-                "prediction_id=..., outcome='hit'|'miss'|'not_run') 结掉。"
+                "   Unsettled pre-registrations remain — settle them via "
+                "plan_update(action='settle', "
+                "prediction_id=..., outcome='hit'|'miss'|'not_run')."
             )
         lines.append("")
         return lines
@@ -1232,18 +1233,18 @@ class TaskPlan:
             # made, because an estimate nobody ever re-reads is not a plan.
             if estimated_total is None and actual_total <= 0:
                 return lines
-            lines.append("时间账 (TIME LEDGER) — 未注入预算，无 deadline：")
+            lines.append("TIME LEDGER — no budget injected, no deadline:")
             if estimated_total is not None:
                 lines.append(
-                    f"   预计合计: {_fmt_sec(estimated_total)}"
+                    f"   Estimated total: {_fmt_sec(estimated_total)}"
                     + (
-                        f"  ({unestimated} 步未估时)"
+                        f"  ({unestimated} step(s) without estimate)"
                         if unestimated
-                        else "  (全部步骤已估时)"
+                        else "  (all steps estimated)"
                     )
                 )
             if actual_total > 0:
-                lines.append(f"   已实际消耗: {_fmt_sec(actual_total)}")
+                lines.append(f"   Actual spent: {_fmt_sec(actual_total)}")
             return lines
 
         budget = float(budget)
@@ -1254,24 +1255,24 @@ class TaskPlan:
         # spent) instead of printing a four-digit percentage that reads like a
         # formatting bug and hides the one actionable fact: nothing is left.
         if remaining <= 0:
-            lines.append("时间账 (TIME LEDGER):")
+            lines.append("TIME LEDGER:")
             lines.append(
-                f"   预算 {_fmt_sec(budget)} | 已用 {_fmt_sec(elapsed)} "
-                f"→ 剩余 0（预算已耗尽或被更早的会话用完）"
+                f"   Budget {_fmt_sec(budget)} | Used {_fmt_sec(elapsed)} "
+                f"→ Remaining 0 (budget exhausted or consumed by an earlier session)"
             )
             lines.append(
-                "   现在只做收尾：把已有交付物固化到交付路径并验证，"
-                "不要再开新方向"
+                "   Wrap up ONLY now: secure existing deliverables to their "
+                "delivery paths and verify — do not open new directions"
             )
             return lines
         num = f"{remaining / budget * 100:.0f}%"
 
-        lines.append("时间账 (TIME LEDGER):")
+        lines.append("TIME LEDGER:")
         lines.append(
-            f"   预算 {_fmt_sec(budget)} | 已用 {_fmt_sec(elapsed)} "
-            f"({elapsed / budget * 100:.0f}%) | 剩余 {_fmt_sec(remaining)} ({num})"
+            f"   Budget {_fmt_sec(budget)} | Used {_fmt_sec(elapsed)} "
+            f"({elapsed / budget * 100:.0f}%) | Remaining {_fmt_sec(remaining)} ({num})"
         )
-        lines.append(f"   预留 wrap-up {_fmt_sec(reserve)}（不含在任何步骤估时内）")
+        lines.append(f"   Wrap-up reserve {_fmt_sec(reserve)} (not counted in any step estimate)")
 
         if estimated_total is not None:
             # F3: judge the plan against what is STILL ON THE CLOCK. Computing
@@ -1292,28 +1293,28 @@ class TaskPlan:
             # verdict unknown — say so instead of certifying a number.
             verdict_known = unestimated == 0
             lines.append(
-                f"   计划估时合计 {_fmt_sec(estimated_total)}"
-                + (f" + 预留 {_fmt_sec(reserve)}" if reserve else "")
+                f"   Plan estimate total {_fmt_sec(estimated_total)}"
+                + (f" + reserve {_fmt_sec(reserve)}" if reserve else "")
             )
             # Serial sum is only the answer for a pure chain. Report the
             # critical path whenever it differs, so a plan is not called over
             # budget when independent branches could run at the same time.
             if cp["gain"] > 0.5:
                 lines.append(
-                    f"   关键路径 {_fmt_sec(cp['critical'])}（串行相加 {_fmt_sec(cp['serial'])}）"
-                    f" — 并行可省 {_fmt_sec(cp['gain'])}："
+                    f"   Critical path {_fmt_sec(cp['critical'])} (serial sum {_fmt_sec(cp['serial'])})"
+                    f" — parallel gain {_fmt_sec(cp['gain'])}: "
                     + _id_list(cp["parallel"])
-                    + " 互不依赖，可同时推进（把其中一条分支交给 worker，"
-                    "主线程走最长链）"
+                    + " are independent and can run together (hand one branch to a worker, "
+                    "main thread takes the longest chain)"
                 )
                 bounded = cp["critical"]
             else:
                 bounded = live_est
                 if len(live_steps) > 2:
                     lines.append(
-                        f"   关键路径 = 串行相加 = {_fmt_sec(cp['serial'])}"
-                        f"（依赖链是真的，没有可并行的支线；瓶颈在第 "
-                        f"{cp['constraint']} 步）"
+                        f"   Critical path = serial sum = {_fmt_sec(cp['serial'])}"
+                        f" (the dependency chain is real, no parallel branch; bottleneck at step "
+                        f"{cp['constraint']})"
                     )
             # Judge the LIVE remainder against the REMAINING wall — not the
             # absolute total against the original budget. Mixed units made one
@@ -1328,51 +1329,55 @@ class TaskPlan:
             # pays for them is the mixed-unit bug).
             nothing_closed = actual_total <= 0
             over_label = (
-                f"⚠ 计划已超预算 {_fmt_sec(bounded - usable_now)}"
+                f"⚠ Plan over budget by {_fmt_sec(bounded - usable_now)}"
                 if nothing_closed
-                else f"⚠ 计划已超剩余可用 {_fmt_sec(bounded - usable_now)}"
+                else f"⚠ Plan over the remaining allowance by {_fmt_sec(bounded - usable_now)}"
             )
             if bounded > usable_now:
                 lines.append(
                     over_label
-                    + f"（{'关键路径' if cp['gain'] > 0.5 else '剩余估时'} {_fmt_sec(bounded)}"
-                    f" > {'预算-预留' if nothing_closed else '剩余-预留'} {_fmt_sec(usable_now)}）"
+                    + f" ({'critical path' if cp['gain'] > 0.5 else 'remaining estimate'} {_fmt_sec(bounded)}"
+                    + f" > {'budget-reserve' if nothing_closed else 'remaining-reserve'} {_fmt_sec(usable_now)})"
                 )
                 if cp["gain"] > 0.5:
                     lines.append(
-                        "   → 先扇出：把互不依赖的支线并行做掉再判断。"
-                        "只有并行后仍然超，才动范围"
+                        "   → Fan out first: run the independent branches in "
+                        "parallel before judging scope. Only if it is still "
+                        "over after parallelizing, cut scope"
                     )
                 else:
                     lines.append(
-                        f"   → 并行救不了（依赖链是真的）：砍第 {cp['constraint']} 步的范围，"
-                        "或换更便宜的方法，而不是压缩后续每一步"
+                        f"   → Parallel will not help (the dependency chain is "
+                        f"real): cut the scope of step {cp['constraint']}, "
+                        "or switch to a cheaper method — do not just squeeze every later step"
                     )
             else:
                 lines.append(
-                    f"   计划余量 {_fmt_sec(usable_now - bounded)}"
+                    f"   Plan slack {_fmt_sec(usable_now - bounded)}"
                     + (
-                        " （按已知估时可完成；未估时的步骤未计入，补上再判断）"
+                        " (fits by the known estimates; unestimated steps are "
+                        "NOT counted — add them before trusting this)"
                         if not verdict_known
-                        else " （按计划走可完成）"
+                        else " (completable as planned)"
                     )
                 )
         if unestimated:
             lines.append(
-                f"   ⚠ {unestimated} 个未完成步骤还没有估时 — 未估时的步骤等于没有计划，"
-                f"现在就补 est_sec（剩余可用 {_fmt_sec(remaining - reserve)}，"
-                "按这个数给每步分配）"
+                f"   ⚠ {unestimated} unfinished step(s) still have no estimate — an "
+                "unestimated step is an unplanned step; add est_sec now "
+                f"(remaining usable {_fmt_sec(remaining - reserve)}, "
+                "allocate against that number)"
             )
         elif estimated_total is None:
             # Nothing estimated at all, but a real wall exists: say where the
             # agent stands anyway, because "how much is left" is exactly the
             # fact it needs in order to produce the estimates.
             lines.append(
-                f"   未估时的计划无法判断可行性；剩余可用 {_fmt_sec(remaining - reserve)}，"
-                "先给每步分配再开工"
+                f"   Feasibility is unknown with no estimates; remaining usable "
+                f"{_fmt_sec(remaining - reserve)} — allocate per step first, then start"
             )
         if actual_total > 0:
-            lines.append(f"   已实际消耗（已关闭步骤）: {_fmt_sec(actual_total)}")
+            lines.append(f"   Actual spent (closed steps): {_fmt_sec(actual_total)}")
 
         # Drift check: are the remaining steps still affordable with what's left?
         pending_est = [
@@ -1395,34 +1400,35 @@ class TaskPlan:
             usable = remaining - reserve
             if cp_pending["gain"] > 0.5 and need_critical <= usable < need:
                 lines.append(
-                    f"   剩余步骤串行需 {_fmt_sec(need)} > 可用 {_fmt_sec(usable)}，"
-                    f"但关键路径只要 {_fmt_sec(need_critical)} → 可完成。"
-                    " 并行做掉"
+                    f"   Remaining steps need {_fmt_sec(need)} serially > usable {_fmt_sec(usable)}, "
+                    f"but the critical path only needs {_fmt_sec(need_critical)} → completable."
+                    " Run the parallel branches"
                     + _id_list(cp_pending["parallel"])
-                    + "：把一条支线交给 worker，主线程走最长链"
+                    + ": hand one branch to a worker, main thread takes the longest chain"
                 )
             elif need_critical > usable:
                 lines.append(
-                    f"   ⚠ 漂移: 剩余步骤关键路径还需 {_fmt_sec(need_critical)}"
-                    + (f"（串行 {_fmt_sec(need)}）" if need != need_critical else "")
-                    + f"，可用只有 {_fmt_sec(usable)}（=剩余-预留）"
-                    f" → 差 {_fmt_sec(need_critical - usable)}。"
+                    f"   ⚠ Drift: the remaining steps' critical path still needs {_fmt_sec(need_critical)}"
+                    + (f" (serial {_fmt_sec(need)})" if need != need_critical else "")
+                    + f"; only {_fmt_sec(usable)} usable (=remaining-reserve)"
+                    f" → short by {_fmt_sec(need_critical - usable)}."
                 )
                 if cp_pending["gain"] > 0.5:
                     lines.append(
-                        "   先扇出并行支线"
+                        "   Fan out the parallel branches first"
                         + _id_list(cp_pending["parallel"])
-                        + "；仍不够再砍范围"
+                        + "; if still not enough, cut scope"
                     )
                 else:
                     lines.append(
-                        "   依赖链是真的，并行救不了：现在砍范围/换更便宜的方法/"
-                        "放弃最贵的一步，不要等余量耗尽"
+                        "   The dependency chain is real, parallel will not help: "
+                        "cut scope / switch to a cheaper method / drop the most "
+                        "expensive step NOW — do not wait for the slack to run out"
                     )
             else:
                 lines.append(
-                    f"   剩余步骤估时需要 {_fmt_sec(need)}，可用 {_fmt_sec(usable)}"
-                    f" → 尚余 {_fmt_sec(usable - need)}"
+                    f"   Remaining steps need {_fmt_sec(need)}, usable {_fmt_sec(usable)}"
+                    f" → {_fmt_sec(usable - need)} to spare"
                 )
         return lines
 
@@ -1447,25 +1453,27 @@ class TaskPlan:
         items = _normalize_forbidden(plan.get("forbidden"))
         lines: List[str] = []
         if not items:
-            lines.append("不做清单 (forbidden) — 尚未声明：")
+            lines.append("Forbidden list (what NOT to do) — not yet declared:")
             lines.append(
-                "   计划只写了要做什么。没有阴性约束，时间紧张时就没有防线。"
-                "现在用 plan_update(action='add_forbidden') 写下本任务里明确不该做的事"
-                "（每条：不该做的动作 + 为什么 + 那种时候改做什么）。"
+                "   The plan states only what to do. With no negative constraints "
+                "there is no defense when the clock gets tight. Write down the "
+                "things this task must NOT do via "
+                "plan_update(action='add_forbidden') now "
+                "(each: the forbidden action + why + what to do instead)."
             )
             lines.append("")
             return lines
-        lines.append("不做清单 (forbidden) — 我自己写下的、本任务中不该做的事：")
+        lines.append("Forbidden list — written by me for THIS task, re-rendered every turn:")
         for i, e in enumerate(items, 1):
             seg = f"   {i}. ✗ {e.get('action', '')}"
             if e.get("why"):
-                seg += f"（因为：{e['why']}）"
+                seg += f" (why: {e['why']})"
             if e.get("instead"):
-                seg += f" → 那时改为：{e['instead']}"
+                seg += f" → then instead: {e['instead']}"
             lines.append(seg)
         lines.append(
-            "   （执行中新发现的坑同样要写进来，别只在脑子里记："
-            "plan_update(action='add_forbidden', items=[...])）"
+            "   (traps discovered mid-task go on this list too, not just in "
+            "memory: plan_update(action='add_forbidden', items=[...]))"
         )
         lines.append("")
         return lines
@@ -1482,7 +1490,7 @@ class TaskPlan:
         lines.extend(self._forbidden_lines(plan))
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
-            lines.append("当前问题模型 (thinking):")
+            lines.append("Current problem model (thinking):")
             for t_line in thinking.split("\n"):
                 lines.append(f"   {t_line}")
             lines.append("")
@@ -1496,28 +1504,28 @@ class TaskPlan:
             if est or actual:
                 bits = []
                 if est:
-                    bits.append(f"估{_fmt_sec(est)}")
+                    bits.append(f"est {_fmt_sec(est)}")
                 if actual is not None:
-                    bits.append(f"实{_fmt_sec(actual)}")
+                    bits.append(f"act {_fmt_sec(actual)}")
                     if est:
                         drift = actual - est
                         bits.append(
-                            f"{'超出' if drift > 0 else '省'}{_fmt_sec(abs(drift))}"
+                            f"{'over' if drift > 0 else 'under'} {_fmt_sec(abs(drift))}"
                         )
                 line += f"  ⏱ {' / '.join(bits)}"
             lines.append(line)
-            
+
             # Show acceptance criteria
             acceptance = s.get("acceptance", [])
             if acceptance:
-                lines.append("   验收:")
+                lines.append("   Acceptance:")
                 for item in acceptance:
                     lines.append(f"     • {item}")
-            
+
             # Show verification evidence
             verification = s.get("verification", [])
             if verification:
-                lines.append("   产出:")
+                lines.append("   Evidence:")
                 for item in verification:
                     lines.append(f"     ✓ {item}")
             
@@ -1544,7 +1552,7 @@ class TaskPlan:
         lines.extend(self._forbidden_lines(plan))
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
-            lines.append("  当前问题模型 (thinking):")
+            lines.append("  Current problem model (thinking):")
             for t_line in thinking.split("\n"):
                 lines.append(f"     {t_line}")
         for s in plan["steps"]:
@@ -1555,28 +1563,28 @@ class TaskPlan:
             if est or actual:
                 bits = []
                 if est:
-                    bits.append(f"估{_fmt_sec(est)}")
+                    bits.append(f"est {_fmt_sec(est)}")
                 if actual is not None:
-                    bits.append(f"实{_fmt_sec(actual)}")
+                    bits.append(f"act {_fmt_sec(actual)}")
                     if est:
                         drift = actual - est
                         bits.append(
-                            f"{'超出' if drift > 0 else '省'}{_fmt_sec(abs(drift))}"
+                            f"{'over' if drift > 0 else 'under'} {_fmt_sec(abs(drift))}"
                         )
                 line += f"  ⏱ {' / '.join(bits)}"
             lines.append(line)
-            
+
             # Show acceptance criteria
             acceptance = s.get("acceptance", [])
             if acceptance:
-                lines.append("      验收:")
+                lines.append("      Acceptance:")
                 for item in acceptance:
                     lines.append(f"        • {item}")
-            
+
             # Show verification evidence
             verification = s.get("verification", [])
             if verification:
-                lines.append("      产出:")
+                lines.append("      Evidence:")
                 for item in verification:
                     lines.append(f"        ✓ {item}")
             

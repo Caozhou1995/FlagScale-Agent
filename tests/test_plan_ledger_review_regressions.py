@@ -45,9 +45,9 @@ def test_done_step_is_not_the_constraint_and_render_does_not_contradict_itself()
         _st(2, 100, [1]),
         _st(3, 100, [2]),
     ])
-    assert "超" not in text, text          # 200s of live work against 900s fits
-    assert "第 1 步"  not in text, text      # the finished 900s step is not a target
-    assert "余量" in text
+    assert "over" not in text, text          # 200s of live work against 900s fits
+    assert "step 1" not in text, text        # the finished 900s step is not a target
+    assert "to spare" in text
 
 
 # F3b: the reserve must be deducted EXACTLY once. Double-counting made a
@@ -61,9 +61,9 @@ def test_reserve_is_not_counted_twice():
         _st(2, 200, [1]),
         _st(3, 200, [1]),
     ], budget=400.0)
-    assert "关键路径 5m" in text, text        # 300s, reserve NOT added
-    assert "计划余量" in text, text           # 40s to spare
-    assert "超" not in text, text
+    assert "Critical path 5m" in text, text     # 300s, reserve NOT added
+    assert "Plan slack" in text, text           # 40s to spare
+    assert "over" not in text, text
 
 
 # F2 (reviewer HIGH): an unestimated step was priced at 0.0 and the plan was
@@ -75,8 +75,9 @@ def test_unestimated_steps_do_not_certify_the_plan_as_fitting():
         _st(3, 400, [2]),
         _st(4, 400, [3]),
     ], budget=1300.0)
-    assert "按计划走可完成" not in text, text
-    assert "未估时的步骤未计入" in text, text
+    assert "completable as planned" not in text, text
+    assert "unestimated steps are NOT counted" in text, text
+    assert "still have no estimate" in text, text
 
 
 # F4 (reviewer MED): add_steps discarded the caller's depends_on, so a later

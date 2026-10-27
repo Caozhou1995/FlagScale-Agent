@@ -2740,7 +2740,7 @@ class VerificationGuard(Guard):
         if unsettled:
             items = "\n".join(
                 f"  - {p.get('id')}: {p.get('statement', '')}"
-                + (f" → 预期 {p['expected']}" if p.get("expected") else "")
+                + (f" -> expected {p['expected']}" if p.get("expected") else "")
                 for p in unsettled
             )
             pending.append(GuardVerdict.block(

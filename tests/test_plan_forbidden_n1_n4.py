@@ -41,12 +41,12 @@ class TestN1DashboardCarriesForbidden:
         tp = _plan(tmp_path, [{"action": "do not spin on probes",
                                "why": "burns budget", "instead": "secure it"}])
         d = PromptBuilder(None)._build_dashboard(_producer_context(tp))
-        assert "不做清单" in d
+        assert "Forbidden list" in d
         assert "do not spin on probes" in d
 
     def test_dashboard_empty_plan_clean(self):
         d = PromptBuilder(None)._build_dashboard('<active-plan title="T2"></active-plan>')
-        assert "不做清单" not in d
+        assert "Forbidden list" not in d
 
     def test_dashboard_tags_removed_from_step_scan(self, tmp_path):
         """The forbidden text may contain '[x] Step' shapes; extraction must
@@ -86,7 +86,7 @@ class TestN3CapDisclosure:
         plan = {"forbidden": [{"action": f"a{i}"} for i in range(8)],
                 "forbidden_meta": {"requested": 10, "dropped": 2}}
         out = PlanCreateTool._forbidden_report(t, plan)
-        assert "上限" in out and "不要重发" in out
+        assert "at its cap of 8" in out and "Do NOT re-send" in out
 
     def test_malformed_state_still_advises_resent(self, tmp_path):
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
@@ -94,7 +94,7 @@ class TestN3CapDisclosure:
         plan = {"forbidden": [{"action": "a"}],
                 "forbidden_meta": {"requested": 3, "dropped": 2}}
         out = PlanCreateTool._forbidden_report(t, plan)
-        assert "缺 action 文本或重复" in out
+        assert "missing action text or duplicates" in out
 
 
 class TestN4NoCallerMutation:

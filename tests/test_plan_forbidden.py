@@ -43,7 +43,7 @@ def _plan_create_tool(tp, session_id=""):
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The plan's NEGATIVE half: ``forbidden`` (不做清单).
+"""The plan's NEGATIVE half: ``forbidden`` (forbidden list).
 
 A plan says what to DO. These tests cover the symmetric artefact the agent
 writes about what NOT to do, and — the part that actually matters — that it is
@@ -122,7 +122,7 @@ def test_create_without_forbidden_persists_empty_list(plan):
 def test_context_for_prompt_renders_declared_prohibitions(plan):
     plan.create("t", ["a"], forbidden=["不要在没有读数时连续微调参数"])
     out = plan.context_for_prompt()
-    assert "不做清单" in out
+    assert "Forbidden list" in out
     assert "不要在没有读数时连续微调参数" in out
 
 
@@ -141,8 +141,8 @@ def test_absent_prohibitions_are_named_as_a_gap_not_silently_skipped(plan):
     # negative half is a plan with no defence, and the agent must be told so.
     plan.create("t", ["a"])
     out = plan.context_for_prompt()
-    assert "不做清单" in out
-    assert "尚未声明" in out
+    assert "Forbidden list" in out
+    assert "not yet declared" in out
 
 
 def test_prohibitions_render_before_the_step_list(plan):
@@ -150,7 +150,7 @@ def test_prohibitions_render_before_the_step_list(plan):
     # ahead of the to-do steps, not buried after them where a long plan hides it.
     plan.create("t", ["step one"], forbidden=["不要抛光已有产物"])
     out = plan.context_for_prompt()
-    assert out.index("不做清单") < out.index("step one")
+    assert out.index("Forbidden list") < out.index("step one")
 
 
 def test_rendering_is_not_gated_on_remaining_time(plan):
@@ -185,15 +185,15 @@ def test_add_forbidden_rejects_duplicates_without_wiping_the_list(plan):
 
 def test_plan_create_tool_accepts_forbidden_and_echoes_it(plan):
     out = _plan_create_tool(plan).execute(
-        title="t", steps=["a"], forbidden=["不要盲目调参"],
+        title="t", steps=["a"], forbidden=["do not tune blindly"],
     )
-    assert "已写下 1 条" in out
-    assert "不要盲目调参" in out
+    assert "1 item(s) recorded" in out
+    assert "do not tune blindly" in out
 
 
 def test_plan_create_tool_flags_an_empty_forbidden_list(plan):
     out = _plan_create_tool(plan).execute(title="t", steps=["a"])
-    assert "为空" in out
+    assert "forbidden list is EMPTY" in out
     assert "add_forbidden" in out
 
 

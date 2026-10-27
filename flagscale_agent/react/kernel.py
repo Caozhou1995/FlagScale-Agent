@@ -1393,7 +1393,7 @@ class AgentKernel:
         lines = [
             "[system: FORBIDDEN — you have now made "
             f"{self.FORBIDDEN_STOP_AFTER} consecutive edit-family calls with "
-            "no successful execution in between. Your own plan's 不做清单 "
+            "no successful execution in between. Your own plan's forbidden list "
             "exists for exactly this state.",
         ]
         if quoted:

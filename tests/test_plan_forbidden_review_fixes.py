@@ -114,13 +114,13 @@ def test_creation_echo_discloses_dropped_entries(plan):
     )
     out = _plan_create_tool(plan).execute(title="t", steps=["s"],
                                        forbidden=[{"why": "no action"}, {"action": "ok"}])
-    assert "被丢弃" in out
+    assert "were dropped" in out
     assert "{'action': ...}" in out  # the fix is named, not just the count
 
 
 def test_creation_echo_clean_when_nothing_dropped(plan):
     out = _plan_create_tool(plan).execute(title="t", steps=["s"], forbidden=["real one"])
-    assert "被丢弃" not in out
+    assert "were dropped" not in out
 
 
 # ── F6: cap-full and duplicate are different states with different advice ───
@@ -134,7 +134,7 @@ def _fill_to_cap(plan_obj):
 def test_add_forbidden_at_cap_gets_cap_message_not_duplicate_message(plan):
     p = _fill_to_cap(plan)
     out = PlanUpdateTool(p).execute(action="add_forbidden", forbidden=["brand new"])
-    assert "已满" in out
+    assert "full (8/8 items)" in out
     assert "unchanged" not in out
 
 
@@ -142,7 +142,7 @@ def test_add_forbidden_duplicate_gets_duplicate_message(plan):
     plan.create("t", ["s"], forbidden=["only one trap"])
     out = PlanUpdateTool(plan).execute(action="add_forbidden", forbidden=["only one trap"])
     assert "unchanged" in out
-    assert "已满" not in out
+    assert "full (8/8 items)" not in out
 
 
 def test_add_forbidden_reaching_cap_exactly_warns_on_success(plan):

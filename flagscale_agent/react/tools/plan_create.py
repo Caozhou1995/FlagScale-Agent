@@ -125,7 +125,7 @@ _RSI_STEP_ACCEPTANCE = [
 _FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
 
 _FRAME_STEP_ACCEPTANCE = [
-    "Negative constraints (不做清单) — write this BEFORE you start working, in the "
+    "Negative constraints (forbidden list) - write this BEFORE you start working, in the "
     "SAME plan_create call as your steps: `forbidden=[...]`, 2-5 entries, each "
     "{action, why, instead}. `steps` says what to do; `forbidden` says what NOT to "
     "do, and the harness re-renders it at the TOP of your plan context every turn "
@@ -757,16 +757,17 @@ class PlanCreateTool(Tool):
         arbiter = oracle.get("named_arbiter")
         arbiter_note = ""
         if isinstance(arbiter, str) and arbiter.strip():
-            arbiter_note = f"  裁决工具（任务文本点名的那个）: {arbiter.strip()}\n"
+            arbiter_note = f"  named arbiter (the tool the task text names): {arbiter.strip()}\n"
         return (
-            f"oracle 声明 (你已承诺，完成前必须真实执行):\n"
-            f"  裁决来源 premise_source: {source}\n"
-            f"  裁决者 oracle: {decider}\n"
-            f"  首次执行 first_exercise: {exercise}\n"
+            f"oracle declaration (you promised this; it MUST really be run before completion):\n"
+            f"  premise_source: {source}\n"
+            f"  oracle (decider): {decider}\n"
+            f"  first_exercise: {exercise}\n"
             f"{arbiter_note}"
-            "  ⚠ 关键纪律：任务点名的外部裁决工具，必须对【交付物本身】跑，而不是对"
-            "你自己构造的样本跑；当你的读数与它的读数不一致时，以它的为准，"
-            "不得解释成'我的脚本有 bug'后换自己的量。\n\n"
+            "  WARNING - key discipline: an external decider the task text names must be run"
+            " against THE DELIVERABLE ITSELF, not against a sample you constructed. When your"
+            " reading and its reading disagree, ITS reading wins; do not explain the gap away"
+            " as 'my script has a bug' and switch back to your own quantity.\n\n"
         )
 
     def _forbidden_report(self, plan: dict) -> str:
@@ -788,36 +789,40 @@ class PlanCreateTool(Tool):
         if not items:
             if dropped:
                 return (
-                    f"⚠ 不做清单 (forbidden) 为空：你提交了 {requested} 条，"
-                    f"但 {dropped} 条因缺 action 文本（或整体是坏 JSON）被丢弃。"
-                    "重新用 dict {'action': ...} 格式发一遍。\n\n"
+                    f"WARNING: the forbidden list is EMPTY - you submitted {requested} item(s), "
+                    f"but {dropped} were dropped for missing an action string (or the whole "
+                    "value was malformed JSON). Send them again as dicts "
+                    "{'action': ...}.\n\n"
                 )
             return (
-                "⚠ 不做清单 (forbidden) 为空：你只写了要做什么，没有写不该做什么。"
-                "时间紧张时这份计划没有任何防线。用 "
-                "plan_update(action='add_forbidden') 补 2-5 条具体的禁做动作"
-                "（每条：动作 + 为什么 + 改做什么）。\n\n"
+                "WARNING: the forbidden list is EMPTY - you only wrote what to DO, not what "
+                "NOT to do. Under time pressure this plan has no line of defence. "
+                "Use plan_update(action='add_forbidden') to add 2-5 concrete prohibited "
+                "actions (each: action + why + what to do instead).\n\n"
             )
-        lines = [f"不做清单 (forbidden) — 已写下 {len(items)} 条，每轮都会回显在计划顶部："]
+        lines = [f"forbidden list - {len(items)} item(s) recorded; re-rendered at the top of the plan every turn:"]
         if dropped:
             cap_note = (
-                f"  ⚠ 另有 {dropped}/{requested} 条被丢弃（缺 action 文本或重复）。"
-                "重复条目无需处理；缺 action 的条目请用 dict {'action': ...} 重发。"
+                f"  Note: another {dropped}/{requested} item(s) were dropped (missing action "
+                "text or duplicates). Duplicates need no action; items missing an action "
+                "should be re-sent as dicts {'action': ...}."
             )
             if requested > _MAX_FORBIDDEN and len(items) == _MAX_FORBIDDEN:
                 # A third disclosed state (reviewer N3): valid items dropped by
                 # the CAP are not malformed and not duplicates — telling the
                 # agent to "fix and resend" them just re-drops them.
                 cap_note = (
-                    f"  ⚠ 另有 {dropped}/{requested} 条被丢弃：清单已到上限 {_MAX_FORBIDDEN} 条，"
-                    "只保留优先级最高的前 8 条。不要重发被丢弃的条目——会再次被丢弃；"
-                    "如需替换，用 plan_update(action='add_forbidden') 重发同名 action 刷新该条的 why/instead。"
+                    f"  Note: another {dropped}/{requested} item(s) were dropped: the list is "
+                    f"at its cap of {_MAX_FORBIDDEN}, so only the highest-priority items were "
+                    "kept. Do NOT re-send the dropped ones - they will be dropped again. To "
+                    "replace one, re-send the SAME action via "
+                    "plan_update(action='add_forbidden') to refresh its why/instead."
                 )
             lines.append(cap_note)
         for i, e in enumerate(items, 1):
-            seg = f"  {i}. ✗ {e.get('action', '')}"
+            seg = f"  {i}. X {e.get('action', '')}"
             if e.get("instead"):
-                seg += f" → 改为：{e['instead']}"
+                seg += f" -> instead: {e['instead']}"
             lines.append(seg)
         return "\n".join(lines) + "\n\n"
 

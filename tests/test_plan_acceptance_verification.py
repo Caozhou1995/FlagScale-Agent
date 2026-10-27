@@ -166,7 +166,7 @@ class TestFormatting:
         """Summary shows acceptance criteria."""
         tp.create("Test", [{"title": "Task", "acceptance": ["A", "B"]}])
         summary = tp.summary()
-        assert "验收:" in summary
+        assert "Acceptance:" in summary
         assert "• A" in summary
         assert "• B" in summary
 
@@ -175,14 +175,14 @@ class TestFormatting:
         tp.create("Test", [{"title": "Task", "acceptance": ["A"]}])
         tp.update_step(1, "done", verification=["Proof A"])
         summary = tp.summary()
-        assert "产出:" in summary
+        assert "Evidence:" in summary
         assert "✓ Proof A" in summary
 
     def test_context_for_prompt_includes_acceptance(self, tp):
         """Prompt context shows acceptance."""
         tp.create("Test", [{"title": "T", "acceptance": ["X"]}])
         ctx = tp.context_for_prompt()
-        assert "验收:" in ctx
+        assert "Acceptance:" in ctx
         assert "• X" in ctx
 
     def test_context_for_prompt_includes_verification(self, tp):
@@ -190,7 +190,7 @@ class TestFormatting:
         tp.create("Test", ["T"])
         tp.update_step(1, "done", verification=["Evidence"])
         ctx = tp.context_for_prompt()
-        assert "产出:" in ctx
+        assert "Evidence:" in ctx
         assert "✓ Evidence" in ctx
 
 

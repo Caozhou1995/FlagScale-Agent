@@ -207,7 +207,7 @@ class PlanUpdateGuard(Guard):
         discovered trap into the negative list is real progress — but only when
         an entry was actually added. A rejected append (a duplicate of an
         already-recorded prohibition, or a list already at cap) mutates
-        nothing: the tool answers "No new prohibitions added" / "已满", and
+        nothing: the tool answers "No new prohibitions added" / "already at cap", and
         crediting that as progress would let a zero-effect call wipe the stall
         escalation — the same hole the empty-notes rule closed for
         ``step_doing``. Keyed off the tool's own reply (post-execution), not a
