@@ -669,6 +669,130 @@ def check_prediction(pred):
     return None
 
 
+_MISSING_NAMED_STANDARD = """`requirements_read` is REQUIRED for this task and is missing.
+
+The task text does not state its requirements itself — it NAMES an external
+standard and defers to it ("check that X satisfies <standard>'s requirements",
+"per the manufacturer's protocol", "as specified by <spec>"). Those clauses are
+not in the task text, so a checklist built only from the task text looks
+complete while being incomplete: measured loss -- an agent read in the standard
+that a protective base was required before a recognition site, then dropped it
+because it judged the checker "less likely to verify it", and failed on exactly
+that clause while every clause it did satisfy passed.
+
+So when you read the standard, WRITE DOWN WHAT IT SAID, one clause per entry.
+A clause you never write down is a clause you will silently drop.
+
+COPY THIS SHAPE, filled in:
+
+  "requirements_read": [
+    {"clause": "the recognition site needs at least 1 protective base 5' of it",
+     "source": "the standard's design-requirements page (protocol section)",
+     "covered_by": "I add one extra base at the 5' end of every synthesized segment"},
+    {"clause": "the measured span excludes any added tail",
+     "source": "the same page, measurement section",
+     "covered_by": "every reading is taken on the annealing portion only"}
+  ]
+
+What each key is for (all free text -- nothing parses them):
+  · clause      -- the requirement in the standard's own terms, as a checkable
+                   statement. Not a topic ("segment design") -- a clause.
+  · source      -- WHERE you read it. If you could not reach the page, say which
+                   known/documented form of the requirement you are relying on.
+  · covered_by  -- how your plan satisfies it, or "dropped: <reason>" when you
+                   deliberately do not. Dropping is allowed; dropping SILENTLY
+                   is what this field exists to stop.
+
+If the task names no external standard, this field does not apply -- but that is
+a judgment about THIS task text, not a default. Re-read the task statement before
+answering it.
+
+Forbidden values: a bare string, an empty list, entries whose clause is blank or
+a placeholder ("follow the standard", "n/a", "TODO")."""
+
+
+def task_names_external_standard(task_text) -> bool:
+    """True when the task text DEFERS its requirements to a named external standard.
+
+    A conservative, wording-based detector: it looks for the deferral form
+    (check/satisfy/follow/meet/comply + a possessive/standard marker) rather
+    than for any particular domain vocabulary, so it carries no task literals.
+
+    Deliberately NOT a semantic judgement: a false positive costs the agent one
+    short declaration, a false negative re-opens the measured loss (a clause
+    read in the standard and silently dropped). So it errs toward firing.
+    """
+    if not _is_real_str(task_text):
+        return False
+    text = " ".join(str(task_text).split()).lower()
+    verbs = ("satisf", "comply", "conform", "meet", "follow", "check that",
+             "check whether", "make sure", "ensure")
+    markers = ("requirement", "protocol", "guideline", "specification", "spec",
+               "standard", "manual", "datasheet", "documentation", "rules",
+               "recommend", "instructions")
+    return any(v in text for v in verbs) and any(m in text for m in markers)
+
+
+
+def _reqs_malformed(detail: str) -> str:
+    """Compose the refusal for `requirements_read` WITHOUT the calibration preamble."""
+    return "`requirements_read` is malformed.\n\n" + detail
+
+
+def check_requirements_read(task_text, reqs):
+    """Validate ``requirements_read`` when the task defers to an external standard.
+
+    Returns ``(reason, message)`` when it must be refused, else None.
+
+    WHY THIS IS SEPARATE FROM ``instrument_input``. That field binds the INPUT to
+    a check the agent already decided to run; this binds the REQUIREMENT SET the
+    agent drew from a standard it was told to satisfy. The measured loss is not a
+    wrong measurement but a requirement never recorded: the agent read the clause,
+    weighed it in its reasoning, judged the checker unlikely to test it, and
+    dropped it -- so no downstream gate (which only sweeps DECLARED constraints)
+    could see it. Requiring the clause list at plan-creation makes the drop
+    visible at the moment the plan is frozen.
+    """
+    if not task_names_external_standard(task_text):
+        return None
+    if reqs is None:
+        return ("requirements_read_missing", _MISSING_NAMED_STANDARD)
+    if isinstance(reqs, str):
+        return ("requirements_read_not_list",
+                _reqs_malformed((
+                    "`requirements_read` must be a list of clause objects, not a "
+                    "bare string. One entry per clause: "
+                    '{"clause": ..., "source": ..., "covered_by": ...}. '
+                    + _describe_received(reqs))))
+    if not isinstance(reqs, (list, tuple)) or not reqs:
+        return ("requirements_read_missing", _MISSING_NAMED_STANDARD)
+
+    bad = []
+    for i, entry in enumerate(reqs):
+        if isinstance(entry, str):
+            if not _is_real_str(entry) or _is_vague(entry):
+                bad.append(f"[{i}] is a blank/placeholder string")
+            continue
+        if not isinstance(entry, dict):
+            bad.append(f"[{i}] is {type(entry).__name__}, not an object")
+            continue
+        clause = entry.get("clause")
+        if not _is_real_str(clause) or _is_vague(clause):
+            bad.append(f"[{i}].clause is missing/blank/placeholder")
+            continue
+        cb = entry.get("covered_by")
+        if not _is_real_str(cb) or _is_vague(cb):
+            bad.append(
+                f"[{i}].covered_by is missing/blank -- state how the plan "
+                f"satisfies this clause, or 'dropped: <reason>'")
+    if bad:
+        return ("requirements_read_incomplete",
+                _reqs_malformed((
+                    "`requirements_read` entries are incomplete: "
+                    + "; ".join(bad) + ". " + _describe_received(reqs))))
+    return None
+
+
 __all__ = [
     "CALIBRATION_MATCHES",
     "DIFFERENTIAL_OUTCOMES",
@@ -681,4 +805,6 @@ __all__ = [
     "negative_control_fired",
     "check_prediction",
     "UNSETTLED_PREDICTIONS_MSG",
+    "task_names_external_standard",
+    "check_requirements_read",
 ]

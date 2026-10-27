@@ -19,6 +19,7 @@ import json
 from flagscale_agent.react.tools.base import Tool
 from flagscale_agent.react.instruments import check_calibration
 from flagscale_agent.react.instruments import check_instrument_input
+from flagscale_agent.react.instruments import check_requirements_read
 from flagscale_agent.react.oracle import (
     ORACLE_ACCEPTANCE_ITEM,
     STATED_CONSTRAINT_ITEM,
@@ -496,13 +497,41 @@ class PlanCreateTool(Tool):
                 },
                 "required": ["instrument", "matches"],
             },
+            "requirements_read": {
+                "type": "array",
+                "description": (
+                    "REQUIRED when the task text defers its requirements to an "
+                    "external standard ('make sure X satisfies <standard>'s "
+                    "requirements', 'per the <vendor> protocol', 'as specified by "
+                    "<spec>'). Those clauses are NOT in the task text, so a "
+                    "checklist built only from the task text looks complete while "
+                    "being incomplete. Write down what the standard actually said, "
+                    "one entry per clause: {clause, source, covered_by}. "
+                    "`covered_by` = how the plan satisfies it, or "
+                    "'dropped: <reason>' when you deliberately do not. Dropping is "
+                    "allowed; dropping SILENTLY is what this field stops."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "clause": {"type": "string"},
+                        "source": {"type": "string"},
+                        "covered_by": {"type": "string"},
+                    },
+                    "required": ["clause"],
+                },
+            },
         },
         "required": ["title", "steps", "calibration"],
     }
 
-    def __init__(self, task_plan, session_id: str = ""):
+    def __init__(self, task_plan, session_id: str = "", task_text_fn=None):
         self._plan = task_plan
         self._session_id = session_id
+        # The ORIGINAL task text, used to decide whether `requirements_read`
+        # applies (the task defers to a named external standard). Injected as a
+        # callable so the tool reads the live task text rather than a snapshot.
+        self._task_text_fn = task_text_fn
 
     def execute(self, **kwargs) -> str:
         title = kwargs["title"]
@@ -659,10 +688,36 @@ class PlanCreateTool(Tool):
         if _inp_refusal is not None:
             return f"ERROR: {_inp_refusal[1]}"
 
+        # NAMED-STANDARD GATE: when the task text defers its requirements to an
+        # external standard, the clauses that will decide the reward are NOT in
+        # the task text. Measured loss: an agent read in the standard that a
+        # protective base was required, judged the checker "less likely to verify
+        # it", dropped it -- and failed on exactly that clause. No later gate can
+        # recover it, because every coverage sweep only reads DECLARED
+        # constraints. So the clause list is demanded here, at the moment the
+        # plan is frozen; dropping a clause stays legal, but must be written.
+        # Accepted inside calibration as well as top-level (instrument_input
+        # precedent: the calibration object is the declaration home).
+        requirements_read = kwargs.get("requirements_read")
+        if requirements_read is None and isinstance(calibration, dict):
+            requirements_read = calibration.get("requirements_read")
+        if isinstance(requirements_read, str):
+            _raw = requirements_read.strip()
+            if _raw.startswith("["):
+                try:
+                    requirements_read = json.loads(_raw)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+        _req_refusal = check_requirements_read(
+            self._task_text_fn() if self._task_text_fn else "", requirements_read)
+        if _req_refusal is not None:
+            return f"ERROR: {_req_refusal[1]}"
+
         try:
             plan = self._plan.create(title, normalized, self._session_id, thinking=thinking,
                                      oracle=oracle, forbidden=forbidden,
-                                     calibration=calibration)
+                                     calibration=calibration,
+                                     requirements_read=requirements_read)
             forbidden_report = self._forbidden_report(plan)
             oracle_report = self._oracle_report(oracle)
             return (

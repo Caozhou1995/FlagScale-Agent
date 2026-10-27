@@ -473,7 +473,8 @@ class TaskPlan:
 
     def create(self, title: str, steps: List, session_id: str = "", thinking: str = "",
                oracle: Optional[dict] = None, forbidden: Optional[List] = None,
-               calibration: Optional[dict] = None) -> dict:
+               calibration: Optional[dict] = None,
+               requirements_read: Optional[List] = None) -> dict:
         """Create a new plan.
         
         Args:
@@ -592,6 +593,12 @@ class TaskPlan:
                 # subsequent PASS claims worthless, which no step-local field
                 # could express.
                 "calibration": dict(calibration) if isinstance(calibration, dict) else {},
+                # The clause list drawn from an external standard the task text
+                # defers to. Persisted so the clause set exists as DATA (not
+                # reasoning text) and a dropped clause is visible as "dropped:"
+                # rather than absent.
+                "requirements_read": list(requirements_read)
+                if isinstance(requirements_read, (list, tuple)) else [],
                 # Instrument 3 (PRE-REGISTRATION): predictions written BEFORE a
                 # run, each with an id so it can be SETTLED later. Append-only;
                 # an unsettled entry is a live obligation on plan completion.

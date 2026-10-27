@@ -654,7 +654,8 @@ class WorkerAgent:
         self.tool_registry.register(MemoryReadTool(self.memory))
         self.tool_registry.register(MemoryListTool(self.memory))
         self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
-        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
+        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id,
+                                         task_text_fn=lambda: self._mech_original_task()))
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
         self.tool_registry.register(RecallSearchTool(self._session_dir))
@@ -1896,7 +1897,8 @@ class WorkerAgent:
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
         self.tool_registry.register(MemoryWriteTool(
             self.memory, self._session_id, task_plan=self.task_plan))
-        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
+        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id,
+                                         task_text_fn=lambda: self._mech_original_task()))
         # Re-register the proposal tool under the restored session id (same
         # capture-at-registration issue as memory_write/plan_create above).
         self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
