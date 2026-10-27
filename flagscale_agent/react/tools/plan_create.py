@@ -572,6 +572,7 @@ class PlanCreateTool(Tool):
         existing work while the clock runs out) is exactly what an agent that
         wrote no prohibitions leaves itself open to.
         """
+        from flagscale_agent.react.plan import _MAX_FORBIDDEN
         items = (plan or {}).get("forbidden") or []
         meta = (plan or {}).get("forbidden_meta") or {}
         dropped = int(meta.get("dropped") or 0)
@@ -591,10 +592,20 @@ class PlanCreateTool(Tool):
             )
         lines = [f"不做清单 (forbidden) — 已写下 {len(items)} 条，每轮都会回显在计划顶部："]
         if dropped:
-            lines.append(
+            cap_note = (
                 f"  ⚠ 另有 {dropped}/{requested} 条被丢弃（缺 action 文本或重复）。"
                 "重复条目无需处理；缺 action 的条目请用 dict {'action': ...} 重发。"
             )
+            if requested > _MAX_FORBIDDEN and len(items) == _MAX_FORBIDDEN:
+                # A third disclosed state (reviewer N3): valid items dropped by
+                # the CAP are not malformed and not duplicates — telling the
+                # agent to "fix and resend" them just re-drops them.
+                cap_note = (
+                    f"  ⚠ 另有 {dropped}/{requested} 条被丢弃：清单已到上限 {_MAX_FORBIDDEN} 条，"
+                    "只保留优先级最高的前 8 条。不要重发被丢弃的条目——会再次被丢弃；"
+                    "如需替换，用 plan_update(action='add_forbidden') 重发同名 action 刷新该条的 why/instead。"
+                )
+            lines.append(cap_note)
         for i, e in enumerate(items, 1):
             seg = f"  {i}. ✗ {e.get('action', '')}"
             if e.get("instead"):

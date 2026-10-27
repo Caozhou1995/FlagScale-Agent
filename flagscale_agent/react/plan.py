@@ -144,6 +144,11 @@ def _normalize_forbidden(items) -> List[dict]:
         return []
     if isinstance(items, (str, dict)):
         items = [items]
+    # Work on a COPY: the JSON-blob decode path extends `items` in place, and
+    # mutating the caller's list (create() passes the caller's object straight
+    # through) corrupts it and double-counts through create()'s second
+    # normalization pass (reviewer finding N4).
+    items = list(items)
     out: List[dict] = []
     index: dict = {}
     for it in items:
@@ -558,6 +563,11 @@ class TaskPlan:
                 step_dict["actual_sec"] = None
                 step_list.append(step_dict)
 
+            # Normalized ONCE (reviewer N4): the stored list and the
+            # forbidden_meta count must come from the SAME pass — re-running
+            # _normalize_forbidden on the raw input double-decodes JSON blobs
+            # and miscounts. Also isolates the copy from the caller's list.
+            _norm_forbidden = _normalize_forbidden(forbidden)
             plan = {
                 "id": plan_id,
                 "title": title,
@@ -580,7 +590,7 @@ class TaskPlan:
                 # Empty list is meaningful: "this plan declares no prohibitions",
                 # which the completion boundary can tell apart from "never
                 # declared" only by the presence of the key, so it is always set.
-                "forbidden": _normalize_forbidden(forbidden),
+                "forbidden": _norm_forbidden,
                 # Discarded-input bookkeeping (F5): normalisation drops
                 # malformed entries (dicts without action text, non-str/dict
                 # items) and caps the list. Counting DROPPED entries vs
@@ -595,7 +605,7 @@ class TaskPlan:
                     "dropped": max(
                         0,
                         (len(forbidden if isinstance(forbidden, list) else [forbidden]) if forbidden is not None else 0)
-                        - len(_normalize_forbidden(forbidden)),
+                        - len(_norm_forbidden),
                     ),
                 },
                 # Plan-level time ledger. `budget_sec` is the wall the agent was
@@ -642,10 +652,26 @@ class TaskPlan:
             seen = {" ".join(e["action"].lower().split()) for e in cur}
             added = 0
             skipped_dup = 0
+            refreshed = 0
             for e in _normalize_forbidden(items):
                 key = " ".join(e["action"].lower().split())
                 if key in seen:
+                    # Refresh, don't just skip: a resend of an existing action
+                    # with NEW why/instead text is the documented cap-full
+                    # refresh path (tools/plan_update.py advises exactly this),
+                    # so the stored entry must take the new text (F2/N2).
                     skipped_dup += 1
+                    if e.get("why") or e.get("instead"):
+                        for prev in cur:
+                            if " ".join(prev["action"].lower().split()) == key:
+                                changed = False
+                                if e.get("why") and prev.get("why") != e["why"]:
+                                    prev["why"] = e["why"]; changed = True
+                                if e.get("instead") and prev.get("instead") != e["instead"]:
+                                    prev["instead"] = e["instead"]; changed = True
+                                if changed:
+                                    refreshed += 1
+                                break
                     continue
                 if len(cur) >= _MAX_FORBIDDEN:
                     break
@@ -662,6 +688,7 @@ class TaskPlan:
                 "at_cap": len(cur) >= _MAX_FORBIDDEN,
                 "max": _MAX_FORBIDDEN,
                 "skipped_duplicates": skipped_dup,
+                "refreshed": refreshed,
             }
 
     def set_thinking(self, thinking: str) -> dict:

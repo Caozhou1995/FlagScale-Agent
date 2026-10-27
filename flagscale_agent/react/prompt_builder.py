@@ -152,6 +152,7 @@ class PromptBuilder:
         # patterns like "[🔄] Step N:" that would otherwise corrupt step
         # counting. Rendered in full below — never truncated.
         hypothesis = ""
+        forbidden_block = ""
         if plan_context:
             hyp_match = re.search(
                 r"<current-hypothesis>(.*?)</current-hypothesis>",
@@ -160,6 +161,18 @@ class PromptBuilder:
             if hyp_match:
                 hypothesis = hyp_match.group(1).strip()
                 plan_context = plan_context.replace(hyp_match.group(0), "")
+            # The agent's own prohibitions — the negative half of the plan —
+            # ride the same tag channel as the hypothesis: extracted here and
+            # rendered below, because a bare block is dropped by the title/step
+            # parser (reviewer finding N1: lines built into plan_context were
+            # discarded by this function).
+            forb_match = re.search(
+                r"<current-forbidden>(.*?)</current-forbidden>",
+                plan_context, re.DOTALL,
+            )
+            if forb_match:
+                forbidden_block = forb_match.group(1).strip()
+                plan_context = plan_context.replace(forb_match.group(0), "")
 
         if plan_context:
             # Extract title from <active-plan title="...">
@@ -285,6 +298,13 @@ class PromptBuilder:
         # the metric line — a single "|"-joined line cannot hold it untruncated.
         # Permanently resident; falsifying/updating it is the agent's own action
         # (plan_update set_thinking), not a guard.
+        if forbidden_block:
+            return (
+                " | ".join(parts)
+                + f"\n\n不做清单 (forbidden — every turn, self-authored):\n{forbidden_block}"
+                + (f"\n\nHypothesis (current problem model):\n{hypothesis}" if hypothesis else "")
+            )
+
         if hypothesis:
             return " | ".join(parts) + f"\n\nHypothesis (current problem model):\n{hypothesis}"
 

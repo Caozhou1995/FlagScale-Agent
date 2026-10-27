@@ -2082,10 +2082,13 @@ class WorkerAgent:
         icons = {"pending": "⬜", "doing": "🔄", "done": "✅", "skipped": "⏭", "blocked": "🚫"}
         lines = [f'<active-plan title="{active.get("title", "")}">']
         # The agent's own prohibitions, directly after the title and BEFORE the
-        # step list. This is the LIVE per-turn context (the dashboard), not the
-        # plan_status rendering — the one surface guaranteed to be seen every
-        # turn, which is the whole point of the negative half of the plan.
+        # step list. Tagged so the dashboard consumer (prompt_builder
+        # _build_dashboard) can extract and render the block per-turn — a bare
+        # block here is silently dropped by the dashboard's tag-based parser
+        # (reviewer finding N1: only title/steps/hypothesis survive).
+        lines.append("<current-forbidden>")
         lines.extend(self.task_plan._forbidden_lines(active))
+        lines.append("</current-forbidden>")
         # Plan-level problem model (the agent's CURRENT hypothesis). Rendered in
         # full — never truncated — so the dashboard can carry it permanently.
         # Absent/empty thinking omits the block entirely (byte-identical to the
