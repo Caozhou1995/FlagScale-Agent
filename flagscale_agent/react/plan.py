@@ -1316,6 +1316,10 @@ class TaskPlan:
             if e.get("instead"):
                 seg += f" → 那时改为：{e['instead']}"
             lines.append(seg)
+        lines.append(
+            "   （执行中新发现的坑同样要写进来，别只在脑子里记："
+            "plan_update(action='add_forbidden', items=[...])）"
+        )
         lines.append("")
         return lines
 
