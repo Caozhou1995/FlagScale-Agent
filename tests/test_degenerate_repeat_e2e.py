@@ -138,7 +138,15 @@ def _run(texts: list[str]):
 
 # ── the two directions ───────────────────────────────────────────────────────
 def test_real_kernel_stops_on_the_live_filler_loop():
-    """The exact cycle from the live trial must stop the REAL loop."""
+    """The exact cycle from the live trial must stop the REAL loop.
+
+    Two breakers cover this class and either is an honest stop: the
+    degenerate-repeat breaker (diversity window) fires ~response #482 on the
+    original log, and the auto-append fallback (AUTO_APPEND_NEED_INPUT_AT=12)
+    ends the turn harness-side far earlier than that. Both stop_reasons are
+    valid loop protection; what must hold is that the REAL loop stops EARLY
+    and never claims completion for filler.
+    """
     filler = [
         "Let me write the file.",
         "Let me write the content.",
@@ -148,7 +156,8 @@ def test_real_kernel_stops_on_the_live_filler_loop():
     # Repeat the cycle many times: the loop must abort, not run to max_iter.
     texts = filler * 20
     result = _run(texts)
-    assert result.stop_reason == "degenerate_repeat_loop", (
+    assert result.stop_reason in ("degenerate_repeat_loop",
+                                  "auto_appended_need_input"), (
         "real kernel did NOT stop the live filler loop; "
         f"got stop_reason={result.stop_reason!r} after {result.iterations} iterations"
     )

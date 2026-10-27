@@ -144,6 +144,16 @@ class AgentKernel:
     # no-action text from history and injects the same HARD convergence
     # directive the saturation path uses. 0 disables it.
     TEXT_ONLY_STREAK_HARD_AT = 6
+    # Auto-append fallback (honest hand-back): the whole ladder above only
+    # re-prompts, so a model that NEVER self-corrects burns the entire wall
+    # (observed: every round ends "no stop signal" and the loop continues).
+    # From this many consecutive tool-free, signal-free responses on, the
+    # kernel ends the turn ITSELF by appending a harness-side
+    # [NEED_USER_INPUT] — deliberately NOT a fabricated [TASK_COMPLETE],
+    # which would claim a verified deliverable the model never asserted.
+    # The appended message is the kernel's own history entry, so the model's
+    # text is never rewritten. 0 disables.
+    AUTO_APPEND_NEED_INPUT_AT = 12
 
     def __init__(self, deps: KernelDeps):
         self.deps = deps
@@ -154,6 +164,11 @@ class AgentKernel:
         # with no tool call and no stop signal). Reset by a tool turn, a
         # stop-signal turn, or an unsaturated text-only turn.
         self._consecutive_saturated = 0
+        # Auto-append fallback state: set the moment the kernel ends a turn
+        # harness-side (see AUTO_APPEND_NEED_INPUT_AT). Checked at the end of
+        # run_turn to avoid re-appending on every later turn of a truly
+        # stuck stream — one hand-back per incident.
+        self._auto_appended_this_turn = False
         # Structured execution ledger for the current turn: one entry per tool
         # call that ACTUALLY ran (blocked calls excluded), each carrying the
         # `exec_error` flag so an evidence gate can tell "something executed"
@@ -207,6 +222,13 @@ class AgentKernel:
         # once the agent has clearly stalled on the gate.
         self._consecutive_completion_blocks = 0
         self._recent_tool_history = []  # reset the per-turn execution ledger
+        # Auto-append fallback: one hand-back per incident. A new user turn
+        # re-arms it (a genuinely stuck model can hit it again next turn,
+        # which is correct — each turn then costs at most the threshold).
+        self._auto_appended_this_turn = False
+        # NOTE: _consecutive_text_only deliberately does NOT reset here — the
+        # threshold counts tool-free responses, and consecutive run_turn()
+        # calls with no tool call in between are the same degenerate stream.
         # Idle think-interval accounting: when did a tool last actually run, and
         # how many consecutive think round-trips have passed since. Each
         # run_turn() is one user turn, so the debt does not carry across turns;
@@ -746,6 +768,10 @@ class AgentKernel:
                                     continue
                         # Not blocked (released via plan/override) — reset the breaker.
                         self._consecutive_completion_blocks = 0
+                        # The model produced a proper stop signal: the tool-free
+                        # streak ends here too, otherwise the residue would make
+                        # the NEXT turn's auto-append threshold fire early.
+                        self._consecutive_text_only = 0
                         # Print the authoritative completion marker HERE — only now
                         # that the gate has passed. The raw sentinel was stripped
                         # from the live stream (SentinelStripper), so this is the
@@ -869,6 +895,34 @@ class AgentKernel:
                     )
                     if _long_text_only and not _saturated:
                         d.history.pop_last_assistant()
+
+                    # ── Auto-append fallback (honest hand-back) ──
+                    # The escalation ladder above only re-prompts. If the model
+                    # STILL produces tool-free, signal-free text past the
+                    # fallback threshold, end the turn harness-side: append
+                    # the kernel's OWN [NEED_USER_INPUT] (never rewrite the
+                    # model's message, never fabricate [TASK_COMPLETE]) and
+                    # stop. One hand-back per turn; the next run_turn() re-arms.
+                    if (self.AUTO_APPEND_NEED_INPUT_AT > 0
+                            and not self._auto_appended_this_turn
+                            and self._consecutive_text_only
+                            >= self.AUTO_APPEND_NEED_INPUT_AT):
+                        self._auto_appended_this_turn = True
+                        d.history.append({
+                            "role": "user",
+                            "content": (
+                                "[system: auto_appended [NEED_USER_INPUT] — "
+                                f"{self._consecutive_text_only} consecutive "
+                                "responses contained no tool call and no stop "
+                                "signal. The harness ended this turn on your "
+                                "behalf; no deliverable was verified. Start the "
+                                "next turn with a concrete tool call, or close "
+                                "the task yourself.]"
+                            ),
+                        })
+                        d.display.completion_signal("[NEED_USER_INPUT]")
+                        result.stop_reason = "auto_appended_need_input"
+                        break
 
                     continuation = self._generate_continuation(
                         text_only=True, saturated=_saturated
