@@ -850,6 +850,84 @@ Return ONLY JSON, no prose:
 TASK STATEMENT:
 {task_text}"""
 
+    #: One prompt for requirements that live OUTSIDE the statement: when the task
+    #: DEFERS to an external standard ("consult X's requirements", "per the Y
+    #: manual", "should satisfy the Z spec") the checkable requirements are not in
+    #: the task text at all -- only the pointer to them is. Extracting them is a
+    #: language+domain task with no shape to key off, so it crosses this boundary
+    #: and never a regex in the guard.
+    #:
+    #: The measured loss this exists for: a task said only "make sure the cut
+    #: sites satisfy NEB's requirements". A real requirement of that standard --
+    #: at least one protective base 5' of the recognition site -- never entered
+    #: the agent's checklist, so a self-check that passed every stated clause
+    #: still failed the grader. The agent HAD read the requirement and then
+    #: dropped it on a guess about whether it would be checked. The point of
+    #: asking for these separately is to make the requirement an OBLIGATION with
+    #: a recorded disposition instead of a thought that can evaporate.
+    _DEFERRED_PROMPT = """Read the task statement below. It may DEFER to an
+external standard instead of stating the requirement itself (e.g. "check that X
+satisfies Y's requirements", "follow the Z protocol", "per the manufacturer's
+guidelines", "as specified by the W standard").
+
+List EVERY checkable requirement that such a deferred standard IMPOSES on the
+deliverable -- the requirements the statement does not spell out because it
+points at the standard instead.
+
+Rules:
+- Quote the DEFERRING sentence from the statement verbatim as `source`.
+- State each requirement in one line as an instruction the deliverable must
+  satisfy, in your own words, concretely enough to check.
+- Only requirements that standard really imposes for THIS deliverable. Do not
+  add general good practice, and do not invent a threshold the standard does not
+  give. If you are not sure a specific requirement applies, include it and set
+  "certain": false.
+- If the statement defers to NO external standard, return an empty list.
+
+Return ONLY JSON, no prose:
+{"deferred": [{"source": "<verbatim deferring sentence>",
+               "requirement": "<what the standard requires>",
+               "certain": true}, ...]}
+
+TASK STATEMENT:
+{task_text}"""
+
+    def deferred_requirements(self, task_text: str) -> list:
+        """Checkable requirements the statement defers to an external standard.
+
+        Empty when the statement names no standard, or the judge is unavailable:
+        an empty list leaves the obligation inert rather than inventing work.
+        Never raises -- a dead provider must not turn into a false obligation.
+        """
+        if not isinstance(task_text, str) or not task_text.strip():
+            return []
+        ctx = {"task_text": task_text}
+        cache_key = self._key("deferred_requirements", ctx)
+        cached = self._cache.get(cache_key)
+        if isinstance(cached, list):
+            return cached
+        prompt = self._DEFERRED_PROMPT.replace("{task_text}", task_text)
+        data = self._call_and_parse(prompt)
+        items = data.get("deferred") if isinstance(data, dict) else None
+        out = []
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                req = it.get("requirement")
+                if not (isinstance(req, str) and req.strip()):
+                    continue
+                phrase = " ".join(req.split())
+                if phrase.lower() in [d["requirement"].lower() for d in out]:
+                    continue
+                out.append({
+                    "source": " ".join(str(it.get("source") or "").split()),
+                    "requirement": phrase,
+                    "certain": bool(it.get("certain", True)),
+                })
+        self._cache[cache_key] = out
+        return out
+
     def constraints(self, task_text: str) -> list:
         """The checkable requirements a task statement states, verbatim.
 

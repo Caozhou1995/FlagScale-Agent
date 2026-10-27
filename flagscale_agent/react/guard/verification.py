@@ -55,6 +55,8 @@ from flagscale_agent.react.display import has_override_completion, trailing_sent
 from flagscale_agent.react.oracle import (
     arbiter_observation_matches,
     named_arbiter_obligation,
+    rival_reading_distinct,
+    rival_reading_obligation,
 )
 from flagscale_agent.react.instruments import (
     check_bound_margin,
@@ -375,6 +377,46 @@ silently re-derived number is not.
 
 Nothing here reads or guesses a hidden checker: the arbiter name must come from
 the task text, and the obligation is satisfied by a command you run yourself.
+"""
+
+
+_PLAN_COMPLETE_ONE_READING = """[VerificationGuard] You are closing the plan with ONE reading of a quantity whose definition you chose yourself.
+
+Pointing the task's named decider at your delivered file is necessary but not
+sufficient. The decider measures whatever YOUR command feeds it — and the rule
+that CUTS the measured substring out of those bytes is still yours to pick. A
+single definition always agrees with itself, so one reading cannot detect that
+you cut in a different place than the consumer does. Measured shape: a command
+that named the delivered file, that stripped a fixed-length prefix before
+measuring (an overhang, a header, a tag), and whose number landed just inside
+the stated bound — while the consumer's construction of the SAME quantity
+included those characters and landed just outside it.
+
+Record a SECOND, genuinely different reading over the SAME delivered bytes:
+
+  arbiter_act={"command": "<reading A: your extraction>",
+               "observed": "<its actual output>",
+               "rival_command": "<reading B: the OTHER defensible extraction — a
+                                 different cut, boundary, unit or prompt>",
+               "rival_observed": "<its actual output>"}
+
+Both commands must name the delivered path. The two commands must genuinely
+DIFFER: pasting the same command twice is one reading, not two.
+
+Two outcomes to compare, and only one of them is comfortable:
+  * the two readings AGREE and the shared number is inside the bound with room
+    to spare — the definition does not decide the answer; close with that
+    number and say so;
+  * the two readings DISAGREE — then the definition decides the answer, and the
+    consumer's construction wins. Work out which cut the consumer's own default
+    path applies (the boundary IT uses, the characters IT includes), and ship a
+    value that survives BOTH readings. A value that is only correct under your
+    own cut is not correct.
+
+If the quantity truly admits exactly one defensible definition, declare that
+explicitly as "rival_command": "none" — an auditable declaration, the complement
+of having actually looked. An omitted rival_command reads as never having asked
+the question, which is the loss this check exists for.
 """
 
 
@@ -1437,6 +1479,20 @@ def _stated_constraints(task_text: str, judge=None) -> list:
     a differently-worded statement of the same requirement yields the same
     answer, which a shape rule cannot promise.
 
+    DEFERRED REQUIREMENTS ARE INCLUDED. A statement can point AT a standard
+    instead of stating the requirement ("check that X satisfies Y's
+    requirements", "per the manufacturer's manual"). Those requirements are
+    checkable and the deliverable must satisfy them, but they appear nowhere in
+    the statement's own words -- so reading only the literal sentences leaves
+    them out of the obligation set entirely. Measured loss: a task deferred to a
+    synthesis kit's requirements; a real one (a protective base 5' of the
+    recognition site) never entered the agent's checklist, so a self-check that
+    passed EVERY stated clause still failed the grader. The agent had read that
+    requirement earlier and then dropped it on a guess about whether it would be
+    checked -- exactly the silent evaporation an obligation prevents. The judge
+    extracts these too (a second, separately-prompted reading), and they join the
+    same coverage demand, so each one needs a corpus-backed observation.
+
     Returning [] when no judge is supplied (or the judge reads nothing) leaves
     the gate inert rather than inventing obligations -- a dead provider must not
     manufacture a block.
@@ -1445,10 +1501,28 @@ def _stated_constraints(task_text: str, judge=None) -> list:
         return []
     if judge is None:
         return []
+    out: list = []
     try:
-        return judge.constraints(task_text)
+        out = list(judge.constraints(task_text) or [])
     except Exception:
-        return []
+        out = []
+    try:
+        deferred = judge.deferred_requirements(task_text) or []
+    except Exception:
+        deferred = []
+    seen = {" ".join(s.split()).lower() for s in out}
+    for d in deferred:
+        if not isinstance(d, dict):
+            continue
+        req = d.get("requirement")
+        if not _is_real_str(req):
+            continue
+        phrase = " ".join(req.split())
+        if phrase.lower() in seen:
+            continue
+        seen.add(phrase.lower())
+        out.append(phrase)
+    return out
 
 
 
@@ -2575,6 +2649,35 @@ class VerificationGuard(Guard):
             pending.append(GuardVerdict.block(
                 message=_PLAN_COMPLETE_NO_NAMED_ARBITER,
                 reason="plan_complete_arbiter_wrong_target",
+                category="verification_required",
+            ))
+            return pending
+
+        # THE SECOND READING. Passing the check above proves the arbiter was
+        # pointed at the delivered bytes -- it does NOT prove the bytes fed to it
+        # were cut out of that file the way the consumer cuts them. Measured
+        # shape: the command named the delivered file (so the target check
+        # passed) while the shell rule that extracted the measured substring was
+        # the agent's own (`${s:12}` -- dropping a fixed-length overhang), and the
+        # consumer's construction of the same quantity included those characters
+        # and landed just outside the stated bound. One reading cannot reveal
+        # that: a single definition always agrees with itself. So a second,
+        # DIFFERENT extraction over the SAME file is required, and its number is
+        # a re-check of the delivered value rather than a formality.
+        rival = rival_reading_obligation(act)
+        if rival == "":
+            pending.append(GuardVerdict.block(
+                message=_PLAN_COMPLETE_ONE_READING,
+                reason="plan_complete_single_reading",
+                category="verification_required",
+            ))
+        elif rival is None:
+            pass  # declared "there is no defensible second reading" -- auditable
+        elif not rival_reading_distinct(act, rival) or not _evidence_observed(
+                rival, self._observed(ctx)):
+            pending.append(GuardVerdict.block(
+                message=_PLAN_COMPLETE_ONE_READING,
+                reason="plan_complete_rival_not_distinct",
                 category="verification_required",
             ))
         return pending

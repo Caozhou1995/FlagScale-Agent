@@ -126,6 +126,29 @@ satisfied is a zero, exactly like four failures. Compile each assertion into a
 command, run it against the artifact you are about to ship, and read the observed
 value next to the required one.
 
+(b2) A REQUIREMENT THE TEXT POINTS AT IS STILL A REQUIREMENT. Some statements do
+not state a requirement — they NAME A STANDARD and defer to it ("check that X
+satisfies Y's requirements", "per the manufacturer's protocol", "as specified by
+the Z spec"). Those requirements are not in your task text, so a checklist built
+only from the text's own sentences looks complete and is incomplete at the same
+time. Go read the standard, then write what it requires as its own assertion with
+its own probe, exactly like a stated clause. Two disciplines follow, both
+load-bearing:
+
+  * Do not settle a requirement you have already read by guessing whether it will
+    be checked. Observed loss: an agent read that its enzyme needed a protective
+    base 5' of the recognition site, then dropped it because it judged the grader
+    "less likely to be mechanically checked" — a probability it invented — and
+    failed on exactly that clause while every clause it did satisfy passed. Your
+    estimate of what the checker tests is not evidence about the requirement, and
+    the requirement does not stop applying because you bet against it.
+  * When a requirement is cheap to satisfy and satisfying it cannot break a
+    requirement the text states explicitly, satisfy it. That is a hedge, not a
+    compromise: the extra protective base cost one character and changed nothing
+    else. Reserve a bet for the case where two readings are mutually exclusive in
+    the same slot — and even then prefer the one the text explicitly grants, never
+    the one your guess about the checker favours.
+
 (c) THE INPUT OUTRANKS YOUR EXPECTATIONS. Whatever the environment supplies —
 data, weights, a reference implementation, a golden file — is presumptively the
 source of truth even when the text never mentions it. Read its real content and
