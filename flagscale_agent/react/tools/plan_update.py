@@ -535,11 +535,19 @@ class PlanUpdateTool(Tool):
                 if not updates:
                     return "ERROR: updates required for batch action."
                 status_map = {"done": "done", "doing": "doing", "skipped": "skipped"}
+                applied = 0
                 for u in updates:
                     sid = _parse_step_id(u.get("step_id"))
                     status = u.get("status", "")
-                    if not sid or status not in status_map:
-                        continue
+                    if not sid:
+                        return ("ERROR: batch update missing a valid step_id "
+                                f"(got {u.get('step_id')!r}); nothing applied. "
+                                "Use an integer or 'step_N'.")
+                    if status not in status_map:
+                        return (f"ERROR: unknown batch status {status!r} for step "
+                                f"{sid} (expected one of {sorted(status_map)}); "
+                                "nothing applied. The single-step spelling "
+                                "'skip' is NOT accepted here — use 'skipped'.")
                     if status == "skipped":
                         self._plan.skip_step(sid, u.get("notes", ""))
                     else:
@@ -547,6 +555,10 @@ class PlanUpdateTool(Tool):
                             sid, status_map[status], u.get("notes", ""),
                             verification=u.get("verification"),
                         )
+                    applied += 1
+                if applied == 0:
+                    return ("ERROR: no batch update was applicable; check "
+                            "step_id and status values.")
             else:
                 return f"ERROR: Unknown action '{action}'."
             # thinking may accompany any action (e.g. step_done + updated model).
