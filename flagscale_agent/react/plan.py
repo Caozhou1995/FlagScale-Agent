@@ -110,6 +110,68 @@ def _id_list(ids) -> str:
     return "第" + "、".join(str(i) for i in ids) + "步"
 
 
+# Hard cap on the number of prohibitions a plan carries. The list is meant to be
+# SHORT and pointed: a plan that forbids twenty things is a plan whose author did
+# not decide what actually matters, and a long list is also unreadable at the
+# moment it matters (a decision point under time pressure). Eight is roughly what
+# measurably recurs across failing trials once the aggregate noise is removed.
+_MAX_FORBIDDEN = 8
+
+
+def _normalize_forbidden(items) -> List[dict]:
+    """Normalise the plan's negative constraints to ``[{action, why, instead}]``.
+
+    Accepts a bare string, a dict with ``action``, or a list of either. Entries
+    with no ``action`` text are dropped (an empty prohibition forbids nothing and
+    would only pad the list). Order is preserved so the author's own priority
+    survives; the list is capped at ``_MAX_FORBIDDEN``.
+
+    Repeats are collapsed here rather than only at the `add_forbidden` call site:
+    the same trap is routinely re-described across turns (once as a bare string,
+    once with the reason attached), and a list that grows a new copy of the same
+    prohibition every turn stops being read at all. A later richer entry is
+    MERGED into the earlier one instead of being dropped -- the second telling
+    usually carries the ``why``/``instead`` the first lacked, and discarding it
+    for being "a duplicate" would throw away the only actionable part.
+
+    A prohibition is authored GENERICALLY at planning time -- it must describe a
+    class of action the agent could take on THIS task, not a restatement of what
+    it already did. That is what lets it fire at the decision point instead of
+    after it.
+    """
+    if items is None:
+        return []
+    if isinstance(items, (str, dict)):
+        items = [items]
+    out: List[dict] = []
+    index: dict = {}
+    for it in items:
+        if isinstance(it, str):
+            action = it.strip()
+            why = instead = ""
+        elif isinstance(it, dict):
+            action = str(it.get("action") or it.get("what") or it.get("text") or "").strip()
+            why = str(it.get("why") or "").strip()
+            instead = str(it.get("instead") or "").strip()
+        else:
+            continue
+        if not action:
+            continue
+        # Match on the action text alone: "why"/"instead" elaborate the same
+        # prohibition, so two entries sharing an action ARE the same item.
+        key = " ".join(action.lower().split())
+        if key in index:
+            prev = out[index[key]]
+            prev["why"] = prev["why"] or why
+            prev["instead"] = prev["instead"] or instead
+            continue
+        index[key] = len(out)
+        out.append({"action": action, "why": why, "instead": instead})
+        if len(out) >= _MAX_FORBIDDEN:
+            break
+    return out
+
+
 def _with_default_chain(steps: List[dict]) -> List[dict]:
     """Fill in the default serial `depends_on` chain `create()` will persist.
 
@@ -385,7 +447,7 @@ class TaskPlan:
             yaml.dump({"active_id": plan_id}, f)
 
     def create(self, title: str, steps: List, session_id: str = "", thinking: str = "",
-               oracle: Optional[dict] = None) -> dict:
+               oracle: Optional[dict] = None, forbidden: Optional[List] = None) -> dict:
         """Create a new plan.
         
         Args:
@@ -409,6 +471,18 @@ class TaskPlan:
                     oracle the agent BOUND -- turning the framing-time
                     declaration into something the presentation path can check
                     was actually EXERCISED, not merely named. Empty when absent.
+            forbidden: Optional list of NEGATIVE constraints -- the actions this
+                    plan must NOT take. Symmetric to ``steps``: steps are what to
+                    do, ``forbidden`` is what not to do, and both are authored by
+                    the agent at planning time so the prohibitions exist BEFORE
+                    the moment they apply (a rule read at the deadline arrives
+                    too late to change the plan that created the problem). Each
+                    entry is a str, or a dict with ``action`` (the prohibited
+                    action, described generically), optional ``why`` (the
+                    concrete failure it prevents) and optional ``instead`` (what
+                    to do at that moment). Persisted at the plan level and
+                    re-presented on every plan_status so it is recalled at the
+                    decision point, not just when written.
         """
         with self._lock:
             # Pause any existing active plan (check both active.yaml and scan files)
@@ -480,6 +554,13 @@ class TaskPlan:
                 # check it was EXERCISED -- a declaration becomes load-bearing
                 # only when the presentation path can see it.
                 "oracle": dict(oracle) if isinstance(oracle, dict) else {},
+                # NEGATIVE constraints -- the twin of `steps`. Normalised to a
+                # list of dicts so every consumer (plan_status renderer, guard
+                # messages) reads one shape. A bare string becomes {"action": s}.
+                # Empty list is meaningful: "this plan declares no prohibitions",
+                # which the completion boundary can tell apart from "never
+                # declared" only by the presence of the key, so it is always set.
+                "forbidden": _normalize_forbidden(forbidden),
                 # Plan-level time ledger. `budget_sec` is the wall the agent was
                 # actually given (None when nobody injected one — never fabricate
                 # a deadline); `started` is when this plan was created so elapsed
@@ -497,6 +578,39 @@ class TaskPlan:
             }
             self._save(plan)
             return plan
+
+    def add_forbidden(self, items) -> dict:
+        """Append prohibitions discovered DURING execution (merge, never replace).
+
+        The planning-time list is authored before any of the task's real traps are
+        visible. Some prohibitions are only learnable by hitting the trap
+        ("do not re-run the same failing command a third time on this input").
+        This lets the agent write that lesson into the SAME forced, presented
+        artifact as the plan rather than into prose nobody reads again.
+
+        Merge semantics are deliberate: a replacement would let the agent erase a
+        prohibition because it just violated it -- the one edit that must never be
+        cheap. Duplicates (same ``action`` text) collapse to the first entry.
+        """
+        with self._lock:
+            plan = self.get_active()
+            if not plan:
+                raise ValueError("No active plan")
+            cur = _normalize_forbidden(plan.get("forbidden"))
+            seen = {e["action"] for e in cur}
+            added = 0
+            for e in _normalize_forbidden(items):
+                if e["action"] in seen:
+                    continue
+                if len(cur) >= _MAX_FORBIDDEN:
+                    break
+                cur.append(e)
+                seen.add(e["action"])
+                added += 1
+            plan["forbidden"] = cur
+            plan["updated"] = time.time()
+            self._save(plan)
+            return {"added": added, "total": len(cur), "forbidden": cur}
 
     def set_thinking(self, thinking: str) -> dict:
         """Overwrite the plan-level problem model (current theory of the task).
@@ -1119,6 +1233,40 @@ class TaskPlan:
             return "No active plan."
         return self._format_plan(plan)
 
+    def _forbidden_lines(self, plan: dict) -> list:
+        """Render the agent's own written prohibitions into the plan context.
+
+        Placement is the whole mechanism: this sits right after the time ledger
+        and BEFORE the step list, so every turn the agent reads "what I said I
+        must not do" beside "how much clock is left" -- the two facts that
+        together stop the failure mode where a nearly-out-of-time agent polishes
+        what it already has instead of securing a deliverable.
+
+        Deliberately NOT gated on the clock: a prohibition must be in view
+        BEFORE the state that would trip it, not only once it is too late.
+        """
+        items = _normalize_forbidden(plan.get("forbidden"))
+        lines: List[str] = []
+        if not items:
+            lines.append("不做清单 (forbidden) — 尚未声明：")
+            lines.append(
+                "   计划只写了要做什么。没有阴性约束，时间紧张时就没有防线。"
+                "现在用 plan_update(action='add_forbidden') 写下本任务里明确不该做的事"
+                "（每条：不该做的动作 + 为什么 + 那种时候改做什么）。"
+            )
+            lines.append("")
+            return lines
+        lines.append("不做清单 (forbidden) — 我自己写下的、本任务中不该做的事：")
+        for i, e in enumerate(items, 1):
+            seg = f"   {i}. ✗ {e.get('action', '')}"
+            if e.get("why"):
+                seg += f"（因为：{e['why']}）"
+            if e.get("instead"):
+                seg += f" → 那时改为：{e['instead']}"
+            lines.append(seg)
+        lines.append("")
+        return lines
+
     def context_for_prompt(self) -> str:
         plan = self.get_active()
         if not plan:
@@ -1128,6 +1276,7 @@ class TaskPlan:
         if ledger:
             lines.extend(ledger)
             lines.append("")
+        lines.extend(self._forbidden_lines(plan))
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
             lines.append("当前问题模型 (thinking):")

@@ -122,6 +122,21 @@ _RSI_STEP_ACCEPTANCE = [
 _FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
 
 _FRAME_STEP_ACCEPTANCE = [
+    "Negative constraints (不做清单) — write this BEFORE you start working, in the "
+    "SAME plan_create call as your steps: `forbidden=[...]`, 2-5 entries, each "
+    "{action, why, instead}. `steps` says what to do; `forbidden` says what NOT to "
+    "do, and the harness re-renders it at the TOP of your plan context every turn "
+    "beside the time ledger. This is not paperwork — measured over real losses, "
+    "aggregate behaviour barely differs from wins, but two shapes separate sharply: "
+    "(1) >=8 consecutive edits with no successful execution (65% of losses vs 22% of "
+    "wins) and (2) ending the run while still churning — the last stretch spent on "
+    "same-shape probing or polishing rather than verifying (20% of losses vs 6% of "
+    "wins). The point of writing it NOW is that a prohibition decided at planning "
+    "time fires at the decision point; one you would only think of at the deadline "
+    "arrives after the mistake. Name ACTIONS specific to THIS task, not virtues: "
+    "'do not re-run the same command with a bigger timeout — read the partial "
+    "output and change the approach' is a prohibition; 'be careful' is not. You may "
+    "append more later with plan_update(action='add_forbidden') as traps appear.",
     ORACLE_ACCEPTANCE_ITEM,
     STATED_CONSTRAINT_ITEM,
     AMBIGUITY_ANCHOR_ITEM,
@@ -252,6 +267,10 @@ class PlanCreateTool(Tool):
     name = "plan_create"
     description = (
         "Create a task plan with ordered steps for multi-step work. "
+        "A plan has TWO halves: `steps` (what to do) and `forbidden` (what NOT to "
+        "do — the negative constraints the harness re-displays at the top of your "
+        "plan context every turn). Write both: the negative half is what stops you "
+        "from burning the last of the clock polishing something that already works. "
         "Use when about to produce a deliverable or act on a task. "
         "Only one plan can be active at a time."
     )
@@ -381,6 +400,40 @@ class PlanCreateTool(Tool):
                     "to THAT step's acceptance (default: the first listed step)."
                 ),
             },
+            "forbidden": {
+                "type": "array",
+                "description": (
+                    "NEGATIVE constraints — the actions you must NOT take in this "
+                    "task. `steps` says what to do; `forbidden` says what not to "
+                    "do, and the harness renders it at the TOP of your plan context "
+                    "every turn, right beside the time ledger. Write it NOW, at "
+                    "planning time, while you can still think clearly about the "
+                    "failure modes: a prohibition never written is a prohibition "
+                    "you cannot honour when the clock gets tight. Each item is "
+                    "either a string or an object "
+                    "{action, why, instead}: `action` = the thing you must not do "
+                    "(name the ACTION, not a vague virtue); `why` = the concrete "
+                    "reason in THIS task; `instead` = what to do when you feel the "
+                    "temptation. Good items are specific and falsifiable "
+                    "('do not hand-tune constants to chase a metric — run the "
+                    "measurement first'), bad ones are platitudes ('do not be "
+                    "careless'). Two to five well-chosen items beat twenty."
+                ),
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string"},
+                                "why": {"type": "string"},
+                                "instead": {"type": "string"},
+                            },
+                            "required": ["action"],
+                        },
+                    ]
+                },
+            },
         },
         "required": ["title", "steps"],
     }
@@ -485,10 +538,12 @@ class PlanCreateTool(Tool):
         })
 
         thinking = kwargs.get("thinking", "") or ""
+        forbidden = kwargs.get("forbidden")
 
         try:
             plan = self._plan.create(title, normalized, self._session_id, thinking=thinking,
-                                     oracle=oracle)
+                                     oracle=oracle, forbidden=forbidden)
+            forbidden_report = self._forbidden_report(plan)
             return (
                 "Plan created.\n\n"
                 "NOTE: this is the FlagScale-Agent Plan STANDARD TEMPLATE. The harness "
@@ -499,11 +554,39 @@ class PlanCreateTool(Tool):
                 "and provide verification evidence for each acceptance criterion. All "
                 "fixed steps are SKIPPABLE with a reasonable reason, but do not skip "
                 "them silently.\n\n"
+                + forbidden_report
                 + self._time_budget_report(normalized)
                 + f"{self._plan.summary()}"
             )
         except Exception as e:
             return f"ERROR: {e}"
+
+    def _forbidden_report(self, plan: dict) -> str:
+        """Confirm back to the agent the prohibitions it just committed to.
+
+        Echoing them at creation is the point: a list the agent wrote and never
+        saw again is a list it will not act on. The plan context re-renders them
+        every turn; this one-time echo closes the loop at the moment of writing,
+        and an EMPTY list is reported as a gap to fill rather than passing
+        silently -- the failure mode this mechanism targets (polishing already
+        existing work while the clock runs out) is exactly what an agent that
+        wrote no prohibitions leaves itself open to.
+        """
+        items = (plan or {}).get("forbidden") or []
+        if not items:
+            return (
+                "⚠ 不做清单 (forbidden) 为空：你只写了要做什么，没有写不该做什么。"
+                "时间紧张时这份计划没有任何防线。用 "
+                "plan_update(action='add_forbidden') 补 2-5 条具体的禁做动作"
+                "（每条：动作 + 为什么 + 改做什么）。\n\n"
+            )
+        lines = [f"不做清单 (forbidden) — 已写下 {len(items)} 条，每轮都会回显在计划顶部："]
+        for i, e in enumerate(items, 1):
+            seg = f"  {i}. ✗ {e.get('action', '')}"
+            if e.get("instead"):
+                seg += f" → 改为：{e['instead']}"
+            lines.append(seg)
+        return "\n".join(lines) + "\n\n"
 
     def _time_budget_report(self, steps: list) -> str:
         """Frame-time accounting for the plan the agent just committed to.

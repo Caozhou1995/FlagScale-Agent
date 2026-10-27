@@ -68,7 +68,7 @@ class PlanUpdateTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "update_acceptance", "complete", "abandon", "deactivate", "reactivate", "batch", "set_thinking"],
+                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "update_acceptance", "add_forbidden", "complete", "abandon", "deactivate", "reactivate", "batch", "set_thinking"],
                 "description": "What to do: step_done/step_doing/step_skip (update a step), add_steps (insert new steps), update_acceptance (modify step acceptance criteria), complete/abandon (finish the plan), deactivate (pause current plan), reactivate (resume a paused plan by id), batch (update multiple steps at once), set_thinking (rewrite the plan-level problem model — pass the new model in the 'thinking' field).",
             },
             "step_id": {
@@ -184,6 +184,38 @@ class PlanUpdateTool(Tool):
                 "type": "string",
                 "description": "Plan ID to reactivate (for reactivate action).",
             },
+            "forbidden": {
+                "type": "array",
+                "description": (
+                    "For action='add_forbidden': the NEGATIVE constraints to append "
+                    "to your plan — the actions you must NOT take. `steps` says what "
+                    "to do; this says what not to do, and it is re-rendered at the "
+                    "TOP of your plan context every turn, beside the time ledger. "
+                    "Append here the moment you discover a trap DURING the work — a "
+                    "path you already burned time on, a temptation the clock will "
+                    "make stronger. Each item is a string or "
+                    "{action, why, instead}: `action` = the concrete thing you must "
+                    "not do; `why` = what happened in THIS task that proved it; "
+                    "`instead` = what to do when tempted. Specific and falsifiable "
+                    "only ('do not re-run the same build with a bigger timeout — "
+                    "read the partial output and change the approach'), never a "
+                    "platitude. Duplicates are dropped automatically."
+                ),
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string"},
+                                "why": {"type": "string"},
+                                "instead": {"type": "string"},
+                            },
+                            "required": ["action"],
+                        },
+                    ]
+                },
+            },
             "thinking": {
                 "type": "string",
                 "description": (
@@ -250,6 +282,25 @@ class PlanUpdateTool(Tool):
                 if not acceptance:
                     return "ERROR: acceptance required for update_acceptance."
                 self._plan.update_acceptance(step_id, acceptance)
+            elif action == "add_forbidden":
+                items = kwargs.get("forbidden", [])
+                if not items:
+                    return "ERROR: forbidden required for add_forbidden."
+                res = self._plan.add_forbidden(items)
+                added = res.get("added", 0)
+                total = res.get("total", 0)
+                if not added:
+                    return (
+                        f"No new prohibitions added ({total} already recorded). The "
+                        "list on disk is unchanged — append items that are actually new."
+                    )
+                out = [f"Appended {added} prohibition(s); {total} now on record:"]
+                for i, e in enumerate(res.get("forbidden") or [], 1):
+                    seg = f"  {i}. ✗ {e.get('action', '')}"
+                    if e.get("instead"):
+                        seg += f" → 改为：{e['instead']}"
+                    out.append(seg)
+                return "\n".join(out)
             elif action == "complete":
                 self._plan.complete()
             elif action == "abandon":

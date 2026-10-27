@@ -156,7 +156,7 @@ class PlanUpdateGuard(Guard):
     # the plan forward, not merely pinged the guard.
     _PROGRESS_ACTIONS = frozenset((
         "step_done", "step_skip", "complete", "abandon",
-        "add_steps", "update_acceptance", "batch",
+        "add_steps", "update_acceptance", "batch", "add_forbidden",
     ))
 
     @staticmethod
