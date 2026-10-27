@@ -1,3 +1,29 @@
+
+# --- calibration shim (test layer only) -------------------------------------
+# plan_create now REFUSES without a `calibration` declaration (instrument 1:
+# prove your check works on a case whose answer is already known). The tests in
+# this module measure step parsing / rendering / ledgers, not calibration, so
+# they supply a default. Production code has no such default -- the refusal is
+# load-bearing BECAUSE it cannot be skipped.
+_CAL_SHIM = {
+    "instrument": "pytest shim default",
+    "known_case": "shim known case",
+    "observed": "shim observed",
+    "matches": "yes",
+}
+
+
+def _plan_create_tool(tp, session_id=""):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    class _Shim(PlanCreateTool):
+        def execute(self, **kwargs):
+            kwargs.setdefault("calibration", dict(_CAL_SHIM))
+            return super().execute(**kwargs)
+
+    return _Shim(tp) if not session_id else _Shim(tp, session_id)
+# ---------------------------------------------------------------------------
+
 # Copyright 2026 FlagOS Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +53,9 @@ import pytest
 from flagscale_agent.react.plan import TaskPlan, _normalize_forbidden
 from flagscale_agent.react.tools.plan_create import PlanCreateTool
 from flagscale_agent.react.tools.plan_update import PlanUpdateTool
+
+
+
 
 
 @pytest.fixture
@@ -150,7 +179,7 @@ def test_add_forbidden_rejects_duplicates_without_wiping_the_list(plan):
 
 
 def test_plan_create_tool_accepts_forbidden_and_echoes_it(plan):
-    out = PlanCreateTool(plan).execute(
+    out = _plan_create_tool(plan).execute(
         title="t", steps=["a"], forbidden=["不要盲目调参"],
     )
     assert "已写下 1 条" in out
@@ -158,7 +187,7 @@ def test_plan_create_tool_accepts_forbidden_and_echoes_it(plan):
 
 
 def test_plan_create_tool_flags_an_empty_forbidden_list(plan):
-    out = PlanCreateTool(plan).execute(title="t", steps=["a"])
+    out = _plan_create_tool(plan).execute(title="t", steps=["a"])
     assert "为空" in out
     assert "add_forbidden" in out
 

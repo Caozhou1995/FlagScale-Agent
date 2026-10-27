@@ -23,6 +23,35 @@ from flagscale_agent.react.tools.plan_create import PlanCreateTool
 from flagscale_agent.react.tools.plan_update import PlanUpdateTool
 
 
+
+
+
+
+# --- calibration shim (test layer only) -------------------------------------
+# plan_create now REFUSES without a `calibration` declaration (instrument 1:
+# prove your check works on a case whose answer is already known). The tests in
+# this module measure step parsing / rendering / ledgers, not calibration, so
+# they supply a default. Production code has no such default -- the refusal is
+# load-bearing BECAUSE it cannot be skipped.
+_CAL_SHIM = {
+    "instrument": "pytest shim default",
+    "known_case": "shim known case",
+    "observed": "shim observed",
+    "matches": "yes",
+}
+
+
+def _plan_create_tool(tp, session_id=""):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    class _Shim(PlanCreateTool):
+        def execute(self, **kwargs):
+            kwargs.setdefault("calibration", dict(_CAL_SHIM))
+            return super().execute(**kwargs)
+
+    return _Shim(tp) if not session_id else _Shim(tp, session_id)
+# ---------------------------------------------------------------------------
+
 @pytest.fixture
 def plan_dir():
     d = tempfile.mkdtemp()
@@ -35,7 +64,7 @@ class TestSetThinkingEcho:
 
     def test_set_thinking_action_echoes_challenge(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        PlanCreateTool(tp).execute(title="T", steps=["A"])
+        _plan_create_tool(tp).execute(title="T", steps=["A"])
         tool = PlanUpdateTool(tp)
         result = tool.execute(action="set_thinking", thinking="bottleneck is IO")
         assert "Model recorded" in result
@@ -43,7 +72,7 @@ class TestSetThinkingEcho:
 
     def test_step_done_with_thinking_echoes(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        PlanCreateTool(tp).execute(title="T", steps=["A"])
+        _plan_create_tool(tp).execute(title="T", steps=["A"])
         tool = PlanUpdateTool(tp)
         sid = tp.get_active()["steps"][0]["id"]
         result = tool.execute(action="step_done", step_id=sid, thinking="new model")
@@ -51,7 +80,7 @@ class TestSetThinkingEcho:
 
     def test_step_done_without_thinking_no_echo(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        PlanCreateTool(tp).execute(title="T", steps=["A"])
+        _plan_create_tool(tp).execute(title="T", steps=["A"])
         tool = PlanUpdateTool(tp)
         sid = tp.get_active()["steps"][0]["id"]
         result = tool.execute(action="step_done", step_id=sid, notes="progress")
@@ -61,7 +90,7 @@ class TestSetThinkingEcho:
 class TestPlanCreateToolStructuredSteps:
     def test_dict_steps_with_acceptance(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="Test",
             steps=[
@@ -82,7 +111,7 @@ class TestPlanCreateToolStructuredSteps:
 
     def test_mixed_steps(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="Test",
             steps=[
@@ -101,7 +130,7 @@ class TestPlanCreateToolStructuredSteps:
 
     def test_backward_compatible_string_steps(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(title="Test", steps=["A", "B"])
         assert "Plan created" in result
         plan = tp.get_active()
@@ -111,7 +140,7 @@ class TestPlanCreateToolStructuredSteps:
 
     def test_dict_without_title_fails(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="Test",
             steps=[{"acceptance": ["A1"]}]
@@ -184,7 +213,7 @@ class TestPlanToolsThinking:
 
     def test_create_with_thinking(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="Test", steps=["A"],
             thinking="bottleneck: data too small; predict 5x lifts acc",
@@ -196,7 +225,7 @@ class TestPlanToolsThinking:
 
     def test_create_without_thinking_ok(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(title="Test", steps=["A"])
         assert "Plan created" in result
         assert tp.get_active()["thinking"] == ""

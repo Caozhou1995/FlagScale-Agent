@@ -68,7 +68,7 @@ class PlanUpdateTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "update_acceptance", "add_forbidden", "complete", "abandon", "deactivate", "reactivate", "batch", "set_thinking"],
+                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "update_acceptance", "add_forbidden", "predict", "settle", "complete", "abandon", "deactivate", "reactivate", "batch", "set_thinking"],
                 "description": "What to do: step_done/step_doing/step_skip (update a step), add_steps (insert new steps), update_acceptance (modify step acceptance criteria), complete/abandon (finish the plan), deactivate (pause current plan), reactivate (resume a paused plan by id), batch (update multiple steps at once), set_thinking (rewrite the plan-level problem model — pass the new model in the 'thinking' field).",
             },
             "step_id": {
@@ -141,6 +141,76 @@ class PlanUpdateTool(Tool):
                     "real probe + observed output; a non-affecting one (no) MUST "
                     "carry a reason. On a block, the guard message states the exact "
                     "rule — read it."
+                ),
+            },
+            "prediction_statement": {
+                "type": "string",
+                "description": (
+                    "For action='predict'. Instrument 3 of 4 (pre-registration): "
+                    "write the outcome you EXPECT before running, so the result "
+                    "cannot be re-explained after the fact. A prediction recorded "
+                    "in advance can be wrong — which is exactly what makes it "
+                    "informative. Settle it afterwards with action='settle' "
+                    "(outcome hit/miss/not_run); plan_update(action='complete') "
+                    "REFUSES while any prediction is unsettled."
+                ),
+            },
+            "prediction_expected": {
+                "type": "string",
+                "description": "For action='predict': the concrete expected value ('~3350 passed', 'reward=1').",
+            },
+            "prediction_kind": {
+                "type": "string",
+                "description": "For action='predict': optional tag grouping related predictions.",
+            },
+            "prediction_id": {
+                "type": "string",
+                "description": "For action='settle': the pred_xxx id returned when the prediction was recorded.",
+            },
+            "outcome": {
+                "type": "string",
+                "enum": ["hit", "miss", "not_run"],
+                "description": (
+                    "For action='settle': hit = the result matched your prediction; "
+                    "miss = it did not (state the observed value); not_run = the run "
+                    "never happened (cut short, abandoned) — an honest outcome, never "
+                    "reuse 'hit' for it."
+                ),
+            },
+            "prediction_observed": {
+                "type": "string",
+                "description": "For action='settle': what was ACTUALLY observed, so hit/miss is auditable.",
+            },
+            "differential": {
+                "type": "object",
+                "description": (
+                    "Instrument 2 of 4 (differential). REQUIRED on step_done when "
+                    "`convention` NAMES a convention with conflict=\"no\" — i.e. "
+                    "when this step's output rests on a quantity YOU defined. "
+                    "Compute the same quantity a second time down a path that does "
+                    "not share source with the first, and report both numbers: if "
+                    "they agree, the value does not depend on your definition (cheap "
+                    "confidence); if they differ, the value is DECIDED BY YOUR "
+                    "DEFINITION — a fact about the problem, not a bug in your code, "
+                    "and you must then pick the definition from an external "
+                    "authority. Keys: quantity, path_a, path_b, delta, "
+                    "within_tolerance (\"yes\"|\"no\"|\"cannot_compute\"), "
+                    "tolerance_basis. within_tolerance=\"no\" is refused until you "
+                    "either name the deciding external authority or record it as an "
+                    "unverified assumption in `assumptions`."
+                ),
+            },
+            "negative_control": {
+                "type": "object",
+                "description": (
+                    "Instrument 4 of 4 (negative control). REQUIRED on step_done "
+                    "when the plan's calibration declared matches=\"no_known_case\" "
+                    "— your check was never validated against a case with a known "
+                    "answer, so the only remaining evidence it can detect failure is "
+                    "seeing it go RED. Keys: check (the check you rely on), "
+                    "must_fail_input (an input the correct check rejects), observed "
+                    "(what it actually reported — must show a failure/rejection; a "
+                    "bare \"ok\" is refused because it proves nothing)."
                 ),
             },
             "acceptance": {
@@ -282,6 +352,48 @@ class PlanUpdateTool(Tool):
                 if not acceptance:
                     return "ERROR: acceptance required for update_acceptance."
                 self._plan.update_acceptance(step_id, acceptance)
+            elif action == "predict":
+                # INSTRUMENT 3 (pre-registration): record the expected outcome
+                # BEFORE the run. Rejected without a statement because an empty
+                # prediction cannot be wrong, and a prediction that cannot be
+                # wrong carries none of its cost.
+                statement = (kwargs.get("prediction_statement") or "").strip()
+                if not statement:
+                    return (
+                        "ERROR: prediction_statement required for predict — write "
+                        "the number/outcome you EXPECT before you run it."
+                    )
+                self._plan.predict(
+                    statement=statement,
+                    expected=(kwargs.get("prediction_expected") or ""),
+                    kind=(kwargs.get("prediction_kind") or ""),
+                )
+                pending = self._plan.unsettled_predictions()
+                lines = [
+                    f"Pre-registered. {len(pending)} unsettled prediction(s) on record:"
+                ]
+                for pp in pending:
+                    lines.append(f"  - {pp['id']}: {pp['statement']}")
+                lines.append(
+                    "现在去跑。跑完必须结算（action='settle'，outcome 只能是 "
+                    "hit / miss / not_run）——plan complete 会拒绝未结算的预注册。"
+                )
+                return "\n".join(lines)
+            elif action == "settle":
+                pid = kwargs.get("prediction_id")
+                if not pid:
+                    return "ERROR: prediction_id required for settle."
+                outcome = kwargs.get("outcome") or kwargs.get("prediction_outcome")
+                observed = kwargs.get("prediction_observed") or ""
+                try:
+                    self._plan.settle(pid, outcome, observed)
+                except ValueError as e:
+                    return f"ERROR: {e}"
+                left = self._plan.unsettled_predictions()
+                return (
+                    f"Settled {pid} as {str(outcome).strip().lower()}."
+                    + (f" {len(left)} still unsettled." if left else " No unsettled predictions left.")
+                )
             elif action == "add_forbidden":
                 items = kwargs.get("forbidden", [])
                 if not items:

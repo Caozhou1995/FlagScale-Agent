@@ -56,6 +56,13 @@ from flagscale_agent.react.oracle import (
     arbiter_observation_matches,
     named_arbiter_obligation,
 )
+from flagscale_agent.react.instruments import (
+    check_differential,
+    check_negative_control,
+    calibration_needs_negative_control,
+    differential_satisfied,
+    UNSETTLED_PREDICTIONS_MSG,
+)
 
 
 def _normalize_step_id(raw) -> int | None:
@@ -2497,6 +2504,32 @@ class VerificationGuard(Guard):
         surfaces the whole set, matching ``_completion_obligations``' rationale.
         """
         pending: list[GuardVerdict] = []
+
+        # INSTRUMENT 3 (PRE-REGISTRATION), checked FIRST and INDEPENDENTLY of the
+        # oracle: a prediction recorded before a run and never settled is an open
+        # obligation no matter what else was declared. Placed above the
+        # oracle-early-return below, which is the trap this placement avoids --
+        # a plan with no oracle declaration would otherwise close with dangling
+        # predictions. Measured need: a long-running prediction on this harness
+        # was left unsettled after its run was stopped, and nothing surfaced it.
+        unsettled = []
+        if self._plan:
+            try:
+                unsettled = self._plan.unsettled_predictions() or []
+            except Exception:
+                unsettled = []
+        if unsettled:
+            items = "\n".join(
+                f"  - {p.get('id')}: {p.get('statement', '')}"
+                + (f" → 预期 {p['expected']}" if p.get("expected") else "")
+                for p in unsettled
+            )
+            pending.append(GuardVerdict.block(
+                message=UNSETTLED_PREDICTIONS_MSG.format(items=items),
+                reason="plan_complete_unsettled_predictions",
+                category="verification_required",
+            ))
+
         decl = self._bound_oracle()
         if not decl:
             # No oracle declaration at all. The plan-complete path does NOT
@@ -2772,6 +2805,14 @@ class VerificationGuard(Guard):
                         _check_unverified_assumptions_field(
                             ctx.tool_args.get("assumptions"), self._observed(ctx)),
                         "assumptions", ctx.tool_args.get("assumptions")),
+                    _echo_received(
+                        self._instrument_obligation(
+                            ctx.tool_args.get("convention"),
+                            ctx.tool_args.get("differential"),
+                            ctx.tool_args.get("negative_control")),
+                        "differential/negative_control",
+                        {"differential": ctx.tool_args.get("differential"),
+                         "negative_control": ctx.tool_args.get("negative_control")}),
                 ])
                 # EVIDENCE LATCHING PRECEDES FORMAL BLOCKING.
                 #
@@ -2992,6 +3033,92 @@ class VerificationGuard(Guard):
         if not msgs and not full_log:
             return None
         return _observed_corpus(msgs or [], full_log)
+
+    def _instrument_obligation(self, conv, differential, negative_control):
+        """Instruments 2 & 4: the obligations that follow from what was DECLARED.
+
+        Both are conditional by design — the point of the measured lesson is that
+        a gate applied everywhere gets routed around, so each fires only on the
+        declaration that creates the risk:
+
+        * DIFFERENTIAL fires when the step's `convention` NAMES a convention (i.e.
+          the output rests on a quantity the agent DEFINED) while declaring that
+          definition non-conflicting. The shape it targets: a quantity measured
+          under the agent's own scope, self-scored PASS, while the named tool's
+          own scope for that same quantity lands outside the stated bound. The
+          obligation asks for the SAME quantity down a second, mechanically
+          different path, because the interesting outcome is not "my code has a
+          bug" but "this number is decided by my definition".
+
+        * NEGATIVE CONTROL fires when the plan's calibration said
+          "no_known_case" — the instrument was never checked against a known
+          answer, so the only remaining evidence that it can detect failure is
+          seeing it go RED on an input that must fail it.
+
+        Returns a GuardVerdict.block to MERGE with the other fixed-field failures,
+        or None. With no active plan both obligations are skipped (unknown state
+        must not block).
+        """
+        conv_name = ""
+        conflict = ""
+        if isinstance(conv, dict):
+            conv_name = str(conv.get("name") or "").strip()
+            conflict = str(conv.get("conflict") or "").strip().lower()
+        named = bool(conv_name) and conv_name.lower() != "none"
+
+        # Instrument 2: a NAMED convention whose conflict the agent resolved on
+        # its own must be recomputed down an independent path -- BUT ONLY when
+        # the task actually named a deciding tool. That scoping is not leniency,
+        # it is what the instrument is FOR: a differential answers "does this
+        # quantity depend on MY definition?", a question that only has teeth when
+        # some OTHER definition is in play. With no named arbiter there is no
+        # rival definition to differ from, so demanding two paths would be
+        # ceremony -- and ceremony is what gets routed around.
+        #
+        # The measured loss this targets: the task text named a tool as the
+        # ground truth; the agent measured the quantity over only the region it
+        # chose (self-scored PASS) while that named tool's own scope put the same
+        # quantity out of the stated bound. Two paths there would have surfaced
+        # the choice.
+        arbiter = ""
+        decl = self._bound_oracle() if self._plan else {}
+        if isinstance(decl, dict):
+            arbiter = str(decl.get("named_arbiter") or "").strip()
+        has_named_decider = bool(arbiter) and arbiter.lower() != "none"
+
+        if (named and conflict == "no" and has_named_decider
+                and not differential_satisfied(differential)):
+            verdict = check_differential(differential)
+            if verdict is not None:
+                reason, msg = verdict
+                return GuardVerdict.block(
+                    # NOT .format(): the message body itself contains literal
+                    # brace groups (e.g. "step_done(differential={...})") that
+                    # str.format would try to interpret.
+                    message=msg.replace("{name}", conv_name or "unspecified"),
+                    reason=reason,
+                    category="verification_required",
+                )
+
+        # Instrument 4: an uncalibrated instrument must be shown able to fail.
+        cal = {}
+        if self._plan:
+            try:
+                active = self._plan.get_active()
+                if isinstance(active, dict):
+                    cal = active.get("calibration") or {}
+            except Exception:
+                cal = {}
+        if calibration_needs_negative_control(cal):
+            verdict = check_negative_control(negative_control)
+            if verdict is not None:
+                reason, msg = verdict
+                return GuardVerdict.block(
+                    message=msg,
+                    reason=reason,
+                    category="verification_required",
+                )
+        return None
 
     def _unfinished_steps(self) -> list:
         """Return the ids of steps in the active plan NOT yet done/skipped.

@@ -1,3 +1,29 @@
+
+# --- calibration shim (test layer only) -------------------------------------
+# plan_create now REFUSES without a `calibration` declaration (instrument 1:
+# prove your check works on a case whose answer is already known). The tests in
+# this module measure step parsing / rendering / ledgers, not calibration, so
+# they supply a default. Production code has no such default -- the refusal is
+# load-bearing BECAUSE it cannot be skipped.
+_CAL_SHIM = {
+    "instrument": "pytest shim default",
+    "known_case": "shim known case",
+    "observed": "shim observed",
+    "matches": "yes",
+}
+
+
+def _plan_create_tool(tp, session_id=""):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    class _Shim(PlanCreateTool):
+        def execute(self, **kwargs):
+            kwargs.setdefault("calibration", dict(_CAL_SHIM))
+            return super().execute(**kwargs)
+
+    return _Shim(tp) if not session_id else _Shim(tp, session_id)
+# ---------------------------------------------------------------------------
+
 # Copyright 2026 FlagOS Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,6 +80,9 @@ from flagscale_agent.react.guard import GuardContext
 # tests exercise the GATE LOGIC, so they must switch it back on explicitly;
 # without this they would report "no block" and look like broken code.
 import pytest as _pytest_mod
+
+
+
 
 
 @_pytest_mod.fixture(autouse=True)
@@ -129,7 +158,7 @@ class TestIsPremiseExternal:
 class TestPlanCreateOracleBinding:
     def test_self_authored_oracle_refused(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="T", steps=["A"],
             oracle={"oracle": "x", "premise_source": "self", "first_exercise": "cmd"},
@@ -140,7 +169,7 @@ class TestPlanCreateOracleBinding:
 
     def test_valid_oracle_binds_into_first_load_bearing_step(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="T",
             steps=[{"title": "A", "acceptance": ["A1"]}, "B"],
@@ -167,7 +196,7 @@ class TestPlanCreateOracleBinding:
         # creation without an oracle declaration is now refused, exactly like
         # creation without steps.
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(title="T", steps=["A"])
         assert "ERROR" in result
         assert tp.get_active() is None
@@ -176,7 +205,7 @@ class TestPlanCreateOracleBinding:
         # a plain string first step is promoted to a structured step carrying
         # the binding, so the acceptance channel still fires.
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="T", steps=["A", "B"],
             oracle={
@@ -197,7 +226,7 @@ class TestReviewRegressionFixes:
         # A model that JSON-encodes the oracle object must be DEGRADED, not
         # refused -- same normalization `steps` already gets.
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="T", steps=["A"],
             oracle='{"oracle": "golden", "premise_source": "provided", '
@@ -210,7 +239,7 @@ class TestReviewRegressionFixes:
         # Bind to the step the agent marks load-bearing, NOT silently the first
         # listed (here step 1 is a trivial preamble).
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="T", steps=["read task", "do the real work"],
             oracle={"oracle": "o", "premise_source": "provided",
@@ -224,7 +253,7 @@ class TestReviewRegressionFixes:
 
     def test_F3_oracle_step_id_out_of_range_falls_back_to_first(self, plan_dir):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         result = tool.execute(
             title="T", steps=["A", "B"],
             oracle={"oracle": "o", "premise_source": "provided",
@@ -388,7 +417,7 @@ class TestOracleExerciseCompletionArm:
 
     def _plan_with_oracle(self, plan_dir, oracle):
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
+        tool = _plan_create_tool(tp)
         tool.execute(title="T", steps=["A"], oracle=oracle)
         return tp
 
@@ -497,7 +526,7 @@ class TestOracleArmNotDisarmableByPlanMutation:
         # the guard must LATCH the declaration when it sees plan_create
         g.check_pre(GuardContext(tool_name="plan_create",
                                  tool_args={"title": "T", "oracle": oracle}))
-        PlanCreateTool(tp).execute(title="T", steps=["A"], oracle=oracle)
+        _plan_create_tool(tp).execute(title="T", steps=["A"], oracle=oracle)
         return tp, g
 
     @staticmethod
@@ -527,7 +556,7 @@ class TestOracleArmNotDisarmableByPlanMutation:
             "oracle": "ref impl", "premise_source": "provided",
             "first_exercise": "python x.py"})
         g.check_pre(GuardContext(tool_name="plan_create", tool_args={"title": "T2"}))
-        PlanCreateTool(tp).execute(title="T2", steps=["B"])  # no oracle
+        _plan_create_tool(tp).execute(title="T2", steps=["B"])  # no oracle
         self._close(tp)
         v = g.check_pre(self._complete_ctx())
         assert v is not None and v.reason == "completion_without_oracle_exercise"

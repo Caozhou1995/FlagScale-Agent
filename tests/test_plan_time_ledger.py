@@ -417,3 +417,22 @@ def _default_oracle_for_creation(monkeypatch):
         return original(self, **kwargs)
 
     monkeypatch.setattr(PlanCreateTool, "execute", execute)
+
+
+# Same shim, second required declaration: plan_create now also REFUSES to create
+# a plan without a `calibration` (instrument 1). The tests here exercise the time
+# ledger and merely pass through creation, so they get a minimal valid
+# calibration injected. The refusal contract itself is covered in
+# tests/test_instruments_four_levers.py, which drives the tool directly.
+@pytest.fixture(autouse=True)
+def _default_calibration_for_creation(monkeypatch):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+    from tests._calibration_fixture import DEFAULT_CALIBRATION
+
+    original = PlanCreateTool.execute
+
+    def execute(self, **kwargs):
+        kwargs.setdefault("calibration", dict(DEFAULT_CALIBRATION))
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(PlanCreateTool, "execute", execute)

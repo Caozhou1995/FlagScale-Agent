@@ -472,7 +472,8 @@ class TaskPlan:
             yaml.dump({"active_id": plan_id}, f)
 
     def create(self, title: str, steps: List, session_id: str = "", thinking: str = "",
-               oracle: Optional[dict] = None, forbidden: Optional[List] = None) -> dict:
+               oracle: Optional[dict] = None, forbidden: Optional[List] = None,
+               calibration: Optional[dict] = None) -> dict:
         """Create a new plan.
         
         Args:
@@ -584,6 +585,17 @@ class TaskPlan:
                 # check it was EXERCISED -- a declaration becomes load-bearing
                 # only when the presentation path can see it.
                 "oracle": dict(oracle) if isinstance(oracle, dict) else {},
+                # Instrument 1 (CALIBRATION): the case whose answer was already
+                # known, and what the agent's own check said about it. Stored at
+                # plan level because it governs EVERY later self-report: an
+                # instrument that disagreed with a known answer makes all of its
+                # subsequent PASS claims worthless, which no step-local field
+                # could express.
+                "calibration": dict(calibration) if isinstance(calibration, dict) else {},
+                # Instrument 3 (PRE-REGISTRATION): predictions written BEFORE a
+                # run, each with an id so it can be SETTLED later. Append-only;
+                # an unsettled entry is a live obligation on plan completion.
+                "predictions": [],
                 # NEGATIVE constraints -- the twin of `steps`. Normalised to a
                 # list of dicts so every consumer (plan_status renderer, guard
                 # messages) reads one shape. A bare string becomes {"action": s}.
@@ -975,6 +987,107 @@ class TaskPlan:
             self._save(plan)
             self._clear_active()
             return plan
+
+    def predictions_block(self, plan: dict) -> List[str]:
+        """Render pre-registrations so they are in view before the next run.
+
+        Placed beside the time ledger for the same reason as the forbidden list:
+        a prediction the agent cannot see is a prediction it will silently
+        re-explain. `UNSETTLED` is spelled out because a dangling prediction is
+        an open obligation, not a note.
+        """
+        preds = plan.get("predictions") or []
+        lines: List[str] = []
+        if not preds:
+            return lines
+        lines.append("预注册 (predictions) — 跑之前写下的预期，跑完必须结算：")
+        for p in preds:
+            oc = p.get("outcome")
+            mark = f"[{oc}]" if oc else "[UNSETTLED]"
+            seg = f"   {mark} {p.get('id')}: {p.get('statement', '')}"
+            if p.get("expected"):
+                seg += f" → 预期 {p['expected']}"
+            if p.get("observed"):
+                seg += f"；实测 {p['observed']}"
+            lines.append(seg)
+        if any(not p.get("outcome") for p in preds):
+            lines.append(
+                "   还有未结算的预注册 —— 用 plan_update(action='settle', "
+                "prediction_id=..., outcome='hit'|'miss'|'not_run') 结掉。"
+            )
+        lines.append("")
+        return lines
+
+    def predict(self, statement: str, expected: str = "", kind: str = "") -> dict:
+        """Record a PRE-REGISTRATION: what the agent expects a run to produce.
+
+        Instrument 3. Its whole value is temporal -- written before the
+        observation, so the observation cannot be re-explained afterwards. Stored
+        in the plan (not prose) so `complete()` can refuse to close while any
+        entry is still unsettled: on this harness a long-running prediction was
+        once left dangling when the run was stopped, which is exactly the drift
+        this makes impossible.
+        """
+        with self._lock:
+            plan = self.get_active()
+            if not plan:
+                raise ValueError("No active plan")
+            preds = plan.setdefault("predictions", [])
+            pid = f"pred_{uuid.uuid4().hex[:8]}"
+            preds.append({
+                "id": pid,
+                "statement": (statement or "").strip(),
+                "expected": str(expected).strip() if expected is not None else "",
+                "kind": (kind or "").strip(),
+                "created": time.time(),
+                "outcome": None,
+                "settled": 0.0,
+                "observed": "",
+            })
+            plan["updated"] = time.time()
+            self._save(plan)
+            return plan
+
+    def settle(self, prediction_id: str, outcome: str, observed: str = "") -> dict:
+        """Settle a pre-registration hit/miss/not_run.
+
+        `not_run` is a legal outcome -- a run cut short by the wall is reported
+        honestly rather than silently dropped, because "the experiment didn't
+        happen" is a fact the plan should carry forward.
+        """
+        with self._lock:
+            plan = self.get_active()
+            if not plan:
+                raise ValueError("No active plan")
+            oc = (outcome or "").strip().lower()
+            if oc not in ("hit", "miss", "not_run"):
+                raise ValueError(
+                    'outcome must be "hit", "miss" or "not_run"'
+                )
+            preds = plan.get("predictions") or []
+            target = None
+            for p in preds:
+                if p.get("id") == prediction_id:
+                    target = p
+                    break
+            if target is None:
+                raise ValueError(
+                    f"No prediction with id {prediction_id!r}. Open ones: "
+                    + ", ".join(p["id"] for p in preds if not p.get("outcome"))
+                )
+            target["outcome"] = oc
+            target["observed"] = str(observed or "").strip()
+            target["settled"] = time.time()
+            plan["updated"] = time.time()
+            self._save(plan)
+            return plan
+
+    def unsettled_predictions(self) -> List[dict]:
+        """Predictions recorded but never settled -- the close-out obligation."""
+        plan = self.get_active()
+        if not plan:
+            return []
+        return [p for p in (plan.get("predictions") or []) if not p.get("outcome")]
 
     def abandon(self, reason: str = "") -> dict:
         with self._lock:

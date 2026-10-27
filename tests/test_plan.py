@@ -23,6 +23,35 @@ import pytest
 from flagscale_agent.react.plan import TaskPlan
 
 
+
+
+
+
+# --- calibration shim (test layer only) -------------------------------------
+# plan_create now REFUSES without a `calibration` declaration (instrument 1:
+# prove your check works on a case whose answer is already known). The tests in
+# this module measure step parsing / rendering / ledgers, not calibration, so
+# they supply a default. Production code has no such default -- the refusal is
+# load-bearing BECAUSE it cannot be skipped.
+_CAL_SHIM = {
+    "instrument": "pytest shim default",
+    "known_case": "shim known case",
+    "observed": "shim observed",
+    "matches": "yes",
+}
+
+
+def _plan_create_tool(tp, session_id=""):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    class _Shim(PlanCreateTool):
+        def execute(self, **kwargs):
+            kwargs.setdefault("calibration", dict(_CAL_SHIM))
+            return super().execute(**kwargs)
+
+    return _Shim(tp) if not session_id else _Shim(tp, session_id)
+# ---------------------------------------------------------------------------
+
 @pytest.fixture
 def plan_dir():
     d = tempfile.mkdtemp()
@@ -201,7 +230,7 @@ class TestPlanCreateToolStringSteps:
 
     def test_steps_as_json_string(self, tp):
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
-        tool = PlanCreateTool(tp, session_id="test")
+        tool = _plan_create_tool(tp, "test")
         result = tool.execute(
             title="Test plan",
             steps='["Create conda env", "Install deps", "Run training"]',
@@ -216,7 +245,7 @@ class TestPlanCreateToolStringSteps:
 
     def test_steps_as_plain_string(self, tp):
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
-        tool = PlanCreateTool(tp, session_id="test")
+        tool = _plan_create_tool(tp, "test")
         result = tool.execute(
             title="Test plan",
             steps="Create conda env\nInstall deps\nRun training",
@@ -228,7 +257,7 @@ class TestPlanCreateToolStringSteps:
 
     def test_steps_as_normal_list(self, tp):
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
-        tool = PlanCreateTool(tp, session_id="test")
+        tool = _plan_create_tool(tp, "test")
         result = tool.execute(
             title="Test plan",
             steps=["Step A", "Step B"],

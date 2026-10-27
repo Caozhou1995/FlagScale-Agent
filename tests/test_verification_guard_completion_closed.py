@@ -1,3 +1,29 @@
+
+# --- calibration shim (test layer only) -------------------------------------
+# plan_create now REFUSES without a `calibration` declaration (instrument 1:
+# prove your check works on a case whose answer is already known). The tests in
+# this module measure step parsing / rendering / ledgers, not calibration, so
+# they supply a default. Production code has no such default -- the refusal is
+# load-bearing BECAUSE it cannot be skipped.
+_CAL_SHIM = {
+    "instrument": "pytest shim default",
+    "known_case": "shim known case",
+    "observed": "shim observed",
+    "matches": "yes",
+}
+
+
+def _plan_create_tool(tp, session_id=""):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    class _Shim(PlanCreateTool):
+        def execute(self, **kwargs):
+            kwargs.setdefault("calibration", dict(_CAL_SHIM))
+            return super().execute(**kwargs)
+
+    return _Shim(tp) if not session_id else _Shim(tp, session_id)
+# ---------------------------------------------------------------------------
+
 """Unit tests for the completion-boundary closure arm (VerificationGuard).
 
 A text-only [TASK_COMPLETE] must obey the SAME closure rule that
@@ -21,6 +47,9 @@ from flagscale_agent.react.plan import TaskPlan
 # tests exercise the GATE LOGIC, so they must switch it back on explicitly;
 # without this they would report "no block" and look like broken code.
 import pytest as _pytest_mod
+
+
+
 
 
 @_pytest_mod.fixture(autouse=True)
@@ -697,7 +726,7 @@ def test_tc_oracle_bind_action_exit_clears():
         g._graded_reading_seen = True
         g._acceptance_observed = True
         # The real ACTION exit: bind via plan_create (not a hand-set latch).
-        PlanCreateTool(plan).execute(
+        _plan_create_tool(plan).execute(
             title="re-bind", steps=["bind"],
             oracle={"premise_source": "provided", "oracle": "task reference",
                     "first_exercise": "cat /app/y"},

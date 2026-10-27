@@ -1,3 +1,29 @@
+
+# --- calibration shim (test layer only) -------------------------------------
+# plan_create now REFUSES without a `calibration` declaration (instrument 1:
+# prove your check works on a case whose answer is already known). The tests in
+# this module measure step parsing / rendering / ledgers, not calibration, so
+# they supply a default. Production code has no such default -- the refusal is
+# load-bearing BECAUSE it cannot be skipped.
+_CAL_SHIM = {
+    "instrument": "pytest shim default",
+    "known_case": "shim known case",
+    "observed": "shim observed",
+    "matches": "yes",
+}
+
+
+def _plan_create_tool(tp, session_id=""):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    class _Shim(PlanCreateTool):
+        def execute(self, **kwargs):
+            kwargs.setdefault("calibration", dict(_CAL_SHIM))
+            return super().execute(**kwargs)
+
+    return _Shim(tp) if not session_id else _Shim(tp, session_id)
+# ---------------------------------------------------------------------------
+
 # Copyright 2026 FlagOS Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +54,9 @@ from flagscale_agent.react.plan import TaskPlan, _normalize_forbidden
 from flagscale_agent.react.guard.plan_update import PlanUpdateGuard
 from flagscale_agent.react.tools.plan_create import PlanCreateTool
 from flagscale_agent.react.tools.plan_update import PlanUpdateTool
+
+
+
 
 
 @pytest.fixture
@@ -78,14 +107,14 @@ def test_creation_echo_discloses_dropped_entries(plan):
     p = plan.create(
         "t", ["s"], forbidden=[{"why": "no action text"}, {"action": "ok"}]
     )
-    out = PlanCreateTool(plan).execute(title="t", steps=["s"],
+    out = _plan_create_tool(plan).execute(title="t", steps=["s"],
                                        forbidden=[{"why": "no action"}, {"action": "ok"}])
     assert "被丢弃" in out
     assert "{'action': ...}" in out  # the fix is named, not just the count
 
 
 def test_creation_echo_clean_when_nothing_dropped(plan):
-    out = PlanCreateTool(plan).execute(title="t", steps=["s"], forbidden=["real one"])
+    out = _plan_create_tool(plan).execute(title="t", steps=["s"], forbidden=["real one"])
     assert "被丢弃" not in out
 
 

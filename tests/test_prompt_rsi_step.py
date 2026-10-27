@@ -1,3 +1,29 @@
+
+# --- calibration shim (test layer only) -------------------------------------
+# plan_create now REFUSES without a `calibration` declaration (instrument 1:
+# prove your check works on a case whose answer is already known). The tests in
+# this module measure step parsing / rendering / ledgers, not calibration, so
+# they supply a default. Production code has no such default -- the refusal is
+# load-bearing BECAUSE it cannot be skipped.
+_CAL_SHIM = {
+    "instrument": "pytest shim default",
+    "known_case": "shim known case",
+    "observed": "shim observed",
+    "matches": "yes",
+}
+
+
+def _plan_create_tool(tp, session_id=""):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    class _Shim(PlanCreateTool):
+        def execute(self, **kwargs):
+            kwargs.setdefault("calibration", dict(_CAL_SHIM))
+            return super().execute(**kwargs)
+
+    return _Shim(tp) if not session_id else _Shim(tp, session_id)
+# ---------------------------------------------------------------------------
+
 # Copyright 2026 FlagOS Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +51,9 @@ import pytest
 from flagscale_agent.react.plan import TaskPlan
 from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 from flagscale_agent.react.tools.plan_create import (
+
+
+
     PlanCreateTool,
     _REVIEW_STEP_TITLE,
     _RSI_STEP_TITLE,
@@ -46,7 +75,7 @@ def test_review_title_no_longer_claims_final_step():
 
 def test_rsi_step_is_appended_after_review(plan_dir):
     tp = TaskPlan(plan_dir)
-    PlanCreateTool(tp, session_id="t").execute(title="T", steps=["A", "B"])
+    _plan_create_tool(tp, "t").execute(title="T", steps=["A", "B"])
     steps = tp.get_active()["steps"]
     titles = [s["title"] for s in steps]
     # tail order: ... → review → RSI (RSI LAST)
@@ -96,7 +125,7 @@ def test_rsi_acceptance_demands_historical_open_proposals():
 
 def test_plan_create_note_announces_both_fixed_steps(plan_dir):
     tp = TaskPlan(plan_dir)
-    result = PlanCreateTool(tp, session_id="t").execute(title="T", steps=["A"])
+    result = _plan_create_tool(tp, "t").execute(title="T", steps=["A"])
     assert "RSI" in result
 
 

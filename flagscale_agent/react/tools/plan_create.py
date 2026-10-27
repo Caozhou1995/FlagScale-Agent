@@ -17,6 +17,7 @@
 import json
 
 from flagscale_agent.react.tools.base import Tool
+from flagscale_agent.react.instruments import check_calibration
 from flagscale_agent.react.oracle import (
     ORACLE_ACCEPTANCE_ITEM,
     STATED_CONSTRAINT_ITEM,
@@ -519,7 +520,7 @@ class PlanCreateTool(Tool):
                     oracle = json.loads(oracle)
                 except (json.JSONDecodeError, ValueError):
                     pass
-        # DECLARATION REQUIRED AT CREATION (measured loss, dna-assembly 2026-10-27):
+        # DECLARATION REQUIRED AT CREATION (measured loss, 2026-10-27):
         # the schema exposes `oracle`, the FRAME acceptance demands it, and the
         # model still omitted the kwarg -- the plan was created with oracle: {},
         # so the binding/arbiter machinery never armed and the downstream gates
@@ -582,6 +583,28 @@ class PlanCreateTool(Tool):
         })
         normalized.append({
             "title": _REVIEW_STEP_TITLE,
+            "calibration": {
+                "type": "object",
+                "description": (
+                    "REQUIRED. Instrument 1 of 4 (calibration): prove your check "
+                    "works BEFORE you trust it. Before relying on any instrument "
+                    "to decide whether your output is right, run it ONCE on a case "
+                    "whose answer you ALREADY know, and record what it said. You "
+                    "authored the instrument, so it shares your blind spot — an "
+                    "uncalibrated check reporting PASS only tells you it agrees "
+                    "with itself. Keys: `instrument` (the exact check/command), "
+                    "`known_case` (a case whose answer is already known and "
+                    "external to the instrument — a value read from the task's own "
+                    "data, a prior observed result, a supplied reference), "
+                    "`observed` (what the instrument actually reported on it), "
+                    "`matches` = \"yes\" | \"no\" | \"no_known_case\". If no such "
+                    "case exists, say \"no_known_case\" — that is an honest answer, "
+                    "but it obliges you to show a NEGATIVE CONTROL later (the "
+                    "instrument must be seen to FIRE on a bad input). If it says "
+                    "\"no\", your instrument is broken and is refused: every PASS "
+                    "it produces afterwards is noise."
+                ),
+            },
             "acceptance": list(_REVIEW_STEP_ACCEPTANCE),
         })
         normalized.append({
@@ -591,10 +614,20 @@ class PlanCreateTool(Tool):
 
         thinking = kwargs.get("thinking", "") or ""
         forbidden = kwargs.get("forbidden")
+        calibration = kwargs.get("calibration")
+
+        # INSTRUMENT 1 GATE: refuse to create the plan without a calibration
+        # declaration. This is the load-bearing half of the mechanism -- the
+        # schema only *asks*, this refuses, and only a refusal changes behaviour
+        # (measured: the advisory forms of every earlier mechanism were ignored).
+        _cal_refusal = check_calibration(calibration)
+        if _cal_refusal is not None:
+            return f"ERROR: {_cal_refusal[1]}"
 
         try:
             plan = self._plan.create(title, normalized, self._session_id, thinking=thinking,
-                                     oracle=oracle, forbidden=forbidden)
+                                     oracle=oracle, forbidden=forbidden,
+                                     calibration=calibration)
             forbidden_report = self._forbidden_report(plan)
             oracle_report = self._oracle_report(oracle)
             return (
@@ -618,7 +651,7 @@ class PlanCreateTool(Tool):
     def _oracle_report(self, oracle: dict) -> str:
         """State the oracle declaration back to the agent at creation time.
 
-        Part C of the measured fix (dna-assembly 2026-10-27): the agent wrote a
+        Part C of the measured fix (2026-10-27): the agent wrote a
         self-congratulatory 'oracle: ...' line in its thinking text while never
         passing the kwarg, and nothing echoed the declaration state -- so the
         gap was invisible until every downstream gate turned out inert. The
