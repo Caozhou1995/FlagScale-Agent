@@ -38,12 +38,41 @@ THRESHOLD_PAT = re.compile(
     r"\b\d+(?:\.\d+)?\s*(?:nt|bp|degrees?|°c|nm)\b", re.IGNORECASE
 )
 
+# A worked EXAMPLE with concrete numbers is a leak even when the unit is
+# omitted: quoting a measured value beside the stated bound discloses the
+# graded instance's answer (what the value should have been, how far off it
+# was). Mechanism text must describe the SHAPE of the decision, never replay a
+# production number pair.
+#
+# Scope deliberately narrow. A bare "two numbers on one line" rule was tried
+# first and produced 37 hits on enumeration markers ("(2) reference artifacts"),
+# dates ("2026-10-27") and the harness's own regression counts -- a detector
+# that fires on everything has no discriminating power. The leak needs BOTH a
+# worked-example marker AND bound-semantics vocabulary AND two distinct numbers,
+# which is what a task-answer replay actually looks like.
+EXAMPLE_MARKER_PAT = re.compile(
+    r"(measured case|worked example|for example|e\.g\.|your value"
+    r"|came out|this very|actual measurement)",
+    re.IGNORECASE,
+)
+BOUND_WORD_PAT = re.compile(
+    r"(value|bound|maximum|minimum|limit|margin|threshold|ceiling|cap)",
+    re.IGNORECASE,
+)
+BARE_NUMBER_PAIR_PAT = re.compile(r"(?<![\w.])(\d{1,6})(?![\w.])")
+
 # Files whose strings are rendered into an agent message.
 AGENT_FACING = [
     "flagscale_agent/react/prompt.py",
     "flagscale_agent/react/oracle.py",
     "flagscale_agent/react/judge.py",
     "flagscale_agent/react/guard/verification.py",
+    # Tool schemas and the instruments module are read by the model verbatim
+    # (base.py converts `parameters` into the tool's JSON schema), so they are
+    # agent-facing text in exactly the same sense as the prompt.
+    "flagscale_agent/react/tools/plan_update.py",
+    "flagscale_agent/react/tools/plan_create.py",
+    "flagscale_agent/react/instruments.py",
 ]
 
 REPO_ROOT_MOUNT = '"source":"/nfs/caozhou/fa_eval/FlagScale-Agent"'
@@ -94,6 +123,15 @@ def check_agent_facing(repo: pathlib.Path) -> list[str]:
             if THRESHOLD_PAT.search(ln):
                 fails.append(f"(c) {p}:{i} threshold pattern in "
                              f"agent-facing text: {ln.strip()[:110]}")
+                continue
+            nums = {int(m.group(1)) for m in BARE_NUMBER_PAIR_PAT.finditer(ln)}
+            if (len(nums) >= 2 and EXAMPLE_MARKER_PAT.search(ln)
+                    and BOUND_WORD_PAT.search(ln)):
+                fails.append(
+                    f"(c) {p}:{i} worked example with concrete numbers "
+                    f"{sorted(nums)} in agent-facing text "
+                    f"(describes the shape of the decision, never a number "
+                    f"pair): {ln.strip()[:110]}")
     return fails
 
 

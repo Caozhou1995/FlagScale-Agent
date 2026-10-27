@@ -226,11 +226,12 @@ class PlanUpdateTool(Tool):
                     "another defensible definition of the SAME quantity would "
                     "change that number, 0 when you can defend no rival exists), "
                     "rival_definition (WHAT that other definition is, one line; "
-                    "required whenever rival_shift > 0). Measured case: your value "
-                    "44 vs a stated maximum of 45 — margin 1 — while the "
-                    "construction the task's arbiter uses for the same quantity "
-                    "came out 4 larger (48, outside). Reporting the margin and the "
-                    "size of the disagreement is what makes the pass decidable."
+                    "required whenever rival_shift > 0). Passing means the rival "
+                    "reading would still satisfy the limit, so a self-test that "
+                    "only measured your own definition is not evidence. Failing "
+                    "means the rival reading would land outside the limit — then "
+                    "the margin is not decidable from your side alone and the "
+                    "task's own arbiter construction decides it."
                 ),
             },
             "acceptance": {
