@@ -392,3 +392,28 @@ class TestPublicBudgetAccessor:
         assert plan.budget_sec() is None
         _budgeted(plan, 900.0)
         assert plan.budget_sec() == 900.0
+
+
+# plan_create now REQUIRES an oracle declaration: a plan created without one
+# arms none of the verification machinery, which is how the measured failure
+# (oracle: {} persisted, every downstream gate silently inert) happened. The
+# tests in this module exercise OTHER behaviour and merely pass through the
+# creation call, so they get a minimal valid declaration injected here. The
+# contract itself -- including the refusal -- is covered in
+# tests/test_oracle_at_frame.py.
+@pytest.fixture(autouse=True)
+def _default_oracle_for_creation(monkeypatch):
+    from flagscale_agent.react.tools.plan_create import PlanCreateTool
+
+    original = PlanCreateTool.execute
+
+    def execute(self, **kwargs):
+        if kwargs.get("oracle") in (None, ""):
+            kwargs["oracle"] = {
+                "oracle": "test decider",
+                "premise_source": "provided",
+                "first_exercise": "true",
+            }
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(PlanCreateTool, "execute", execute)

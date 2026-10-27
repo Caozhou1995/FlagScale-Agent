@@ -161,13 +161,16 @@ class TestPlanCreateOracleBinding:
         # the binding must NOT leak onto the SECOND agent step
         assert plan["steps"][2]["acceptance"] == []
 
-    def test_oracle_absent_is_backward_compatible(self, plan_dir):
+    def test_oracle_absent_is_REFUSED(self, plan_dir):
+        # Contract changed (measured loss, dna-assembly 2026-10-27: the model
+        # silently omitted the kwarg and every downstream gate was inert):
+        # creation without an oracle declaration is now refused, exactly like
+        # creation without steps.
         tp = TaskPlan(plan_dir)
         tool = PlanCreateTool(tp)
         result = tool.execute(title="T", steps=["A"])
-        assert "Plan created" in result
-        # no oracle -> first step acceptance stays empty
-        assert tp.get_active()["steps"][1]["acceptance"] == []
+        assert "ERROR" in result
+        assert tp.get_active() is None
 
     def test_oracle_on_string_step_promotes_it(self, plan_dir):
         # a plain string first step is promoted to a structured step carrying
@@ -416,10 +419,13 @@ class TestOracleExerciseCompletionArm:
         assert v is not None and v.reason == "completion_without_oracle_exercise"
 
     def test_no_bound_oracle_does_not_block_on_this_arm(self, plan_dir):
-        # no oracle bound -> this arm is inert (must not regress normal tasks)
+        # A legacy/persisted plan built BEFORE the creation-time contract (or a
+        # resumed session's plan) carries no oracle dict -- state "unknown" must
+        # stay non-blocking, which is the permissive fallback _bound_oracle
+        # documents. Built via TaskPlan.create directly: the TOOL now refuses
+        # this shape, but the persisted state still exists in the wild.
         tp = TaskPlan(plan_dir)
-        tool = PlanCreateTool(tp)
-        tool.execute(title="T", steps=["A"])
+        tp.create("T", ["A", "B"])
         self._close_all_steps(tp)
         g = VerificationGuard(plan=tp)
         v = g.check_pre(self._ctx())

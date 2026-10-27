@@ -376,15 +376,20 @@ class PlanCreateTool(Tool):
             "oracle": {
                 "type": "object",
                 "description": (
-                    "Optional but strongly encouraged at framing time: the oracle "
-                    "that will decide this task, with a premise EXTERNAL to your own "
-                    "implementation. Object with keys: `premise_source` (one of "
-                    "'differential' | 'provided' | 'consumer'), `oracle` (what "
-                    "decides it), and `first_exercise` (the exact command/check that "
-                    "runs it). When supplied, its first exercise is bound into the "
+                    "REQUIRED. The oracle that will decide this task, with a "
+                    "premise EXTERNAL to your own implementation. Object with "
+                    "keys: `premise_source` (one of 'differential' | 'provided' "
+                    "| 'consumer'), `oracle` (what decides it), and "
+                    "`first_exercise` (the exact command/check that runs it). "
+                    "When supplied, its first exercise is bound into the "
                     "acceptance of the FIRST load-bearing step you list, so the "
-                    "acceptance->verification channel forces the oracle's evidence "
-                    "to exist early. A self-authored premise_source is refused."
+                    "acceptance->verification channel forces the oracle's "
+                    "evidence to exist early. A self-authored premise_source is "
+                    "refused. If the task text names NO deciding tool at all, "
+                    "declare that explicitly: premise_source 'consumer', oracle "
+                    "text 'none: <why no external decider exists>' -- an "
+                    "auditable declaration, not an omission. Omitting this field "
+                    "REFUSES plan creation."
                 ),
                 "properties": {
                     "premise_source": {"type": "string"},
@@ -514,31 +519,54 @@ class PlanCreateTool(Tool):
                     oracle = json.loads(oracle)
                 except (json.JSONDecodeError, ValueError):
                     pass
-        if oracle is not None:
-            if not declares_external_premise(oracle):
-                return (
-                    "ERROR: oracle must DECLARE an external-premise source. Provide "
-                    "'premise_source' (one of: "
-                    + " | ".join(PREMISE_SOURCES)
-                    + "), non-empty 'oracle' and 'first_exercise', and no extra keys. "
-                    "A self-authored/unknown premise_source, a missing leg, or an "
-                    "annex key is refused. Note: this is a declaration, not proof -- "
-                    "name the external artifact so a reader can check it."
-                )
-            binding = build_oracle_binding_line(oracle["oracle"], oracle["first_exercise"])
-            # F3: bind to the step the agent marks load-bearing when it says so,
-            # else the first listed step (the convention is stated in the FRAME
-            # acceptance text: "list that step first, or pass its index").
-            target_idx = 0
-            raw_idx = kwargs.get("oracle_step_id")
-            if isinstance(raw_idx, int) and 1 <= raw_idx <= len(normalized):
-                target_idx = raw_idx - 1
-            target = normalized[target_idx]
-            if isinstance(target, dict):
-                target.setdefault("acceptance", [])
-                target["acceptance"] = [binding] + list(target["acceptance"])
-            else:
-                normalized[target_idx] = {"title": str(target), "acceptance": [binding]}
+        # DECLARATION REQUIRED AT CREATION (measured loss, dna-assembly 2026-10-27):
+        # the schema exposes `oracle`, the FRAME acceptance demands it, and the
+        # model still omitted the kwarg -- the plan was created with oracle: {},
+        # so the binding/arbiter machinery never armed and the downstream gates
+        # (which fire only on a BOUND oracle) were all inert. A declaration the
+        # agent can silently skip is not a declaration: refuse creation until the
+        # agent commits one, the same way `steps` is required. This is a SHAPE
+        # gate (same honest scope as declares_external_premise) -- it forces the
+        # naming of a decider up front; it cannot prove the premise is external.
+        if oracle is None or not oracle:
+            return (
+                "ERROR: plan_create requires an oracle declaration -- the plan's "
+                "FRAME acceptance is built around one, and a plan created without "
+                "it arms none of the verification machinery. Provide an oracle "
+                "dict: 'premise_source' (one of: "
+                + " | ".join(PREMISE_SOURCES)
+                + "), non-empty 'oracle' (what decides the task's key quantity) "
+                "and 'first_exercise' (the exact command that runs it). If the "
+                "task text names NO deciding tool at all, say so explicitly in "
+                "the 'oracle' text (premise_source 'consumer', oracle text "
+                "'none: <why no external decider exists>') -- that is an "
+                "auditable declaration, not an omission. This is a declaration, "
+                "not proof: name the artifact so a reader can check it."
+            )
+        if not declares_external_premise(oracle):
+            return (
+                "ERROR: oracle must DECLARE an external-premise source. Provide "
+                "'premise_source' (one of: "
+                + " | ".join(PREMISE_SOURCES)
+                + "), non-empty 'oracle' and 'first_exercise', and no extra keys. "
+                "A self-authored/unknown premise_source, a missing leg, or an "
+                "annex key is refused. Note: this is a declaration, not proof -- "
+                "name the external artifact so a reader can check it."
+            )
+        binding = build_oracle_binding_line(oracle["oracle"], oracle["first_exercise"])
+        # F3: bind to the step the agent marks load-bearing when it says so,
+        # else the first listed step (the convention is stated in the FRAME
+        # acceptance text: "list that step first, or pass its index").
+        target_idx = 0
+        raw_idx = kwargs.get("oracle_step_id")
+        if isinstance(raw_idx, int) and 1 <= raw_idx <= len(normalized):
+            target_idx = raw_idx - 1
+        target = normalized[target_idx]
+        if isinstance(target, dict):
+            target.setdefault("acceptance", [])
+            target["acceptance"] = [binding] + list(target["acceptance"])
+        else:
+            normalized[target_idx] = {"title": str(target), "acceptance": [binding]}
 
         # Harness-appended FIXED steps — the plan standard template. The FIRST
         # step frames the plan (divergence check + qualifier/facet extraction +
@@ -568,6 +596,7 @@ class PlanCreateTool(Tool):
             plan = self._plan.create(title, normalized, self._session_id, thinking=thinking,
                                      oracle=oracle, forbidden=forbidden)
             forbidden_report = self._forbidden_report(plan)
+            oracle_report = self._oracle_report(oracle)
             return (
                 "Plan created.\n\n"
                 "NOTE: this is the FlagScale-Agent Plan STANDARD TEMPLATE. The harness "
@@ -578,12 +607,44 @@ class PlanCreateTool(Tool):
                 "and provide verification evidence for each acceptance criterion. All "
                 "fixed steps are SKIPPABLE with a reasonable reason, but do not skip "
                 "them silently.\n\n"
+                + oracle_report
                 + forbidden_report
                 + self._time_budget_report(normalized)
                 + f"{self._plan.summary()}"
             )
         except Exception as e:
             return f"ERROR: {e}"
+
+    def _oracle_report(self, oracle: dict) -> str:
+        """State the oracle declaration back to the agent at creation time.
+
+        Part C of the measured fix (dna-assembly 2026-10-27): the agent wrote a
+        self-congratulatory 'oracle: ...' line in its thinking text while never
+        passing the kwarg, and nothing echoed the declaration state -- so the
+        gap was invisible until every downstream gate turned out inert. The
+        refusal (part A) closes creation-time silence; this echo closes the
+        creation-time loop on the success path, the same one-time echo the
+        forbidden list gets. Named tools referenced in the declaration are
+        quoted verbatim from the AGENT'S OWN dict -- nothing here invents or
+        suggests a tool name (no grader leak).
+        """
+        decider = str(oracle.get("oracle", "")).strip()
+        source = str(oracle.get("premise_source", "")).strip()
+        exercise = str(oracle.get("first_exercise", "")).strip()
+        arbiter = oracle.get("named_arbiter")
+        arbiter_note = ""
+        if isinstance(arbiter, str) and arbiter.strip():
+            arbiter_note = f"  裁决工具（任务文本点名的那个）: {arbiter.strip()}\n"
+        return (
+            f"oracle 声明 (你已承诺，完成前必须真实执行):\n"
+            f"  裁决来源 premise_source: {source}\n"
+            f"  裁决者 oracle: {decider}\n"
+            f"  首次执行 first_exercise: {exercise}\n"
+            f"{arbiter_note}"
+            "  ⚠ 关键纪律：任务点名的外部裁决工具，必须对【交付物本身】跑，而不是对"
+            "你自己构造的样本跑；当你的读数与它的读数不一致时，以它的为准，"
+            "不得解释成'我的脚本有 bug'后换自己的量。\n\n"
+        )
 
     def _forbidden_report(self, plan: dict) -> str:
         """Confirm back to the agent the prohibitions it just committed to.
