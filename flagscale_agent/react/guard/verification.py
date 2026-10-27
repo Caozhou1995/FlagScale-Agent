@@ -216,8 +216,25 @@ Marking done in bulk must not skip the verification each step would otherwise re
 Re-issue the batch with "_override_reason" affirming that for EACH step you are marking
 done, you re-checked the result against what that step was supposed to satisfy.
 
-If a step deserves real evidence, mark it via plan_update(step_done, verification=[...])
-individually rather than folding it into a batch."""
+WHERE THE FOUR DECLARATIONS GO (this is the part that costs rounds if guessed):
+  · EVERY done item inside `updates[]` must carry its OWN four declaration
+    fields, nested INSIDE that item's object:
+      {"step_id": 1, "status": "done",
+       "convention": {"name": "none"},
+       "deliverable_reading": {"deliverable": "none"},
+       "assumptions": {"unverified": "none"},
+       "acceptance_act": {"command": "...", "observed": "<real output>"},
+       "verification": ["<what you ran + what it printed>"]}
+  · Writing them at the TOP LEVEL of the plan_update call is NOT enough and is
+    exactly how this gate keeps firing — the per-item check reads updates[i]
+    first and only falls back to the top level. Put them in the item; do not
+    rely on the fallback.
+  · `acceptance_act.observed` must be text a tool really printed this session
+    (copy it from a real tool result; a paraphrase is refused). If the step has
+    no runnable check use the unobservable form:
+    {"unobservable": "<what and why>", "command": "...", "observed": "..."}
+  · If a step deserves real evidence, mark it via plan_update(step_done,
+    verification=[...]) individually rather than folding it into a batch."""
 
 _STEP_DONE_NO_ACCEPTANCE_ACT = """[VerificationGuard] This step reports done with no `{field}`, so the requirement-coverage sweep cannot run.
 
@@ -635,6 +652,10 @@ def _collect_fixed_field_failures(checks):
         "[VerificationGuard] %d required fields are wrong in this ONE call. "
         "Fix ALL of them together and re-issue once — they are independent, so "
         "fixing one at a time costs one round each.\n" % len(bad)
+        + "WHERE they go: this call is a plan_update batch — each missing field "
+        "belongs INSIDE the done item it names (updates[i][field]), NOT at the "
+        "top level of the call; the [RECEIVED] lines below already show the "
+        "dotted path each field must occupy.\n"
         + "MINIMAL LEGAL FORMS (copy the one matching each missing field; use "
           "each only when its claim is true for THIS step):\n"
         "  convention={\"name\": \"none\"}\n"
