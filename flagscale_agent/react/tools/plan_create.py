@@ -464,8 +464,39 @@ class PlanCreateTool(Tool):
                     ]
                 },
             },
+            "calibration": {
+                "type": "object",
+                "description": (
+                    "REQUIRED. Instrument 1 of 4: prove your check works BEFORE "
+                    "you trust it. Run the instrument you will rely on ONCE on a "
+                    "case whose answer you ALREADY know, and record what it said. "
+                    "You authored the instrument, so it shares your blind spot — an "
+                    "uncalibrated check reporting PASS only tells you it agrees "
+                    "with itself. Keys: `instrument` (the exact check/command), "
+                    "`known_case` (a case whose answer is already known and "
+                    "external to the instrument — a value read from the task's own "
+                    "data, a prior observed result, a supplied reference), "
+                    "`observed` (what the instrument actually reported on it), "
+                    '`matches` = "yes" | "no" | "no_known_case". If no such case '
+                    'exists, say "no_known_case" — an honest answer, but it '
+                    "obliges you to show a NEGATIVE CONTROL later (the instrument "
+                    'must be seen to FIRE on a bad input). If it says "no", your '
+                    "instrument is broken and is refused: every PASS it produces "
+                    "afterwards is noise."
+                ),
+                "properties": {
+                    "instrument": {"type": "string"},
+                    "known_case": {"type": "string"},
+                    "observed": {"type": "string"},
+                    "matches": {
+                        "type": "string",
+                        "enum": ["yes", "no", "no_known_case"],
+                    },
+                },
+                "required": ["instrument", "matches"],
+            },
         },
-        "required": ["title", "steps"],
+        "required": ["title", "steps", "calibration"],
     }
 
     def __init__(self, task_plan, session_id: str = ""):
@@ -583,28 +614,6 @@ class PlanCreateTool(Tool):
         })
         normalized.append({
             "title": _REVIEW_STEP_TITLE,
-            "calibration": {
-                "type": "object",
-                "description": (
-                    "REQUIRED. Instrument 1 of 4 (calibration): prove your check "
-                    "works BEFORE you trust it. Before relying on any instrument "
-                    "to decide whether your output is right, run it ONCE on a case "
-                    "whose answer you ALREADY know, and record what it said. You "
-                    "authored the instrument, so it shares your blind spot — an "
-                    "uncalibrated check reporting PASS only tells you it agrees "
-                    "with itself. Keys: `instrument` (the exact check/command), "
-                    "`known_case` (a case whose answer is already known and "
-                    "external to the instrument — a value read from the task's own "
-                    "data, a prior observed result, a supplied reference), "
-                    "`observed` (what the instrument actually reported on it), "
-                    "`matches` = \"yes\" | \"no\" | \"no_known_case\". If no such "
-                    "case exists, say \"no_known_case\" — that is an honest answer, "
-                    "but it obliges you to show a NEGATIVE CONTROL later (the "
-                    "instrument must be seen to FIRE on a bad input). If it says "
-                    "\"no\", your instrument is broken and is refused: every PASS "
-                    "it produces afterwards is noise."
-                ),
-            },
             "acceptance": list(_REVIEW_STEP_ACCEPTANCE),
         })
         normalized.append({
@@ -615,6 +624,18 @@ class PlanCreateTool(Tool):
         thinking = kwargs.get("thinking", "") or ""
         forbidden = kwargs.get("forbidden")
         calibration = kwargs.get("calibration")
+        # F: LLM tool arguments can arrive JSON-encoded instead of parsed
+        # (same transport drift `steps` and `oracle` already tolerate above).
+        # Without this the agent can submit a perfectly standard object and be
+        # refused forever with "malformed" while its retries stay identical --
+        # observed 6 consecutive refusals with zero new information.
+        if isinstance(calibration, str):
+            _raw = calibration.strip()
+            if _raw.startswith("{"):
+                try:
+                    calibration = json.loads(_raw)
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
         # INSTRUMENT 1 GATE: refuse to create the plan without a calibration
         # declaration. This is the load-bearing half of the mechanism -- the

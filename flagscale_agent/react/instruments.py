@@ -52,6 +52,8 @@ treatment). Forcing them everywhere would be the "abuse of guards" failure.
 
 from __future__ import annotations
 
+import json
+
 #: The three ways a calibration can come out. `no_known_case` is a legal answer
 #: but it CHANGES what else is required (see calibration_needs_negative_control),
 #: because an uncalibrated instrument is the one situation where a self-report of
@@ -91,6 +93,39 @@ _CALIBRATION_MALFORMED = (
     '"instrument" (str), "known_case" (str), "observed" (str) and "matches" '
     '(one of "yes" | "no" | "no_known_case"). Pass plan_create(calibration={...}).'
 )
+
+
+def _cal_malformed(detail: str) -> str:
+    """Compose the malformed reply WITHOUT str.format (the message contains
+    literal braces: `calibration={...}`)."""
+    return _CALIBRATION_MALFORMED + "\n\n" + detail
+
+#: A malformed-declaration reply must ECHO what actually arrived, otherwise a
+#: model whose retries are all identical (observed: 6 in a row) is stuck with no
+#: information about which side is wrong. Cheap, and it turns a blind refusal
+#: into a self-correcting one.
+def _describe_received(value) -> str:
+    """One-line echo of the received shape, for a rejection message."""
+    if value is None:
+        return "What arrived: nothing (None)."
+    if isinstance(value, dict):
+        keys = ", ".join(sorted(str(k) for k in value.keys())) or "(no keys)"
+        types = ", ".join(
+            f"{k}:{type(v).__name__}" for k, v in sorted(value.items())[:8]
+        )
+        return f"What arrived: an object with keys [{keys}] (key:type -> {types})."
+    if isinstance(value, (list, tuple)):
+        return (
+            f"What arrived: a {type(value).__name__} of {len(value)} item(s), "
+            "not an object."
+        )
+    text = str(value).strip().replace("\n", " ")
+    if len(text) > 160:
+        text = text[:160] + "..."
+    return (
+        f"What arrived: a {type(value).__name__} (not an object): {text!r}. "
+        "If you sent JSON text, it must be a single JSON OBJECT."
+    )
 
 _CALIBRATION_CONTRADICTED = (
     "`calibration.matches` is \"no\": your instrument disagreed with a case whose "
@@ -201,6 +236,34 @@ def _is_real_str(v) -> bool:
     return isinstance(v, str) and v.strip() != ""
 
 
+def coerce_structured(value):
+    """Decode a JSON-encoded object that arrived as text.
+
+    TOOL-ARGUMENT TRANSPORT DRIFT: an LLM's tool arguments can reach the tool
+    already serialised to JSON text instead of a parsed object. Measured in
+    production: a plan_create call carrying a perfectly standard calibration
+    object was refused as "malformed" every single time because the bytes
+    arrived as a str, and the retries stayed identical for 6 consecutive
+    refusals -- the loop was unbreakable because the message never showed what
+    had actually arrived.
+
+    `plan_create.py` already tolerated this for `steps` and `oracle`; this is
+    the same defence for every structured argument, placed at the validator so
+    no future caller can miss it. Any JSON text is decoded (object OR list), so
+    a wrong-typed payload is described by the shape it really has instead of the
+    transport accident that carried it. Text that is not JSON is returned
+    untouched, so a genuinely malformed argument still gets an honest refusal.
+    """
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith(("{", "[")):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                return value
+    return value
+
+
 def check_calibration(cal):
     """Validate a plan-level calibration declaration.
 
@@ -209,24 +272,40 @@ def check_calibration(cal):
     it changes what happens later (negative control becomes mandatory) rather
     than being a silent skip.
     """
+    cal = coerce_structured(cal)
     if cal is None:
         return ("calibration_missing", _MISSING_CALIBRATION)
     if not isinstance(cal, dict):
-        return ("calibration_not_dict", _CALIBRATION_MALFORMED)
+        return ("calibration_not_dict",
+                _cal_malformed(_describe_received(cal)))
     for f in ("instrument", "matches"):
         if f not in cal:
-            return ("calibration_field_missing", _CALIBRATION_MALFORMED)
+            return ("calibration_field_missing",
+                    _cal_malformed((
+                        f"Required key `{f}` is absent. "
+                        + _describe_received(cal))))
     matches = str(cal.get("matches") or "").strip().lower()
     if matches not in CALIBRATION_MATCHES:
-        return ("calibration_bad_matches", _CALIBRATION_MALFORMED)
+        return ("calibration_bad_matches",
+                _cal_malformed((
+                    f"`matches` was {cal.get('matches')!r}, which is not one of "
+                    + " | ".join(CALIBRATION_MATCHES) + ". "
+                    + _describe_received(cal))))
     if not _is_real_str(cal.get("instrument")):
-        return ("calibration_blank_instrument", _CALIBRATION_MALFORMED)
+        return ("calibration_blank_instrument",
+                _cal_malformed((
+                    "`instrument` must be a non-empty string (the exact check/"
+                    "command, not a category). " + _describe_received(cal))))
     # `no_known_case` legitimately has no case or observation to report; every
     # other answer must carry both, or the declaration is a formality.
     if matches != "no_known_case":
         if not (_is_real_str(cal.get("known_case"))
                 and _is_real_str(cal.get("observed"))):
-            return ("calibration_blank_fields", _CALIBRATION_MALFORMED)
+            return ("calibration_blank_fields",
+                    _cal_malformed((
+                        "matches is not \"no_known_case\", so `known_case` and "
+                        "`observed` must both be non-empty strings. "
+                        + _describe_received(cal))))
     if matches == "no":
         return ("calibration_contradicted", _CALIBRATION_CONTRADICTED)
     return None
@@ -313,6 +392,7 @@ def check_prediction(pred):
 __all__ = [
     "CALIBRATION_MATCHES",
     "DIFFERENTIAL_OUTCOMES",
+    "coerce_structured",
     "check_calibration",
     "calibration_needs_negative_control",
     "check_differential",
