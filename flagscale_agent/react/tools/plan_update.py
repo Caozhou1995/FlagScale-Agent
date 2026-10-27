@@ -289,10 +289,26 @@ class PlanUpdateTool(Tool):
                 res = self._plan.add_forbidden(items)
                 added = res.get("added", 0)
                 total = res.get("total", 0)
+                # Cap-full and duplicate are DIFFERENT situations the agent
+                # must not confuse: at the cap the fix is to accept that the
+                # list is full (a 9th prohibition is not more protective, it
+                # is noise), while a duplicate means the item is already
+                # recorded and needs no action. Telling a full list to "append
+                # items that are actually new" sends the agent in circles.
                 if not added:
+                    if res.get("at_cap"):
+                        return (
+                            f"不做清单已满（{total}/{res.get('max', '?')} 条）。新条目未加入。"
+                            "清单的价值在于每条都被反复读到——第 9 条不是更多保护，是稀释。"
+                            "如果你刚发现的新坑比某条已有禁令更致命，用同一 action 名重发以刷新"
+                            "该条的 why/instead，而不是继续追加。"
+                        )
+                    skipped = res.get("skipped_duplicates", 0)
                     return (
-                        f"No new prohibitions added ({total} already recorded). The "
-                        "list on disk is unchanged — append items that are actually new."
+                        f"No new prohibitions added ({total} already recorded"
+                        + (f"; {skipped} duplicate(s) skipped" if skipped else "")
+                        + "). The list on disk is unchanged — append items that "
+                        "are actually new."
                     )
                 out = [f"Appended {added} prohibition(s); {total} now on record:"]
                 for i, e in enumerate(res.get("forbidden") or [], 1):
@@ -300,6 +316,11 @@ class PlanUpdateTool(Tool):
                     if e.get("instead"):
                         seg += f" → 改为：{e['instead']}"
                     out.append(seg)
+                if res.get("at_cap"):
+                    out.append(
+                        f"NOTE: list now at cap ({total}/{res.get('max', '?')}) — "
+                        "further appends will be refused."
+                    )
                 return "\n".join(out)
             elif action == "complete":
                 self._plan.complete()

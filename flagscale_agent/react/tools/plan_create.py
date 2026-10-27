@@ -573,7 +573,16 @@ class PlanCreateTool(Tool):
         wrote no prohibitions leaves itself open to.
         """
         items = (plan or {}).get("forbidden") or []
+        meta = (plan or {}).get("forbidden_meta") or {}
+        dropped = int(meta.get("dropped") or 0)
+        requested = int(meta.get("requested") or 0)
         if not items:
+            if dropped:
+                return (
+                    f"⚠ 不做清单 (forbidden) 为空：你提交了 {requested} 条，"
+                    f"但 {dropped} 条因缺 action 文本（或整体是坏 JSON）被丢弃。"
+                    "重新用 dict {'action': ...} 格式发一遍。\n\n"
+                )
             return (
                 "⚠ 不做清单 (forbidden) 为空：你只写了要做什么，没有写不该做什么。"
                 "时间紧张时这份计划没有任何防线。用 "
@@ -581,6 +590,11 @@ class PlanCreateTool(Tool):
                 "（每条：动作 + 为什么 + 改做什么）。\n\n"
             )
         lines = [f"不做清单 (forbidden) — 已写下 {len(items)} 条，每轮都会回显在计划顶部："]
+        if dropped:
+            lines.append(
+                f"  ⚠ 另有 {dropped}/{requested} 条被丢弃（缺 action 文本或重复）。"
+                "重复条目无需处理；缺 action 的条目请用 dict {'action': ...} 重发。"
+            )
         for i, e in enumerate(items, 1):
             seg = f"  {i}. ✗ {e.get('action', '')}"
             if e.get("instead"):

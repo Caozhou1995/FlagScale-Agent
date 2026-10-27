@@ -195,9 +195,32 @@ class PlanUpdateGuard(Guard):
         if getattr(ctx, "tool_name", "") != "plan_update":
             return False
         args = getattr(ctx, "tool_args", None) or {}
-        if args.get("action", "") in cls._PROGRESS_ACTIONS:
+        if cls._progress_action_landed(ctx):
             return True
         return cls._supplies_thinking(ctx)
+
+    @classmethod
+    def _progress_action_landed(cls, ctx) -> bool:
+        """True iff the declared progress action ACTUALLY mutated plan state.
+
+        ``add_forbidden`` is in ``_PROGRESS_ACTIONS`` because writing a newly
+        discovered trap into the negative list is real progress — but only when
+        an entry was actually added. A rejected append (a duplicate of an
+        already-recorded prohibition, or a list already at cap) mutates
+        nothing: the tool answers "No new prohibitions added" / "已满", and
+        crediting that as progress would let a zero-effect call wipe the stall
+        escalation — the same hole the empty-notes rule closed for
+        ``step_doing``. Keyed off the tool's own reply (post-execution), not a
+        re-parse of the args.
+        """
+        args = getattr(ctx, "tool_args", None) or {}
+        action = args.get("action", "")
+        if action not in cls._PROGRESS_ACTIONS:
+            return False
+        if action != "add_forbidden":
+            return True
+        result = getattr(ctx, "tool_result", None) or ""
+        return result.lstrip().startswith("Appended")
 
     @classmethod
     def _is_substantive_update(cls, ctx) -> bool:
@@ -226,7 +249,7 @@ class PlanUpdateGuard(Guard):
             return False
         args = ctx.tool_args or {}
         action = args.get("action", "")
-        if action in cls._PROGRESS_ACTIONS:
+        if cls._progress_action_landed(ctx):
             return True
         notes = args.get("notes") or ""
         return bool(notes.strip())

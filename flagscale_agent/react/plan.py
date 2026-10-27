@@ -14,6 +14,7 @@
 
 """Task plan — structured multi-step planning with persistence."""
 
+import json
 import math
 import os
 import re
@@ -146,6 +147,21 @@ def _normalize_forbidden(items) -> List[dict]:
     out: List[dict] = []
     index: dict = {}
     for it in items:
+        # A JSON-encoded list/dict string arrives when the caller serialised
+        # its structure a level too early. Silently treating the whole blob as
+        # one action line records garbage ("[{"action": ...") as a prohibition
+        # and eats a cap slot — decode it instead; on decode failure the raw
+        # string is still kept (a plain sentence that merely starts with "[").
+        if isinstance(it, str) and it.lstrip()[:1] in ("[", "{"):
+            try:
+                decoded = json.loads(it)
+                if isinstance(decoded, list):
+                    items.extend(decoded)  # in-place: the live iterator picks these up
+                    continue
+                if isinstance(decoded, dict):
+                    it = decoded
+            except (json.JSONDecodeError, ValueError):
+                pass
         if isinstance(it, str):
             action = it.strip()
             why = instead = ""
@@ -156,6 +172,10 @@ def _normalize_forbidden(items) -> List[dict]:
         else:
             continue
         if not action:
+            # Dropped here, but never invisibly: `create()` diffs the requested
+            # count against the stored one and the creation echo discloses the
+            # gap, so a malformed entry (dict without action text) surfaces at
+            # the moment of writing instead of silently shrinking the list.
             continue
         # Match on the action text alone: "why"/"instead" elaborate the same
         # prohibition, so two entries sharing an action ARE the same item.
@@ -561,6 +581,23 @@ class TaskPlan:
                 # which the completion boundary can tell apart from "never
                 # declared" only by the presence of the key, so it is always set.
                 "forbidden": _normalize_forbidden(forbidden),
+                # Discarded-input bookkeeping (F5): normalisation drops
+                # malformed entries (dicts without action text, non-str/dict
+                # items) and caps the list. Counting DROPPED entries vs
+                # MERGED duplicates separately lets the creation echo tell the
+                # agent "your item was malformed" (fix the entry) from "your
+                # item repeated one already recorded" (no action needed) from
+                # "the list is full" (stop appending) — a silent discard
+                # teaches nothing and a conflated message sends the agent in
+                # circles, so all three surface states are distinct.
+                "forbidden_meta": {
+                    "requested": len(forbidden if isinstance(forbidden, list) else [forbidden]) if forbidden is not None else 0,
+                    "dropped": max(
+                        0,
+                        (len(forbidden if isinstance(forbidden, list) else [forbidden]) if forbidden is not None else 0)
+                        - len(_normalize_forbidden(forbidden)),
+                    ),
+                },
                 # Plan-level time ledger. `budget_sec` is the wall the agent was
                 # actually given (None when nobody injected one — never fabricate
                 # a deadline); `started` is when this plan was created so elapsed
@@ -597,20 +634,35 @@ class TaskPlan:
             if not plan:
                 raise ValueError("No active plan")
             cur = _normalize_forbidden(plan.get("forbidden"))
-            seen = {e["action"] for e in cur}
+            # Match on the FOLDED key, not the raw text: the list was deduped
+            # on that key at write time, so a raw-text seen-set is stricter
+            # than the store and lets case/whitespace variants of an
+            # already-recorded prohibition through as "new" — they then burn
+            # cap slots with re-descriptions of the same trap.
+            seen = {" ".join(e["action"].lower().split()) for e in cur}
             added = 0
+            skipped_dup = 0
             for e in _normalize_forbidden(items):
-                if e["action"] in seen:
+                key = " ".join(e["action"].lower().split())
+                if key in seen:
+                    skipped_dup += 1
                     continue
                 if len(cur) >= _MAX_FORBIDDEN:
                     break
                 cur.append(e)
-                seen.add(e["action"])
+                seen.add(key)
                 added += 1
             plan["forbidden"] = cur
             plan["updated"] = time.time()
             self._save(plan)
-            return {"added": added, "total": len(cur), "forbidden": cur}
+            return {
+                "added": added,
+                "total": len(cur),
+                "forbidden": cur,
+                "at_cap": len(cur) >= _MAX_FORBIDDEN,
+                "max": _MAX_FORBIDDEN,
+                "skipped_duplicates": skipped_dup,
+            }
 
     def set_thinking(self, thinking: str) -> dict:
         """Overwrite the plan-level problem model (current theory of the task).
@@ -1333,6 +1385,12 @@ class TaskPlan:
         ledger = self._time_ledger_lines(plan)
         if ledger:
             lines.extend(ledger)
+        # The negative half of the plan rides the SAME surfaces as the steps:
+        # plan_status/reactivate/plan_create all print summary(), so rendering
+        # the prohibitions here is what makes the list reachable on demand.
+        # (context_for_prompt has no production caller — the live per-turn path
+        # builds its own plan block in agent.py _build_plan_context.)
+        lines.extend(self._forbidden_lines(plan))
         thinking = (plan.get("thinking") or "").strip()
         if thinking:
             lines.append("  当前问题模型 (thinking):")
