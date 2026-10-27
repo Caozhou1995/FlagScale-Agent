@@ -362,7 +362,10 @@ _MISSING_BOUND_MARGIN = (
     "  bound            -- the stated limit it was compared against\n"
     "  direction        -- \"max\" (value must be <= bound) or \"min\" "
     "(value must be >= bound)\n"
-    "  rival_shift      -- HOW MUCH another defensible definition of the SAME "
+    "  rival_value      -- the OTHER defensible reading of the same quantity, "
+    "actually computed (strongest form; the harness measures the disagreement "
+    "itself rather than trusting a magnitude you assert)\n"
+    "  rival_shift      -- or: HOW MUCH another defensible definition of the SAME "
     "quantity would change that number (an integer, 0 when you can defend that "
     "no rival definition exists)\n"
     "  rival_definition -- WHAT that other definition is, in one line (\"none\" "
@@ -418,11 +421,27 @@ def check_bound_margin(bm):
                 "`bound_margin` must be an object, got "
                 f"{type(bm).__name__}. " + _MISSING_BOUND_MARGIN.format(
                     bound="a stated limit"))
-    for f in ("value", "bound", "direction", "rival_shift", "rival_definition"):
+    for f in ("value", "bound", "direction"):
         if f not in bm:
             return ("bound_margin_field_missing",
                     f"Required key `{f}` is absent. "
                     + _MISSING_BOUND_MARGIN.format(bound=bm.get("bound", "?")))
+    # A rival may be declared as a MEASURED second reading (`rival_value`) or as
+    # a stated magnitude (`rival_shift`). Requiring at least one keeps the old
+    # contract working while making the stronger form available -- and the
+    # stronger form is strictly better, because a magnitude the agent asserts
+    # about itself is not evidence (it can simply understate it).
+    has_value = "rival_value" in bm
+    has_shift = "rival_shift" in bm
+    if not has_value and not has_shift:
+        return ("bound_margin_field_missing",
+                "Required key `rival_value` (the OTHER defensible reading, "
+                "actually computed) or `rival_shift` (its magnitude) is absent. "
+                + _MISSING_BOUND_MARGIN.format(bound=bm.get("bound", "?")))
+    if "rival_definition" not in bm:
+        return ("bound_margin_field_missing",
+                "Required key `rival_definition` is absent. "
+                + _MISSING_BOUND_MARGIN.format(bound=bm.get("bound", "?")))
     direction = str(bm.get("direction") or "").strip().lower()
     if direction not in ("max", "min"):
         return ("bound_margin_bad_direction",
@@ -434,7 +453,8 @@ def check_bound_margin(bm):
     try:
         value = float(str(bm.get("value")).strip())
         bound = float(str(bm.get("bound")).strip())
-        shift = float(str(bm.get("rival_shift")).strip())
+        shift = (float(str(bm.get("rival_shift")).strip())
+                 if has_shift and bm.get("rival_shift") is not None else 0.0)
     except (TypeError, ValueError):
         return ("bound_margin_bad_shift",
                 "`value`, `bound` and `rival_shift` must be numbers; got "
@@ -445,6 +465,20 @@ def check_bound_margin(bm):
         return ("bound_margin_bad_shift",
                 "`rival_shift` is a MAGNITUDE: it must be >= 0. Got "
                 f"{bm.get('rival_shift')!r}.")
+    # A MEASURED rival reading is stronger than an asserted shift: the harness
+    # computes the disagreement itself instead of trusting a magnitude the
+    # caller could understate. When both are present the measurement wins.
+    rival_value = None
+    if has_value and bm.get("rival_value") is not None:
+        try:
+            rival_value = float(str(bm.get("rival_value")).strip())
+        except (TypeError, ValueError):
+            return ("bound_margin_bad_rival_value",
+                    "`rival_value` must be a number (the other reading, actually "
+                    f"computed); got {bm.get('rival_value')!r}.")
+        measured = abs(value - rival_value)
+        if measured > shift:
+            shift = measured
     rival = str(bm.get("rival_definition") or "").strip()
     if shift > 0 and (not rival or rival.lower() in ("none", "n/a")):
         return ("bound_margin_blank_rival",

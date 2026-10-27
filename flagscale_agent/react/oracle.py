@@ -17,7 +17,7 @@
 The loss signature this targets: an agent's SELF-authored oracle shares the
 agent's own wrong premise, so it green-washes the error instead of catching it
 (recurring convention/form failures -- a base address, an area-vs-height unit, a
-serialization form, a clamp direction, a call signature, a container type).
+serialization form, a boundary convention, a call signature, a container type).
 
 HONEST SCOPE. This module checks the DECLARED SHAPE of an oracle: that the agent
 named one of the external-premise SOURCES and supplied both an oracle and its
@@ -49,11 +49,11 @@ PREMISE_SOURCES = ("differential", "provided", "consumer")
 # self-authored oracle structurally cannot supply: WHICH external tool the task
 # text itself names as the decider, and which delivered bytes that tool must run
 # on. The loss signature this targets: an agent calibrates its own instrument
-# (its two Tm implementations agree to 0.00) but never points the task's named
-# arbiter at the delivered artifact, so the definition it chose -- not the
-# arbiter's -- decides. Observed: the run recorded the arbiter's own reading
-# (a delta the task bounded) mid-run, then explained it away as its own script
-# bug and shipped one unit of that delta over the bound.
+# (its two implementations of the quantity agree to 0.00) but never points the
+# task's named arbiter at the delivered artifact, so the definition it chose --
+# not the arbiter's -- decides. Observed: the run recorded the arbiter's own
+# reading (a quantity the task bounded) mid-run, then explained it away as its
+# own script bug and shipped one unit of that delta over the bound.
 _DECLARATION_KEYS = frozenset(
     ("oracle", "premise_source", "first_exercise", "named_arbiter", "deliverable_path")
 )
@@ -257,6 +257,66 @@ def arbiter_observation_matches(act, arbiter, deliverable_path=""):
     if path and path.lower() not in low:
         return False
     return True
+
+
+# Sentinel an agent writes when it can defend that the quantity has exactly ONE
+# defensible definition (so a second reading would be a copy, not a rival).
+RIVAL_NONE = "none"
+
+
+def rival_reading_obligation(act):
+    """Does this recorded act carry the SECOND reading of the same quantity?
+
+    Three outcomes, mirroring ``named_arbiter_obligation``'s shape so the two
+    obligations are auditable the same way:
+
+      * ``""``  -- the key is absent or blank: the agent ran ONE reading. That is
+        the measured loss this exists for -- a command that names the delivered
+        file (so the weaker path check passes) while the rule it uses to CUT the
+        measured substring out of those bytes is the agent's own choice, and the
+        consumer's construction of the same quantity differs by exactly that cut.
+        The obligation is unmet, not malformed: the message teaches the shape.
+      * ``None``-- the act explicitly records ``rival_command: "none"``, i.e. the
+        agent looked for a second defensible definition and can defend there is
+        none. A DECLARATION, auditable, not a silent omission.
+      * a dict  -- ``{command, observed}``: a genuinely different extraction rule
+        run over the SAME delivered bytes.
+
+    Nothing here judges which reading is right. It forces both to exist, so the
+    disagreement becomes an observation the agent must look at instead of a
+    definition it never had to name.
+    """
+    if not isinstance(act, dict):
+        return ""
+    raw = act.get("rival_command")
+    if isinstance(raw, str):
+        txt = raw.strip()
+        if not txt:
+            return ""
+        if txt.lower() == RIVAL_NONE:
+            return None
+        return {"command": txt, "observed": act.get("rival_observed")}
+    if isinstance(raw, dict):
+        return raw
+    return ""
+
+
+def rival_reading_distinct(act, rival):
+    """Is ``rival`` a DIFFERENT extraction from the primary command?
+
+    A copy is not a rival: two commands that cut the measured substring the same
+    way agree by construction and confirm nothing. The comparison is textual over
+    the command bodies with whitespace collapsed -- deliberately weak and honest
+    (it catches "you pasted the same command twice", not a determined disguise),
+    matching ``arbiter_observation_matches``' stated limit.
+    """
+    if not isinstance(act, dict) or not isinstance(rival, dict):
+        return False
+    a = " ".join(str(act.get("command") or "").split())
+    b = " ".join(str(rival.get("command") or "").split())
+    if not b:
+        return False
+    return a != b
 
 
 def build_oracle_binding_line(oracle, first_exercise):

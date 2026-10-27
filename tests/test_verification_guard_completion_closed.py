@@ -589,13 +589,18 @@ def test_tc_bare_unobservable_does_not_clear_boundary():
     """SEMANTIC INVERSION FALSIFIER: a bare `{"unobservable": ...}` declaration
     (no attempt) must NOT set the observed flag. If `_acceptance_act_recorded`
     is reverted to its free-pass form, this test FAILS. This is the exact
-    loophole the change closes: declaring a dimension invisible without trying."""
+    loophole the change closes: declaring a dimension invisible without trying.
+
+    The step_done itself is now ALSO blocked formally (the per-step
+    `acceptance_act` obligation: an unrecordable act is an incomplete claim),
+    so the assertion below checks the block reason AND then drives the latch
+    question through the completion arm directly.
+    """
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_ready_for_acceptance_act(plan)
-        assert g.check_pre(
-            _step_done_ctx({"unobservable": "grader corpus is hidden"})
-        ) is None
+        v = g.check_pre(_step_done_ctx({"unobservable": "grader corpus is hidden"}))
+        assert v is not None and v.reason == "step_done_without_acceptance_act", v
         assert g._acceptance_observed is False, \
             "a bare unobservable declaration must not clear the boundary"
         # ...so completion is still blocked by the acceptance-observation arm.
@@ -626,17 +631,22 @@ def test_tc_unobservable_with_recorded_attempt_clears_boundary():
 
 def test_tc_unobservable_with_fabricated_attempt_still_blocks():
     """An unobservable declaration plus an `observed` string that is NOT in the
-    recorded corpus is refused — the attempt must be real, not asserted."""
+    recorded corpus is refused — the attempt must be real, not asserted.
+
+    As with the bare form, the step_done is now also blocked formally (the
+    per-step `acceptance_act` obligation), and the latch question is unchanged.
+    """
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_ready_for_acceptance_act(plan)
-        assert g.check_pre(
+        v = g.check_pre(
             _step_done_ctx({
                 "unobservable": "grader corpus is hidden",
                 "command": "ls /grader",
                 "observed": "I could not find the grader",
             })
-        ) is None
+        )
+        assert v is not None and v.reason == "step_done_without_acceptance_act", v
         assert g._acceptance_observed is False
     finally:
         _close(d)

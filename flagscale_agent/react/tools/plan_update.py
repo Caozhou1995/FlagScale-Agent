@@ -213,6 +213,24 @@ class PlanUpdateTool(Tool):
                     "bare \"ok\" is refused because it proves nothing)."
                 ),
             },
+            "arbiter_act": {
+                "type": "object",
+                "description": (
+                    "The recorded reading of the task's NAMED decider against your "
+                    "DELIVERED file — required to satisfy the plan-close obligation "
+                    "when the plan's oracle declared a named_arbiter. Keys: command "
+                    "(the exact command, which must name the named arbiter AND the "
+                    "delivered path), observed (its ACTUAL output), and a SECOND, "
+                    "genuinely different reading over the same bytes: rival_command "
+                    "(the other defensible extraction — a different cut, boundary, "
+                    "unit or prompt; must differ from command) + rival_observed "
+                    "(its actual output). Declare rival_command: \"none\" only if "
+                    "the quantity truly admits one defensible definition. One "
+                    "reading cannot detect that you cut the measured substring out "
+                    "of the file differently than the consumer does — a single "
+                    "definition always agrees with itself."
+                ),
+            },
             "bound_margin": {
                 "type": "object",
                 "description": (
@@ -232,6 +250,46 @@ class PlanUpdateTool(Tool):
                     "means the rival reading would land outside the limit — then "
                     "the margin is not decidable from your side alone and the "
                     "task's own arbiter construction decides it."
+                ),
+            },
+            "acceptance_act": {
+                "type": "object",
+                "description": (
+                    "REQUIRED on every step_done: the ACCEPTANCE OBSERVATION — a "
+                    "command you actually ran plus the observation you actually "
+                    "read, plus one `constraints` row per constraint the task "
+                    "states (and per requirement it defers to an external "
+                    "standard). Keys: command (string), observed (string, must "
+                    "occur in a real tool result), unobservable (string, alternate "
+                    "to observed when the acceptance has no runnable check), and "
+                    "constraints (array of {quote, command, observed}). This is "
+                    "not a formality: the coverage sweep reads it to find "
+                    "constraints you never measured, and it is the only way the "
+                    "harness can tell a delivered requirement from an intended "
+                    "one."
+                ),
+            },
+            "oracle_act": {
+                "type": "object",
+                "description": (
+                    "The recorded exercise of the oracle bound at framing. Keys: "
+                    "command (the exact command that runs the oracle named in the "
+                    "plan's `oracle.first_exercise`), observed (its ACTUAL "
+                    "output). Required whenever the plan declared an oracle whose "
+                    "first exercise has not yet been recorded."
+                ),
+            },
+            "calibration": {
+                "type": "object",
+                "description": (
+                    "Instrument 1 of 4: prove your check works BEFORE you trust "
+                    "it. Run the instrument you rely on ONCE on a case whose "
+                    "answer you already know. Keys: instrument (the exact "
+                    "check/command), known_case (a case whose answer is known and "
+                    "external to the instrument), observed (what the instrument "
+                    "reported on it), matches (\"yes\" | \"no\" | "
+                    "\"no_known_case\"). `no_known_case` is honest but obliges a "
+                    "negative control later."
                 ),
             },
             "acceptance": {

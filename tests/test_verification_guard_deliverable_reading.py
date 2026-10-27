@@ -27,7 +27,13 @@ def _guard_with_step(acceptance=("A1",), task_text=None):
     return d, guard
 
 
-def _ctx(dr, verification=("proof A1",)):
+def _ctx(dr, verification=("proof A1",), acceptance_act=None):
+    # `acceptance_act` is a SEPARATE fixed-required step_done field with its own
+    # test file (test_step_done_acceptance_obligation.py). These tests are about
+    # the deliverable_reading field, so they carry a minimal valid act for the
+    # same reason they carry `convention`/`assumptions`: to reach this gate.
+    # With no messages supplied the corpus is unavailable, so the evidence check
+    # fails open on shape alone.
     return GuardContext(
         tool_name="plan_update",
         tool_args={
@@ -36,6 +42,10 @@ def _ctx(dr, verification=("proof A1",)):
             "verification": list(verification),
             "convention": {"name": "none"},
             "deliverable_reading": dr,
+            "acceptance_act": acceptance_act or {
+                "command": "ran the acceptance probe",
+                "observed": "output of the acceptance probe",
+            },
         },
     )
 
@@ -313,13 +323,36 @@ def test_batch_done_requires_field():
 # --- observed-evidence arms: a claim must paste text the harness can find in the
 #     session's REAL tool results; an asserted-but-never-run falsifier is blocked.
 
-def _ctx_obs(dr, msgs, verification=("proof A1",)):
+def _corpus_act(msgs):
+    """An `acceptance_act` whose `observed` really occurs in `msgs`.
+
+    The per-step acceptance obligation requires the pasted observation to be
+    findable in the session's recorded tool results. These tests supply their own
+    corpus, so the default act is DERIVED from it (longest real line) instead of
+    hardcoded — a fixed string would simply not be a member of a synthetic
+    corpus. Returns a blank act when there is no corpus, which is the
+    fail-open path (membership is uncheckable, shape alone decides).
+    """
+    lines = []
+    for m in msgs or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, str):
+            lines.extend(ln.strip() for ln in c.splitlines() if ln.strip())
+    observed = max(lines, key=len) if lines else "output"
+    return {"command": "ran the acceptance probe", "observed": observed}
+
+
+def _ctx_obs(dr, msgs, verification=("proof A1",), acceptance_act=None):
+    # Same rationale as `_ctx`: `acceptance_act` is a separate fixed-required
+    # field with its own test file, and its `observed` must be a member of the
+    # corpus supplied here (hence `_corpus_act`).
     return GuardContext(
         tool_name="plan_update",
         tool_args={"action": "step_done", "assumptions": {"unverified": "none"}, "step_id": 1,
                    "verification": list(verification),
                    "convention": {"name": "none"},
-                   "deliverable_reading": dr},
+                   "deliverable_reading": dr,
+                   "acceptance_act": acceptance_act or _corpus_act(msgs)},
         messages=msgs,
     )
 

@@ -144,6 +144,8 @@ def test_complete_passes_on_the_shipped_bytes():
     g._arbiter_act_seen = {
         "command": "oligotm -seq $(grep -v '>' primers.fasta | head -1)",
         "observed": "64.38",
+        # second reading required by the plan-close gate (out of scope here).
+        "rival_command": "none",
     }
     assert g.check_all_pre(_ctx({"action": "complete"})) == []
 
@@ -165,7 +167,7 @@ def test_act_supplied_on_the_complete_call_itself_is_honoured():
     g._oracle_bound = dict(ORACLE)
     args = {"action": "complete",
             "arbiter_act": {"command": "oligotm -seq $(tail -1 primers.fasta)",
-                            "observed": "64.38"}}
+                            "observed": "64.38", "rival_command": "none"}}
     assert g.check_all_pre(_ctx(args)) == []
 
 
@@ -192,7 +194,7 @@ def test_act_latched_on_step_done_also_satisfies_plan_close():
     step = {"action": "step_done", "step_id": 1,
             "verification": ["oligotm ran on the delivered file"],
             "arbiter_act": {"command": "oligotm -seq $(tail -1 primers.fasta)",
-                            "observed": "64.38"}}
+                            "observed": "64.38", "rival_command": "none"}}
     vs = g.check_all_pre(_ctx(step))
     # step_done still blocks on its own formal fields (convention etc.)...
     assert vs, "step_done should still be judged on its own formal fields"

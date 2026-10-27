@@ -218,6 +218,38 @@ done, you re-checked the result against what that step was supposed to satisfy.
 If a step deserves real evidence, mark it via plan_update(step_done, verification=[...])
 individually rather than folding it into a batch."""
 
+_STEP_DONE_NO_ACCEPTANCE_ACT = """[VerificationGuard] This step reports done with no `acceptance_act`, so the requirement-coverage sweep cannot run.
+
+Measured failure this prevents: a trial reported 21 step_done calls and submitted
+`acceptance_act` ZERO times, so the coverage gate never executed once; it later
+delivered an artifact that violated a requirement the agent had itself written
+down earlier in its own log. The requirement was known and unmeasured — that is
+exactly the gap this field closes, one step at a time, instead of only at
+plan-close.
+
+Add to THIS call:
+
+  acceptance_act = {{
+    "command": "<the exact command you ran>",
+    "observed": "<its ACTUAL output text>",       # must appear in a real tool result
+    "constraints": [                              # ONE row per requirement
+      {{"quote": "<the requirement, in the task's or the standard's words>",
+        "command": "<how you measured it>",
+        "observed": "<the value you read>"}}
+    ]
+  }}
+
+If the acceptance has no runnable check, use the UNOBSERVABLE form instead:
+{{"unobservable": "<dimension + why>", "command": "<probe you ran>", "observed":
+"<what it returned>"}} — a bare claim is refused.
+
+Cover the requirements the task STATES and the ones it DEFERS to an external
+standard (a clause of the form "the design must satisfy <named standard>") — a
+deferred requirement is still a requirement, and it is the one most easily
+dropped. When the wall is nearly spent the N-requirement sweep degrades to
+advisory rather than blocking delivery; the field itself is still owed."""
+
+
 _COMPLETION_NO_ACCEPTANCE_OBSERVED = """[VerificationGuard] You are declaring the task complete, but you never recorded a real ACCEPTANCE OBSERVATION.
 
 Declaring the readings a checker may apply is not the same as observing that your
@@ -2413,6 +2445,38 @@ class VerificationGuard(Guard):
                 if _evidence_observed(aact, observed):
                     self._arbiter_act_seen = aact
 
+    def _acceptance_act_obligation(self, ctx: GuardContext):
+        """Per-step acceptance-observation obligation (FIXED required field).
+
+        Returns None when satisfied or when the obligation does not apply, a
+        GuardVerdict.block otherwise.
+
+        Does NOT apply when the task text is not groundable -- with no stated
+        requirement there is nothing to observe against.
+
+        The budget valve deliberately does NOT live here. Two different costs are
+        in play and only one of them is expensive:
+          * recording ONE observed act (a command plus its real output) is a
+            single probe the agent was going to run anyway, and
+          * sweeping EVERY stated constraint is N probes, the shape that
+            measured reward 1 -> 0 (a coverage sweep ate an entire 900 s turn
+            and no deliverable was ever written).
+        Degrading the cheap obligation would keep the sweep unreachable (that is
+        precisely the hole this fixes: 21 step_done calls, ZERO acts, so the
+        sweep body never executed). The wall-pressure valve therefore stays where
+        the cost is -- inside the coverage sweep, unchanged.
+        """
+        if not _task_text_groundable(self._task_text()):
+            return None
+        act = ctx.tool_args.get("acceptance_act")
+        if _acceptance_act_recorded(act, self._observed(ctx)):
+            return None
+        return GuardVerdict.block(
+            _STEP_DONE_NO_ACCEPTANCE_ACT,
+            reason="step_done_without_acceptance_act",
+            category="verification_required",
+        )
+
     def _coverage_gate_affordable(self) -> bool:
         """Is there enough wall left to pay for a per-constraint measurement sweep?
 
@@ -2919,6 +2983,29 @@ class VerificationGuard(Guard):
                         {"differential": ctx.tool_args.get("differential"),
                          "negative_control": ctx.tool_args.get("negative_control"),
                          "bound_margin": ctx.tool_args.get("bound_margin")}),
+                    # The acceptance observation is a FIXED, REQUIRED field on
+                    # EVERY step_done once the task text is groundable -- the same
+                    # bar convention/deliverable_reading/assumptions carry.
+                    #
+                    # WHY: the requirement-coverage sweep used to live ONLY
+                    # inside `if _acceptance_act_recorded(...)`, and a measured
+                    # trial made 21 step_done calls with ZERO acceptance_act
+                    # submissions, so the sweep never executed once. It then
+                    # delivered an artifact violating a requirement it had itself
+                    # written down. The obligation at plan-close did not help,
+                    # because it fires only at the end -- after every step has
+                    # already been waved through. Making the act a per-step
+                    # obligation is what puts the sweep on the actual path.
+                    #
+                    # BUDGET SAFETY: the expensive part of this gate is the
+                    # N-constraint SWEEP, and that is where the wall-pressure
+                    # valve lives (`_coverage_gate_affordable`, unchanged). The
+                    # obligation to record ONE observed act is a single probe the
+                    # agent should be running anyway, so it is not degraded --
+                    # degrading it would re-open the exact hole being closed.
+                    _echo_received(
+                        self._acceptance_act_obligation(ctx),
+                        "acceptance_act", ctx.tool_args.get("acceptance_act")),
                 ])
                 # EVIDENCE LATCHING PRECEDES FORMAL BLOCKING.
                 #
