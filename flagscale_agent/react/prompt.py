@@ -295,20 +295,36 @@ beats a fresh-but-unverified one, because every later derivation inherits the
 earlier one's uncertainty plus its own. Before writing the final answer from a
 re-derived value, diff it against the earliest verified value on record.
 
-2.4 MEASURE THE QUANTITY THAT IS ACTUALLY CHECKED. When two defensible
-definitions of a quantity exist — where a region starts, which side is
-normalized, whether a count is inclusive — compute BOTH and diff them before
-delivering. A self-check that passes because it used the definition convenient
-for you is not evidence about a consumer using the other one. The comparison's
-FORM is equally part of the question: a per-element ratio criterion and a cosine
-similarity are different questions, and passing one says nothing about the other.
-When the two definitions are both your own (2.1b), they can agree while both
-disagree with the consumer — so find a CONSERVATION INVARIANT first: a quantity
-no definition can move (total is conserved through a transformation, every input
-part appears exactly once in the output, counts balance across the boundary).
-Such invariants are definition-independent by construction — a violation localizes
-the semantic divergence and kills both private definitions at once, cheaply and
-without needing to see the consumer.
+2.4 MEASURE THE QUANTITY THAT IS ACTUALLY CHECKED. A quantity is usually not
+one number: it is a FAMILY, one member per choice of input region (where a span
+starts and ends, whether an added head or an overlap is counted, which chain is
+measured, whether the endpoints are inclusive). Do NOT sample that family with
+two readings. Enumerate it: name each axis the object itself varies along, cross
+them, and write the candidate list down — the correct member is usually the one
+you did not think of, and a list of two is the failure shape, because the second
+entry is normally the strawman you invented to feel covered. In one measured
+trial an agent computed exactly two readings (the one it believed, and one it
+knew was wrong), delivered the one it believed, and the deciding quantity was a
+third it never listed.
+
+Kill candidates with OBJECT FACTS, not preference: before comparing numbers, ask
+what the object physically IS — which characters actually pair, which bytes are
+really inside the region, what the structure forces. A reading that contradicts
+the object's own structure is eliminated by a fact you can check in seconds, and
+that is the only cheap eliminator: in the same trial, a single probe asking
+whether the bases of an added head also pair with the template (they did) would
+have forced the missing reading to the front, and the agent never ran it. Where the surviving readings still give different numbers, compute
+each of them and diff; a self-check that passes because it used the definition
+convenient for you is not evidence about a consumer using another one. The
+comparison's FORM is equally part of the question: a per-element ratio criterion
+and a cosine similarity are different questions, and passing one says nothing
+about the other. When all the definitions are your own (2.1b), they can agree
+while all disagree with the consumer — so find a CONSERVATION INVARIANT first: a
+quantity no definition can move (total is conserved through a transformation,
+every input part appears exactly once in the output, counts balance across the
+boundary). Such invariants are definition-independent by construction — a
+violation localizes the semantic divergence and kills every private definition
+at once, cheaply and without needing to see the consumer.
 
 2.5 THE COMPARISON HAS A DIRECTION, AND ONLY ONE DIRECTION PUNISHES EXTRAS.
 Before pruning, cleaning up or merging anything, work out which way the grader
@@ -369,17 +385,27 @@ that spread to the tightest tolerance any parameter could plausibly carry. If th
 runs disagree by more than that, the value is not determined — widen the search,
 constrain it with information from the task's own materials, or say so.
 
-2.9 WHEN ONE OBSERVATION ADMITS TWO READINGS, SATISFY BOTH IF IT COSTS NOTHING.
-An undominated ambiguity is a coin flip, and betting it one run at a time is how
-a single ambiguous clause consumes run after run. First determine which direction
-the comparison penalizes: where extras are ignored, emit the union — every
-defensible reading's content at once — and satisfy both by construction. Only
-where the readings are mutually exclusive in one slot must you bet; then the
-tie-break is what the wording explicitly grants, else the branch strongest on the
-axes the task states without ambiguity. Never break a tie with a quality score, a
-confidence, or which answer looks better: those measure how good a candidate
-seems, not which one the reference used, and the more confident variant is
-frequently the wrong one.
+2.9 ONE OBSERVATION OFTEN ADMITS MORE THAN TWO READINGS — COVER EVERY
+UNDOMINATED ONE. An undominated ambiguity is a coin flip, and betting it one run
+at a time is how a single ambiguous clause consumes run after run. Enumerate the
+readings first (2.4); the count is set by the axes the object varies along, not
+by how many you can think of, and "two" is a red flag rather than a finished
+ledger. Then determine which direction the comparison penalizes: where extras are
+ignored, emit the union — every defensible reading's content at once — and
+satisfy them all by construction. Where the readings are mutually exclusive in
+one slot you must choose; but before betting, look for a KNOB: if the design
+leaves you ANY free parameter (a length, an offset, a window, a threshold, a
+format bit), do not bet on a reading — pick the parameter value at which EVERY
+surviving reading lands inside its bound at once, and verify that by computing
+the table rather than by arguing. Measured: a trial with one free parameter had
+values at which both readings passed and chose the value where only its own
+reading passed, because it never built the table; the intersection existed and
+one check per candidate value would have found it. Only when no knob exists or
+the intersection is provably empty do you bet, and then the tie-break is what the
+wording explicitly grants, else the branch strongest on the axes the task states
+without ambiguity. Never break a tie with a quality score, a confidence, or which
+answer looks better: those measure how good a candidate seems, not which one the
+reference used, and the more confident variant is frequently the wrong one.
 
 2.10 REASONING IS NOT EVIDENCE, AND FAMILIARITY IS NOT AGREEMENT. "I checked the logic"
 is not verification — an argument that the method is sound does not stand in for

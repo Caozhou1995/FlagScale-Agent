@@ -68,7 +68,48 @@ def test_conservation_invariant_pin_in_2_4():
     s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
     assert "CONSERVATION INVARIANT" in s
     assert "definition-independent" in s
-    assert "both your own" in s  # names the co-source failure both-definitions share
+    # names the co-source failure the definitions share (wording kept generic:
+    # the count of definitions is a family, not a pair)
+    assert "your own" in s and "disagree with the consumer" in s
+
+
+def test_quantity_is_a_family_not_two_readings():
+    """Anti-decay: the open-ended enumeration must survive rewording.
+
+    A clause that says "two defensible definitions" structurally caps the
+    candidate set at 2. Measured: on one trial the agent enumerated exactly two
+    readings and the deciding one was a third it never listed. So the pin is on
+    the FAMILY framing plus the explicit failure-shape warning, not on prose.
+    """
+    start = SYSTEM_PROMPT_STATIC.index("2.4 MEASURE THE QUANTITY")
+    end = SYSTEM_PROMPT_STATIC.index("2.5 THE COMPARISON")
+    s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
+    assert "it is a FAMILY" in s
+    assert "Enumerate it" in s
+    assert "a list of two is the failure shape" in s
+
+
+def test_candidates_killed_by_object_fact():
+    """Anti-decay: enumeration alone does not decide — object facts eliminate."""
+    start = SYSTEM_PROMPT_STATIC.index("2.4 MEASURE THE QUANTITY")
+    end = SYSTEM_PROMPT_STATIC.index("2.5 THE COMPARISON")
+    s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
+    assert "OBJECT FACTS" in s
+    assert "which characters actually pair" in s
+
+
+def test_satisfy_rule_is_not_pair_scoped():
+    """Anti-decay: 2.9 must cover the whole undominated set and, where the
+    readings conflict, settle it with a knob at the intersection instead of
+    betting on one reading."""
+    start = SYSTEM_PROMPT_STATIC.index("2.9 ONE OBSERVATION")
+    end = SYSTEM_PROMPT_STATIC.index("2.10 REASONING")
+    s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
+    assert "ADMITS TWO READINGS, SATISFY BOTH" not in s
+    assert "COVER EVERY" in s
+    assert "union" in s and "intersection" in s
+    assert "look for a KNOB" in s
+    assert "computing the table" in s
 
 
 def test_no_task_identifiers_leak():
