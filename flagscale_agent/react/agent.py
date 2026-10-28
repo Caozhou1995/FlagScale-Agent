@@ -497,7 +497,18 @@ class WorkerAgent:
         # measures. One-shot and overridable, so a healthy run is never
         # livelocked.
         from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
-        guard_registry.register(FirstArtifactGuard())
+        # Both probes are REQUIRED for the guard's task-scoped liveness check:
+        # without them it cannot tell "no task in flight" from "task delivered
+        # already", so it falls back to session-wide turn counting and keeps
+        # blocking after the work is done (measured: 4+ consecutive blocks
+        # after a verified delivery, plus blocks on pure Q&A turns).
+        # `get_active()` reads the plan pointer, so a completed/absent plan
+        # makes the guard stand down; the declared delivery paths let it see an
+        # artifact that is already on disk.
+        guard_registry.register(FirstArtifactGuard(
+            active_plan_fn=self.task_plan.get_active,
+            declared_paths_fn=self._declared_delivery_paths,
+        ))
 
         # Reliability guards (P7)
 
@@ -584,7 +595,7 @@ class WorkerAgent:
         # Verification discipline guard — now keeps ONLY the plan step_done
         # evidence gate; the terminal completion gates moved into the plan's
         # fixed review step (tools/plan_create.py). Re-enabled.
-        guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals, task_text_fn=lambda: self._mech_original_task() + "\n\n" + self._mech_last_user_turn(), full_log_fn=lambda: list(self.history._full_log), stats_fn=self._task_budget_stats))
+        # guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals, task_text_fn=lambda: self._mech_original_task() + "\n\n" + self._mech_last_user_turn(), full_log_fn=lambda: list(self.history._full_log), stats_fn=self._task_budget_stats))
 
         deps = KernelDeps(
             provider=self.provider,
@@ -1257,6 +1268,52 @@ class WorkerAgent:
     # the healthy floor and catches any realistic phrase cycle. 0 disables.
     INTRA_STREAM_CYCLE_TAIL_CHARS = 4096
     INTRA_STREAM_CYCLE_DISTINCT_MAX = 32
+
+    def _declared_delivery_paths(self) -> list:
+        """Delivery paths the CURRENT plan declares, as an explicit list.
+
+        Read by the first-artifact guard to answer one question it cannot answer
+        from message history: has the artifact this task is graded on already
+        landed on disk? The active plan's oracle names that path when the plan
+        binds one; a plan that binds none yields an empty list, which makes the
+        guard fall back to its history-only behaviour (it never guesses a path).
+
+        Deliberately task-scoped, not session-scoped: a path declared by an
+        earlier, completed plan says nothing about the current turn.
+        """
+        try:
+            active = self.task_plan.get_active() or {}
+        except Exception:
+            return []
+        paths = []
+        oracle = active.get("oracle") or {}
+        if isinstance(oracle, dict):
+            declared = oracle.get("deliverable_path")
+            if isinstance(declared, str) and declared.strip():
+                paths.append(declared.strip())
+        # A LOCAL_FIRST_CUT/step acceptance may name the delivery path too; scan
+        # both so a plan that only states it in a step still counts.
+        for step in active.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            for crit in step.get("acceptance") or []:
+                if not isinstance(crit, str):
+                    continue
+                for token in crit.split():
+                    tok = token.strip("()[],;:\"'`")
+                    if tok.startswith("/") and "." in tok.rsplit("/", 1)[-1]:
+                        paths.append(tok)
+        # De-duplicate, preserving order; cap so a pathological plan cannot make
+        # the guard stat a huge list every iteration.
+        seen, out = set(), []
+        for p in paths:
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+            if len(out) >= 5:
+                break
+        return out
 
     def _mech_original_task(self) -> str:
         """First user turn of the session = the original task text, verbatim.

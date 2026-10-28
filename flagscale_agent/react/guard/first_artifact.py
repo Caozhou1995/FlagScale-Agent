@@ -39,6 +39,8 @@ observed, the guard disarms permanently for the session.
 
 from __future__ import annotations
 
+import os
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
@@ -238,7 +240,7 @@ class FirstArtifactGuard(Guard):
     priority = 18  # after the startup pipeline (5) and safety guards (10-16),
     # before the generic text/verification gates.
 
-    def __init__(self):
+    def __init__(self, plan=None, declared_paths_fn=None, active_plan_fn=None):
         self._wrote_artifact = False
         self._blocked_once = False
         # Last reasoning volume at which the top-of-loop advisory was emitted.
@@ -248,6 +250,98 @@ class FirstArtifactGuard(Guard):
         # text-based inject dedup, since the counts in the message change).
         self._injected_at_bytes = -1
         self._injected_at_turns = -1
+        # ── Task-scoped liveness (2026-10-28) ──────────────────────────────
+        # The two budgets above are calibrated for ONE trial. In a long
+        # session they are exceeded from the first iteration onward, so the
+        # guard used to fire on EVERY turn — including turns where the task
+        # was already delivered and no task was in flight at all. Measured:
+        # turns 1489-1502, 4+ consecutive blocks after a verified delivery,
+        # and 2 more on pure Q&A turns.
+        #
+        # Two external facts settle whether a write is still owed, and neither
+        # is available from message history:
+        #   * `active_plan_fn` — is a task in flight at all? No active plan
+        #     means nothing is being graded, so nothing is owed.
+        #   * `declared_paths_fn` — where is the deliverable supposed to be?
+        #     If one of those paths already holds bytes on disk, the write
+        #     this guard exists to force has already happened (history alone
+        #     cannot prove it: writes can precede this guard's bookkeeping,
+        #     and a long session's history may have been evicted).
+        # Both default to None, and None means "this caller cannot tell" —
+        # in that case the guard behaves exactly as before, so no existing
+        # caller or test changes behaviour by omission.
+        self._plan = plan
+        self._active_plan_fn = active_plan_fn
+        self._declared_paths_fn = declared_paths_fn
+
+    # ── task-scoped state probes ───────────────────────────────────────────
+    def _active_plan(self):
+        """The plan currently in flight, or None when no task is being graded."""
+        if self._active_plan_fn is not None:
+            try:
+                return self._active_plan_fn()
+            except Exception:
+                return None
+        if self._plan is not None:
+            try:
+                return self._plan.get_active()
+            except Exception:
+                return None
+        return None
+
+    def _declared_paths(self) -> list[str]:
+        """Delivery paths this task declared (empty when unknown)."""
+        raw = []
+        if self._declared_paths_fn is not None:
+            try:
+                raw = self._declared_paths_fn() or []
+            except Exception:
+                raw = []
+        elif self._plan is not None:
+            try:
+                active = self._plan.get_active() or {}
+                oracle = active.get("oracle") or {}
+                candidate = oracle.get("deliverable_path")
+                if candidate:
+                    raw = [candidate]
+            except Exception:
+                raw = []
+        if isinstance(raw, str):
+            raw = [raw]
+        return [str(p) for p in raw if str(p or "").strip()]
+
+    def _observed_deliverables(self) -> tuple[list[str], str]:
+        """Check declared delivery paths on disk.
+
+        Returns (present_paths, description). `present_paths` is non-empty iff
+        at least one declared path already holds bytes — positive evidence that
+        the write this guard forces has already landed, which is the only
+        acceptable reason to stay silent.
+        """
+        paths = self._declared_paths()
+        if not paths:
+            return [], "no delivery path declared by the task"
+        present, notes = [], []
+        for p in paths:
+            try:
+                size = os.path.getsize(p) if os.path.isfile(p) else -1
+            except OSError:
+                size = -1
+            if size > 0:
+                present.append(p)
+                notes.append(f"{p} = {size}B (non-empty)")
+            elif size == 0:
+                notes.append(f"{p} = 0B (empty placeholder)")
+            else:
+                notes.append(f"{p} = absent")
+        return present, "; ".join(notes)
+
+    def _task_is_live(self) -> bool | None:
+        """True/False when the caller can tell, None when it cannot."""
+        if self._active_plan_fn is None and self._plan is None:
+            return None
+        return self._active_plan() is not None
+
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _scan_history_for_write(self, ctx: GuardContext) -> bool:
@@ -385,6 +479,30 @@ class FirstArtifactGuard(Guard):
         if self._wrote_artifact or self._blocked_once:
             return None
 
+        # ── Task-scoped liveness gate ───────────────────────────────────────
+        # Two facts settle whether a write is still owed, and neither is in the
+        # message history. Both callers are optional; when a caller supplies
+        # neither, `_task_is_live()` returns None and this block is skipped so
+        # behaviour is unchanged for existing wiring.
+        #
+        #   (1) NO TASK IN FLIGHT -> nothing is being graded, nothing is owed.
+        #       Measured: two consecutive blocks on pure Q&A turns.
+        #   (2) DECLARED DELIVERABLE ALREADY ON DISK -> the very write this
+        #       guard exists to force has landed. Measured: 4+ consecutive
+        #       blocks after a delivery that an external arbiter had already
+        #       verified, because history alone cannot prove a write happened.
+        # Either fact is positive evidence, never a weakening: an active plan
+        # with an absent deliverable still blocks (pinned by test).
+        live = self._task_is_live()
+        if live is False:
+            self._stale_reason = "no active plan — no task is being graded"
+            return None
+        present, observed = self._observed_deliverables()
+        if present:
+            self._wrote_artifact = True
+            self._stale_reason = f"deliverable already on disk: {observed}"
+            return None
+
         # ── Top-of-loop consultation (tool_name == "") ──────────────────────
         # This is the ONLY point that runs BEFORE the LLM is called. The
         # failure shape this guard targets produces very FEW tool calls, so a
@@ -465,6 +583,14 @@ class FirstArtifactGuard(Guard):
                 "reasoning in, no file has been written to the delivery path "
                 "yet — every action so far has read or inspected, none has "
                 "produced the artifact the task is graded on.\n\n"
+                # ── What was actually checked, and what was seen ────────────
+                # Measured cost of omitting this: the agent could not tell
+                # whether the guard had looked at the real delivery path, so it
+                # had to guess whether it had already satisfied the guard, and
+                # burned rounds doing so. A block that names its evidence and
+                # its observation needs no guessing.
+                "WHAT WAS CHECKED (delivery paths and their state on disk):\n"
+                f"  {observed}\n\n"
                 "Reasoning has no natural end. A plan that waits for the "
                 "design to settle before the first write never reaches the "
                 "write: the clock runs out with nothing on disk, and the "
