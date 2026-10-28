@@ -226,6 +226,22 @@ formula, you were wrong about which span the formula eats.
   row you had not considered, or an explicit statement that you looked and found
   none.
 
+  S5 GATE THE DELIVERED BYTES. A check run over your model, your summary, or your
+  plan notes is not a check over the deliverable — the grader reads the bytes at the
+  delivery path, not your understanding of them. Before you close: (1) compile every
+  numeric bound the task text states into a runnable assertion that reads the
+  DELIVERED file (its size, its content — not your memory of what you meant to
+  write); (2) locate on those bytes every named component your model relies on (a
+  header, a prefix, a structural element) and write down where it actually is —
+  "it is in my design" is not a location; (3) re-run the gate AFTER THE LAST write to
+  the delivery path — a write that has not been followed by a gate run is an
+  unverified write, and reporting the violation honestly does not substitute for
+  gating it (an honest report of an out-of-bound deliverable still fails). The gate
+  set is derived from the task's own stated constraints — never from constants you
+  invent. Run the gate immediately after each write — the gate is not a wrap-up
+  step, and a verification you postpone to the end of the budget is the one the
+  wall will eat.
+
 These four steps are the reusable core of every clause in this section. 2.1 through
 2.14 are what each step looks like when it goes wrong.
 

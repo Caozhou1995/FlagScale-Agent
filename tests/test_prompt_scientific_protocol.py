@@ -116,3 +116,30 @@ def test_s4_obligates_enumeration_after_checks_pass():
 def test_protocol_is_referenced_as_the_core_of_the_section():
     """The four steps must be declared the reusable core, so 2.x reads as instances."""
     assert "reusable core of every clause in this section" in FLAT
+
+
+def test_s5_gates_the_delivered_bytes():
+    """S5 exists and carries the byte-fact obligations the measured losses lacked.
+
+    The two loss shapes it closes: a model symbol never located on the delivered
+    bytes (the grader found the component missing while every in-model check
+    passed), and a stated bound treated as a goal rather than a pre-write gate (the
+    final write was never re-measured, and the honest report did not rescue it).
+    """
+    assert "s5 gate the delivered bytes" in FLAT
+    # (1) bounds become runnable assertions over the DELIVERED file.
+    assert "compile every numeric bound" in FLAT
+    assert "reads the" in FLAT and "delivered file" in FLAT
+    # (2) named components are located on the bytes, with a stated location.
+    assert "locate on those bytes" in FLAT
+    assert '"it is in my design" is not a location' in FLAT
+    # (3) the last write must be followed by a gate run; honesty is not a gate.
+    assert "re-run the gate after the last write" in FLAT
+    assert "unverified write" in FLAT
+    assert "an honest report of an out-of-bound deliverable still fails" in FLAT
+    # The gate set is task-derived, never invented constants (anti-leakage).
+    assert "derived from the task's own stated constraints" in FLAT
+    assert "never from constants you invent" in FLAT
+    # (4) G2: the gate is not a wrap-up step — postponed verification dies to the wall.
+    assert "the gate is not a wrap-up step" in FLAT
+    assert "postpone" in FLAT and "the wall will eat" in FLAT
