@@ -269,10 +269,36 @@ class TestReviewerPreset:
 
     def test_missing_deliverable_input_rejected(self, tmp_path):
         cons = self._cons(tmp_path)
-        with pytest.raises(ContractError, match="deliverable"):
+        with pytest.raises(ContractError, match="DELIVERABLE PATH"):
             apply_reviewer_preset(
                 "review", cons, [], str(tmp_path / "findings.md"), 5,
                 inputs=[{"kind": "value", "value": "rev=x"}])
+
+    def test_missing_all_inputs_reports_all_in_one_error(self, tmp_path):
+        # One rejection must list EVERY unmet reviewer obligation — the
+        # caller gets the full shopping list in one round-trip instead of
+        # discovering them one at a time across three rejected spawns.
+        cons = self._cons(tmp_path)
+        with pytest.raises(ContractError) as ei:
+            apply_reviewer_preset(
+                "review", cons, [], str(tmp_path / "findings.md"), 5,
+                inputs=[])
+        msg = str(ei.value)
+        assert "3 required input obligation(s) unmet" in msg
+        assert "DELIVERABLE PATH" in msg
+        assert "REVISION" in msg
+        assert "TASK STATEMENT VERBATIM" in msg
+
+    def test_two_missing_report_together(self, tmp_path):
+        cons = self._cons(tmp_path)
+        with pytest.raises(ContractError) as ei:
+            apply_reviewer_preset(
+                "review", cons, [], str(tmp_path / "findings.md"), 5,
+                inputs=[{"kind": "path", "value": "/tmp/whatever.md"}])
+        msg = str(ei.value)
+        assert "2 required input obligation(s) unmet" in msg
+        assert "DELIVERABLE PATH" not in msg  # satisfied, not reported
+        assert "REVISION" in msg and "TASK STATEMENT VERBATIM" in msg
 
     def test_missing_rev_rejected(self, tmp_path):
         cons = self._cons(tmp_path)

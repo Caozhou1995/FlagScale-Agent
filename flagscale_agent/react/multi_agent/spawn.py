@@ -281,31 +281,38 @@ def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
     acc = list(acceptance or [])
     ins = list(inputs or [])
 
-    # inputs must carry the deliverable abs path + rev
+    # inputs must carry the deliverable abs path + rev + the task text.
+    # ALL unmet obligations are reported in ONE error: reporting them one at a
+    # time costs the caller a full round-trip per obligation (observed: three
+    # consecutive spawn rejections, each revealing only the next requirement).
     path_inputs = [i for i in ins
                    if isinstance(i, dict) and i.get("kind") == "path"
                    and isinstance(i.get("value"), str)
                    and i["value"].startswith("/")]
+    missing = []
     if not path_inputs:
-        raise ContractError(
-            "reviewer preset: inputs must carry the deliverable's absolute "
-            "path — add {\"kind\": \"path\", \"value\": \"<abs path>\"}."
-        )
+        missing.append(
+            "DELIVERABLE PATH — add {\"kind\": \"path\", \"value\": \"<abs path>\"}")
     if not _has_rev_marker(constraints, ins):
-        raise ContractError(
-            "reviewer preset: inputs must carry the revision under review — "
-            "add {\"kind\": \"value\", \"value\": \"rev=<git sha|mtime>\"} or "
-            "constraints.rev."
-        )
+        missing.append(
+            "REVISION — add {\"kind\": \"value\", \"value\": \"rev=<git sha|mtime>\"} "
+            "or constraints.rev")
     if not _has_task_text(ins):
+        missing.append(
+            "TASK STATEMENT VERBATIM — add {\"kind\": \"value\", \"value\": "
+            "\"task_text=<the task's own words>\"}. A reviewer handed only a "
+            "paraphrase audits the spawner's blind spot, not the task")
+    if missing:
+        detail = " ".join(
+            "%d) %s." % (n, m) for n, m in enumerate(missing, 1))
         raise ContractError(
-            "reviewer preset: inputs must carry the task statement VERBATIM — "
-            "add {\"kind\": \"value\", \"value\": \"task_text=<the task's own "
-            "words>\"}. A reviewer handed only a paraphrase audits the "
-            "spawner's blind spot, not the task. (If you did NOT intend a "
-            "reviewer: your `goal` matched the auto-injection pattern "
-            "(review|audit) — pass an explicit ordinary role or reword the "
-            "goal so a plain worker is spawned instead of a reviewer.)"
+            "reviewer preset: %d required input obligation(s) unmet. Add ALL "
+            "of them in this call, not one per attempt: %s "
+            "(If you did NOT intend a reviewer: your `goal` matched the "
+            "auto-injection pattern (review|audit) — pass an explicit "
+            "ordinary role or reword the goal so a plain worker is spawned "
+            "instead of a reviewer.)"
+            % (len(missing), detail)
         )
 
     # deadline floor
