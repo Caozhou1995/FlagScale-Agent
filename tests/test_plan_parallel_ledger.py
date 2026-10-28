@@ -185,9 +185,9 @@ def test_parallel_plan_that_fits_after_fanout_is_not_told_to_cut_scope():
     ]
     text = _ledger(p, steps)
     # serial 1020 > usable 765, but critical path 720 fits -> no scope cut
-    assert "关键路径" in text
-    assert "砍范围" not in text
-    assert "第2、3步" in text
+    assert "Critical path" in text
+    assert "cut scope" not in text
+    assert "step 2,3" in text
 
 
 def test_genuine_chain_is_named_as_such_with_the_bottleneck():
@@ -202,8 +202,8 @@ def test_genuine_chain_is_named_as_such_with_the_bottleneck():
     ]
     text = _ledger(p, steps)
     # 1020s of work against a 900s wall: this one genuinely does not fit.
-    assert "依赖链是真的" in text
-    assert "第 2 步" in text  # the 600s step, not the tail
+    assert "the dependency chain is real" in text
+    assert "step 2" in text  # the 600s step, not the tail
 
 
 def test_scope_cut_wording_never_names_verification_as_the_cheap_win():
@@ -215,7 +215,7 @@ def test_scope_cut_wording_never_names_verification_as_the_cheap_win():
          "status": "pending"},
     ]
     text = _ledger(p, steps)
-    assert "依赖链是真的" in text or "链是真的" in text
+    assert "the dependency chain is real" in text
 
 
 # --------------------------------------------------------------------------

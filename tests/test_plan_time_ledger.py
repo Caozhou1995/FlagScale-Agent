@@ -123,20 +123,20 @@ class TestNoFabricatedDeadline:
     def test_without_budget_no_elapsed_or_remaining_is_rendered(self, plan):
         plan.create("t", [{"title": "a", "est_sec": 60}])
         out = plan.summary()
-        assert "已用" not in out
-        assert "剩余" not in out
+        assert "Used" not in out
+        assert "Remaining" not in out
         # the estimate the agent committed to IS still shown
-        assert "预计合计" in out
+        assert "Estimated total" in out
 
     def test_without_budget_and_without_estimates_ledger_is_silent(self, plan):
         plan.create("t", ["a"])
-        assert "时间账" not in plan.summary()
+        assert "TIME LEDGER" not in plan.summary()
 
     def test_non_positive_budget_clears_the_ledger(self, plan):
         _budgeted(plan)
         plan.set_budget_sec(0)
         plan.create("t", [{"title": "a", "est_sec": 60}])
-        assert "已用" not in plan.summary()
+        assert "Used" not in plan.summary()
 
 
 class TestLedgerRendering:
@@ -144,19 +144,19 @@ class TestLedgerRendering:
         _budgeted(plan, 900.0)
         plan.create("t", [{"title": "a", "est_sec": 300}])
         out = plan.summary()
-        assert "计划余量" in out
-        assert "超预算" not in out
+        assert "Plan slack" in out
+        assert "over budget" not in out
 
     def test_overrun_is_flagged_at_plan_time(self, plan):
         _budgeted(plan, 900.0)
         plan.create("t", [{"title": "expensive", "est_sec": 1100}])
         out = plan.summary()
-        assert "超预算" in out
+        assert "over budget" in out
 
     def test_drift_warning_when_remaining_steps_outrun_remaining_time(self, plan):
         _budgeted(plan, 900.0)
         plan.create("t", [{"title": "a", "est_sec": 1100}])
-        assert "漂移" in plan.summary()
+        assert "Drift" in plan.summary()
 
     def test_reserve_is_held_back_from_step_allocation(self, plan):
         _budgeted(plan, 1000.0)
@@ -168,12 +168,12 @@ class TestLedgerRendering:
         _budgeted(plan, 900.0)
         plan.create("t", [{"title": "a", "est_sec": 300}])
         ctx = plan.context_for_prompt()
-        assert "时间账" in ctx
+        assert "TIME LEDGER" in ctx
 
     def test_unestimated_agent_step_is_nagged(self, plan):
         _budgeted(plan, 900.0)
         plan.create("t", [{"title": "unpriced"}])
-        assert "没有估时" in plan.summary()
+        assert "no estimate" in plan.summary()
 
 
 class TestPerStepRendering:
@@ -183,8 +183,8 @@ class TestPerStepRendering:
         plan.update_step(1, "doing")
         plan.update_step(1, "done")
         out = plan.summary()
-        assert "估30s" in out
-        assert "实" in out
+        assert "est 30s" in out
+        assert "act" in out
 
 
 class TestPlanCreateFrameAccounting:
@@ -259,7 +259,7 @@ class TestLegacyPlanCompatibility:
     def test_legacy_plan_still_renders_a_ledger(self, plan):
         self._legacy(plan, budget=900.0, created=__import__("time").time())
         out = plan.summary()
-        assert "时间账" in out, "missing time_budget key must not disable the ledger"
+        assert "TIME LEDGER" in out, "missing time_budget key must not disable the ledger"
 
     def test_legacy_plan_updates_without_keyerror(self, plan):
         self._legacy(plan, budget=900.0, created=__import__("time").time())
@@ -272,14 +272,14 @@ class TestLegacyPlanCompatibility:
         # A plan written long ago and resumed NOW: the old session's origin must
         # not be used as this session's elapsed origin. Because elapsed is
         # anchored to this session, the absurd five-digit percentage cannot
-        # appear (previously it printed 已用 25840h (10336123%)).
+        # appear (previously it printed Used 25840h (10336123%)).
         self._legacy(plan, budget=900.0, created=1700000000.0)
         out = plan.summary()
         assert "%" in out
         assert "25840h" not in out, out
         assert "10336123" not in out, out
         # and the repairable state is not reported as unrepairable
-        assert "预算已耗尽" not in out, out
+        assert "exhausted" not in out, out
 
     def test_genuinely_exhausted_budget_says_so(self, plan):
         # The legitimate exhausted case: the wall really is spent WITHIN this
@@ -289,13 +289,13 @@ class TestLegacyPlanCompatibility:
         plan.create("t", [{"title": "a", "est_sec": 60}])
         _t.sleep(0.05)
         out = plan.summary()
-        assert "预算已耗尽" in out, out
-        assert "只做收尾" in out, out
+        assert "exhausted" in out, out
+        assert "Wrap up ONLY" in out, out
 
     def test_legacy_plan_without_budget_stays_silent_about_time(self, plan):
         self._legacy(plan, budget=None)
         out = plan.summary()
-        assert "已用" not in out
+        assert "Used" not in out
 
 
 class TestNonFiniteInputs:
@@ -354,8 +354,8 @@ class TestResumedPlanAnchorsToThisSession:
     def test_resumed_plan_does_not_report_exhausted_budget(self, plan):
         self._legacy_started(plan, 720.0, 86400.0)
         out = plan.summary()
-        assert "预算已耗尽" not in out, out
-        assert "只做收尾" not in out, out
+        assert "exhausted" not in out, out
+        assert "Wrap up ONLY" not in out, out
 
     def test_resumed_plan_reports_fresh_elapsed(self, plan):
         self._legacy_started(plan, 720.0, 86400.0)
@@ -363,7 +363,7 @@ class TestResumedPlanAnchorsToThisSession:
         # elapsed is measured from THIS session, so almost all of the wall is
         # still available and the ledger must say so
         assert "24h" not in out, out
-        assert "剩余" in out
+        assert "Remaining" in out
 
 
 class TestOneFixedStepPredicate:
@@ -384,7 +384,7 @@ class TestOneFixedStepPredicate:
                    {"title": "Review (x fixed step)"}],
         )
         assert "0 unestimated" in tool_out, tool_out
-        assert "没有估时" not in plan.summary(), plan.summary()
+        assert "no estimate" not in plan.summary(), plan.summary()
 
 
 class TestPublicBudgetAccessor:
