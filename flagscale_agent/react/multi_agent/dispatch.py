@@ -488,6 +488,11 @@ def _validate_spec_sync(spec: Dict[str, Any], spawn: SpawnWorkerTool,
     cons.setdefault("max_minutes", dm)
     from .contract import Contract, ContractError  # local: cycle-free import
     from .spawn import maybe_auto_inject_reviewer, apply_reviewer_preset
+    # Mirror spawn.execute step 4b exactly: the reviewer tag is auto-injected
+    # BEFORE the preset runs (an explicit reviewer/role tag suppresses it).
+    # Without this mirror, a review-goal spec passes sync validation and
+    # still dies in the background thread — defeating the fail-fast.
+    maybe_auto_inject_reviewer(goal, cons)
     try:
         acc_list, dm = apply_reviewer_preset(
             goal, cons, list(acceptance or []), output_ptr, dm,

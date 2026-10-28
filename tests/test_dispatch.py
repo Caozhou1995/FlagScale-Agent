@@ -465,3 +465,22 @@ class TestWorkerLogPointer:
         recs, _ = _live_records(job, led)
         assert recs[0].log_path == str(led.task_dir(c.id) / "worker.log")
 
+
+
+def test_sync_validation_applies_reviewer_auto_inject(led):
+    """A review-goal spec (no explicit role tag) must fail AT DISPATCH with the
+    reviewer preset obligations — the sync mirror applies the same auto-inject
+    spawn.execute does, so the preset sees the injected reviewer role."""
+    spec = {
+        "goal": "read-only review of /tmp/review_target.txt",
+        "constraints": {"writable": ["/tmp"], "max_minutes": 5},
+        "acceptance": [{"check": "test -f /tmp/r.txt"}],
+        "inputs": [],
+        "output_ptr": "/tmp/r.txt",
+        "deadline_minutes": 5,
+    }
+    with pytest.raises(ContractError) as ei:
+        start_dispatch_many([spec], ledger=led)
+    msg = str(ei.value)
+    assert "spec[0]" in msg
+    assert "REVISION" in msg and "TASK STATEMENT VERBATIM" in msg
