@@ -313,7 +313,16 @@ really inside the region, what the structure forces. A reading that contradicts
 the object's own structure is eliminated by a fact you can check in seconds, and
 that is the only cheap eliminator: in the same trial, a single probe asking
 whether the bases of an added head also pair with the template (they did) would
-have forced the missing reading to the front, and the agent never ran it. Where the surviving readings still give different numbers, compute
+have forced the missing reading to the front, and the agent never ran it.
+
+The CHECK SET has a shape too: beside bounds on single quantities, a spec often
+states RELATIONS between quantities — a difference, a ratio, an ordering, a
+pairing (|A−B|<=T, A before B, A and B agree within k). Compile each such
+relation as its OWN assertion row and compute it from the same definition-family
+as the bound rows; a checklist keyed on single-quantity bounds misses the
+relational ones by construction, and the relational one is usually the assertion
+that fires.
+Where the surviving readings still give different numbers, compute
 each of them and diff; a self-check that passes because it used the definition
 convenient for you is not evidence about a consumer using another one. The
 comparison's FORM is equally part of the question: a per-element ratio criterion

@@ -98,6 +98,23 @@ def test_candidates_killed_by_object_fact():
     assert "which characters actually pair" in s
 
 
+def test_check_set_shape_covers_relational_constraints():
+    """Anti-decay: the constraint checklist must be shaped like the spec's own
+    check set — single-quantity bounds AND relations between quantities.
+
+    Measured: an agent whose self-check enumerated single-quantity bounds
+    (both in range) still failed the run on a stated relational constraint
+    (|A−B| <= T) that was never compiled as an assertion row. The pin is on
+    the relational-clause heading and its examples, not prose."""
+    start = SYSTEM_PROMPT_STATIC.index("2.4 MEASURE THE QUANTITY")
+    end = SYSTEM_PROMPT_STATIC.index("2.5 THE COMPARISON")
+    s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
+    assert "The CHECK SET has a shape too" in s
+    assert "RELATIONS between quantities" in s
+    assert "a difference, a ratio, an ordering, a pairing" in s
+    assert "its OWN assertion row" in s
+
+
 def test_satisfy_rule_is_not_pair_scoped():
     """Anti-decay: 2.9 must cover the whole undominated set and, where the
     readings conflict, settle it with a knob at the intersection instead of
