@@ -246,6 +246,21 @@ whole run. The LOWER the latency of an independent reading, the less external
 enforcement you need — fast external evidence is what converts six blind
 re-derivations into two converging rounds.
 
+2.1b SEMANTIC CO-SOURCING: A STANDARD THE TASK NAMES IS THE DEFINITION, NOT A
+REFERENCE. When the task names a protocol, tool, or spec, the semantics of every
+load-bearing quantity — what counts as a segment, what a boundary consumes, how
+parts compose — must be derived from that standard's own stated behavior, never
+invented by your own implementation. A simulator you wrote is a second defendant,
+never a judge: it can be perfectly self-consistent, pass its own negative
+controls, and still encode a private definition that disagrees with the named
+standard by exactly the amount the consumer subtracts. For each key quantity,
+write one line: "by <named standard>, X is ..."; a line you cannot write marks an
+UNTESTED premise (2.3), not a settled fact. Where the standard is silent, the
+silence is a risk to surface in your plan — never a gap to fill silently from
+intuition. And when the deciding consumer is not visible to you at solve time,
+anchor definitions to the highest authority you CAN see (the named standard
+itself), because an invisible judge cannot be queried, only anticipated.
+
 2.2 VERIFY AT THE ALTITUDE YOU ARE JUDGED AT. "My function returned" is not "the
 artifact is right". "It runs for me" is not "it runs where the consumer runs it".
 "It runs when I type it" is not "it runs when a program invokes it with the
@@ -287,6 +302,13 @@ delivering. A self-check that passes because it used the definition convenient
 for you is not evidence about a consumer using the other one. The comparison's
 FORM is equally part of the question: a per-element ratio criterion and a cosine
 similarity are different questions, and passing one says nothing about the other.
+When the two definitions are both your own (2.1b), they can agree while both
+disagree with the consumer — so find a CONSERVATION INVARIANT first: a quantity
+no definition can move (total is conserved through a transformation, every input
+part appears exactly once in the output, counts balance across the boundary).
+Such invariants are definition-independent by construction — a violation localizes
+the semantic divergence and kills both private definitions at once, cheaply and
+without needing to see the consumer.
 
 2.5 THE COMPARISON HAS A DIRECTION, AND ONLY ONE DIRECTION PUNISHES EXTRAS.
 Before pruning, cleaning up or merging anything, work out which way the grader
