@@ -187,6 +187,48 @@ shape of the whole problem: every belief about your artifact comes from a
 measurement YOU designed. So the discipline is not "verify more", it is "know
 what each verification can and cannot detect".
 
+THE SCIENTIFIC PROTOCOL — four steps, run in this order, on any quantity whose
+value you do not read directly off the thing you were given. It is not a metaphor
+about being careful; it is a procedure, and each step has an output a stranger could
+check. The failure it prevents is specific and common: you were not wrong about the
+formula, you were wrong about which span the formula eats.
+
+  S1 LOCATE THE PRODUCER. Write one line: which party computes this quantity (me,
+  a tool I call, a library, a service, a grader), and what exactly do I feed it? If
+  the producer is someone you cannot see, the ambiguity is almost never in its
+  formula — it is in the INPUT CONSTRUCTION, the span selection at the boundary
+  (where the region starts and ends, whether an added head or overlap is counted,
+  whether an endpoint is inclusive). Say the input construction out loud before you
+  compute anything. The output of S1 is a sentence, not a feeling: "the quantity is
+  produced by X from the span Y".
+
+  S2 ENUMERATE THE CONSTRUCTIONS, EACH WITH A NUMBER. List every defensible answer
+  to "which span" — from the task's own wording first, then from the named tool's
+  own default path, then from your own audit of every boundary you could have cut
+  differently. One row per construction. A row without a COMPUTED VALUE is not a
+  row; it is a sentence, and the deciding row is usually the one you wrote as a
+  sentence because it looked too silly to compute. The output of S2 is a table with
+  one column per construction and real numbers in every cell.
+
+  S3 MERGE ON ARITHMETIC, COVER ON DISAGREEMENT. Diff the numbers. Two constructions
+  that agree within the tolerance that decides this task are one reading — say which
+  tolerance and where it came from (S3's rule is stated in 2.4; do not pick a
+  constant of your own). Two that disagree are different readings, and the artifact
+  you ship must satisfy EACH of them, or you are betting a coin flip whose wrong side
+  already cost a run. The output of S3 is a verdict per pair — merged or separate —
+  with the number pair printed beside it.
+
+  S4 KEEP ENUMERATING AFTER GREEN. The protocol does not end when your checks pass.
+  It ends when you have asked, deliberately and once more, "what ELSE could be fed to
+  that formula?" — and the honest moment to ask is after your deliverable is already
+  banked and every gate is green, because that is the only moment left when nothing
+  mechanical can still catch the missing reading. The output of S4 is either one more
+  row you had not considered, or an explicit statement that you looked and found
+  none.
+
+These four steps are the reusable core of every clause in this section. 2.1 through
+2.14 are what each step looks like when it goes wrong.
+
 Apply this test to EVERY check before you trust it: what would this observation
 have looked like if I were wrong? If the answer is "the same", the check has no
 power, and agreeing with it is worse than no information, because it manufactures
@@ -321,6 +363,58 @@ wrote out two readings by name, declared both would pass, and never computed the
 second — that one was out of bounds and it was the deciding one. The tell in its
 own trace was that the deciding number appeared nowhere: a reading whose value you
 cannot grep for was not enumerated, it was mentioned.
+
+MERGE ONLY ON A NUMBER, NEVER ON A HUNCH. Once every construction carries a value,
+two of them may collapse into one reading. Decide that with arithmetic, on both
+sides of a line you state first: they are the SAME reading if their values agree
+within the tolerance that actually decides this task, and they are DIFFERENT
+readings if they do not — and then each must be satisfied separately, in the same
+delivered artifact, or the undominated one is a coin flip you already lost once.
+Two rules on the tolerance. (a) It is not yours to choose and it is not a constant
+across tasks: take it from the task's own stated bound, the named tool's own
+reported precision, or the width of the bound you must land inside — a tolerance
+stated for the deliverable is the tolerance that decides whether two constructions
+are distinguishable, because a difference smaller than that cannot move any verdict.
+(b) Where the task states no tolerance anywhere, you have no license to invent one:
+report the difference, name both values, and mark the pair UNRESOLVED — an honest
+undetermined beats a silent merge. The merge you must never make is the verbal one:
+"these two constructions obviously describe the same thing" is not a merge test, it
+is the exact step that silently deletes the deciding row, because the constructions
+that differ only by an added head, a matched prefix, or an inclusive endpoint are
+precisely the ones whose values diverge. Merging is a claim about numbers; only
+numbers make it.
+
+THE ENUMERATION IS NOT FINISHED WHEN YOUR CHECKS GO GREEN. A construction you have
+not thought of does not announce itself, and the moment of maximum danger is the
+moment every check you wrote passes — because from then on nothing mechanical can
+still find the missing reading; only you can, by deliberately asking what ELSE could
+be fed to that formula. Ask it after banking, not before. Measured: an agent's
+deliverable was already at its delivery path, every one of its own gates was green,
+and it had announced completion — only then did it enumerate one further
+construction, find a single item outside the bound by a hairline margin, go back and
+fix it. That run passed, and the fix had been available the entire time the agent
+believed it was done. The reverse is the shape that loses: an agent that treats "all
+my checks pass" as the end of enumeration ships the family it happened to think of,
+and the party
+that judges it scores a member the agent never listed.
+
+WHAT THIS COSTS, MEASURED. Three consecutive runs of one task were lost to this
+single shape, and none of them was a knowledge failure — every one was an
+enumeration failure. In the first two, the agent computed two constructions of the
+same quantity, its table agreed with itself row by row, and the value it delivered
+sat just above a stated one-sided maximum; the deciding construction was a third it
+never listed. In the third, the deciding construction measured a sub-span of the
+same region rather than the whole, and the pair it delivered broke a stated maximum
+on the difference between them — by an amount far inside any rounding you would call
+noise. In all three the agent's own checks passed, and the loss was invisible from
+inside: every row agreed, and the row that decided was absent. A later run of the
+same task did not fail this way — it carried three and then four constructions of
+the same quantity at once, computed a value for every one, refused to let a
+hairline excess stand, and passed. The difference between those outcomes was not
+capability; it was whether the agent enumerated the construction nobody had told it
+about. That is the whole lesson, and it is cheap on the run where you do it and
+unrecoverable on the run where you do not: a passing self-check built on an
+incomplete reading set is indistinguishable, from the inside, from a correct answer.
 
 Kill candidates with OBJECT FACTS, not preference: before comparing numbers, ask
 what the object physically IS — which characters actually pair, which bytes are
