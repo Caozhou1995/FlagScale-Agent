@@ -19,6 +19,7 @@ import os
 
 import pytest
 
+from flagscale_agent.react.multi_agent.contract import ContractError
 from flagscale_agent.react.multi_agent.dispatch import (
     DispatchManyTool,
     PointerRecord,
@@ -254,6 +255,139 @@ def test_async_rejected_artifact_missing(led, tmp_path):
 def test_async_poll_unknown_dispatch(led):
     info = poll_dispatch("dsp_nope", ledger=led)
     assert info["state"] == "unknown"
+
+
+# ── spawn-error surfacing (SPAWN_ERROR_CAP) + fail-fast sync validation ──────
+class _ErrorSpawn:
+    """A spawn that always fails its contract check with a LONG error.
+
+    Mimics SpawnWorkerTool.execute's 'ERROR: ...' return shape (a spawn error
+    is returned as a string, not raised) so the dispatcher's SPAWN_FAILED
+    record path is exercised deterministically.
+    """
+
+    def __init__(self, ledger, msg):
+        self._ledger = ledger
+        self._msg = msg
+
+    def execute(self, **kw):
+        return f"ERROR: {self._msg}"
+
+
+def test_spawn_failed_note_keeps_full_error_beyond_note_cap(led):
+    """A spawn error is the parent's fix list for its next call — it must
+    survive into the pointer record beyond the 180-char summary cap (the
+    measured loss: an obligation list cut at obligation 1 made the fix
+    information-theoretically unavailable)."""
+    long_detail = "y" * 400 + " ESCAPE_HATCH_ADVICE_MARKER"
+    spawn = _ErrorSpawn(led, long_detail)
+    recs = dispatch_many_blocking(
+        [{"goal": "g", "constraints": {}, "acceptance": [{"check": "true"}],
+          "output_ptr": "/tmp/nope.md", "deadline_minutes": 5}],
+        degree=1, spawn=spawn, ledger=led,
+    )
+    assert recs[0].status == "SPAWN_FAILED"
+    assert len(recs[0].note) > 400                    # beyond the 180 cap
+    assert "ESCAPE_HATCH_ADVICE_MARKER" in recs[0].note  # the tail survived
+    assert recs[0].note.endswith("y" * 400 + " ESCAPE_HATCH_ADVICE_MARKER")
+
+
+def test_start_dispatch_many_rejects_invalid_spec_synchronously(led, tmp_path):
+    """A contract-invalid spec must fail AT DISPATCH (an exception naming the
+    spec), not at poll via a SPAWN_FAILED record — one round-trip instead of
+    a wasted fan-out + poll."""
+    from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+    spawn = SpawnWorkerTool(ledger=led)
+    bad = {
+        "goal": "g",
+        "constraints": {"writable": [str(tmp_path)]},
+        "acceptance": [{"check": "true"}],
+        "output_ptr": "relative/not-absolute.md",   # invalid: not absolute
+        "deadline_minutes": 5,
+    }
+    with pytest.raises(ContractError, match="spec\\[0\\]"):
+        start_dispatch_many([bad], degree=1, spawn=spawn, ledger=led)
+
+
+def test_start_dispatch_many_error_names_every_bad_spec(led, tmp_path):
+    """ALL invalid specs are reported in ONE error — the fix list must be
+    complete in a single round-trip (same rule as the reviewer preset)."""
+    from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+    spawn = SpawnWorkerTool(ledger=led)
+    work = tmp_path / "w"
+    work.mkdir()
+    specs = [
+        {"goal": "ok", "constraints": {"writable": [str(work)]},
+         "acceptance": [{"check": "true"}],
+         "output_ptr": str(work / "o.md"), "deadline_minutes": 5},
+        {"goal": "bad1", "constraints": {"writable": [str(work)]},
+         "acceptance": [{"check": "true"}],
+         "output_ptr": str(work / "o1.md"), "deadline_minutes": -1},
+        {"goal": "bad2", "constraints": {"writable": [str(work)]},
+         "acceptance": [],
+         "output_ptr": str(work / "o2.md"), "deadline_minutes": 5},
+    ]
+    with pytest.raises(ContractError) as ei:
+        start_dispatch_many(specs, degree=2, spawn=spawn, ledger=led)
+    msg = str(ei.value)
+    assert "spec[1]" in msg and "spec[2]" in msg
+    assert "spec[0]" not in msg.split("spec[1]")[0]   # the good one not blamed
+
+
+def test_start_dispatch_many_accepts_valid_spec(led, tmp_path):
+    """Backward compat: a sound spec still dispatches (the fail-fast gate
+    must not reject what spawn itself would have accepted)."""
+    spawn = FakeSpawn(led, report_ok=True)
+    specs = [_spec(0, tmp_path)]
+    handle = dispatch_many(specs, degree=1, spawn=spawn, ledger=led)
+    assert handle["dispatch_id"].startswith("dsp_")
+    info = _poll_until_complete(handle["dispatch_id"], led)
+    assert info["state"] == "complete"
+    assert info["records"][0]["status"] == DONE
+
+
+def test_dispatch_reviewer_contract_error_names_literally_rev(led, tmp_path):
+    """The reviewer-preset error must say the marker is literally `rev=`
+    (and that revision= is accepted) — the message's own word REVISION is
+    what taught callers to write revision=, which the old regex rejected."""
+    from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+    spawn = SpawnWorkerTool(ledger=led)
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "findings.md").write_text("| ID | Sev | Fix |\n| --- | --- | --- |\n"
+                                      "| F1 | high | x |\n", encoding="utf-8")
+    bad = {
+        "goal": "review the deliverable at the path",
+        "constraints": {"writable": [str(work)], "reviewer": True},
+        "acceptance": [{"check": "true"}],
+        "output_ptr": str(work / "findings.md"),
+        "deadline_minutes": 5,
+        "inputs": [{"kind": "path", "value": str(work / "findings.md")}],
+    }
+    with pytest.raises(ContractError, match="literally `rev=`"):
+        start_dispatch_many([bad], degree=1, spawn=spawn, ledger=led)
+
+
+def test_dispatch_reviewer_preset_accepts_revision_prefix(led, tmp_path):
+    """revision=<sha> satisfies the rev marker — a caller echoing the error's
+    own word must not hit an identical rejection on retry."""
+    from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+    spawn = SpawnWorkerTool(ledger=led)
+    work = tmp_path / "w2"
+    work.mkdir()
+    (work / "findings.md").write_text("no findings\n", encoding="utf-8")
+    spec = {
+        "goal": "review the deliverable at the path",
+        "constraints": {"writable": [str(work)], "reviewer": True},
+        "acceptance": [{"check": "true"}],
+        "output_ptr": str(work / "findings.md"),
+        "deadline_minutes": 5,
+        "inputs": [{"kind": "path", "value": str(work / "findings.md")},
+                   {"kind": "value", "value": "revision=abc1234"},
+                   {"kind": "value", "value": "task_text=review it"}],
+    }
+    handle = start_dispatch_many([spec], degree=1, spawn=spawn, ledger=led)
+    assert handle["dispatch_id"].startswith("dsp_")
 
 
 def test_dispatch_tool_async_then_poll(led, tmp_path):

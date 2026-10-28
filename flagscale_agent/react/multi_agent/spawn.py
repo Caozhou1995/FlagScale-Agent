@@ -223,7 +223,10 @@ def maybe_auto_inject_reviewer(goal: str, constraints: Dict[str, Any]) -> None:
 def _has_rev_marker(constraints: Dict[str, Any],
                     inputs: Optional[List[Dict[str, Any]]]) -> bool:
     """A revision marker: constraints['rev'] non-empty, or a value input
-    shaped `rev=<non-empty>`."""
+    shaped `rev=<non-empty>` (a `revision=<non-empty>` prefix is accepted
+    as the same marker — callers naturally echo the error's own word
+    REVISION, and a marker that only matches its own spelling turns one
+    retryable mistake into a dead loop)."""
     if str(constraints.get("rev", "") or "").strip():
         return True
     for inp in inputs or []:
@@ -231,7 +234,7 @@ def _has_rev_marker(constraints: Dict[str, Any],
             continue
         if inp.get("kind") == "value":
             val = str(inp.get("value", "") or "")
-            if re.match(r"^\s*rev\s*=\s*\S+", val, re.IGNORECASE):
+            if re.match(r"^\s*(rev|revision)\s*=\s*\S+", val, re.IGNORECASE):
                 return True
     return False
 
@@ -295,8 +298,9 @@ def apply_reviewer_preset(goal: str, constraints: Dict[str, Any],
             "DELIVERABLE PATH — add {\"kind\": \"path\", \"value\": \"<abs path>\"}")
     if not _has_rev_marker(constraints, ins):
         missing.append(
-            "REVISION — add {\"kind\": \"value\", \"value\": \"rev=<git sha|mtime>\"} "
-            "or constraints.rev")
+            "REVISION — add {\"kind\": \"value\", \"value\": \"rev=<git "
+            "sha|mtime>\"} (literally `rev=`, not `revision=` — though a "
+            "`revision=` prefix is also accepted) or constraints.rev")
     if not _has_task_text(ins):
         missing.append(
             "TASK STATEMENT VERBATIM — add {\"kind\": \"value\", \"value\": "
@@ -636,7 +640,12 @@ class SpawnWorkerTool(Tool):
         "properties": {
             "goal": {
                 "type": "string",
-                "description": "Task goal, one sentence (<=400 chars).",
+                "description": (
+                    "Task goal, one sentence, decidable. No hard length cap — "
+                    "a precise 500-char goal beats a vague 399-char one; put "
+                    "the detailed charter/context into inputs as kind=value "
+                    "items, not into the goal."
+                ),
             },
             "constraints": {
                 "type": "object",

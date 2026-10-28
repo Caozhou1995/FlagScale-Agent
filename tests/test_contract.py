@@ -12,7 +12,6 @@ from flagscale_agent.react.multi_agent.contract import (
     Contract,
     ContractError,
     compute_id,
-    GOAL_MAX_LEN,
 )
 
 
@@ -48,20 +47,26 @@ class TestContentAddressing:
         with pytest.raises(ContractError):
             _mk(tmp_path, goal="   ").validate()
 
-    def test_goal_too_long_rejected(self, tmp_path):
-        with pytest.raises(ContractError, match=f"exceeds {GOAL_MAX_LEN} chars"):
-            _mk(tmp_path, goal="x" * (GOAL_MAX_LEN + 1)).validate()
+    def test_goal_has_no_hard_length_cap(self, tmp_path):
+        # The old GOAL_MAX_LEN=400 hard reject punished the wrong axis: a
+        # 399-char vague goal passed while a 450-char precise goal failed.
+        # Length is guidance (schema text), not validation — a 1000-char
+        # goal must validate as long as the contract is otherwise sound.
+        _mk(tmp_path, goal="x" * 1000).validate()  # no raise
 
-    def test_goal_too_long_error_echoes_goal_and_fix_hint(self, tmp_path):
-        long_goal = "z" * (GOAL_MAX_LEN + 50) + " TAILMARK99"  # exceeds cap, tail beyond echo window
-        with pytest.raises(ContractError) as ei:
-            _mk(tmp_path, goal=long_goal).validate()
-        msg = str(ei.value)
-        assert "received:" in msg                    # echoes the offending goal
-        assert "zzz" in msg                          # echo present
-        assert "TAILMARK99" not in msg               # echo truncated at 120 chars
-        assert "inputs" in msg and "kind=value" in msg  # fix hint present
-        assert f"(got {len(long_goal)};" in msg      # original count kept
+    def test_goal_whitespace_only_still_rejected_at_any_length(self, tmp_path):
+        # The non-empty check survives the cap removal — a huge whitespace
+        # goal is still a contract with no decidable scope.
+        with pytest.raises(ContractError, match="goal must be non-empty"):
+            _mk(tmp_path, goal=" " * 500).validate()
+
+    def test_goal_schema_description_states_no_hard_cap(self):
+        # The tool schema teaches self-censoring BEFORE any validation; its
+        # goal description must not carry the old hard cap.
+        from flagscale_agent.react.multi_agent.spawn import SpawnWorkerTool
+        desc = SpawnWorkerTool.parameters["properties"]["goal"]["description"]
+        assert "<=400" not in desc and "400 chars" not in desc
+        assert "No hard length cap" in desc
 
 
 class TestValidate:

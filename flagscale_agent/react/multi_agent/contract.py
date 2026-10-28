@@ -43,7 +43,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# goal length cap ("<=400 chars, single sentence, decidable")
+# goal length guidance (schema text only — NOT a validation cap; see
+# Contract.validate: length does not decide contract quality).
 GOAL_MAX_LEN = 400
 
 # ── RoleSpec — one mechanism for a role and everything it implies ──
@@ -396,16 +397,15 @@ class Contract:
                 side re-validates the CONTRACT but not filesystem state (the
                 path may be remote / fetched lazily).
         """
-        # 1. goal non-empty, <= 400 chars; acceptance non-empty, each check non-empty
+        # 1. goal non-empty; acceptance non-empty, each check non-empty.
+        # NOTE: goal has NO length cap. The old GOAL_MAX_LEN=400 hard reject
+        # punished the wrong axis — a 399-char vague goal passed while a
+        # 450-char precise goal failed, and at 200 the cap rejected the
+        # harness's OWN reviewer-template goal examples. Length does not
+        # decide a contract's quality; keep the one-sentence FORM guidance
+        # in the schema description, not an error here.
         if not self.goal or not self.goal.strip():
             raise ContractError(f"goal must be non-empty (got: {self.goal!r})")
-        if len(self.goal) > GOAL_MAX_LEN:
-            raise ContractError(
-                f"goal exceeds {GOAL_MAX_LEN} chars (got {len(self.goal)}; "
-                f"received: {self.goal[:120]!r}) — goal must be a one-sentence "
-                f"task title; put the detailed charter/context into inputs "
-                f"as kind=value items"
-            )
         if not self.acceptance:
             raise ContractError("acceptance must be non-empty")
         for i, a in enumerate(self.acceptance):

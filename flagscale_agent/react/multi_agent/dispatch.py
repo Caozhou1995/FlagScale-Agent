@@ -52,7 +52,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from flagscale_agent.react.paths import get_tasks_dir
 from flagscale_agent.react.tools.base import Tool
 
-from .contract import compute_id
+from .contract import ContractError, compute_id
 from .ledger import TaskLedger
 from .reunite import check_result
 from .spawn import MAX_CONCURRENT, SUBAGENTS_DIRNAME, SpawnWorkerTool
@@ -61,6 +61,14 @@ from .spawn import MAX_CONCURRENT, SUBAGENTS_DIRNAME, SpawnWorkerTool
 POLL_INTERVAL_S = 1.0
 # Max chars of a note carried into a pointer record (context stays bounded).
 NOTE_CAP = 180
+# SPAWN_FAILED notes keep the FULL error: a spawn error is exactly the
+# bounded content the parent must READ to fix its next call — clipping it
+# to the summary cap hides later obligations and the escape-hatch advice
+# (measured: a reviewer contract error listing 3 obligations was cut at
+# obligation 1, so a caller who fixed obligation 1 could never learn 2
+# existed and rationally gave up). These errors are harness-written, not
+# worker prose, so the no-text-wall rule does not apply to them.
+SPAWN_ERROR_CAP = 2000
 
 
 @dataclass
@@ -92,6 +100,11 @@ class PointerRecord:
 def _clip(text: str, n: int = NOTE_CAP) -> str:
     text = (text or "").strip().replace("\n", " ")
     return text if len(text) <= n else text[:n] + "…"
+
+
+def _clip_error(text: str) -> str:
+    """Clip a SPAWN error note — wider cap, same shape (see SPAWN_ERROR_CAP)."""
+    return _clip(text, SPAWN_ERROR_CAP)
 
 
 # Statuses that are neither ACTIVE nor terminal but mean "stop waiting".
@@ -160,10 +173,13 @@ def _dispatch_many_blocking(
                 # Backpressure (slots full elsewhere / active dup) → wait, retry.
                 if ("concurrency slots full" in out) or ("duplicate task" in out):
                     break
-                # Hard contract/Popen failure → record and move on.
+                # Hard contract/Popen failure → record and move on. The FULL
+                # error text is kept (SPAWN_ERROR_CAP, not NOTE_CAP): it is
+                # the caller's fix list for the next attempt.
                 records[idx] = PointerRecord(
                     task_id="", status="SPAWN_FAILED", passed=False,
-                    output_ptr=str(spec.get("output_ptr", "")), note=_clip(out),
+                    output_ptr=str(spec.get("output_ptr", "")),
+                    note=_clip_error(out),
                 )
                 pending.pop(0)
                 continue
@@ -439,6 +455,56 @@ def _live_records(job: Dict[str, Any],
     return recs, [r.task_id for r in recs]
 
 
+def _validate_spec_sync(spec: Dict[str, Any], spawn: SpawnWorkerTool,
+                        ledger: TaskLedger, idx: int) -> Optional[str]:
+    """Synchronously validate ONE fan-out spec; return an error string or None.
+
+    Why: a contract-invalid spec previously died in the background thread, so
+    the caller discovered it only on a later poll — one wasted round-trip, and
+    (before SPAWN_ERROR_CAP) with the fix list clipped off. Running the same
+    checks spawn.execute would run, BEFORE the handle is returned, turns that
+    into an immediate error naming the offending spec index.
+
+    Mirrors the checks in SpawnWorkerTool.execute that precede the process
+    spawn: deadline parse, reviewer preset, contract build + validate (with
+    parent-side input-existence checks). Concurrency/depth/duplicate checks
+    are NOT replayed here — they depend on live ledger state and stay in the
+    background path.
+    """
+    goal = spec.get("goal", "")
+    constraints = spec.get("constraints") or {}
+    acceptance = spec.get("acceptance") or []
+    inputs = spec.get("inputs") or []
+    output_ptr = spec.get("output_ptr", "")
+    dm = spec.get("deadline_minutes", 0)
+    try:
+        dm = float(dm)
+    except (TypeError, ValueError):
+        return (f"spec[{idx}]: invalid deadline_minutes: {dm!r}")
+    if dm <= 0:
+        return (f"spec[{idx}]: deadline_minutes must be a positive number "
+                f"of minutes (got {dm!r})")
+    cons = dict(constraints)
+    cons.setdefault("max_minutes", dm)
+    from .contract import Contract, ContractError  # local: cycle-free import
+    from .spawn import maybe_auto_inject_reviewer, apply_reviewer_preset
+    try:
+        acc_list, dm = apply_reviewer_preset(
+            goal, cons, list(acceptance or []), output_ptr, dm,
+            inputs=list(inputs or []))
+        c = Contract.build(
+            goal=goal, constraints=cons,
+            acceptance=list(acc_list or []), output_ptr=output_ptr,
+            inputs=list(inputs or []),
+            deadline_epoch=int(time.time()) + int(dm * 60),
+            depth=1, parent={},
+        )
+        c.validate(check_inputs_exist=True)
+    except ContractError as e:
+        return f"spec[{idx}]: {e}"
+    return None
+
+
 def start_dispatch_many(
     specs: List[Dict[str, Any]],
     degree: int = MAX_CONCURRENT,
@@ -460,6 +526,22 @@ def start_dispatch_many(
     if spawn is None:
         spawn = SpawnWorkerTool(ledger=ledger)
     ledger = ledger or spawn._ledger
+
+    # Fail fast: a contract-invalid spec used to die in the background thread
+    # and surface only at poll (a wasted round-trip). Validate every spec
+    # with the SAME checks spawn.execute would apply, BEFORE returning the
+    # handle, and raise with per-spec errors so the caller fixes them in one
+    # round-trip.
+    errors = []
+    for i, s in enumerate(specs):
+        err = _validate_spec_sync(s, spawn, ledger, i)
+        if err:
+            errors.append(err)
+    if errors:
+        raise ContractError(
+            "dispatch_many: %d of %d specs failed contract validation: %s"
+            % (len(errors), len(specs), " | ".join(errors))
+        )
 
     dispatch_id = "dsp_" + uuid.uuid4().hex[:12]
     handle = _new_handle(dispatch_id, len(specs), degree, ledger, spawn)

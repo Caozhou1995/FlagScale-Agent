@@ -165,7 +165,7 @@ class AgentKernel:
     # passing test) never triggers. Fires once per streak (the counter
     # resets after firing); a model that answers the directive with real
     # evidence keeps working. 0 disables.
-    FORBIDDEN_STOP_AFTER = 6
+    FORBIDDEN_STOP_AFTER = 30
     # Tool names treated as "edit" by the churn detector.
     FORBIDDEN_EDIT_TOOLS = frozenset({"edit_file", "write_file"})
     # How many times the rung may fire on consecutive churn streaks before
@@ -1061,6 +1061,22 @@ class AgentKernel:
                         self._edit_churn_streak = 0
                         _directive = self._generate_forbidden_stop_directive()
                         d.history.append({"role": "user", "content": _directive})
+                        # Make the stop VISIBLE to the operator: the bare
+                        # [NEED_USER_INPUT] sentinel alone gives the human no
+                        # reason ("what fired?"). Echo a short explanation of
+                        # the rule and the hand-back semantics. Model sees the
+                        # full directive; this terminal echo is for the user.
+                        d.display.guard_block(
+                            "Edit-churn circuit breaker fired: "
+                            f"{self.FORBIDDEN_STOP_AFTER} consecutive "
+                            "edit_file/write_file calls with no successful "
+                            "non-edit execution in between. The turn is ended "
+                            "harness-side with [NEED_USER_INPUT] — no "
+                            "deliverable was verified. The model was given a "
+                            "directive naming the churn and the recovery "
+                            "options (run evidence / different method / "
+                            "honest hand-back). To clear it, the run must "
+                            "execute a non-edit tool successfully.")
                         d.display.completion_signal("[NEED_USER_INPUT]")
                         result.stop_reason = "forbidden_edit_churn_stop"
                         break
@@ -1401,7 +1417,7 @@ class AgentKernel:
             for q in quoted[:3]:
                 lines.append(f"  ✗ {q}")
         lines.append(
-            "Repeating the edit a 7th time is NOT one of your options. "
+            "Repeating the same edit again is NOT one of your options. "
             "Your next response must contain EXACTLY ONE of:\n"
             "1. The new EVIDENCE that justifies another attempt — a command "
             "you ran and its actual output (not another edit).\n"

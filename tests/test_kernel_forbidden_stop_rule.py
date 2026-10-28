@@ -171,18 +171,26 @@ def test_tdd_cadence_never_fires():
 
 def test_successful_verify_resets_the_streak():
     """A passing execution in the middle of edits breaks the run."""
-    n = AgentKernel.FORBIDDEN_STOP_AFTER
-    resp = [_edit() for _ in range(n - 2)]
-    executed = [ERR] * (n - 2)
-    resp.append({"content": "", "tool_calls": [
-        {"id": "v", "name": "shell", "arguments": {"command": "pytest"}}]})
-    executed.append("ok")
-    resp += [_edit() for _ in range(n - 2)]
-    executed += [ERR] * (n - 2)
-    resp.append({"content": "done [TASK_COMPLETE]", "tool_calls": None})
-    k, _, _, _ = _make_kernel(resp, executed=executed)
-    result = k.run_turn()
-    assert result.stop_reason == "explicit_signal"
+    # Pin a small threshold locally: this test exercises the RESET logic, not
+    # the configured threshold, and the response mock cannot sustain
+    # FORBIDDEN_STOP_AFTER-scale runs (the rung was raised 6 -> 30).
+    n = 4
+    saved = AgentKernel.FORBIDDEN_STOP_AFTER
+    AgentKernel.FORBIDDEN_STOP_AFTER = n
+    try:
+        resp = [_edit() for _ in range(n - 2)]
+        executed = [ERR] * (n - 2)
+        resp.append({"content": "", "tool_calls": [
+            {"id": "v", "name": "shell", "arguments": {"command": "pytest"}}]})
+        executed.append("ok")
+        resp += [_edit() for _ in range(n - 2)]
+        executed += [ERR] * (n - 2)
+        resp.append({"content": "done [TASK_COMPLETE]", "tool_calls": None})
+        k, _, _, _ = _make_kernel(resp, executed=executed)
+        result = k.run_turn()
+        assert result.stop_reason == "explicit_signal"
+    finally:
+        AgentKernel.FORBIDDEN_STOP_AFTER = saved
 
 
 def test_directive_quotes_the_forbidden_item():
@@ -210,3 +218,28 @@ def test_disabled_when_zero():
         assert result.stop_reason != "forbidden_edit_churn_stop"
     finally:
         AgentKernel.FORBIDDEN_STOP_AFTER = saved
+
+
+def test_configured_threshold_is_thirty():
+    """The configured circuit-breaker threshold is 30 (raised from 6 so
+    legitimate long edit+test batches inside one turn are not cut off)."""
+    assert AgentKernel.FORBIDDEN_STOP_AFTER == 30
+
+
+def test_fire_is_explained_to_the_operator():
+    """When the breaker fires, the terminal explains WHY to the user — a bare
+    [NEED_USER_INPUT] sentinel alone gives the operator no reason."""
+    n = AgentKernel.FORBIDDEN_STOP_AFTER
+    resp = [_edit() for _ in range(n + 1)]
+    executed = [ERR] * (n + 1)
+    k, _, _, _ = _make_kernel(resp, executed=executed)
+    k.run_turn()
+    # The completion sentinel is still the honest hand-back.
+    k.deps.display.completion_signal.assert_called_with("[NEED_USER_INPUT]")
+    # AND the operator got a readable explanation of what fired.
+    gb = k.deps.display.guard_block
+    assert gb.called, "guard_block must be called to explain the stop"
+    msg = gb.call_args[0][0]
+    assert "Edit-churn circuit breaker fired" in msg
+    assert str(n) in msg
+    assert "NEED_USER_INPUT" in msg
