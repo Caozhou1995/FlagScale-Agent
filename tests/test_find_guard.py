@@ -33,13 +33,14 @@ class TestFindBlocked:
         assert v.reason == "find_invocation"
         assert v.overridable is True
 
-    def test_scoped_find_still_blocks(self):
-        # User chose "block all" — even a tightly-scoped find is blocked;
-        # override releases it.
+    def test_scoped_find_passes_now(self):
+        # Re-contracted (21aca14 + scoped-walk exemption): the bounded walk the
+        # message prescribes — bounded root + scope filter — passes WITHOUT an
+        # override; a broad root / cwd anchor / no-filter find still blocks.
         g = FindGuard()
-        v = g.check_pre(_shell("find ./src -maxdepth 2 -name '*.yaml'"))
-        assert v is not None
-        assert v.action == "block"
+        assert g.check_pre(_shell("find ./src -maxdepth 2 -name '*.yaml'")) is None
+        assert g.check_pre(_shell("find / -maxdepth 2 -name 'x'")) is not None
+        assert g.check_pre(_shell("find /app")) is not None
 
     def test_find_after_cd_blocks(self):
         g = FindGuard()
@@ -662,13 +663,12 @@ def test_broad_grep_block_echoes_the_rejected_command():
 
 def test_received_echo_does_not_fire_on_allowed_commands():
     g = FindGuard()
-    # Every `find` is blocked by design (it is never the cheap channel), so the
-    # echo appears there too — that is the point. What must NOT echo is a
-    # scoped grep, which this guard allows through untouched.
+    # A scoped grep passes untouched — no echo must appear.
     assert g.check_pre(_shell("grep -rn foo ./src")) is None
-    scoped_find = g.check_pre(_shell("find ./src -maxdepth 2 -name '*.py'"))
-    assert scoped_find is not None
-    # repr() picks its quoting to avoid escaping, so assert the stable parts:
-    # the field name and the command's distinctive content.
-    assert "[RECEIVED] command = " in scoped_find.message
-    assert "-maxdepth 2 -name" in scoped_find.message
+    # A scoped find now PASSES (bounded walk, re-contracted) — so its echo
+    # must not fire either; the unbounded find still blocks and echoes.
+    assert g.check_pre(_shell("find ./src -maxdepth 2 -name '*.py'")) is None
+    blocked = g.check_pre(_shell("find / -maxdepth 2 -name '*.py'"))
+    assert blocked is not None
+    assert "[RECEIVED] command = " in blocked.message
+    assert "-maxdepth 2 -name" in blocked.message

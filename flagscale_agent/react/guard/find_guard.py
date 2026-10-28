@@ -249,15 +249,31 @@ def _cmd_base(word: str | None) -> str:
     return re.sub(r"['\"\\`]", "", word).rsplit("/", 1)[-1]
 
 
-def _statement_find_violation(text: str) -> GuardVerdict | None:
+def _statement_find_violation(
+    text: str, cwd: str | None | object = None,
+) -> GuardVerdict | None:
     """find as a statement's command word.
 
     Covers forms the anchored _FIND_RE misses: absolute paths
     (`/usr/bin/find ...`) and prefix forms (`sudo find ...`, `nohup find
     ...`, `VAR=val find ...`). Used at both top level and inside payloads.
+
+    The bounded-walk exemption applies to LOCAL statements only; a find inside
+    a REMOTE-executor payload (`cwd is _REMOTE_CWD`) always blocks — the remote
+    tree is unknown and is where a stray walk is slowest.
     """
     for stmt in _STMT_SPLIT_RE.split(text):
-        if _cmd_base(_statement_command_word(stmt.split())) == "find":
+        toks = stmt.split()
+        if _cmd_base(_statement_command_word(toks)) == "find":
+            # Exemption: the bounded walk the block message prescribes — a
+            # named root below a broad root PLUS a scope filter (-name /
+            # -maxdepth / ...) — is cheap and must not be blocked. Remote
+            # payloads never take it.
+            if cwd is not _REMOTE_CWD:
+                fi = next((n for n, t in enumerate(toks)
+                           if _cmd_base(t) == "find"), 0)
+                if _find_is_bounded_walk(toks[fi + 1 :]):
+                    continue
             return GuardVerdict.block(
                 _FIND_MESSAGE, reason="find_invocation", category="find_guard",
             )
@@ -272,10 +288,10 @@ def _violation_in_shell_text(
     `cwd` threads the grep-target context: None = this process's cwd;
     _REMOTE_CWD = payload of a remote/other-root executor (exemption off).
     """
-    v = _statement_find_violation(text)
+    v = _statement_find_violation(text, cwd)
     if v is not None:
         return v
-    if _FIND_RE.search(text):
+    if _FIND_RE.search(text) and not _regex_find_is_bounded(text):
         return GuardVerdict.block(
             _FIND_MESSAGE, reason="find_invocation", category="find_guard",
         )
@@ -559,6 +575,72 @@ def _find_scoped(toks: list[str]) -> bool:
     return any(t in _FIND_SCOPE_FLAGS for t in toks)
 
 
+def _find_root_is_bounded(toks: list[str]) -> bool:
+    """True if a `find` token tail names an explicitly BOUNDED root.
+
+    Bounded means the walk starts at a named directory below a broad root —
+    `/app`, `/app/data`, `./src`, `sub/dir` — rather than at the top of a
+    system tree or shared mount (`/`, `/usr`, `/mnt`, `/public-nvme`, ...) or
+    at a cwd-relative anchor (`.`, `..`, `~`, a bare `*`, no root at all).
+
+    `toks` is the tail AFTER the `find` word. The first token that is neither
+    an option nor an expression keyword is the root. A root that is not an
+    absolute path (a bare relative name) is bounded by definition: it can only
+    cover the subtree under the cwd.
+    """
+    if not toks:
+        return False
+    # `find -L root ...`, `find -H root ...`: leading walk options take no
+    # value before the root.
+    i = 0
+    while i < len(toks) and toks[i] in ("-L", "-H", "-P"):
+        i += 1
+    if i >= len(toks):
+        return False
+    root = toks[i]
+    if not root.startswith("-"):
+        pass  # the root itself
+    else:
+        # Every token before the root was an option: no root was given, so the
+        # walk defaults to `.` — the unbounded case.
+        return False
+    r = root.rstrip("/") or "/"
+    if r in _GREP_BROAD_ROOTS:
+        return False
+    if root in _GREP_CWD_RELATIVE_TARGETS:
+        return False
+    if not r.startswith("/"):
+        # A relative root (`src`, `./src`) walks only under the cwd.
+        return r not in ("*", ".", "..")
+    # An absolute root strictly below a broad root is the bounded walk the
+    # block message prescribes (`/app -maxdepth 2 -name '*.fasta'`).
+    return True
+
+
+def _find_is_bounded_walk(toks: list[str]) -> bool:
+    """The guard's OWN prescription, satisfied: a `find` that names a bounded
+    root AND carries a real scope filter. This is exactly what the block
+    message tells the caller to do, so it must not be blocked again."""
+    return _find_root_is_bounded(toks) and _find_scoped(toks)
+
+
+def _regex_find_is_bounded(text: str) -> bool:
+    """True when EVERY `find` statement in `text` (as located by _FIND_RE) is a
+    bounded walk (`_find_is_bounded_walk`). Used by the regex layer so a scoped
+    find stops being blocked there too; a single unbounded find keeps the
+    block."""
+    found_any = False
+    for m in _FIND_RE.finditer(text):
+        found_any = True
+        tail = text[m.end():]
+        # Cut the tail at the next statement boundary so tokens from a later
+        # command cannot supply a scope filter this find does not have.
+        tail = _STMT_SPLIT_RE.split(tail)[0]
+        if not _find_is_bounded_walk(tail.split()):
+            return False
+    return found_any
+
+
 def _timeout_head_tokens(toks: list[str]) -> list[str] | None:
     """If the segment head is `timeout [opts] DURATION ...`, return the tokens
     AFTER the duration (the work it bounds); else None."""
@@ -791,6 +873,8 @@ def _stage_violation(
             return v
     head = _cmd_base(resolved)
     if head == "find":
+        if _find_is_bounded_walk(toks[i + 1 :]):
+            return None
         return GuardVerdict.block(
             _FIND_MESSAGE, reason="find_invocation", category="find_guard",
         )
@@ -860,10 +944,13 @@ def _stage_violation(
     if k < len(toks):
         rtok = _resolve_var(toks[k], tainted)
         if _cmd_base(rtok) == "find":
-            return GuardVerdict.block(
-                _FIND_MESSAGE, reason="find_invocation", category="find_guard",
-            )
-        if _cmd_base(toks[k]) == "grep" and _toks_recursive_broad(toks[k + 1 :], cwd):
+            if _find_is_bounded_walk(toks[k + 1 :]):
+                pass
+            else:
+                return GuardVerdict.block(
+                    _FIND_MESSAGE, reason="find_invocation", category="find_guard",
+                )
+        elif _cmd_base(toks[k]) == "grep" and _toks_recursive_broad(toks[k + 1 :], cwd):
             return GuardVerdict.block(
                 _GREP_MESSAGE, reason="broad_recursive_grep", category="find_guard",
             )
@@ -949,6 +1036,13 @@ _FIND_MESSAGE = (
     "A broad `find /` or a find over a big shared/NFS tree can take minutes and "
     "hammer the filesystem — that is what this guard blocks.\n"
     "\n"
+    "A find that names a BOUNDED root below a system/shared root (`/app`, "
+    "`./src`, ...) AND carries a real scope filter (-maxdepth / -name / ...) is "
+    "the bounded walk this message prescribes — it passes WITHOUT an override. "
+    "What still blocks: a broad root (`find /`), a cwd anchor (`find . ...`), "
+    "or no scope filter at all; and any find inside a remote payload "
+    "(`ssh host 'find ...'`), where the tree is unknown.\n"
+    "\n"
     "If your find is necessary AND tightly scoped (bounded root, -maxdepth / -name "
     "filters), override with _override_reason: the root is bounded and the cheaper "
     "channels above don't apply."
@@ -1013,7 +1107,8 @@ class FindGuard(Guard):
         # releases a single call when _override_reason is supplied for it.
         # _statement_find_violation adds token-anchored coverage for absolute
         # paths (/usr/bin/find) and prefix forms (sudo/nohup/VAR=val find).
-        if _FIND_RE.search(sanitized) or _statement_find_violation(sanitized):
+        if ((_FIND_RE.search(sanitized) and not _regex_find_is_bounded(sanitized))
+                or _statement_find_violation(sanitized)):
             out.append(_echo_received(
                 GuardVerdict.block(
                     _FIND_MESSAGE,
