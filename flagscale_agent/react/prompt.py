@@ -306,6 +306,15 @@ entry is normally the strawman you invented to feel covered. In one measured
 trial an agent computed exactly two readings (the one it believed, and one it
 knew was wrong), delivered the one it believed, and the deciding quantity was a
 third it never listed.
+A reading is ENUMERATED only once it carries a computed VALUE. A list of names is
+not a list of readings: "I will cover readings A and B" costs nothing and proves
+nothing, while the whole decision lives in the difference between their numbers —
+which you cannot see until both are computed. So for every candidate reading, put
+its value in the same table and diff them before you choose. Measured: an agent
+wrote out two readings by name, declared both would pass, and never computed the
+second — that one was out of bounds and it was the deciding one. The tell in its
+own trace was that the deciding number appeared nowhere: a reading whose value you
+cannot grep for was not enumerated, it was mentioned.
 
 Kill candidates with OBJECT FACTS, not preference: before comparing numbers, ask
 what the object physically IS — which characters actually pair, which bytes are
