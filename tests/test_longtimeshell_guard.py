@@ -52,13 +52,10 @@ BLOCK = [
     "sleep 60 && echo done",
     "sleep 1m",
     "sleep 1.5h",
-    "timeout 45 ./run.sh",
-    "timeout -k 5 45 ./run.sh",          # -k 5 is kill-after, 45 is duration
-    "timeout --signal=KILL 60 ./run.sh",
-    "timeout --kill-after=10 45 ./run.sh",
-    "FOO=1 timeout 60 ./run.sh",         # env prefix
     "train && sleep 120",                # later segment
     "sleep 2; sleep 40",                 # second sleep is the offense
+    "timeout 45 sleep 60",               # cap renames an idle wait — same cost
+    "timeout 60 && sleep 90",            # sleep in a later segment
 ]
 
 PASS = [
@@ -68,6 +65,12 @@ PASS = [
     "sleep 2 && curl -s localhost:8000",
     "timeout 30 ./probe.sh",             # exactly at threshold
     "timeout 5 ./quick.sh",
+    "timeout 45 ./run.sh",               # self-bounded: killed at 45 by construction
+    "timeout -k 5 45 ./run.sh",          # -k 5 is kill-after, 45 is duration
+    "timeout --signal=KILL 60 ./run.sh",
+    "timeout --kill-after=10 45 ./run.sh",
+    "FOO=1 timeout 60 ./run.sh",         # env prefix
+    "timeout 9999 ./train.sh",           # long cap, still self-bounded work
     "grep timeout file",                 # not in command position
     "grep 'timeout 99' log.txt",
     "echo sleep 999",
@@ -98,15 +101,15 @@ class TestBlocked:
         assert "180" in v.message and "30" in v.message
         assert "background=true" in v.message
         assert "shell_jobs" in v.message
-        v = g.check_pre(_shell("timeout -k 5 45 ./run.sh"))
+        v = g.check_pre(_shell("timeout 45 sleep 60"))
         assert "timeout" in v.message
 
     def test_reason_scopes_kind_and_duration(self):
         g = LongTimeShellGuard()
         v = g.check_pre(_shell("sleep 180"))
         assert v.reason == "long_foreground_sleep_180s"
-        v = g.check_pre(_shell("timeout 45 x"))
-        assert v.reason == "long_foreground_timeout_45s"
+        v = g.check_pre(_shell("timeout 45 sleep 60"))
+        assert v.reason == "long_foreground_sleep_60s"
 
 
 class TestPasses:
@@ -114,6 +117,23 @@ class TestPasses:
         g = LongTimeShellGuard()
         for cmd in PASS:
             assert g.check_pre(_shell(cmd)) is None, cmd
+
+    def test_timeout_capped_work_exempt(self):
+        # Recontract: `timeout N <work>` is self-bounded — the child is killed
+        # at N by construction, and the harness auto-detaches >30s foreground
+        # calls. Regression: `timeout 60 git push ...` (18s actual) was blocked
+        # 4 rounds in a real session while the block message's own advice
+        # (background+poll) is what the harness auto-does anyway.
+        g = LongTimeShellGuard()
+        assert g.check_pre(_shell("timeout 60 git push origin dev_0920")) is None
+        assert g.check_pre(_shell("timeout 45 bash -c 'pytest -q'")) is None
+
+    def test_timeout_renamed_idle_wait_still_blocks(self):
+        # The cap only renames the idle wait — same cost, no information.
+        g = LongTimeShellGuard()
+        v = g.check_pre(_shell("timeout 45 sleep 60"))
+        assert v is not None and v.action == "block"
+        assert v.reason == "long_foreground_sleep_60s"
 
     def test_background_true_always_passes(self):
         g = LongTimeShellGuard()
@@ -141,7 +161,7 @@ class TestThresholdBoundary:
         g = LongTimeShellGuard()
         assert g.check_pre(_shell("sleep 30.1")) is not None
         assert g.check_pre(_shell("sleep 31")) is not None
-        assert g.check_pre(_shell("timeout 30.1 x")) is not None
+        assert g.check_pre(_shell("timeout 30.1 sleep 60")) is not None
 
     def test_custom_threshold_respected(self):
         g = LongTimeShellGuard(threshold=5.0)
@@ -182,7 +202,7 @@ class TestOverride:
         ctx = _shell("sleep 180")
         g.check_pre(ctx)
         assert g.accept_override("foreground wait justified: settle window", ctx) is True
-        assert g.check_pre(_shell("timeout 90 x")) is not None
+        assert g.check_pre(_shell("timeout 90 sleep 120")) is not None
 
     def test_reset_turn_clears_ack(self):
         g = LongTimeShellGuard()

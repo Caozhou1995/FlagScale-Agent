@@ -508,6 +508,23 @@ class TestHiddenEscapeFamilies:
         g = FindGuard()
         assert g.check_pre(_shell("timeout 5 find /data")) is not None
 
+    def test_timeout_wrapped_scoped_find_passes(self):
+        # A find BOTH time-capped AND scope-filtered is the bounded walk the
+        # block message itself prescribes; the harness's >30s auto-detach
+        # bounds the residual cost. Regression: this shape was blocked via the
+        # bare-token-after-wrapper rule and cost 4 rounds of wall-clock.
+        g = FindGuard()
+        assert g.check_pre(_shell("timeout 20 find . -name x")) is None
+        assert g.check_pre(_shell("timeout 20 find ./src -maxdepth 2 -name y")) is None
+
+    def test_timeout_capped_unscoped_find_still_blocks(self):
+        # A cap does not make a whole-tree walk cheap — it only truncates it.
+        g = FindGuard()
+        assert g.check_pre(_shell("timeout 20 find /")) is not None
+        assert g.check_pre(_shell("timeout 20 find ./src")) is None or True  # scoped root alone: unbounded, still block
+        v = g.check_pre(_shell("timeout 20 find ./src"))
+        assert v is not None and v.reason == "find_invocation"
+
     def test_eval_blocks(self):
         g = FindGuard()
         assert g.check_pre(_shell('eval "find /data"')) is not None

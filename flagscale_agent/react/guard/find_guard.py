@@ -546,6 +546,45 @@ _KEYWORDS = {"then", "do", "else", "elif"}
 # `NAME=value` assignment (leading identifier; `--opt=val` does NOT match).
 _ASSIGN_RE = re.compile(r"^([A-Za-z_]\w*)=(.*)$", re.DOTALL)
 
+# A `find` scope filter: the guard message's own advice for a bounded walk.
+_FIND_SCOPE_FLAGS = {"-maxdepth", "-depth", "-name", "-iname", "-path",
+                     "-regex", "-newer", "-size", "-type", "-mtime", "-mmin",
+                     "-lname", "-wholename", "-ilname", "-ipath"}
+
+
+def _find_scoped(toks: list[str]) -> bool:
+    """True if the find token tail carries a real scope filter (-name/-path/
+    -maxdepth/...). A bare root with no filter is unbounded regardless of how
+    small the root looks — the guard's cost argument still applies."""
+    return any(t in _FIND_SCOPE_FLAGS for t in toks)
+
+
+def _timeout_head_tokens(toks: list[str]) -> list[str] | None:
+    """If the segment head is `timeout [opts] DURATION ...`, return the tokens
+    AFTER the duration (the work it bounds); else None."""
+    i = 0
+    while i < len(toks) and _ASSIGN_RE.match(toks[i]):
+        i += 1
+    if i >= len(toks) or _cmd_base(toks[i]) != "timeout":
+        return None
+    i += 1
+    while i < len(toks) and toks[i].startswith("-"):
+        # `timeout` value-taking flags: -k/-s/--kill-after/--signal/--verbose? --
+        # conservative: -k VALUE, -s VALUE, --kill-after[=V], --signal[=V];
+        # `=` forms are single tokens, bare forms consume the next one.
+        tok = toks[i]
+        if tok in ("-k", "-s", "--kill-after", "--signal"):
+            i += 2
+        elif tok.startswith("--") and "=" in tok:
+            i += 1
+        elif tok.startswith("--"):
+            i += 2 if tok in ("--kill-after", "--signal") else 1
+        else:
+            i += 1
+    if i < len(toks):
+        i += 1  # duration token
+    return toks[i:]
+
 # A bare `$VAR` / `${VAR}` use.
 _VAR_USE_RE = re.compile(r"^\$\{?(\w+)\}?$")
 
@@ -770,6 +809,15 @@ def _stage_violation(
                     return v
             rbase = _cmd_base(rtok)
             if rbase == "find":
+                # Exemption: a find BOTH time-capped (`timeout N find`) AND
+                # scope-filtered (-name/-maxdepth/...) is the bounded walk the
+                # block message itself prescribes; the harness's >30s
+                # auto-detach bounds the residual cost. A capped but UNSCOPED
+                # find (`timeout 20 find /`) still blocks: a cap does not make
+                # a whole-tree walk cheap, it only truncates it.
+                th = _timeout_head_tokens(toks)
+                if th is not None and _find_scoped(toks[j + 1:]):
+                    continue
                 return GuardVerdict.block(
                     _FIND_MESSAGE, reason="find_invocation",
                     category="find_guard",

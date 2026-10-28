@@ -161,6 +161,12 @@ def _find_excessive(command: str,
     """Scan all segments; return (kind, duration) of the first offense.
 
     Offense = duration strictly greater than `threshold`.
+    A `timeout N <work>` segment is EXEMPT: its duration is self-bounded
+    (the child is killed at N by construction), so a foreground call costs at
+    most N — the harness's own >30s auto-detach covers the remainder. The
+    exemption applies only when the capped head itself is the work (no nested
+    sleep underneath, which would be an idle wait with the same cost and no
+    output): `timeout 45 sleep 60` stays an offense.
     """
     for toks in _split_segments(command):
         t = _scan_sleep(toks)
@@ -168,8 +174,35 @@ def _find_excessive(command: str,
             return ("sleep", t)
         t = _scan_timeout(toks)
         if t is not None and t > threshold:
-            return ("timeout", t)
+            # timeout's own head position: the tail after the duration token is
+            # the work it bounds. If that tail is itself a sleep, the cap only
+            # renames the idle wait — that stays an offense. Otherwise the cap
+            # is self-bounding (child killed at N by construction) and the
+            # harness's >30s auto-detach covers the cost — exempt.
+            tail = _timeout_work_tokens(toks)
+            st = _scan_sleep(tail)
+            if st is not None and st > threshold:
+                return ("sleep", st)
+            continue
     return None
+
+
+def _timeout_work_tokens(toks: list[str]) -> list[str]:
+    """Tokens AFTER a leading `timeout [opts] DURATION` invocation."""
+    i = 0
+    while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
+        i += 1
+    if i >= len(toks) or toks[i] != "timeout":
+        return []
+    i += 1
+    while i < len(toks) and toks[i].startswith("-"):
+        if toks[i] in _TIMEOUT_VALUE_FLAGS:
+            i += 2
+        else:
+            i += 1
+    if i < len(toks):
+        i += 1  # duration token
+    return toks[i:]
 
 
 class LongTimeShellGuard(Guard):
