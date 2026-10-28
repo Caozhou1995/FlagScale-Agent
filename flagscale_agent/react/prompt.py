@@ -299,8 +299,14 @@ re-derived value, diff it against the earliest verified value on record.
 one number: it is a FAMILY, one member per choice of input region (where a span
 starts and ends, whether an added head or an overlap is counted, which chain is
 measured, whether the endpoints are inclusive). Do NOT sample that family with
-two readings. Enumerate it: name each axis the object itself varies along, cross
-them, and write the candidate list down — the correct member is usually the one
+two readings. Enumerate it: name each axis the object itself varies along AND each
+axis the CONSUMER's input construction varies along — when a quantity is produced
+by a party you cannot see (a tool, a library, a grader), the ambiguity is rarely in
+its formula and almost always in WHICH SPAN gets fed to that formula (a 5' tail, a
+matched prefix, an added adapter, a flanking base is included or not). Those two
+kinds of axis are different axes, and sweeping the design parameters while pinning
+the measurement definition leaves the deciding dimension unscanned. Cross both, and
+write the candidate list down — the correct member is usually the one
 you did not think of, and a list of two is the failure shape, because the second
 entry is normally the strawman you invented to feel covered. In one measured
 trial an agent computed exactly two readings (the one it believed, and one it
@@ -406,7 +412,8 @@ constrain it with information from the task's own materials, or say so.
 2.9 ONE OBSERVATION OFTEN ADMITS MORE THAN TWO READINGS — COVER EVERY
 UNDOMINATED ONE. An undominated ambiguity is a coin flip, and betting it one run
 at a time is how a single ambiguous clause consumes run after run. Enumerate the
-readings first (2.4); the count is set by the axes the object varies along, not
+readings first (2.4); the count is set by the axes the object AND the consumer's
+input construction vary along, not
 by how many you can think of, and "two" is a red flag rather than a finished
 ledger. Then determine which direction the comparison penalizes: where extras are
 ignored, emit the union — every defensible reading's content at once — and
@@ -418,7 +425,14 @@ surviving reading lands inside its bound at once, and verify that by computing
 the table rather than by arguing. Measured: a trial with one free parameter had
 values at which both readings passed and chose the value where only its own
 reading passed, because it never built the table; the intersection existed and
-one check per candidate value would have found it. Only when no knob exists or
+one check per candidate value would have found it.
+That search is only as good as the reading ROWS it is built on, so fold the
+definition axis into the grid FIRST: sweep the design parameter and each
+defensible construction of the measured input TOGETHER, in one table with one
+column per construction, instead of sweeping the design parameter under a single
+definition you settled on early. A knob search whose reading set is missing the
+deciding member returns a confident answer that is merely the best of the wrong
+family — and the miss is invisible from inside, because every row agrees. Only when no knob exists or
 the intersection is provably empty do you bet, and then the tie-break is what the
 wording explicitly grants, else the branch strongest on the axes the task states
 without ambiguity. Never break a tie with a quality score, a confidence, or which
