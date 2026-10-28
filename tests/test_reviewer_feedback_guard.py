@@ -226,7 +226,7 @@ def test_silent_in_worker_subprocess(env, monkeypatch):
     assert _guard(env).check_pre(_ctx()) is None
 
 
-# ── override contract ────────────────────────────────────────────────────────
+# ── override contract (relaxed 2026-10-28: any substantive reply releases) ──
 
 def test_override_rejects_bare_and_generic(env):
     led = env["ledger"]
@@ -235,18 +235,25 @@ def test_override_rejects_bare_and_generic(env):
     _active(led, c, "REPORTED")
     record_spawn(env["session"], c.id, "reviewer")
     g = _guard(env)
+    # A truly bare reply (empty or <=5 chars) is NOT an engagement: reject.
     assert g.accept_override("", _ctx()) is False
     assert g.accept_override("done", _ctx()) is False
-    assert g.accept_override("all checks pass, shipping now", _ctx()) is False
 
 
-def test_override_accepts_reason_naming_task_id(env):
+def test_override_accepts_any_substantive_reply(env):
+    # User directive 2026-10-28: the old task_id+naming contract cost three
+    # blocked completion turns on the dna-assembly line even though each
+    # reason was substantively correct. Any reply that engages at all is the
+    # engagement — release on it, task_id named or not.
     led = env["ledger"]
     c = _contract(env["session"], "rev", reviewer=True)
     led.create(c)
     _active(led, c, "REPORTED")
     record_spawn(env["session"], c.id, "reviewer")
     g = _guard(env)
+    assert g.accept_override(
+        "reviewer timed out; I swept its worker.log and independently "
+        "re-verified all 8 primers myself", _ctx()) is True
     assert g.accept_override(
         f"abandoning reviewer {c.id}, its process hung and I hold the evidence",
         _ctx()) is True
@@ -291,9 +298,12 @@ def test_adjudication_is_durable_across_new_guard_instance(env):
     assert g2.check_pre(_ctx()) is None
 
 
-def test_generic_override_does_not_persist_and_still_blocks(env):
-    # FALSIFIER: an override that does NOT name the task_id must neither be
-    # accepted nor persist any adjudication — the block must survive it.
+def test_generic_override_releases_and_settles_all_live(env):
+    # Relaxed contract: a substantive reply WITHOUT a task_id now RELEASES the
+    # gate (the reply is the engagement), and it must release PERMANENTLY —
+    # settle every live reviewer, otherwise a SETTLED-WITHOUT-REPORT reviewer
+    # (no terminal ledger status) is re-listed on every completion turn: the
+    # infinite leash the adjudication registry exists to prevent.
     led = env["ledger"]
     c = _contract(env["session"], "rev", reviewer=True)
     led.create(c)
@@ -301,10 +311,10 @@ def test_generic_override_does_not_persist_and_still_blocks(env):
     led.transition(c.id, DEADLINE_MISSED)
     record_spawn(env["session"], c.id, "reviewer")
     g = _guard(env)
-    assert g.accept_override("reviewer handled, moving on", _ctx()) is False
-    assert g.check_pre(_ctx()) is not None  # still gated
+    assert g.accept_override("reviewer handled, moving on", _ctx()) is True
+    assert g.check_pre(_ctx()) is None  # settled, not re-listed
     from flagscale_agent.react.multi_agent.spawn import read_adjudications
-    assert read_adjudications(env["session"]) == set()
+    assert c.id in read_adjudications(env["session"])
 
 
 def test_adjudication_registry_roundtrip(tmp_path):
@@ -333,11 +343,11 @@ def test_block_message_says_un_adjudicated(env):
     assert "un-finalized" not in v.message
 
 
-def test_override_fails_closed_when_persistence_fails(env, monkeypatch):
-    # F1: the message promises "you will not be re-asked", so an override must
-    # NOT report success unless the adjudication actually PERSISTED. A write
-    # failure => reject the override (fail-closed) so the block does not vanish
-    # and silently re-appear, contradicting the promise.
+def test_persistence_failure_does_not_reject_the_release(env, monkeypatch):
+    # Relaxed contract (user directive): the reply IS the engagement, so a
+    # persistence failure must NOT hold the release hostage (the old
+    # fail-closed branch cost three blocked turns in production). Persistence
+    # is best-effort only.
     led = env["ledger"]
     c = _contract(env["session"], "rev", reviewer=True)
     led.create(c)
@@ -351,5 +361,4 @@ def test_override_fails_closed_when_persistence_fails(env, monkeypatch):
 
     monkeypatch.setattr(
         "flagscale_agent.react.multi_agent.spawn.record_adjudication", _boom)
-    assert g.accept_override(f"abandoning {c.id}", _ctx()) is False
-    assert g.check_pre(_ctx()) is not None  # still gated, not silently released
+    assert g.accept_override(f"abandoning {c.id}", _ctx()) is True

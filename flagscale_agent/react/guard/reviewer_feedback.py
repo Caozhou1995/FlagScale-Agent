@@ -217,12 +217,19 @@ class ReviewerFeedbackGuard(Guard):
         )
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
-        """A release must NAME at least one of the pending reviewer task_ids.
+        """Release on ANY substantive reply (user directive 2026-10-28).
 
-        This blocks the two cheap escapes: a bare re-emit of [TASK_COMPLETE]
-        (no reason) and a generic "done" that never engages the reviewer. It
-        does NOT require the reviewer to have landed — abandoning a stuck
-        reviewer is a legitimate choice, but it must be an explicit one.
+        The old contract demanded the reason cite a reviewer task_id AND the
+        adjudication to persist successfully before release — measured on the
+        dna-assembly line this cost the parent three blocked completion turns
+        even though its reason was substantively correct each time. The gate's
+        purpose (the parent must ENGAGE the reviewer at least once) is met by
+        any non-trivial reply: the reply itself is the engagement, and the
+        block message already told the parent what a real adjudication looks
+        like. So: any reply longer than a bare "done" releases. Persistence is
+        still attempted (best-effort) so a SETTLED-WITHOUT-REPORT reviewer is
+        not re-listed next turn — but a persistence failure no longer rejects
+        the release; the reply happened, which is what the user contract is.
         """
         if not reason or len(reason.strip()) <= 5:
             return False
@@ -235,23 +242,19 @@ class ReviewerFeedbackGuard(Guard):
         for tid, _ in live:
             if re.search(r"\b" + re.escape(tid) + r"\b", reason):
                 matched.append(tid)
-        if not matched:
-            return False
-        # Persist the adjudication so this explicit abandonment SETTLES the
-        # reviewer permanently: the next completion turn (and any process
-        # restart) reads it back and no longer lists the task_id. A write FAILURE
-        # must NOT be reported as success — the block message promises the agent
-        # it will not be re-asked, so if the marker did not land we reject the
-        # override and let the gate stand (fail-closed), rather than accept and
-        # silently re-block next turn.
+        # The reply is the engagement, so settle EVERYTHING currently live:
+        # naming a tid is the precise form, but an unnamed substantive reply
+        # still releases — and it must release PERMANENTLY, otherwise a
+        # SETTLED-WITHOUT-REPORT reviewer (no terminal ledger status to reach)
+        # is re-listed on every completion turn: an infinite leash, the exact
+        # defect the adjudication registry exists to prevent.
+        settle = matched if matched else [tid for tid, _ in live]
         try:
             from flagscale_agent.react.multi_agent.spawn import (
-                record_adjudication, read_adjudications)
+                record_adjudication)
             sd = self._session_dir()
-            for tid in matched:
+            for tid in settle:
                 record_adjudication(sd, tid)
-            persisted = read_adjudications(sd)
         except Exception:
-            return False
-        # Only release if every named tid actually persisted.
-        return all(tid in persisted for tid in matched)
+            pass
+        return True
