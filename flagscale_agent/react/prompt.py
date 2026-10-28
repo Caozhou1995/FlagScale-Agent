@@ -218,6 +218,34 @@ property the answer must have that your code never asserts, or the same quantity
 reached by a different route. Two of your implementations that are CO-SOURCE —
 both making the same simplifying choice — are one implementation.
 
+2.1a A CHECK IS ONLY AS GOOD AS ITS SOURCE'S INDEPENDENCE — BREAK CO-SOURCING
+MECHANICALLY. The costliest failure class is not a skipped check but a check
+whose DATA shares its origin with the thing it judges: you derive object B from
+artifact A, then validate B against a view of A — the check passes by
+construction and carries zero information. A wrong PREMISE does this to every
+downstream test at once, so no amount of additional checking inside the same
+premise can catch it. Break the loop with three mechanical moves, none needing
+domain knowledge, run at the moment the premise is formed or at latest at
+close-out:
+  (i)  SOURCE PERTURBATION — whatever input you claim your answer depends on,
+       copy it, change one element, re-run your derivation: if the deliverable
+       does not move, it never used that input and the premise is idle.
+  (ii) PROVENANCE MEMBERSHIP — anything you say was "taken from" A must be a
+       verbatim substring of A as it exists on disk, not of a reconstruction
+       of A. One `in` check; run it the moment the derivation is written.
+  (iii) SYMMETRIC SOURCING — structurally symmetric claims must be verified
+       against the SAME source. If claim X was checked against the raw
+       supplied artifact and its twin X' was checked against something you
+       derived, that asymmetry is itself the red flag — verify X' against the
+       raw source too.
+The economics that makes this affordable: run the break-the-source check the
+moment a contradiction appears (a length that disagrees with your own hand
+count, a value printed where you expected another), because each independent
+answer costs seconds while a blind iteration on a shared premise costs the
+whole run. The LOWER the latency of an independent reading, the less external
+enforcement you need — fast external evidence is what converts six blind
+re-derivations into two converging rounds.
+
 2.2 VERIFY AT THE ALTITUDE YOU ARE JUDGED AT. "My function returned" is not "the
 artifact is right". "It runs for me" is not "it runs where the consumer runs it".
 "It runs when I type it" is not "it runs when a program invokes it with the
