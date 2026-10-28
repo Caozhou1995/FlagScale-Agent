@@ -22,7 +22,10 @@ def _guard_with_step(acceptance=("A1",)):
     d = tempfile.mkdtemp()
     plan = TaskPlan(d)
     plan.create("Test", [{"title": "Step A", "acceptance": list(acceptance)}])
-    guard = VerificationGuard(plan=plan)
+    # Production always wires task_text_fn (agent.py), so the plan-carried
+    # acceptance-act obligation is live there; without it the gate fail-opened
+    # and these tests asserted None without ever supplying an act.
+    guard = VerificationGuard(plan=plan, task_text_fn=lambda: "TASK: Step A")
     guard._step_done_recheck_reminded = True  # isolate from one-shot premise re-check
     return d, guard
 
@@ -34,9 +37,13 @@ def _ctx(convention, verification=("proof A1",)):
             "action": "step_done", "assumptions": {"unverified": "none"},
             "step_id": 1,
             "verification": list(verification),
+            "acceptance_act": {"command": "pytest -q",
+                               "observed": "REAL_ACCEPTANCE_OUTPUT ok"},
             "deliverable_reading": {"deliverable": "none"},
             "convention": convention,
         },
+        messages=[{"role": "user", "content": [
+            {"type": "tool_result", "content": "REAL_ACCEPTANCE_OUTPUT ok"}]}],
     )
 
 

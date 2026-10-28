@@ -2470,7 +2470,7 @@ class VerificationGuard(Guard):
                 if (not self._acceptance_observed
                         and _acceptance_act_recorded(act, observed)):
                     miss = _constraint_coverage_missing(
-                        act, self._task_text(), observed,
+                        act, self._obligations_text(), observed,
                         judge=getattr(ctx, "judge", None))
                     # A coverage miss simply means "not latched yet"; the
                     # per-route gate below still blocks and still names the
@@ -2530,7 +2530,7 @@ class VerificationGuard(Guard):
         sweep body never executed). The wall-pressure valve therefore stays where
         the cost is -- inside the coverage sweep, unchanged.
         """
-        if not _task_text_groundable(self._task_text()):
+        if not _task_text_groundable(self._obligations_text()):
             return None
         if _acceptance_act_recorded(act, self._observed(ctx)):
             return None
@@ -2658,7 +2658,7 @@ class VerificationGuard(Guard):
         # boundary (see the step_done route for the per-step gate).
         if (
             not self._acceptance_observed
-            and _task_text_groundable(self._task_text())
+            and _task_text_groundable(self._obligations_text())
         ):
             pending.append(GuardVerdict.block(
                 message=_COMPLETION_NO_ACCEPTANCE_OBSERVED,
@@ -2680,7 +2680,7 @@ class VerificationGuard(Guard):
         # the exit is binding one via plan_create(oracle={...}) and running it.
         if (
             not self._bound_oracle()
-            and _task_text_groundable(self._task_text())
+            and _task_text_groundable(self._obligations_text())
         ):
             pending.append(GuardVerdict.block(
                 message=_COMPLETION_ORACLE_NOT_BOUND,
@@ -3142,7 +3142,7 @@ class VerificationGuard(Guard):
                     # here is the verdict — name the uncovered constraints and
                     # block, unless the wall is nearly spent.
                     _miss = _constraint_coverage_missing(
-                        _act, self._task_text(), self._observed(ctx),
+                        _act, self._obligations_text(), self._observed(ctx),
                         judge=getattr(ctx, "judge", None))
                     if _miss and self._coverage_gate_affordable():
                         _coverage_bad = GuardVerdict.block(
@@ -3325,6 +3325,70 @@ class VerificationGuard(Guard):
             return str(self._task_text_fn() or "")
         except Exception:
             return ""
+
+    def _obligations_text(self) -> str:
+        """The CURRENT obligation set — the active plan, NOT the conversation.
+
+        `_task_text()` answers a different question: which verbatim strings may
+        ground a `deliverable_reading.source` quote (that must stay the session's
+        original task text, or the quotes stop being quotable). The OBLIGATION
+        set is a different axis: what this run must now satisfy.
+
+        Reading obligations off the conversation is wrong by construction. The
+        task text is frozen at the session's first user turn while the work
+        evolves — every later clarification ("do not add another gate on
+        task_complete", "the obligation should be carried by the plan") changes
+        what is obligatory and appears nowhere in that first turn. Measured: a
+        guard kept demanding a superseded obligation pulled from the origin
+        turn, and the agent burned rounds on a requirement its own current plan
+        had already replaced. The active plan is the only structure that is
+        always current: it is rewritten as the work changes, its steps carry the
+        acceptance criteria actually in force, and its notes carry the user's
+        later rulings.
+
+        Fail-open to the task text when no plan is active (a run before framing,
+        or a worker with no plan) — a missing plan must not silently empty the
+        obligation set.
+        """
+        plan = None
+        try:
+            if self._plan is not None:
+                plan = self._plan.get_active()
+        except Exception:
+            plan = None
+        if not isinstance(plan, dict):
+            return self._task_text()
+        parts = []
+        title = plan.get("title")
+        if _is_real_str(title):
+            parts.append(f"Task: {title}")
+        thinking = plan.get("thinking")
+        if _is_real_str(thinking) and thinking.strip():
+            parts.append("Current problem model:")
+            parts.append(thinking.strip())
+        for item in (plan.get("forbidden") or []):
+            if isinstance(item, dict):
+                action = item.get("action")
+                if _is_real_str(action):
+                    parts.append(f"Do not: {action}")
+            elif _is_real_str(item):
+                parts.append(f"Do not: {item}")
+        for step in (plan.get("steps") or []):
+            if not isinstance(step, dict):
+                continue
+            step_title = step.get("title")
+            status = step.get("status")
+            if _is_real_str(step_title):
+                parts.append(f"Step ({status or 'pending'}): {step_title}")
+            for crit in (step.get("acceptance") or []):
+                if _is_real_str(crit):
+                    parts.append(f"  - {crit}")
+            notes = step.get("notes")
+            if _is_real_str(notes) and notes.strip():
+                parts.append(f"  notes: {notes.strip()}")
+        text = "\n".join(parts).strip()
+        # Empty plan rendering (a plan with no steps) must not disable the gate.
+        return text or self._task_text()
 
     def _observed(self, ctx) -> "str | None":
         """Normalized corpus of this session's REAL tool-result text, or None.

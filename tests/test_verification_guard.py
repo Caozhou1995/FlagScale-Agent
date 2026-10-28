@@ -446,7 +446,11 @@ class TestBatchStepDoneEvidence:
     def _guard_with_plan(self, acceptance):
         plan = TaskPlan(tempfile.mkdtemp())
         plan.create("T", [{"title": "S1", "acceptance": acceptance}])
-        guard = VerificationGuard(plan=plan)
+        # Production ALWAYS wires task_text_fn (agent.py), so the obligation gate
+        # is live there. Omitting it here used to fail-open the acceptance-act
+        # obligation and let these tests assert None without ever supplying an
+        # act -- a shape production never sees.
+        guard = VerificationGuard(plan=plan, task_text_fn=lambda: "TASK: do S1")
         guard._step_done_recheck_reminded = True
         return guard
 
@@ -479,12 +483,16 @@ class TestBatchStepDoneEvidence:
                     "step_id": 1,
                     "status": "done",
                     "verification": ["A1 — observed x; expected x; gap: match"],
+                    "acceptance_act": {"command": "pytest -q",
+                                       "observed": "REAL_ACCEPTANCE_OUTPUT ok"},
                 }],
                 "_override_reason": "re-checked against each acceptance criterion",
                 "deliverable_reading": {"deliverable": "none"},
                 "convention": {"name": "none"},
             },
             override_reason="re-checked against each acceptance criterion",
+            messages=[{"role": "user", "content": [
+                {"type": "tool_result", "content": "REAL_ACCEPTANCE_OUTPUT ok"}]}],
         )
         assert guard.check_pre(ctx) is None
 
@@ -493,18 +501,22 @@ class TestBatchStepDoneEvidence:
         # needs no evidence for it (parity with single step_done Mode 2).
         plan = TaskPlan(tempfile.mkdtemp())
         plan.create("T", [{"title": "plain"}])
-        guard = VerificationGuard(plan=plan)
+        guard = VerificationGuard(plan=plan, task_text_fn=lambda: "TASK: plain step")
         guard._step_done_recheck_reminded = True
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
                 "action": "batch", "assumptions": {"unverified": "none"},
-                "updates": [{"step_id": 1, "status": "done"}],
+                "updates": [{"step_id": 1, "status": "done",
+                             "acceptance_act": {"command": "pytest -q",
+                                                "observed": "REAL_ACCEPTANCE_OUTPUT ok"}}],
                 "_override_reason": "simple step, no criteria",
                 "deliverable_reading": {"deliverable": "none"},
                 "convention": {"name": "none"},
             },
             override_reason="simple step, no criteria",
+            messages=[{"role": "user", "content": [
+                {"type": "tool_result", "content": "REAL_ACCEPTANCE_OUTPUT ok"}]}],
         )
         assert guard.check_pre(ctx) is None
 
@@ -640,9 +652,13 @@ class TestBatchStepDoneEvidence:
                              "verification": ["A1 — observed x"]}],
                 "convention": {"name": "none"},
                 "deliverable_reading": {"deliverable": "none"},
+                "acceptance_act": {"command": "pytest -q",
+                                   "observed": "REAL_ACCEPTANCE_OUTPUT ok"},
                 "_override_reason": "re-checked against each acceptance criterion",
             },
             override_reason="re-checked against each acceptance criterion",
+            messages=[{"role": "user", "content": [
+                {"type": "tool_result", "content": "REAL_ACCEPTANCE_OUTPUT ok"}]}],
         )
         assert guard.check_pre(ctx) is None
 

@@ -35,10 +35,14 @@ def _ctx(assumptions, verification=("proof A1",)):
             "action": "step_done",
             "step_id": 1,
             "verification": list(verification),
+            "acceptance_act": {"command": "pytest -q",
+                               "observed": "REAL_ACCEPTANCE_OUTPUT ok"},
             "deliverable_reading": {"deliverable": "none"},
             "convention": {"name": "none"},
             "assumptions": assumptions,
         },
+        messages=[{"role": "user", "content": [
+            {"type": "tool_result", "content": "REAL_ACCEPTANCE_OUTPUT ok"}]}],
     )
 
 

@@ -90,7 +90,10 @@ def test_step_with_acceptance_passes_with_verification():
         plan = TaskPlan(d)
         plan.create("Test", [{"title": "Step A", "acceptance": ["A1", "A2"]}])
         
-        guard = VerificationGuard(plan=plan)
+        # Production always wires task_text_fn (agent.py), so the acceptance-act
+        # obligation is live there; without it the gate fail-opened and this
+        # test asserted None without ever supplying an act.
+        guard = VerificationGuard(plan=plan, task_text_fn=lambda: "TASK: Step A")
         # isolate the Mode 1 acceptance check from the one-shot premise re-check block
         guard._step_done_recheck_reminded = True
         ctx = GuardContext(
@@ -99,9 +102,13 @@ def test_step_with_acceptance_passes_with_verification():
                 "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 1,
                 "verification": ["Proof A1", "Proof A2"],
+                "acceptance_act": {"command": "pytest -q",
+                                   "observed": "REAL_ACCEPTANCE_OUTPUT ok"},
                 "deliverable_reading": {"deliverable": "none"},
                 "convention": {"name": "none"},
-            }
+            },
+            messages=[{"role": "user", "content": [
+                {"type": "tool_result", "content": "REAL_ACCEPTANCE_OUTPUT ok"}]}],
         )
         
         verdict = guard.check_pre(ctx)
@@ -141,17 +148,22 @@ def test_step_without_acceptance_passes_with_override():
         plan = TaskPlan(d)
         plan.create("Test", ["Simple step"])
         
-        guard = VerificationGuard(plan=plan)
+        guard = VerificationGuard(plan=plan, task_text_fn=lambda: "TASK: Simple step")
+        guard._step_done_recheck_reminded = True
         ctx = GuardContext(
             tool_name="plan_update",
             tool_args={
                 "action": "step_done", "assumptions": {"unverified": "none"},
                 "step_id": 1,
                 "_override_reason": "checked, all good",
+                "acceptance_act": {"command": "pytest -q",
+                                   "observed": "REAL_ACCEPTANCE_OUTPUT ok"},
                 "deliverable_reading": {"deliverable": "none"},
                 "convention": {"name": "none"},
             },
-            override_reason="checked, all good"
+            override_reason="checked, all good",
+            messages=[{"role": "user", "content": [
+                {"type": "tool_result", "content": "REAL_ACCEPTANCE_OUTPUT ok"}]}],
         )
         
         verdict = guard.check_pre(ctx)

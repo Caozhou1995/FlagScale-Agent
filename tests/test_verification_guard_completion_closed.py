@@ -111,6 +111,10 @@ def test_tc_all_done_passes():
     d, plan = _plan_with_statuses(["done", "skipped"])
     try:
         g = VerificationGuard(plan=plan)
+        # New contract: obligations are plan-carried, so a pass here requires the
+        # acceptance/oracle acts a real run would have recorded by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -130,6 +134,10 @@ def test_tc_override_releases():
     d, plan = _plan_with_statuses(["pending"])
     try:
         g = VerificationGuard(plan=plan)
+        # New contract: obligations are plan-carried, so a pass here requires the
+        # acceptance/oracle acts a real run would have recorded by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]", override="abandoning, obsolete")) is None
     finally:
         _close(d)
@@ -184,6 +192,10 @@ def test_tc_override_form_with_reason_releases():
     d, plan = _plan_with_statuses(["pending"])
     try:
         g = VerificationGuard(plan=plan)
+        # New contract: obligations are plan-carried, so a pass requires the
+        # acceptance/oracle acts a real run records by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         text = "[TASK_COMPLETE]\n_override_reason: remaining step is obsolete now"
         assert g.check_pre(_ctx(text, override="remaining step is obsolete now")) is None
     finally:
@@ -317,6 +329,10 @@ def test_tc_ungroundable_task_fails_open():
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "(unavailable) task text not recovered")
+        # New contract: obligations are plan-carried, so a pass here requires
+        # the acceptance/oracle acts a real run records by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -326,6 +342,10 @@ def test_tc_truncated_task_fails_open():
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "some task ...[truncated]")
+        # New contract: obligations are plan-carried, so a pass here requires
+        # the acceptance/oracle acts a real run records by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -335,6 +355,10 @@ def test_tc_empty_task_fails_open():
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "")
+        # New contract: obligations are plan-carried, so a pass here requires
+        # the acceptance/oracle acts a real run records by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -345,6 +369,10 @@ def test_tc_no_task_text_fn_fails_open():
     d, plan = _plan_with_statuses(["done"])
     try:
         g = VerificationGuard(plan=plan)
+        # New contract: obligations are plan-carried, so a pass here requires
+        # the acceptance/oracle acts a real run records by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -494,6 +522,10 @@ def test_tc_acceptance_ungroundable_task_fails_open():
     try:
         g = _guard_with_task(plan, "(unavailable) task text not recovered")
         g._graded_reading_seen = True
+        # New contract: obligations are plan-carried, so a pass here requires
+        # the acceptance/oracle acts a real run records by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)
@@ -765,12 +797,18 @@ def test_tc_oracle_bind_action_exit_clears():
 
 
 def test_tc_oracle_bind_ungroundable_task_fails_open():
-    """When the harness could not recover the task text, the arm must not block."""
+    """Same axis split: the oracle-BIND obligation is plan-carried too, so an
+    unavailable task text no longer exempts it. With the oracle bound the arm
+    must pass."""
     d, plan = _plan_with_statuses(["done"])
     try:
         g = _guard_with_task(plan, "(unavailable) task text not recovered")
         g._graded_reading_seen = True
         g._acceptance_observed = True
+        # New contract: obligations are plan-carried, so a pass here requires
+        # the acceptance/oracle acts a real run records by this boundary.
+        g._acceptance_observed = True
+        _bind_oracle(g)
         assert g.check_pre(_ctx("[TASK_COMPLETE]")) is None
     finally:
         _close(d)

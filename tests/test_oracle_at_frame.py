@@ -449,6 +449,9 @@ class TestOracleExerciseCompletionArm:
         })
         self._close_all_steps(tp)
         g = VerificationGuard(plan=tp)
+        # Isolate the ORACLE arm: with plan-carried obligations the acceptance
+        # arm fires first, so satisfy it the way a real run would have.
+        g._acceptance_observed = True
         v = g.check_pre(self._ctx())
         assert v is not None and v.reason == "completion_without_oracle_exercise"
 
@@ -475,6 +478,7 @@ class TestOracleExerciseCompletionArm:
         })
         self._close_all_steps(tp)
         g = VerificationGuard(plan=tp)
+        g._acceptance_observed = True  # isolate the oracle arm (see test above)
         ctx = self._ctx()
         ctx.override_reason = "oracle unrunnable in this environment"
         v = g.check_pre(ctx)
@@ -499,6 +503,8 @@ class TestOracleExerciseCompletionArm:
         ctx.tool_args = {
             "action": "step_done", "step_id": 1,
             "verification": ["ran the oracle"],
+            "acceptance_act": {"command": "python diff.py",
+                               "observed": "diff.py: 0 differing lines"},
             "convention": {"name": "none"},
             "deliverable_reading": {"deliverable": "none"},
             "assumptions": {"unverified": "none"},
@@ -563,6 +569,7 @@ class TestOracleArmNotDisarmableByPlanMutation:
         g.check_pre(GuardContext(tool_name="plan_create", tool_args={"title": "T2"}))
         _plan_create_tool(tp).execute(title="T2", steps=["B"])  # no oracle
         self._close(tp)
+        g._acceptance_observed = True  # isolate the oracle arm
         v = g.check_pre(self._complete_ctx())
         assert v is not None and v.reason == "completion_without_oracle_exercise"
 
