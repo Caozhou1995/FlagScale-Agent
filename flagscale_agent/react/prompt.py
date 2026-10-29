@@ -266,6 +266,18 @@ a bound.
   and showing the delivered bytes still satisfy the assertion. Never let a later,
   noisier reading overwrite an earlier verified one: re-run the probe that produced
   the verified reading and let THAT decide.
+  ANCHOR THE READING ON THE TASK'S OWN VERB, NOT ON THE CONSUMER'S USUAL BEHAVIOR.
+  When the task says the output must be identical / unchanged / unaltered / "do not
+  change X in any way", the dominant reading is BYTE-PRESERVING: keep the original
+  bytes and cut only what you were told to cut. A re-serialise / re-parse / canonicalise
+  pass is a different, stronger transformation, and it is licensed only when the
+  task says so explicitly (a phrase of the form "X may occur during parsing" is a
+  PERMISSION — it does not REQUIRE one). Where you cannot ask which of the two the
+  reference was built from, prefer the one that changes the fewest bytes: an
+  incidental attribute the spec never mentioned (a quote style, an entity spelling,
+  an indentation, a trailing newline) is exactly the collateral a canonicaliser
+  destroys and a byte-preserver keeps. State which reading you chose and the verb
+  that forced it.
 
   G4 COVER EVERY OUTPUT CLASS AND VALUE RANGE THE SPEC NAMES (S4 run over the output
   space). Enumerate every output class, input shape, and — when the quantity carries
@@ -274,6 +286,16 @@ a bound.
   exercises only the class you expect to be easy cannot detect a wrong answer on the
   others; a corpus you authored shares your blind spot by construction; a correctly
   shaped answer whose values sit outside the range the anchors imply is still wrong.
+  CALIBRATE THE SCALE, NOT JUST THE IDENTITY (S1 applied to a measured axis). Knowing
+  WHICH feature an external anchor corresponds to is not the same as knowing that your
+  axis places it there. When you have two or more independent known values of the same
+  measured quantity, compute scale_i = your_reading_i / known_value_i for EACH. If they
+  agree on a constant k != 1, your whole axis is uniformly rescaled and must be divided
+  by k before delivery — that single division is the decisive test, and a RATIO between
+  two of your own readings CANNOT detect it, because a ratio is invariant under uniform
+  scaling and will agree with the known ratio in both the raw and the rescaled frame.
+  An anchor used only to identify a peak, a class, or a label, and never to place it on
+  the delivered numeric axis, has done half its job.
 
   G5 VALIDATE THE INSTRUMENT BEFORE CONCLUDING FROM IT (S1 run on your own measurer).
   If your metric code ever returned a value that cannot be true, its later outputs are

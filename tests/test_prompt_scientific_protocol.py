@@ -198,3 +198,43 @@ def test_g4_covers_value_range_not_only_class():
     """The range half is what a shape-correct, value-wrong deliverable dies on."""
     assert "value range the spec names" in FLAT
     assert "outside the range the anchors imply is still wrong" in FLAT
+
+
+def test_g4_calibrates_the_scale_not_only_the_identity():
+    """An anchor used to IDENTIFY a feature has not placed it on the axis.
+
+    Measured loss: the agent wrote the correct external anchor values, questioned
+    the axis unit five times, and still delivered the raw axis — 2.37x off. It had
+    argued from a RATIO between its own two readings, and a ratio is invariant under
+    uniform scaling, so it agreed in both frames and could not discriminate. The one
+    decisive test was a single division it never performed.
+    """
+    assert "calibrate the scale, not just the identity" in FLAT
+    # the decisive operation must be named as an operation on numbers
+    assert "your_reading" in FLAT and "known_value" in FLAT
+    # the invariance that makes the ratio useless must be stated, not implied
+    assert "invariant under uniform scaling" in FLAT
+    assert "ratio between two of your own readings" in FLAT
+    # an anchor used only for identification is called out as half a job
+    assert "has done half its job" in FLAT
+
+
+def test_g3_anchors_reading_on_the_task_verb_not_consumer_habit():
+    """'identical / unchanged / do not alter' dominate as BYTE-PRESERVING.
+
+    Measured loss: the task said the output must be functionally identical apart
+    from removed substrings, and permitted normalization during parsing. The agent
+    read the permission as a requirement, canonicalised through a parser, and lost
+    on every incidental attribute the spec never mentioned. It had ENUMERATED both
+    readings correctly — enumeration alone does not pick one.
+    """
+    assert "anchor the reading on the task's own verb" in FLAT
+    assert "byte-preserving" in FLAT
+    # the permission/requirement distinction is the crux (phrase kept de-identified:
+    # a verbatim grant quote would trip tests/test_no_harness_grader_leak.py)
+    assert "may occur during parsing" in FLAT and "permission" in FLAT
+    assert "does not require" in FLAT
+    # the tie-break is fewest changed bytes, not the tidier output
+    assert "changes the fewest bytes" in FLAT
+    # and the collateral is named concretely
+    assert "quote style" in FLAT and "trailing newline" in FLAT
