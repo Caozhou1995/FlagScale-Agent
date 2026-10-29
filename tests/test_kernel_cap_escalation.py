@@ -201,7 +201,7 @@ class TestCapRecoveryEscalation:
         kernel = h.build([_capped(), _capped(), _DONE])
         seen = []
 
-        def call_llm_fn(messages, schemas, force_tool=False):
+        def call_llm_fn(messages, schemas, force_tool=False, **kw):
             seen.append(force_tool)
             idx = min(h.call_count["n"], 2)
             h.call_count["n"] += 1
@@ -293,11 +293,26 @@ def test_hard_stop_squeezes_the_thinking_budget():
     configured one — measured round 5 (regex-chess): 11 token caps at 16384,
     1 real action, 0 TASK_COMPLETE. The tool_choice channel was toothless
     (server forces thinking ON; caps abort the stream mid-thinking), so the
-    budget itself must shrink until state is produced."""
+    budget itself must shrink until state is produced.
+
+    Contract updated (round 6, trial SbvVjVR): the override is FORWARDED on
+    the forced call and consumed (cleared) — it must not linger on the
+    kernel instance, because a lingering copy would re-squeeze every later
+    call even after the agent-side branch stops seeing it."""
     h = _Harness()
     kernel = h.build([_capped(), _capped(), _DONE])
+    seen = {}
+    real_call = kernel.deps.call_llm_fn
+
+    def _spy_call(messages, schemas, **kw):
+        seen.update(kw)
+        return real_call(messages, schemas, **kw)
+
+    kernel.deps.call_llm_fn = _spy_call
     kernel.run_turn()
-    assert getattr(kernel, "_thinking_cap_override", None) == 3000, \
+    assert seen.get("thinking_cap_override") == 3000, seen
+    # Consumed on use: the attribute must be cleared after forwarding.
+    assert getattr(kernel, "_thinking_cap_override", None) is None, \
         kernel.__dict__.get("_thinking_cap_override")
 
 
@@ -334,3 +349,10 @@ def test_agent_applies_override_over_force_tool_exemption():
     _i_exempt = src.index("cap_budget = 0")
     assert _i_override < _i_exempt, \
         "override must be checked BEFORE the force_tool exemption"
+    # The squeeze value must come from the CALL kwarg (forwarded by the
+    # kernel on the forced call), NOT from getattr(self, ...) — the HARD
+    # STOP rung lives on the KERNEL instance, so reading the agent instance
+    # always saw None and the squeeze printed "0 token cap" (round 6,
+    # trial SbvVjVR). The old broken form was `_sq = getattr(self, ...)`.
+    assert "getattr(self, '_thinking_cap_override'" not in src, \
+        "override must be read from the call kwarg, not the agent instance"

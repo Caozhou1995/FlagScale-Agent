@@ -2377,7 +2377,8 @@ class WorkerAgent:
 
     # ── LLM streaming ──────────────────────────────────────────────────────
 
-    def _call_llm_stream(self, messages, schemas, force_tool=False):
+    def _call_llm_stream(self, messages, schemas, force_tool=False,
+                         thinking_cap_override=None):
         content_parts = []
         tool_calls = []
         tool_calls_by_id = {}
@@ -2415,7 +2416,12 @@ class WorkerAgent:
         # fix. Once a write/edit succeeds the kernel clears the override
         # and the budget returns to the configured value.
         from flagscale_agent.react.thinking_cap import ThinkingCapCounter
-        _sq = getattr(self, "_thinking_cap_override", None)
+        # The override arrives as a CALL kwarg (kernel.py forwards it), not
+        # as an instance attribute: the HARD STOP rung lives on the KERNEL
+        # instance, so getattr(self, ...) here reads the AGENT instance and
+        # always saw None (measured, round 6 regex-chess trial SbvVjVR:
+        # override set on kernel, cap_budget still 0 → "0 token cap").
+        _sq = thinking_cap_override
         if _sq and _sq > 0:
             cap_budget = int(_sq)
         elif force_tool:
@@ -2537,7 +2543,10 @@ class WorkerAgent:
         # budget still needs a wall bound so a slow endpoint cannot out-wait
         # the squeeze. Scale it from the configured wall by the same ratio as
         # the token budget, with a hard floor of 90s.
-        _sq = getattr(self, "_thinking_cap_override", None)
+        # Same channel fix as cap_budget above: read the override from the
+        # call kwarg, not from the agent instance (the HARD STOP rung sets it
+        # on the KERNEL — getattr(self) here always saw None).
+        _sq = thinking_cap_override
         if _sq and _sq > 0:
             _base = getattr(self.config, "thinking_budget", 0) or 0
             _ratio = (float(_sq) / float(_base)) if _base > 0 else 0.0

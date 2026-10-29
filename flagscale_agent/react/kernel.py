@@ -374,6 +374,17 @@ class AgentKernel:
                     # not a legal answer at all.
                     _force = bool(getattr(self, "_force_tool_next", False))
                     self._force_tool_next = False
+                    # The squeeze override must ride the SAME channel as
+                    # force_tool: the kernel sets it on ITSELF (L711) but the
+                    # agent reads getattr on the AGENT instance (L2418) — two
+                    # different objects, so an instance attribute never
+                    # crosses. Measured (round 6 regex-chess trial SbvVjVR):
+                    # cap#3 printed "0 token cap" (cap_budget=0 branch) even
+                    # though the HARD STOP rung had fired — the override was
+                    # set on the kernel and lost. Forwarding it as a call
+                    # kwarg makes the agent receive the squeezed budget.
+                    _squeeze = getattr(self, "_thinking_cap_override", None)
+                    self._thinking_cap_override = None
                     # The fallback lambda must FORWARD kwargs: a 2-arg lambda
                     # makes the 3-arg forced call raise TypeError and the
                     # degrade branch silently drops the constraint (measured:
@@ -382,9 +393,11 @@ class AgentKernel:
                     _call = d.call_llm_fn or (
                         lambda m, s, **kw: d.provider.chat_stream(m, s, **kw))
                     if _force:
+                        _kw = {"force_tool": True}
+                        if _squeeze:
+                            _kw["thinking_cap_override"] = _squeeze
                         try:
-                            response, usage = _call(messages, schemas,
-                                                    force_tool=True)
+                            response, usage = _call(messages, schemas, **_kw)
                         except TypeError:
                             # Injected callable / provider without the flag:
                             # degrade to the plain call rather than crashing.
