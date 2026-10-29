@@ -736,10 +736,17 @@ class AgentKernel:
                         self._empty_output_retries = 0
                         self._cap_retries = 0
                         self._intra_degen_retries = 0
-                        # A response with real visible output: the cap streak
-                        # did its job (the model broke out of the pure-thinking
-                        # loop), so later caps start the escalation over.
-                        self._cap_text_streak = 0
+                        # CAP TEXT STREAK deliberately does NOT reset here.
+                        # Measured (round-2 rerun 2026-10-29 19-12-23,
+                        # regex-chess__nqvTfjB): cap #1 -> first-rung bounded
+                        # recap -> the model ran ONE `ls` (visible output) and
+                        # resumed deriving; cap #2 then found the counter reset
+                        # by that `ls`, so it served the SAME first-rung recap
+                        # again and the HARD STOP rung was unreachable. Net:
+                        # two caps, two stale recaps, action count pinned at 2,
+                        # deliverable never written. One inspected command is
+                        # not convergence, so only EVIDENCE OF PROGRESS clears
+                        # the streak (keyed on tool kind, see _cap_progress).
 
                     # Detect completion signals. Use end-anchored matching to
                     # distinguish a real sentinel (trailing the text) from a
@@ -1072,6 +1079,16 @@ class AgentKernel:
                             self._edit_churn_streak += 1
                         elif not str(_err).startswith("Error executing tool:"):
                             self._edit_churn_streak = 0
+                        # Cap-escalation streak: cleared ONLY by evidence of
+                        # progress — a successful state-producing call — not by
+                        # any visible output (see the note at the cap reset).
+                        # Measured: one inspection command between two caps is
+                        # what kept the HARD STOP rung unreachable.
+                        if (
+                            _name in self.FORBIDDEN_EDIT_TOOLS
+                            and not str(_err).startswith("Error executing tool:")
+                        ):
+                            self._cap_text_streak = 0
                     if (self._edit_churn_streak >= self.FORBIDDEN_STOP_AFTER
                             and self._forbidden_stop_fires
                             < self.FORBIDDEN_STOP_MAX_FIRES):

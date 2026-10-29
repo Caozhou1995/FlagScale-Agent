@@ -137,9 +137,13 @@ class TestCapRecoveryEscalation:
         assert "write_file" in hard[0]
         assert "reasoning has now hit the runtime cap 2 times" in hard[0]
 
-    def test_visible_output_resets_the_streak(self):
-        """A response carrying real text breaks the loop: a later cap starts
-        the escalation over (1st-level nudge, not HARD STOP)."""
+    def test_prose_progress_does_not_reset_the_streak(self):
+        """A response carrying real TEXT but no tool call does NOT clear the
+        cap streak. Measured (round-2 rerun 2026-10-29 19-12-23,
+        regex-chess__nqvTfjB): cap #1 -> first-rung recap -> agent emitted
+        visible prose -> cap #2 found the streak reset and served the SAME
+        first-rung recap, so the HARD STOP rung was never reached and the
+        deliverable was never written. Prose is not progress."""
         h = _Harness()
         kernel = h.build([
             _capped(),
@@ -150,8 +154,28 @@ class TestCapRecoveryEscalation:
         ])
         result = kernel.run_turn()
         assert result.stop_reason == "explicit_signal"
+        # The second cap must escalate, and the counter must NOT be zeroed by
+        # mere visible output.
+        assert len([m for m in h.user_messages() if "HARD STOP" in m]) == 1
+        assert kernel._cap_text_streak == 2
+
+    def test_state_producing_call_resets_the_streak(self):
+        """A SUCCESSFUL state-producing call (write_file/edit_file) is the one
+        event that clears the streak: that is evidence of progress, and a later
+        cap then legitimately restarts the escalation at rung 1."""
+        h = _Harness()
+        kernel = h.build([
+            _capped(),
+            {"content": "", "tool_calls": [
+                {"id": "t1", "name": "write_file", "arguments": {}}],
+             "thinking": "x", "reasoning_only": False},
+            _capped(),
+            _DONE,
+        ])
+        kernel.run_turn()
+        # 1st cap set streak=1, the write_file cleared it, 2nd cap set it to 1.
+        assert kernel._cap_text_streak == 1
         assert len([m for m in h.user_messages() if "HARD STOP" in m]) == 0
-        assert kernel._cap_text_streak == 0
 
     def test_streak_is_reinitialised_per_turn(self):
         """White-box: the counter lives per turn, so a fresh run_turn starts
