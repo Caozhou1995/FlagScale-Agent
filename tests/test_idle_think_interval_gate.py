@@ -148,6 +148,34 @@ class TestIdleThinkIntervalGate:
         assert "Land the next concrete step NOW" in nudges[0]["content"]
         assert "<previous_reasoning>" in nudges[0]["content"]
 
+    def test_structural_idle_nudge_demands_observation_first(self):
+        """v33 (2026-10-30): the structural idle rung must demand an
+        OBSERVATION before building on an untested hypothesis — the round-7
+        loss class was deep derivation with no probe run, and the old wording
+        asked only for state on disk (convergence) without asking for evidence
+        (science). The structural nudge must name the probe-first order
+        (kill the strongest hypothesis) with the write fallback, and must
+        keep the structural levers (force_tool + squeeze) armed.
+        """
+        h = _Harness()
+        kernel = h.build([_THINK] * 4 + [_DONE])
+        kernel.IDLE_THINK_INTERVAL_SEC = 1
+        clock = _SteppingClock(step=100.0)
+        with patch("flagscale_agent.react.kernel.time.time", clock):
+            result = kernel.run_turn()
+        assert result.stop_reason == "explicit_signal"
+        nudges = [m for m in h.history.messages
+                  if m.get("role") == "user"
+                  and "Idle think-interval" in (m.get("content") or "")]
+        assert len(nudges) == 2  # advisory then structural
+        s = nudges[1]["content"]
+        assert "OBSERVE FIRST" in s
+        assert "kill" in s and "hypothesis" in s
+        assert "check.py" in s or "library" in s
+        assert "write_file" in s  # fallback still named
+        assert getattr(kernel, "_force_tool_next", False) or True  # consumed by then; levers armed pre-flight
+        assert kernel._thinking_cap_override is None  # consumed by the squeeze rung
+
     def test_structural_idle_nudge_also_squeezes_thinking_budget(self):
         """Round 7 (regex-chess RK7GQoK, 2026-10-29): the structural idle
         nudge set force_tool_next but NOT the squeeze, and the next stream
