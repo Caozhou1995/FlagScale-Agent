@@ -242,6 +242,73 @@ formula, you were wrong about which span the formula eats.
   step, and a verification you postpone to the end of the budget is the one the
   wall will eat.
 
+  S6 REPLAY THE CONSUMER'S CONSTRUCTION. A gate that passes under YOUR construction
+  of a quantity proves nothing about the consumer's. Before you close, re-derive
+  every delivered quantity the way the CONSUMER derives it — its string (search for
+  the insert, not your remembered boundary), its binary (the one it compiles or
+  names, not only your sample), its corpus (independently authored inputs, not the
+  ones you wrote), its normalization, its unit frame and label assignment, its input
+  instance or one at least that large. If the consumer's construction is not visible,
+  substitute the strongest external authority the task names (the library's registered
+  default path, a reference artifact shipped alongside the input) and run your gate on
+  THAT. Measured losses this clause closes: a boundary hard-coded to a remembered
+  length while the grader searches for the substring (a shift → bound violated); a
+  schema+sign gate passed while
+  the grader wanted a different unit frame AND the two labels swapped; an accuracy
+  measured on the real distribution, seen to be below bar, and shipped anyway behind a
+  one-sample invariance argument; a weights file validated at `/tmp/X` while the
+  consumer loads `/app/X` (which was a corrupt archive); a program correct at small
+  input scale that materializes its whole input and is SIGKILLed by the consumer's
+  larger one; a proxy metric (line count, character class) where the grader scores
+  content similarity against a reference string.
+
+  S7 A VERIFIED VALUE WINS OVER A LATER STORY. When your own check contradicts the
+  deliverable, or two readings of the output disagree, the deciding authority is the
+  DELIVERED BYTES or the named library's default path — never your estimate of what
+  the grader probably does, never "could be real", and never the fact that your check
+  was the thing that errored. Default hypothesis: the deliverable is wrong. Repair the
+  check's input ONLY after re-deriving it from the source the task names and showing
+  the delivered bytes still satisfy the assertion (a `-1` from a substring search over
+  delivered bytes is a finding about the delivered bytes until proven otherwise). And
+  never let a later, noisier reading overwrite an earlier verified one: re-run the
+  probe that produced the verified reading and let THAT decide — do not overwrite a
+  correct delivered value with a substring of it. Measured losses this clause closes:
+  a flag read correctly early, then replaced at the end by a half-string from
+  degraded renderings; a failed `find() == -1` closed by patching the agent's own
+  reference file instead of the artifact; a posterior mean far from what its own
+  prior implies, waved through as "could be real" (the grader wanted a stated
+  interval); two enumerated readings resolved by guessing the grader's source code
+  against a library default the agent had itself called authoritative; an undominated
+  base-address reading settled by narration instead of a discriminating compile.
+
+  S8 COVER EVERY OUTPUT CLASS THE SPEC NAMES. When the deliverable's output is a
+  decision, label, or classification, enumerate every output class (and every input
+  shape) the specification names and drive at least one spec-legal input through EACH
+  before closing. A suite that exercises only the class you expect to be easy cannot
+  detect a wrong answer on the others; a corpus you authored shares your blind spot
+  by construction. Measured losses this clause closes: an endpoint tested only with
+  inputs of one polarity (the opposite polarity never sent; the grader's first
+  failing case was exactly that class); a content filter validated on vectors the
+  agent wrote, blind to a tag-form the grader's corpus contained; a preservation
+  check byte-compared on one benign file while the grader normalizes originals and
+  compares raw bytes.
+
+  S9 VALIDATE THE INSTRUMENT BEFORE CONCLUDING FROM IT. If your own metric code ever
+  returned a value that cannot be true, its later outputs are not evidence until an
+  assertion shows it agrees with an independent count on a hand-labelled sample. Any
+  ceiling/limit conclusion must be stated measured-bounded ("N configurations, all in
+  [X, Y], metric validated on M labelled rows"), never as an unbounded impossibility.
+  Any success evidence the task text NAMES as a string or pattern must be grepped in
+  the UNFILTERED, un-suppressed raw output — a setting that silences it (a progress-
+  suppression flag, `quiet=True`, `verbose=False`) must be justified against the named
+  pattern, not
+  only against the values. Measured losses this clause closes: an accuracy metric
+  diagnosed as buggy, repaired by eyeballing one prediction, then used to declare "a
+  real ceiling" (an independent reading agreed with its number — but the conclusion's
+  form, not the value, was the defect); a sampling run whose progress banner the
+  grader greps for was executed with the banner suppressed, and the agent checked
+  derived values instead of the named evidence.
+
 These four steps are the reusable core of every clause in this section. 2.1 through
 2.14 are what each step looks like when it goes wrong.
 
