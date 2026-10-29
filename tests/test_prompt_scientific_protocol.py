@@ -319,3 +319,18 @@ def test_g2_a_proxy_is_not_a_substitute_for_a_named_reference():
     assert "zero-hit count on the named artifact" in FLAT
     # it must be typed as a second defendant, not a judge (co-sourcing language)
     assert "second defendant" in FLAT
+
+
+def test_g4_check_list_is_built_from_the_consumers_path():
+    """A4 shape: every check row corresponds to the agent's own output, none to the
+    consumer's named object — so a green suite coexists with a missing deliverable.
+
+    Measured across a batch: four losses in one shape, each with a check set built from
+    the artifacts the agent happened to write while the consumer's named object (a file
+    at a fixed path, a CLI flag, an input instance) was never exercised once.
+    """
+    assert "build the check list from the consumer's path" in FLAT
+    # the enumeration rule: one row per object the CONSUMER names
+    assert "one row per named object" in FLAT
+    # the tell, stated so it is greppable in a session
+    assert "a name with no row is an unverified face" in FLAT

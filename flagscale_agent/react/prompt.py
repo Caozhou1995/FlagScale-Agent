@@ -376,6 +376,22 @@ a bound.
   scaling and will agree with the known ratio in both the raw and the rescaled frame.
   An anchor used only to identify a peak, a class, or a label, and never to place it on
   the delivered numeric axis, has done half its job.
+  BUILD THE CHECK LIST FROM THE CONSUMER'S PATH, NOT FROM WHAT YOU HAVE PRODUCED.
+  A check set is only as good as where its rows came from. Enumerate the rows by walking
+  the consumer's own path — every artifact it names, every file it opens, every field it
+  reads, every command it runs — and write one row per named object. The failure this
+  closes is subtle and self-consistent: the agent builds its check list from the things
+  it has already produced, so every check passes and the check set never contains the one
+  object the consumer needed. The tell is a list whose rows all correspond to your own
+  outputs and none correspond to a name the task or the consumer states. Measured across
+  a batch: four losses in one shape — the check set verified the artifacts the agent
+  happened to write (its own output file, its own generated manifest, its own compiled
+  binary) while the consumer's named object (the file it expected at a fixed path, the
+  flag it reads off the command line, the instance it feeds in) was never exercised once,
+  so a green suite coexisted with a missing deliverable. So before you close: read back
+  the list of NAMES the task and the consumer use, and for each one confirm a row exists
+  that opens THAT name. A name with no row is an unverified face no matter how green the
+  rest is.
 
   G5 VALIDATE THE INSTRUMENT BEFORE CONCLUDING FROM IT (S1 run on your own measurer).
   If your metric code ever returned a value that cannot be true, its later outputs are
