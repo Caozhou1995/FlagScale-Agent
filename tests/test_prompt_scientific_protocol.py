@@ -238,3 +238,66 @@ def test_g3_anchors_reading_on_the_task_verb_not_consumer_habit():
     assert "changes the fewest bytes" in FLAT
     # and the collateral is named concretely
     assert "quote style" in FLAT and "trailing newline" in FLAT
+
+
+def test_g1_makes_each_fix_a_gated_banked_unit():
+    """The gate needs a GRANULARITY, not only a position in the timeline.
+
+    G1 already said "re-run the gate after the last write", which an agent can
+    honour while stacking every unverified edit behind that single final gate.
+    Measured loss: the agent located the real defect at the end of its budget,
+    announced the write, was cut off, and the delivered file violated a bound it
+    had computed correctly minutes earlier — the whole run's correct analysis
+    scored zero because the last edit and its gate were two units, not one.
+    """
+    assert "pack each fix as edit" in FLAT
+    assert "as one unit" in FLAT
+    # the prohibition is on STACKING unverified edits, stated as a bar on order
+    assert "may not begin" in FLAT
+    # and the payoff is named in terms of what survives the cutoff
+    assert "last written" in FLAT and "last verified version" in FLAT
+    # an unmeasured change is not an improvement — it replaced a known-good state
+    assert "hypothesis that has replaced" in FLAT
+    # the honest exit for an unfinished change is revert, not ship-unmeasured
+    assert "revert to the banked version" in FLAT
+
+
+def test_g2_replays_the_assertion_list_not_an_aggregate():
+    """A self-consistent aggregate can hide a false relation in the consumer's list.
+
+    Measured loss: the consumer checked a set of relations between parts; the agent
+    built one aggregate reassembly, reported every check green, and delivered. The
+    aggregate exercised most relations implicitly and never built the composed
+    artefact at all, so every self-check passed and the deliverable was wrong.
+    """
+    assert "replay the assertion list" in FLAT
+    # aggregate substitution is named as the thing being forbidden
+    assert "covers the same ground" in FLAT
+    # the aggregate is characterised by WHY it fails, not merely banned
+    assert "its own failure surface" in FLAT
+    # the required output is a numbered list with a real command behind each row
+    assert "numbered list" in FLAT
+    assert "pass/fail from" in FLAT
+    # a row that cannot be built is a NAMED GAP, never silently covered
+    assert "named gap" in FLAT
+    assert "never exercised is not a relation that holds" in FLAT
+
+
+def test_g3_a_deviation_you_can_argue_away_is_not_tested():
+    """A mechanism argument about the delivered artefact is decided by the artefact.
+
+    G3 already said a check contradicting the deliverable outranks a later story,
+    but it left open the LOOPHOLE this closes: when the agent's construction differs
+    from the required one and the agent EXPLAINS the difference as inert, that
+    explanation is a hypothesis, not a measurement. Measured loss: the agent noticed
+    one extra base at a junction, argued it cannot change the digested fragment and
+    therefore cannot change the product, shipped, and the consumer's construction did
+    include that base — the two outputs differed by exactly the base argued about.
+    """
+    assert "a deviation you can argue away is not a deviation you tested" in FLAT
+    # the conversion the clause demands: build BOTH and diff, do not argue
+    assert "build both constructions" in FLAT
+    # and the earned-right condition is an empty diff WITH A NUMBER, not a story
+    assert "diff is empty" in FLAT
+    # a mechanism argument is explicitly typed as a hypothesis
+    assert "claim about a mechanism" in FLAT

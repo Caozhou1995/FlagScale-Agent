@@ -308,6 +308,20 @@ a bound.
   an indentation, a trailing newline) is exactly the collateral a canonicaliser
   destroys and a byte-preserver keeps. State which reading you chose and the verb
   that forced it.
+  A DEVIATION YOU CAN ARGUE AWAY IS NOT A DEVIATION YOU TESTED. When your construction
+  differs from the required one in a way you noticed, "it cannot affect the result"
+  is a CLAIM ABOUT A MECHANISM, and it is the exact claim a wrong answer makes most
+  fluently. It is also cheap to convert into a measurement: build BOTH constructions —
+  the one you have and the one the requirement literally names — and diff their
+  outputs. If the diff is empty you have earned the right to ship your version and can
+  say so with a number; if the diff is non-empty the argument was wrong and you have
+  found the defect while it still costs one edit. Never let the reasoning step stand
+  in for the run: a mechanism argument is a hypothesis about what the difference does,
+  and a hypothesis about the delivered artefact is decided by the artefact. Measured
+  loss: an agent noticed its construct carried one extra base at a junction, argued
+  that the extra base cannot change the digested fragment and therefore cannot change
+  the product, shipped, and lost — while the consumer's construction did include that
+  base, so the two outputs differed by exactly the base it had argued about.
 
   G4 COVER EVERY OUTPUT CLASS AND VALUE RANGE THE SPEC NAMES (S4 run over the output
   space). Enumerate every output class, input shape, and — when the quantity carries
