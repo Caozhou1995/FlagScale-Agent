@@ -739,6 +739,23 @@ the table rather than by arguing. Measured: a trial with one free parameter had
 values at which both readings passed and chose the value where only its own
 reading passed, because it never built the table; the intersection existed and
 one check per candidate value would have found it.
+A reading set built from OFFSETS YOU PICKED is incomplete by construction. When
+the consumer derives the measured span from the data itself — matching a suffix,
+an overlap, a shared prefix, a terminator, a delimiter — the span is not a fixed
+offset at all but a FAMILY parameterised by how much matched, and your enumeration
+must contain that parameter. Enumerate it as `for k in 1..max_match` (or whatever
+the matching rule allows), COMPUTE the quantity at each k, and carry the whole
+column: a single "my two readings agree" table says nothing about the k the
+consumer landed on. Measured: an agent enumerated exactly two readings of a
+measured region (with and without a fixed-length flanking segment) and reported the
+quantity comfortably inside its bound under both; the consumer instead extended
+the measured region by the length of the template suffix that flanking segment
+happened to match (a data-dependent k), and the same quantity then missed the
+bound. The agent's two readings were both members of the family and both wrong —
+the tell was that the disagreement it was testing lived at a FIXED offset while
+the consumer varied an offset. So before computing, write one line naming HOW the
+consumer fixes its span: a constant offset, an end-of-string rule, or a
+data-driven match.
 That search is only as good as the reading ROWS it is built on, so fold the
 definition axis into the grid FIRST: sweep the design parameter and each
 defensible construction of the measured input TOGETHER, in one table with one

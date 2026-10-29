@@ -354,3 +354,26 @@ def test_g3_unseen_reference_means_minimise_the_movement():
     assert "not the graded one" in FLAT
     # the minimisation directive itself
     assert "minimal transformation that satisfies the clauses" in FLAT
+
+
+def test_29_reading_set_must_contain_the_consumers_data_driven_span():
+    """"Two readings agree" is worthless when both are the same fixed offset.
+
+    Measured loss: the agent enumerated exactly two readings of a measured region
+    (with and without a fixed-length flanking segment), both comfortably inside
+    the bound, and delivered. The consumer instead GREW the measured region by how
+    much of the template suffix the flanking segment happened to match, so the
+    deciding construction was a k the agent never enumerated. The lesson is not
+    "enumerate more" but "name how the consumer FIXES its span": a constant
+    offset, an end-of-string rule, or a data-driven match.
+    """
+    assert "a reading set built from offsets you picked is incomplete" in FLAT
+    assert "by construction" in FLAT
+    # the parameter must be swept, and the value computed at each setting
+    assert "for k in 1..max_match" in FLAT
+    assert "compute the quantity at each k" in FLAT
+    # the three ways a consumer fixes a span must be named
+    assert "a constant offset, an end-of-string rule, or a" in FLAT
+    assert "data-driven match" in FLAT
+    # and the tell that distinguishes family-vs-fixed must be stated
+    assert "lived at a fixed offset" in FLAT
