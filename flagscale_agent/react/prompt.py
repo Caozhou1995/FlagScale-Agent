@@ -358,6 +358,28 @@ a bound.
   batch: this single shape — instrument already showing the violating value, agent
   adjudicating it as acceptable and shipping — was the largest loss bucket, and it costs
   one comparison against the stated number to catch.
+  WHEN THE JUDGE IS AN UNSEEN REFERENCE, MINIMISE THE DISTANCE YOU MOVE.
+  The shape: acceptance is scored as SIMILARITY between your output and a
+  reference you cannot open, your starting point is the input the task gave
+  you, and the reference is itself derived FROM that same input. Similarity
+  distance is then monotone in how far you move: a transform stronger than
+  the reference's can only lose, however good it looks by your own taste.
+  So when the reference is not visible, the defensible strategy is the
+  MINIMAL transformation that satisfies the clauses the task states — not
+  the best-looking result by a criterion you chose. Two habits make it fail:
+  (a) replacing a threshold with one you invented — if the task states a
+  number, that number is the only bar, and if it states none, your invented
+  number is a HYPOTHESIS to be labelled as such, never a licence to escalate
+  the transform (an agent wrote out "my threshold of 0.30 is my own choice,
+  not the task's", then used it to justify driving its output as far as the
+  transform could reach); (b) optimising a quantity that is not the graded
+  one — similarity to the STARTING input is not similarity to the reference's
+  OUTPUT, and pushing one up can push the other down. Measured: a loss whose
+  every structural clause passed and whose only failure was similarity to an
+  unseen reference — the run had escalated its transform to maximise its own
+  self-invented agreement score, and the reference turned out to be a
+  conservative refinement of the same input.
+
   BUILD TOWARD THE BOUND FROM A BOUND-LEGAL VERSION, NOT DOWN FROM AN OVER-BOUND ONE.
   Accepting a violating value as a verdict is necessary but not sufficient: a fix you
   begin and never finish delivers the violating value anyway. So when the quantity you

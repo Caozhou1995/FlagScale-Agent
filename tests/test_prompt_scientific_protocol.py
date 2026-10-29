@@ -334,3 +334,23 @@ def test_g4_check_list_is_built_from_the_consumers_path():
     assert "one row per named object" in FLAT
     # the tell, stated so it is greppable in a session
     assert "a name with no row is an unverified face" in FLAT
+
+
+def test_g3_unseen_reference_means_minimise_the_movement():
+    """A2 sub-shape: acceptance is similarity to a reference the agent cannot open, the
+    reference is a refinement OF the given input, and similarity distance is monotone in
+    how far the agent moves — so an aggressive transform loses no matter how good it looks
+    by a self-chosen criterion.
+
+    Measured loss: every structural clause passed (exists/ran/schema/not-trivial/no-overlap/
+    single-component) and the only failure was per-item IoU against the unseen reference;
+    the run had escalated its transform to maximise its own invented agreement score and had
+    written out 'my threshold is my own choice, not the task's'.
+    """
+    assert "when the judge is an unseen reference" in FLAT
+    # rule (a): an invented threshold is a hypothesis, never a licence to escalate
+    assert "your invented number is a hypothesis to be labelled as such" in FLAT
+    # rule (b): similarity to the STARTING input is not similarity to the reference's OUTPUT
+    assert "not the graded one" in FLAT
+    # the minimisation directive itself
+    assert "minimal transformation that satisfies the clauses" in FLAT
