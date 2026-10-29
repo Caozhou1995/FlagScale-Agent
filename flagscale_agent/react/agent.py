@@ -106,6 +106,7 @@ from flagscale_agent.react.guard.unit_test import UnitTestGuard
 from flagscale_agent.react.guard.knowledge_index import KnowledgeIndexGuard
 from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
 from flagscale_agent.react.guard.deliverable_survival import DeliverableSurvivalGuard
+from flagscale_agent.react.guard.system_prompt_remind import SystemPromptRemindGuard
 from flagscale_agent.react.guard.kill_safety import KillSafetyGuard
 from flagscale_agent.react.guard.poll_spacing import PollSpacingGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
@@ -546,6 +547,16 @@ class WorkerAgent:
         # agent's belief in it survives. Never
         # blocks.
         guard_registry.register(DeliverableSurvivalGuard())
+        # SystemPromptRemindGuard (always active, inject-only): at every
+        # completion DECLARATION (plan_update step_done / batch-with-done /
+        # complete) inject a four-question pointer back to the doctrine already
+        # in the system prompt — protocol walked?, delivered bytes read?,
+        # recorded observation verbatim?, next action crossing a self-authored
+        # negative constraint? Fires per declaration, no cooldown: the risk it
+        # targets (self-confirmation at the moment of claiming done) recurs at
+        # every declaration. Pointer-only, never a paraphrase of the doctrine.
+        # Never blocks.
+        guard_registry.register(SystemPromptRemindGuard())
         # PollSpacingGuard (always active, inject-only): after consecutive
         # poll_tasks/dispatch_many rounds that return not-ready with nothing in
         # between, nudge toward real work between looks (or one bounded sleep)

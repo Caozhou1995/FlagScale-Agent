@@ -118,15 +118,64 @@ def test_protocol_is_referenced_as_the_core_of_the_section():
     assert "reusable core of every clause in this section" in FLAT
 
 
-def test_s5_gates_the_delivered_bytes():
-    """S5 exists and carries the byte-fact obligations the measured losses lacked.
+import re
+from pathlib import Path
 
-    The two loss shapes it closes: a model symbol never located on the delivered
-    bytes (the grader found the component missing while every in-model check
-    passed), and a stated bound treated as a goal rather than a pre-write gate (the
-    final write was never re-measured, and the honest report did not rescue it).
+SRC = Path(__file__).resolve().parents[1] / "flagscale_agent" / "react" / "prompt.py"
+RAW = re.sub(r"\s+", " ", SRC.read_text(encoding="utf-8"))
+FLAT = RAW.lower()
+
+# Top-level protocol steps: a line starting with "S<n> " (the doctrine).
+STEP_RE = re.compile(r"(?m)^\s{2}(S\d+)\s+[A-Z]")
+GATE_RE = re.compile(r"(?m)^\s{2}(G\d+)\s+[A-Z]")
+
+STEPS = STEP_RE.findall(SRC.read_text(encoding="utf-8"))
+GATES = GATE_RE.findall(SRC.read_text(encoding="utf-8"))
+
+
+def test_doctrine_has_exactly_four_steps():
+    """S1-S4 is the whole doctrine. Nine 'steps' was the ratchet this fixes.
+
+    Measured history: S grew 4 -> 9, one new step per losing batch, each restating
+    a 2.x corollary. A doctrine that gains an item per observed loss is no longer a
+    doctrine, and the reader cannot tell rule from instance. The count is pinned so
+    a future loss cannot quietly add S10.
     """
-    assert "s5 gate the delivered bytes" in FLAT
+    assert STEPS == ["S1", "S2", "S3", "S4"], f"doctrine must stay at four steps, got {STEPS}"
+
+
+def test_delivery_gate_exists_as_five_checks():
+    """Everything else lives under ONE gate, as checks that name their parent step."""
+    assert "the delivery gate" in FLAT
+    assert GATES == ["G1", "G2", "G3", "G4", "G5"], f"gate checks, got {GATES}"
+    # Each check declares which doctrine step it applies — otherwise it is a new
+    # top-level rule wearing a G label.
+    for tag, parent in (
+        ("g1 bytes, not model", "s1"),
+        ("g2 replay the consumer's construction", "s2"),
+        ("g3 a verified value wins over a later story", "s3"),
+        ("g4 cover every output class", "s4"),
+        ("g5 validate the instrument", "s1"),
+    ):
+        assert tag in FLAT, f"missing gate check: {tag}"
+        span = FLAT[FLAT.index(tag):FLAT.index(tag) + 400]
+        assert parent in span, f"{tag} must name its parent step {parent}"
+
+
+def test_gate_carries_the_containment_rule():
+    """The anti-ratchet rule must be stated IN the prompt, not just in tests."""
+    assert "does not grow new top-level steps" in FLAT
+    assert "doctrine that grows one item per observed loss stops being doctrine" in FLAT
+
+
+def test_g1_gates_the_delivered_bytes():
+    """G1 carries the byte-fact obligations the measured losses lacked.
+
+    Two loss shapes: a model symbol never located on the delivered bytes (the
+    consumer found the component missing while every in-model check passed), and a
+    stated bound treated as a goal rather than a pre-write gate (the final write was
+    never re-measured, and the honest report did not rescue it).
+    """
     # (1) bounds become runnable assertions over the DELIVERED file.
     assert "compile every numeric bound" in FLAT
     assert "reads the" in FLAT and "delivered file" in FLAT
@@ -138,8 +187,14 @@ def test_s5_gates_the_delivered_bytes():
     assert "unverified write" in FLAT
     assert "an honest report of an out-of-bound deliverable still fails" in FLAT
     # The gate set is task-derived, never invented constants (anti-leakage).
-    assert "derived from the task's own stated constraints" in FLAT
+    assert "comes from the task's own stated constraints" in FLAT
     assert "never from constants you invent" in FLAT
-    # (4) G2: the gate is not a wrap-up step — postponed verification dies to the wall.
+    # (4) the gate is not a wrap-up step — postponed verification dies to the wall.
     assert "the gate is not a wrap-up step" in FLAT
     assert "postpone" in FLAT and "the wall will eat" in FLAT
+
+
+def test_g4_covers_value_range_not_only_class():
+    """The range half is what a shape-correct, value-wrong deliverable dies on."""
+    assert "value range the spec names" in FLAT
+    assert "outside the range the anchors imply is still wrong" in FLAT

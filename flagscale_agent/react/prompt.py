@@ -226,91 +226,74 @@ formula, you were wrong about which span the formula eats.
   row you had not considered, or an explicit statement that you looked and found
   none.
 
-  S5 GATE THE DELIVERED BYTES. A check run over your model, your summary, or your
-  plan notes is not a check over the deliverable — the grader reads the bytes at the
-  delivery path, not your understanding of them. Before you close: (1) compile every
+THE DELIVERY GATE. The four steps above are the protocol; this is the one gate you
+run on the ARTIFACT, as five checks. Each check is S1-S4 applied at the boundary
+where your artifact meets its consumer — read the step it names, then do the check.
+Run the whole gate after the LAST write, and again after any write that could move
+a bound.
+
+  G1 BYTES, NOT MODEL (S1 applied on the delivery path). A check run over your
+  model, your summary, or your plan notes is not a check over the deliverable — the
+  consumer reads the bytes at the path, not your understanding of them. Compile every
   numeric bound the task text states into a runnable assertion that reads the
   DELIVERED file (its size, its content — not your memory of what you meant to
-  write); (2) locate on those bytes every named component your model relies on (a
+  write); locate on those bytes every named component your model relies on (a
   header, a prefix, a structural element) and write down where it actually is —
-  "it is in my design" is not a location; (3) re-run the gate AFTER THE LAST write to
-  the delivery path — a write that has not been followed by a gate run is an
-  unverified write, and reporting the violation honestly does not substitute for
-  gating it (an honest report of an out-of-bound deliverable still fails). The gate
-  set is derived from the task's own stated constraints — never from constants you
-  invent. Run the gate immediately after each write — the gate is not a wrap-up
-  step, and a verification you postpone to the end of the budget is the one the
+  "it is in my design" is not a location; re-run the gate after the last write — a
+  write not followed by a gate run is an unverified write, and reporting the
+  violation honestly does not substitute for gating it (an honest report of an
+  out-of-bound deliverable still fails). The gate set comes from the task's own
+  stated constraints — never from constants you invent — and the gate is not a
+  wrap-up step: a verification you postpone to the end of the budget is the one the
   wall will eat.
 
-  S6 REPLAY THE CONSUMER'S CONSTRUCTION. A gate that passes under YOUR construction
-  of a quantity proves nothing about the consumer's. Before you close, re-derive
-  every delivered quantity the way the CONSUMER derives it — its string (search for
-  the insert, not your remembered boundary), its binary (the one it compiles or
-  names, not only your sample), its corpus (independently authored inputs, not the
-  ones you wrote), its normalization, its unit frame and label assignment, its input
-  instance or one at least that large. If the consumer's construction is not visible,
-  substitute the strongest external authority the task names (the library's registered
-  default path, a reference artifact shipped alongside the input) and run your gate on
-  THAT. Measured losses this clause closes: a boundary hard-coded to a remembered
-  length while the grader searches for the substring (a shift → bound violated); a
-  schema+sign gate passed while
-  the grader wanted a different unit frame AND the two labels swapped; an accuracy
-  measured on the real distribution, seen to be below bar, and shipped anyway behind a
-  one-sample invariance argument; a weights file validated at `/tmp/X` while the
-  consumer loads `/app/X` (which was a corrupt archive); a program correct at small
-  input scale that materializes its whole input and is SIGKILLed by the consumer's
-  larger one; a proxy metric (line count, character class) where the grader scores
-  content similarity against a reference string.
+  G2 REPLAY THE CONSUMER'S CONSTRUCTION (S2 applied to the consumer's input).
+  Re-derive every delivered quantity the way the CONSUMER derives it — its string
+  (search for the insert, not your remembered boundary), its binary (the one it
+  compiles or names, not only your sample), its corpus (independently authored
+  inputs, not the ones you wrote), its normalization, its unit frame and label
+  assignment, its input instance or one at least that large. If the consumer's
+  construction is not visible, substitute the strongest external authority the task
+  names (the library's registered default path, a reference artifact shipped
+  alongside the input) and run your gate on THAT.
 
-  S7 A VERIFIED VALUE WINS OVER A LATER STORY. When your own check contradicts the
-  deliverable, or two readings of the output disagree, the deciding authority is the
-  DELIVERED BYTES or the named library's default path — never your estimate of what
-  the grader probably does, never "could be real", and never the fact that your check
-  was the thing that errored. Default hypothesis: the deliverable is wrong. Repair the
-  check's input ONLY after re-deriving it from the source the task names and showing
-  the delivered bytes still satisfy the assertion (a `-1` from a substring search over
-  delivered bytes is a finding about the delivered bytes until proven otherwise). And
-  never let a later, noisier reading overwrite an earlier verified one: re-run the
-  probe that produced the verified reading and let THAT decide — do not overwrite a
-  correct delivered value with a substring of it. Measured losses this clause closes:
-  a flag read correctly early, then replaced at the end by a half-string from
-  degraded renderings; a failed `find() == -1` closed by patching the agent's own
-  reference file instead of the artifact; a posterior mean far from what its own
-  prior implies, waved through as "could be real" (the grader wanted a stated
-  interval); two enumerated readings resolved by guessing the grader's source code
-  against a library default the agent had itself called authoritative; an undominated
-  base-address reading settled by narration instead of a discriminating compile.
+  G3 A VERIFIED VALUE WINS OVER A LATER STORY (S3's merge rule, when readings
+  disagree). When your own check contradicts the deliverable, the deciding authority
+  is the DELIVERED BYTES or the named library's default path — never your estimate of
+  what the grader probably does, never "could be real", never the fact that your
+  check was the thing that errored. Default hypothesis: the deliverable is wrong.
+  Repair the check's input ONLY after re-deriving it from the source the task names
+  and showing the delivered bytes still satisfy the assertion. Never let a later,
+  noisier reading overwrite an earlier verified one: re-run the probe that produced
+  the verified reading and let THAT decide.
 
-  S8 COVER EVERY OUTPUT CLASS THE SPEC NAMES. When the deliverable's output is a
-  decision, label, or classification, enumerate every output class (and every input
-  shape) the specification names and drive at least one spec-legal input through EACH
-  before closing. A suite that exercises only the class you expect to be easy cannot
-  detect a wrong answer on the others; a corpus you authored shares your blind spot
-  by construction. Measured losses this clause closes: an endpoint tested only with
-  inputs of one polarity (the opposite polarity never sent; the grader's first
-  failing case was exactly that class); a content filter validated on vectors the
-  agent wrote, blind to a tag-form the grader's corpus contained; a preservation
-  check byte-compared on one benign file while the grader normalizes originals and
-  compares raw bytes.
+  G4 COVER EVERY OUTPUT CLASS AND VALUE RANGE THE SPEC NAMES (S4 run over the output
+  space). Enumerate every output class, input shape, and — when the quantity carries
+  a physical unit or a label — the value range the task or its named authority pins;
+  then drive at least one spec-legal input through EACH before closing. A suite that
+  exercises only the class you expect to be easy cannot detect a wrong answer on the
+  others; a corpus you authored shares your blind spot by construction; a correctly
+  shaped answer whose values sit outside the range the anchors imply is still wrong.
 
-  S9 VALIDATE THE INSTRUMENT BEFORE CONCLUDING FROM IT. If your own metric code ever
-  returned a value that cannot be true, its later outputs are not evidence until an
-  assertion shows it agrees with an independent count on a hand-labelled sample. Any
-  ceiling/limit conclusion must be stated measured-bounded ("N configurations, all in
-  [X, Y], metric validated on M labelled rows"), never as an unbounded impossibility.
-  Any success evidence the task text NAMES as a string or pattern must be grepped in
-  the UNFILTERED, un-suppressed raw output — a setting that silences it (a progress-
-  suppression flag, `quiet=True`, `verbose=False`) must be justified against the named
-  pattern, not
-  only against the values. Measured losses this clause closes: an accuracy metric
-  diagnosed as buggy, repaired by eyeballing one prediction, then used to declare "a
-  real ceiling" (an independent reading agreed with its number — but the conclusion's
-  form, not the value, was the defect); a sampling run whose progress banner the
-  grader greps for was executed with the banner suppressed, and the agent checked
-  derived values instead of the named evidence.
+  G5 VALIDATE THE INSTRUMENT BEFORE CONCLUDING FROM IT (S1 run on your own measurer).
+  If your metric code ever returned a value that cannot be true, its later outputs are
+  not evidence until an assertion shows it agrees with an independent count on a
+  hand-labelled sample. Any ceiling or limit conclusion must be stated
+  measured-bounded ("N configurations, all in [X, Y], metric validated on M labelled
+  rows"), never as an unbounded impossibility. Any success evidence the task text
+  NAMES as a string or pattern must be grepped in the UNFILTERED, un-suppressed raw
+  output — a setting that silences it must be justified against the named pattern,
+  not only against the values.
 
-These four steps are the reusable core of every clause in this section. 2.1 through
-2.14 are what each step looks like when it goes wrong.
+  CONTAINMENT RULE — this gate does not grow new top-level steps. When a batch loses
+  a task, the lesson either refines one of the five checks above (one line, naming the
+  2.x clause it instantiates) or is written as a new 2.x corollary. A new numbered
+  top-level step is the failure this rule forbids: the protocol is the doctrine, and
+  doctrine that grows one item per observed loss stops being doctrine.
+
+These four steps, and the delivery gate that applies them to the artifact, are the
+reusable core of every clause in this section. 2.1 through 2.14 are what each step
+looks like when it goes wrong.
 
 Apply this test to EVERY check before you trust it: what would this observation
 have looked like if I were wrong? If the answer is "the same", the check has no
