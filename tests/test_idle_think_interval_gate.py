@@ -148,6 +148,43 @@ class TestIdleThinkIntervalGate:
         assert "Land the next concrete step NOW" in nudges[0]["content"]
         assert "<previous_reasoning>" in nudges[0]["content"]
 
+    def test_structural_idle_nudge_also_squeezes_thinking_budget(self):
+        """Round 7 (regex-chess RK7GQoK, 2026-10-29): the structural idle
+        nudge set force_tool_next but NOT the squeeze, and the next stream
+        burned another 240.3s of pure thinking — force_tool alone is measured
+        toothless on this endpoint (server forces thinking ON; caps abort the
+        stream mid-thinking before any tool call is reached). The structural
+        idle path must arm BOTH levers, exactly like the cap ladder.
+
+        Sequence: 2 think round-trips trip the gate (nudge 1, advisory,
+        _cap_retries 0->1); re-armed clock + 2 more think round-trips trip it
+        again (_retries=1 >= 1) -> nudge 2 is STRUCTURAL -> the NEXT call
+        must carry force_tool=True AND thinking_cap_override=3000."""
+        h = _Harness()
+        seen = []
+        responses = [_THINK] * 4 + [_DONE]
+
+        def spy(messages, schemas, **kw):
+            seen.append(dict(kw))
+            idx = min(h.call_count["n"], len(responses) - 1)
+            h.call_count["n"] += 1
+            return responses[idx], {"input_tokens": 1, "output_tokens": 1}
+
+        kernel = h.build_with(spy)
+        kernel.IDLE_THINK_INTERVAL_SEC = 1
+        clock = _SteppingClock(step=100.0)
+        with patch("flagscale_agent.react.kernel.time.time", clock):
+            result = kernel.run_turn()
+        assert result.stop_reason == "explicit_signal"
+        # The call AFTER the structural idle nudge must carry force_tool=True
+        # AND the 3000-token squeeze (the round-7 gap: force_tool was set,
+        # squeeze was not, next stream = 240.3s of unconverted thinking).
+        assert any(
+            kw.get("force_tool") is True
+            and kw.get("thinking_cap_override") == 3000
+            for kw in seen
+        ), seen
+
     def test_first_roundtrip_stays_silent(self):
         """Below the 2-round floor -> no idle nudge; plain resume nudge instead."""
         h = _Harness()

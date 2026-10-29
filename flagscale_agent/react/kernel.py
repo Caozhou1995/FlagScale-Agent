@@ -692,6 +692,24 @@ class AgentKernel:
                             else:
                                 _cap_n = getattr(self, "_cap_text_streak", 1)
                                 _cap_tail = thinking_text[-4000:] if len(thinking_text) > 4000 else thinking_text
+                                # Pure-thinking streams (no visible text) are the
+                                # one population the soft rung never converted:
+                                # round 7 (regex-chess RK7GQoK, 2026-10-29) —
+                                # cap-retry 1 soft nudge -> 172.5s more pure
+                                # thinking (idle-retry 2 fired only after 372s
+                                # tool-free) -> 240.3s more thinking; 612s = 68%
+                                # of the 900s budget burned in 3 zero-output
+                                # retries before the structural rung arrived.
+                                # This branch is reached ONLY when the stream
+                                # carried no visible text, so upgrading the FIRST
+                                # cap here costs the cooperative-model headroom
+                                # nothing (a model that responds to a nudge emits
+                                # visible text and never re-enters this branch).
+                                # Wording alone was already judged insufficient
+                                # by the measured-failure note in the rung-1
+                                # comment itself; arm the structural channel now.
+                                self._force_tool_next = True
+                                self._thinking_cap_override = 3000
                                 if _cap_n >= 2:
                                     # Second (and later) cap in the SAME turn:
                                     # the model has now been told once to land
@@ -1381,6 +1399,15 @@ class AgentKernel:
         _structural = _retries >= 1
         if _structural:
             self._force_tool_next = True
+            # Pair the structural constraint with a SQUEEZE, same as the
+            # cap ladder: force_tool alone was measured toothless on this
+            # endpoint (the server forces thinking ON and the client-side
+            # caps abort the stream during that forced thinking before any
+            # tool call is reached) — round 7 regex-chess idle-retry 2 set
+            # force_tool and the next stream still burned 240.3s of pure
+            # thinking. Without the budget squeeze the structural wording
+            # never reaches the model as an enforced constraint.
+            self._thinking_cap_override = 3000
         d.display.warn(
             f"Idle think-interval ({_idle_secs:.0f}s with no tool state) — "
             f"forcing convergence (idle-retry {_retries + 1}"

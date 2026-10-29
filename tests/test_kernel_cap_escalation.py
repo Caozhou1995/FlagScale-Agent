@@ -216,14 +216,24 @@ class TestCapRecoveryEscalation:
         assert True in seen, seen
 
     def test_first_cap_does_not_arm_the_structural_constraint(self):
-        """The first rung stays advisory: a cooperative model that was merely
-        long-winded must not be jammed into a forced tool call."""
+        """Contract updated (round 7, regex-chess RK7GQoK): a PURE-THINKING
+        first cap (no visible text) MUST arm the structural channel on the
+        next call. The soft rung was measured dead on this population:
+        cap-retry 1 soft nudge -> 172.5s more pure thinking -> idle-retry 2
+        (structural, force_tool only) -> 240.3s more thinking; 612s = 68% of
+        a 900s budget gone with zero tool calls. The force_tool kwarg AND the
+        thinking_cap_override squeeze must both arrive on the next call.
+
+        A cooperative model is NOT harmed: this branch is only entered when
+        the response carried no visible text at all; a model that answers a
+        nudge emits visible prose and never re-enters it."""
         h = _Harness()
         kernel = h.build([_capped(), _DONE])
         seen = []
 
-        def call_llm_fn(messages, schemas, force_tool=False):
-            seen.append(force_tool)
+        def call_llm_fn(messages, schemas, force_tool=False,
+                        thinking_cap_override=None):
+            seen.append((force_tool, thinking_cap_override))
             idx = min(h.call_count["n"], 1)
             h.call_count["n"] += 1
             return [_capped(), _DONE][idx], {
@@ -231,7 +241,11 @@ class TestCapRecoveryEscalation:
 
         kernel.deps.call_llm_fn = call_llm_fn
         kernel.run_turn()
-        assert seen == [False, False], seen
+        # Call 2 (after the capped retry) must carry force_tool=True AND the
+        # 3000-token squeeze — the old silent degrade (mock without **kw
+        # raising TypeError) is what let this regression hide: the degrade
+        # branch dropped the constraint and the assertion still saw False.
+        assert seen[1] == (True, 3000), seen
 
 
 def test_production_path_forwards_force_tool_to_provider():
