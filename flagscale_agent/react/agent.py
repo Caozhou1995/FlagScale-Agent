@@ -2377,7 +2377,7 @@ class WorkerAgent:
 
     # ── LLM streaming ──────────────────────────────────────────────────────
 
-    def _call_llm_stream(self, messages, schemas):
+    def _call_llm_stream(self, messages, schemas, force_tool=False):
         content_parts = []
         tool_calls = []
         tool_calls_by_id = {}
@@ -2418,10 +2418,21 @@ class WorkerAgent:
         _intra_buf = ""
         intra_degenerate = False
 
-        stream = retry_with_backoff(
-            lambda: self.provider.chat_stream(messages, schemas),
-            max_retries=3,
-        )
+        # Call-shape compatibility: the unforced call must keep its exact
+        # 2-arg form — measured (regression 2026-10-30): forwarding the kwarg
+        # unconditionally broke 13 tests whose patched providers use 2-arg
+        # lambdas (TypeError). The flag rides only when armed.
+        if force_tool:
+            stream = retry_with_backoff(
+                lambda: self.provider.chat_stream(messages, schemas,
+                                                  force_tool=True),
+                max_retries=3,
+            )
+        else:
+            stream = retry_with_backoff(
+                lambda: self.provider.chat_stream(messages, schemas),
+                max_retries=3,
+            )
 
         thinking_cleared = False
         streaming_trailing_newlines = 0

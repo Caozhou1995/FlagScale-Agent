@@ -367,7 +367,13 @@ class AgentKernel:
                     # not a legal answer at all.
                     _force = bool(getattr(self, "_force_tool_next", False))
                     self._force_tool_next = False
-                    _call = d.call_llm_fn or (lambda m, s: d.provider.chat_stream(m, s))
+                    # The fallback lambda must FORWARD kwargs: a 2-arg lambda
+                    # makes the 3-arg forced call raise TypeError and the
+                    # degrade branch silently drops the constraint (measured:
+                    # flag set, request still prose-only). provider.chat_stream
+                    # accepts force_tool, so forwarding keeps both paths live.
+                    _call = d.call_llm_fn or (
+                        lambda m, s, **kw: d.provider.chat_stream(m, s, **kw))
                     if _force:
                         try:
                             response, usage = _call(messages, schemas,

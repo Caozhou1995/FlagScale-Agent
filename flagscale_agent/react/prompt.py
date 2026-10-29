@@ -272,6 +272,20 @@ a bound.
   construction is not visible, substitute the strongest external authority the task
   names (the library's registered default path, a reference artifact shipped
   alongside the input) and run your gate on THAT.
+  WHEN THE MEASURED SPANS A COMPOSED OBJECT, ENUMERATE THE COMPOSITION AXES
+  MULTIPLICATIVELY. A value defined on "the part that does X" of a structured
+  artefact (a region within a record that itself has a header/suffix, a segment
+  inside a decorated wrapper) has one reading PER INCLUSION CHOICE of every
+  decoration: include the header or not, include the suffix or not — and their
+  products. Two or three hand-picked readings do not cover this space: the reading
+  you never computed is the one that decides, and four losses on the same bound
+  moved each time only because a differently-composed span was fed to the same
+  formula. So: list the decoration axes, compute the measured quantity for EVERY
+  inclusion combination (they are cheap — one substring change each), and require
+  your delivered value to satisfy the bound under the MAXIMUM and MINIMUM of those
+  readings at once. If no single value satisfies every reading, the design must
+  change so one does — that is a hedge shown constructively, not a bet on one
+  composition.
   REPLAY THE ASSERTION LIST, NOT A CONVENIENT EQUIVALENT. When the consumer checks a
   set of RELATIONS (this part matches that part, this count equals that count, this
   pair composes into that artefact, this edge is reciprocal to that edge), enumerate

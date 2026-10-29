@@ -232,3 +232,33 @@ class TestCapRecoveryEscalation:
         kernel.deps.call_llm_fn = call_llm_fn
         kernel.run_turn()
         assert seen == [False, False], seen
+
+
+def test_production_path_forwards_force_tool_to_provider():
+    """Regression: the REAL call path (call_llm_fn=None → agent's
+    _call_llm_stream) previously used a 2-arg fallback lambda and a 2-arg
+    _call_llm_stream signature, so the 3-arg forced call raised TypeError and
+    the degrade branch silently DROPPED the constraint — the flag never
+    reached provider.chat_stream even though every provider accepted it.
+
+    Measured (round 4, regex-chess 2026-10-29 20-12-42): kernel armed
+    _force_tool_next on the HARD STOP rung, the stream then ran as plain
+    chat_stream, and the model kept emitting design prose with acts=0.
+    """
+    import inspect
+    from flagscale_agent.react.agent import WorkerAgent
+
+    # The production stream entry must accept and forward the flag.
+    sig = inspect.signature(WorkerAgent._call_llm_stream)
+    assert "force_tool" in sig.parameters, sig
+    # And it must pass the flag down to the provider's chat_stream — but only
+    # on the armed path: the unforced call keeps its exact 2-arg form
+    # (regression: unconditional forwarding broke 13 mock-lambda tests).
+    src = inspect.getsource(WorkerAgent._call_llm_stream)
+    assert "force_tool=True" in src, "forced call no longer carries the flag"
+
+    # The kernel fallback lambda must accept **kwargs (a 2-arg lambda would
+    # make the forced call raise TypeError and drop the flag).
+    from flagscale_agent.react import kernel as kernel_mod
+    ksrc = inspect.getsource(kernel_mod)
+    assert "lambda m, s, **kw:" in ksrc, "fallback lambda still drops kwargs"

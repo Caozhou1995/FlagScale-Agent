@@ -377,3 +377,16 @@ def test_29_reading_set_must_contain_the_consumers_data_driven_span():
     assert "data-driven match" in FLAT
     # and the tell that distinguishes family-vs-fixed must be stated
     assert "lived at a fixed offset" in FLAT
+
+
+def test_g2_composed_spans_enumerate_inclusion_axes_multiplicatively():
+    """"The part that does X" of a decorated record has one reading per inclusion
+    choice of every decoration — and the uncomputed one decides (measured four
+    losses on the same bound, each decided by a differently-composed span).
+    """
+    assert "enumerate the composition axes" in FLAT
+    assert "multiplicatively" in FLAT
+    assert "include the header or not, include the suffix or not" in FLAT
+    assert "under the MAXIMUM and MINIMUM of those" in RAW
+    # the hedge must be constructive, not a bet
+    assert "a hedge shown constructively, not a bet on one" in FLAT
