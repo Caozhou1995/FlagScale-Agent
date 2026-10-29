@@ -35,8 +35,17 @@ class OpenAIProvider(LLMProvider):
             kwargs["base_url"] = base_url
         self._client = OpenAI(**kwargs)
 
-    def _build_kwargs(self, messages, tools, stream=False):
-        """Build API call kwargs, with prompt caching support."""
+    def _build_kwargs(self, messages, tools, stream=False, force_tool=False):
+        """Build API call kwargs, with prompt caching support.
+
+        force_tool: structural channel enforcement. When True and tools are
+        available, the request carries tool_choice="required" so the model
+        CANNOT answer with prose alone -- the provider rejects/reshapes a
+        text-only completion. This is the only lever that survives a model
+        that has learned to split its reasoning across several sub-cap
+        streams: text feedback can be acknowledged and ignored, a required
+        tool call cannot.
+        """
         kwargs = {
             "model": self._model,
             "messages": messages,
@@ -49,10 +58,13 @@ class OpenAIProvider(LLMProvider):
             kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = tools
+            if force_tool:
+                kwargs["tool_choice"] = "required"
         return kwargs
 
-    def chat(self, messages: List[Dict[str, Any]], tools: List[dict]) -> Dict[str, Any]:
-        kwargs = self._build_kwargs(messages, tools)
+    def chat(self, messages: List[Dict[str, Any]], tools: List[dict],
+             force_tool: bool = False) -> Dict[str, Any]:
+        kwargs = self._build_kwargs(messages, tools, force_tool=force_tool)
 
         try:
             response = self._client.chat.completions.create(**kwargs)
@@ -74,8 +86,9 @@ class OpenAIProvider(LLMProvider):
 
         return {"content": message.content, "tool_calls": tool_calls}
 
-    def chat_stream(self, messages: List[Dict[str, Any]], tools: List[dict]) -> Iterator[Dict[str, Any]]:
-        kwargs = self._build_kwargs(messages, tools, stream=True)
+    def chat_stream(self, messages: List[Dict[str, Any]], tools: List[dict],
+                    force_tool: bool = False) -> Iterator[Dict[str, Any]]:
+        kwargs = self._build_kwargs(messages, tools, stream=True, force_tool=force_tool)
 
         stream = self._client.chat.completions.create(**kwargs)
         seen_tool_ids = set()

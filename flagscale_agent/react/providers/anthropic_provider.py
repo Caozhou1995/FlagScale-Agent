@@ -155,7 +155,7 @@ class AnthropicProvider(LLMProvider):
                 msg["content"] = new_blocks
         return chat_messages
 
-    def _build_kwargs(self, messages, tools):
+    def _build_kwargs(self, messages, tools, force_tool=False):
         system, chat_messages = self._split_system(messages)
         chat_messages = self._trim_old_images(chat_messages)
         kwargs = {"model": self._model, "max_tokens": self._max_tokens, "messages": chat_messages}
@@ -187,6 +187,10 @@ class AnthropicProvider(LLMProvider):
                 ]
         if tools:
             kwargs["tools"] = tools
+            if force_tool:
+                # Structural channel enforcement: the model must emit a
+                # tool_use block; a prose-only answer is not a legal reply.
+                kwargs["tool_choice"] = {"type": "any"}
         # Add cache_control to the last message to cache conversation prefix.
         # Copy to avoid mutating shared message references from history.
         if chat_messages:
@@ -205,8 +209,9 @@ class AnthropicProvider(LLMProvider):
             chat_messages[-1] = last_copy
         return kwargs
 
-    def chat(self, messages: List[Dict[str, Any]], tools: List[dict]) -> Dict[str, Any]:
-        kwargs = self._build_kwargs(messages, tools)
+    def chat(self, messages: List[Dict[str, Any]], tools: List[dict],
+             force_tool: bool = False) -> Dict[str, Any]:
+        kwargs = self._build_kwargs(messages, tools, force_tool=force_tool)
         try:
             response = self._client.messages.create(**kwargs)
         except anthropic.AuthenticationError:
@@ -227,8 +232,9 @@ class AnthropicProvider(LLMProvider):
 
         return {"content": content, "tool_calls": tool_calls}
 
-    def chat_stream(self, messages: List[Dict[str, Any]], tools: List[dict]) -> Iterator[Dict[str, Any]]:
-        kwargs = self._build_kwargs(messages, tools)
+    def chat_stream(self, messages: List[Dict[str, Any]], tools: List[dict],
+                    force_tool: bool = False) -> Iterator[Dict[str, Any]]:
+        kwargs = self._build_kwargs(messages, tools, force_tool=force_tool)
         stream_ctx = None
 
         try:

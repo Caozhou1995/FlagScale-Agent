@@ -356,8 +356,28 @@ class AgentKernel:
                 self._t0 = time.time()
 
                 try:
+                    # ── Structural channel enforcement ──
+                    # Text nudges ("MUST emit a tool call") have been measured
+                    # to produce compliance TALK and then another full stream
+                    # of reasoning: the directive is acknowledged and ignored
+                    # because prose is still a legal completion. When the
+                    # escalation ladder has given up on wording, it sets this
+                    # flag, and the NEXT request is sent with a provider-level
+                    # must-call-a-tool constraint, so a prose-only reply is
+                    # not a legal answer at all.
+                    _force = bool(getattr(self, "_force_tool_next", False))
+                    self._force_tool_next = False
                     _call = d.call_llm_fn or (lambda m, s: d.provider.chat_stream(m, s))
-                    response, usage = _call(messages, schemas)
+                    if _force:
+                        try:
+                            response, usage = _call(messages, schemas,
+                                                    force_tool=True)
+                        except TypeError:
+                            # Injected callable / provider without the flag:
+                            # degrade to the plain call rather than crashing.
+                            response, usage = _call(messages, schemas)
+                    else:
+                        response, usage = _call(messages, schemas)
                 except KeyboardInterrupt:
                     d.display.interrupted()
                     self._interrupted = True
@@ -653,14 +673,24 @@ class AgentKernel:
                                     # full stream thinking. Reasoning is not
                                     # converging -- cut it off and demand the
                                     # cheapest state-producing action.
+                                    # The wording alone has been measured to
+                                    # fail: the model acknowledges "I must act"
+                                    # and then emits another full stream. So
+                                    # the wording is paired with a STRUCTURAL
+                                    # constraint on the next request: prose is
+                                    # no longer a legal completion, only a tool
+                                    # call is.
+                                    self._force_tool_next = True
                                     nudge = (
                                         "[system: HARD STOP. Your reasoning has now hit the "
                                         f"runtime cap {_cap_n} times in this turn and each time "
                                         "you resumed thinking instead of acting. Further "
                                         "reasoning will be cut at the same wall every time, so "
                                         "it cannot finish the job — only a tool call can.\n"
-                                        "Your next message MUST contain exactly ONE tool call, "
-                                        "and it must produce state on disk:\n"
+                                        "This request has therefore been sent with a structural "
+                                        "constraint: a prose answer is NOT accepted. Your next "
+                                        "message MUST contain exactly ONE tool call, and it must "
+                                        "produce state on disk:\n"
                                         "  • `write_file` the artifact you have already drafted "
                                         "(even partial/imperfect) to the delivery path the task "
                                         "names, or\n"
@@ -1297,9 +1327,18 @@ class AgentKernel:
         # text re-feeds the very reasoning we are asking it to stop.
         _think = response.get("thinking") or ""
         _tail = _think[-4000:] if len(_think) > 4000 else _think
+        # Second and later idle nudge: wording alone has been measured to
+        # produce "I must act" followed by another full stream of reasoning, so
+        # pair the wording with a STRUCTURAL constraint on the next request --
+        # prose stops being a legal completion. The first nudge stays advisory
+        # so a genuinely stuck-but-cooperative model is not jammed.
+        _structural = _retries >= 1
+        if _structural:
+            self._force_tool_next = True
         d.display.warn(
             f"Idle think-interval ({_idle_secs:.0f}s with no tool state) — "
-            f"forcing convergence (idle-retry {_retries + 1})..."
+            f"forcing convergence (idle-retry {_retries + 1}"
+            f"{', structural' if _structural else ''})..."
         )
         d.history.append({
             "role": "user",

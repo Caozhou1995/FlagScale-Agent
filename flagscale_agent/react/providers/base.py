@@ -30,8 +30,15 @@ class LLMProvider(ABC):
     schema_format: str = "openai"
 
     @abstractmethod
-    def chat(self, messages: List[Dict[str, Any]], tools: List[dict]) -> Dict[str, Any]:
+    def chat(self, messages: List[Dict[str, Any]], tools: List[dict],
+             force_tool: bool = False) -> Dict[str, Any]:
         """Send a chat request with tool definitions.
+
+        force_tool: structural channel enforcement — when True and tools are
+        available, the request is sent with a provider-level "must call a
+        tool" constraint (OpenAI `tool_choice="required"`, Anthropic
+        `tool_choice={"type": "any"}`), so a prose-only reply is not a legal
+        completion. Providers that cannot honour it should ignore the flag.
 
         Returns a unified dict:
             {
@@ -42,7 +49,8 @@ class LLMProvider(ABC):
         ...
 
     @abstractmethod
-    def chat_stream(self, messages: List[Dict[str, Any]], tools: List[dict]) -> Iterator[Dict[str, Any]]:
+    def chat_stream(self, messages: List[Dict[str, Any]], tools: List[dict],
+                    force_tool: bool = False) -> Iterator[Dict[str, Any]]:
         """Streaming variant of chat(). Yields events:
             {"type": "text", "content": str}
             {"type": "tool_start", "id": str, "name": str}

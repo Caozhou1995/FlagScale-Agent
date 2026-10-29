@@ -186,3 +186,49 @@ class TestCapRecoveryEscalation:
         result = kernel.run_turn()
         assert result.stop_reason == "explicit_signal"
         assert kernel._cap_text_streak == 0
+
+    def test_hard_stop_arms_the_structural_channel_constraint(self):
+        """The HARD STOP rung must not rely on wording alone.
+
+        Measured (round 3, regex-chess 2026-10-29 19-34-50): three token caps
+        in one turn, acts(grep -c '⚡') stayed at 2, and after EVERY cap the
+        agent wrote "I need to stop reasoning and act" and then emitted another
+        2000+ characters of design prose. Compliance talk, no action. So the
+        HARD STOP branch must also arm the structural channel constraint, which
+        arrives at the provider as force_tool=True on the NEXT request.
+        """
+        h = _Harness()
+        kernel = h.build([_capped(), _capped(), _DONE])
+        seen = []
+
+        def call_llm_fn(messages, schemas, force_tool=False):
+            seen.append(force_tool)
+            idx = min(h.call_count["n"], 2)
+            h.call_count["n"] += 1
+            return [_capped(), _capped(), _DONE][idx], {
+                "input_tokens": 1, "output_tokens": 1}
+
+        kernel.deps.call_llm_fn = call_llm_fn
+        kernel.run_turn()
+        # Call 1 (before any cap) is not forced; the call AFTER the HARD STOP
+        # rung fired (cap #2) carries force_tool=True.
+        assert seen[0] is False
+        assert True in seen, seen
+
+    def test_first_cap_does_not_arm_the_structural_constraint(self):
+        """The first rung stays advisory: a cooperative model that was merely
+        long-winded must not be jammed into a forced tool call."""
+        h = _Harness()
+        kernel = h.build([_capped(), _DONE])
+        seen = []
+
+        def call_llm_fn(messages, schemas, force_tool=False):
+            seen.append(force_tool)
+            idx = min(h.call_count["n"], 1)
+            h.call_count["n"] += 1
+            return [_capped(), _DONE][idx], {
+                "input_tokens": 1, "output_tokens": 1}
+
+        kernel.deps.call_llm_fn = call_llm_fn
+        kernel.run_turn()
+        assert seen == [False, False], seen
