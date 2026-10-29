@@ -358,6 +358,19 @@ a bound.
   batch: this single shape — instrument already showing the violating value, agent
   adjudicating it as acceptable and shipping — was the largest loss bucket, and it costs
   one comparison against the stated number to catch.
+  BUILD TOWARD THE BOUND FROM A BOUND-LEGAL VERSION, NOT DOWN FROM AN OVER-BOUND ONE.
+  Accepting a violating value as a verdict is necessary but not sufficient: a fix you
+  begin and never finish delivers the violating value anyway. So when the quantity you
+  must satisfy is one you can CONSTRUCT rather than merely measure — a size, a count, a
+  length, a file set — make the first thing you bank a version that already satisfies it
+  (shrink the scope, drop the optional section, emit the minimal legal artifact), and
+  grow from there. The failure this closes is a one-directional reduction loop: trim,
+  re-measure, trim again, each step landing still above the bound, so the wall decides
+  the landing point and the artifact is over-bound at the clock. A shrink chain that
+  converges toward the bound from above is the wrong shape; the same work started from
+  a legal minimum ends inside it. Measured: an agent measured its artifact over a stated
+  ceiling, correctly refused to call it acceptable, enumerated the cheapest reductions —
+  and was cut off with the over-ceiling file still at the delivery path.
 
   G4 COVER EVERY OUTPUT CLASS AND VALUE RANGE THE SPEC NAMES (S4 run over the output
   space). Enumerate every output class, input shape, and — when the quantity carries
