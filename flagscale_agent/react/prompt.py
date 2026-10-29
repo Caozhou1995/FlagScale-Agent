@@ -246,6 +246,22 @@ a bound.
   stated constraints — never from constants you invent — and the gate is not a
   wrap-up step: a verification you postpone to the end of the budget is the one the
   wall will eat.
+  PACK EACH FIX AS edit → gate → bank, AS ONE UNIT. The unit of work is not "make
+  the change"; it is "make the change, run its gate, and leave a verified artifact at
+  the delivery path". So a second change may not begin until the previous one has
+  been gated and banked — never stack two unverified edits and plan to check them
+  together later. Two consequences, both load-bearing. (a) If the wall arrives
+  mid-work, what sits at the path is then the last VERIFIED version rather than the
+  last WRITTEN one, and a verified earlier version scores where a half-finished
+  better one does not. (b) A fix whose effect you have not re-measured is not an
+  improvement you hold; it is a hypothesis that has replaced your known-good state.
+  Corollary for a change you cannot finish: revert to the banked version and say so,
+  rather than leaving an unmeasured edit in place as the deliverable. Measured loss:
+  an agent located the real defect at the very end of its budget, announced "writing
+  it now", and was cut off — the write landed, the gate never ran, and the delivered
+  file violated a bound the agent had already computed correctly minutes earlier; its
+  whole run's correct analysis scored zero because the last edit and its gate were
+  two units instead of one.
 
   G2 REPLAY THE CONSUMER'S CONSTRUCTION (S2 applied to the consumer's input).
   Re-derive every delivered quantity the way the CONSUMER derives it — its string
@@ -256,6 +272,20 @@ a bound.
   construction is not visible, substitute the strongest external authority the task
   names (the library's registered default path, a reference artifact shipped
   alongside the input) and run your gate on THAT.
+  REPLAY THE ASSERTION LIST, NOT A CONVENIENT EQUIVALENT. When the consumer checks a
+  set of RELATIONS (this part matches that part, this count equals that count, this
+  pair composes into that artefact, this edge is reciprocal to that edge), enumerate
+  those relations as SEPARATE rows and execute a check for EACH row. Do not substitute
+  one aggregate construction of your own that "covers the same ground" — an aggregate
+  is a new object with its own failure surface, and it can be perfectly self-consistent
+  while a single relation in the consumer's list is false. Measured loss: an agent
+  built an aggregate reassembly, reported every check green, and delivered; the
+  consumer's list had six relations, the agent's aggregate exercised five of them
+  implicitly, and the sixth (the composed artefact versus the required one) was never
+  built at all — every one of its own checks passed and the artefact was wrong. So:
+  write the consumer's relations as a numbered list first, mark each row PASS/FAIL from
+  a command you actually ran, and treat a row you cannot build as a named gap rather
+  than as covered. A relation you never exercised is not a relation that holds.
 
   G3 A VERIFIED VALUE WINS OVER A LATER STORY (S3's merge rule, when readings
   disagree). When your own check contradicts the deliverable, the deciding authority
