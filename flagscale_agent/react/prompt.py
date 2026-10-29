@@ -273,6 +273,16 @@ a bound.
   construction is not visible, substitute the strongest external authority the task
   names (the library's registered default path, a reference artifact shipped
   alongside the input) and run your gate on THAT.
+  A NAMED LIBRARY IS OBSERVED BY RUNNING IT, NOT BY READING IT. When the disambiguating
+  authority is a library the task names, "anchor on the library" means EXECUTE the
+  library's end-to-end path on the task's own inputs and read what it produces — not
+  infer its behavior from reading its source or docs. Source reading tells you what the
+  code CAN do under some flag; only an execution shows what it DOES on this input with
+  its default path — and the difference between those is precisely the axis the
+  readings disagreed on. Before betting between two readings, run the named library's
+  own pipeline (its top-level entry, its wrapper's default invocation) and let its
+  OUTPUT pick the side; a reading chosen by source-reading alone, however carefully
+  reasoned, is an untested premise, and two batches have lost to exactly this shape.
   WHEN THE MEASURED SPANS A COMPOSED OBJECT, ENUMERATE THE COMPOSITION AXES
   MULTIPLICATIVELY. A value defined on "the part that does X" of a structured
   artefact (a region within a record that itself has a header/suffix, a segment
@@ -442,6 +452,19 @@ a bound.
   the list of NAMES the task and the consumer use, and for each one confirm a row exists
   that opens THAT name. A name with no row is an unverified face no matter how green the
   rest is.
+  COVER THE IMPLEMENTATION'S OWN BRANCHES, NOT ONLY THE INPUT CLASSES. A green suite
+  over well-chosen input classes can still miss a defect that lives INSIDE your own
+  code: a fallback branch, an error path, a parser variant that only one rare
+  construction reaches. Your corpus proves what the HAPPY path does; it says nothing
+  about a branch your corpus never triggers — and a bug in an unexercised branch is
+  invisible to every test you ran. So: for each tool or pipeline you deliver, list its
+  decision points (the format switches, the fallbacks, the error handlers), and for
+  EACH branch construct one input that provably reaches it — then run that input and
+  observe the output matches the same strictness as the main path. If you cannot
+  construct such an input, that branch is unverified: either delete it or say so.
+  A byte-level design claim ("this path preserves the original bytes") is FALSE the
+  moment any branch on that path silently re-encodes — proving the claim requires the
+  branch that re-encodes to be driven and its output diffed, not the claim restated.
 
   G5 VALIDATE THE INSTRUMENT BEFORE CONCLUDING FROM IT (S1 run on your own measurer).
   If your metric code ever returned a value that cannot be true, its later outputs are
