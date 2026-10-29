@@ -260,6 +260,13 @@ class AgentKernel:
         # Cap-escalation streak: consecutive runtime-cap trips in THIS turn that
         # were answered with more pure thinking. Reset per turn.
         self._cap_text_streak = 0
+        # Squeeze override (user directive, 2026-10-30): when set to a positive
+        # token count, the agent's next stream(s) run with the thinking cap
+        # SQUEEZED to this budget instead of the configured thinking_budget.
+        # Set by the HARD STOP rung (below); cleared when a write/edit finally
+        # produces state on disk (progress evidence) — that restores the
+        # normal budget.
+        self._thinking_cap_override = None
         self._turn_start_ts = time.time()
         self.iterations_live = 0
         d.judge.reset_turn()
@@ -687,6 +694,21 @@ class AgentKernel:
                                     # no longer a legal completion, only a tool
                                     # call is.
                                     self._force_tool_next = True
+                                    # Squeeze the thinking budget (user
+                                    # directive, 2026-10-30): the structural
+                                    # tool_choice constraint has been measured
+                                    # toothless on this endpoint — the server
+                                    # forces thinking ON, and the client-side
+                                    # caps abort the stream during that forced
+                                    # thinking before the tool call is ever
+                                    # reached. So instead of (only) forcing the
+                                    # channel, SQUEEZE the thinking budget
+                                    # itself: the next stream(s) get a small
+                                    # token floor, so the reasoning is cut
+                                    # early and the turn actually ends with a
+                                    # tool call. Cleared when a write/edit
+                                    # produces state on disk (below).
+                                    self._thinking_cap_override = 3000
                                     nudge = (
                                         "[system: HARD STOP. Your reasoning has now hit the "
                                         f"runtime cap {_cap_n} times in this turn and each time "
@@ -1125,6 +1147,11 @@ class AgentKernel:
                             and not str(_err).startswith("Error executing tool:")
                         ):
                             self._cap_text_streak = 0
+                            # Squeeze release (user directive): a write/edit
+                            # has finally produced state on disk — restore the
+                            # normal thinking budget so later reasoning is not
+                            # artificially starved.
+                            self._thinking_cap_override = None
                     if (self._edit_churn_streak >= self.FORBIDDEN_STOP_AFTER
                             and self._forbidden_stop_fires
                             < self.FORBIDDEN_STOP_MAX_FIRES):

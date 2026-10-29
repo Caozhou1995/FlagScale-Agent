@@ -262,3 +262,75 @@ def test_production_path_forwards_force_tool_to_provider():
     from flagscale_agent.react import kernel as kernel_mod
     ksrc = inspect.getsource(kernel_mod)
     assert "lambda m, s, **kw:" in ksrc, "fallback lambda still drops kwargs"
+
+
+def test_force_tool_stands_down_both_client_caps():
+    """Measured (round 5, regex-chess trial gfpT6ap): the endpoint forces
+    thinking ON server-side, so a forced call still thinks FIRST — and the
+    client-side token cap + in-stream wall-clock cap both abort the stream
+    during that thinking, so the mandatory tool call is never reached and
+    the enforcement is toothless (two caps fired, acts stayed at 2). When
+    force_tool is armed, the client caps must stand down; the thinking is
+    bounded by the server-side max_tokens instead."""
+    import inspect
+    from flagscale_agent.react.agent import WorkerAgent
+
+    src = inspect.getsource(WorkerAgent._call_llm_stream)
+    # Token cap stands down under the flag (but a squeeze override WINS —
+    # see test_agent_applies_override_over_force_tool_exemption).
+    assert "cap_budget = 0" in src and "force_tool" in src, src[:400]
+    # Silence watchdog stands down under the flag (and the thread start and
+    # the event-level check share the same computed limit).
+    assert "_wd_limit = 0 if force_tool" in src, src[:400]
+    assert "if _wd_limit > 0:" in src, "watchdog thread start not gated on _wd_limit"
+    assert "and _wd_limit > 0" in src, "event-level wall check not gated on _wd_limit"
+
+
+def test_hard_stop_squeezes_the_thinking_budget():
+    """Squeeze mechanism (user directive 2026-10-30): when the escalation
+    ladder reaches HARD STOP and still no write/edit has landed, the next
+    streams must run with a SQUEEZED thinking budget (3000) instead of the
+    configured one — measured round 5 (regex-chess): 11 token caps at 16384,
+    1 real action, 0 TASK_COMPLETE. The tool_choice channel was toothless
+    (server forces thinking ON; caps abort the stream mid-thinking), so the
+    budget itself must shrink until state is produced."""
+    h = _Harness()
+    kernel = h.build([_capped(), _capped(), _DONE])
+    kernel.run_turn()
+    assert getattr(kernel, "_thinking_cap_override", None) == 3000, \
+        kernel.__dict__.get("_thinking_cap_override")
+
+
+def test_state_producing_call_releases_the_squeeze():
+    """Once a write/edit finally produces state on disk, the squeeze must be
+    RELEASED (override cleared) so later reasoning gets the normal budget —
+    the squeeze is a lever for one failure mode, not a permanent handicap."""
+    h = _Harness()
+    kernel = h.build([
+        _capped(), _capped(),
+        {"content": "", "tool_calls": [
+            {"id": "t1", "name": "write_file", "arguments": {}}],
+         "thinking": "x", "reasoning_only": False},
+        _DONE,
+    ])
+    kernel.run_turn()
+    assert kernel._thinking_cap_override is None, kernel._thinking_cap_override
+    # And the streak reset that comes with the same evidence still holds.
+    assert kernel._cap_text_streak == 0
+
+
+def test_agent_applies_override_over_force_tool_exemption():
+    """Ordering contract: the squeeze override WINS over the force_tool cap
+    exemption. A squeeze that gets exempted away re-creates the
+    unlimited-thinking failure it was built to fix (the exemption sets
+    cap_budget=0, which disables the cap entirely)."""
+    import inspect
+    from flagscale_agent.react.agent import WorkerAgent
+
+    src = inspect.getsource(WorkerAgent._call_llm_stream)
+    # The override branch must precede the exemption branch in the source.
+    assert "_thinking_cap_override" in src, src[:400]
+    _i_override = src.index("_thinking_cap_override")
+    _i_exempt = src.index("cap_budget = 0")
+    assert _i_override < _i_exempt, \
+        "override must be checked BEFORE the force_tool exemption"

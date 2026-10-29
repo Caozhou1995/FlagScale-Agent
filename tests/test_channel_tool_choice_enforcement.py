@@ -26,6 +26,7 @@ itself rejects a text-only completion.
 
 import pytest
 
+from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
 from flagscale_agent.react.providers.openai_provider import OpenAIProvider
 
 
@@ -92,3 +93,46 @@ def test_openai_chat_passes_force_tool_through(openai_provider, monkeypatch):
     openai_provider._client = type("C", (), {"chat": _FakeChat()})()
     openai_provider.chat([], TOOLS, force_tool=True)
     assert captured["tool_choice"] == "required"
+
+
+# ── anthropic level: forced calls must not carry an extended-thinking budget ──
+#
+# Measured (round 5, regex-chess trial gfpT6ap): under tool_choice=any the model
+# may still think FIRST, and the client-side in-stream wall-clock cap aborts the
+# stream during that thinking, so the mandatory tool call is never reached — the
+# channel constraint alone is toothless. When force_tool is armed, thinking must
+# be omitted so the model's very next emission can be the tool call.
+
+
+@pytest.fixture
+def anthropic_provider(monkeypatch):
+    _patch_anthropic_client(monkeypatch)
+    return AnthropicProvider(model="m", api_key="k", thinking_budget=16384)
+
+
+def _patch_anthropic_client(monkeypatch):
+    """The client is constructed inside _build_client via the module-level
+    `anthropic` import, so patch that seam (there is no provider attribute
+    to patch — measured: AttributeError on 'Anthropic')."""
+    import flagscale_agent.react.providers.anthropic_provider as mod
+    monkeypatch.setattr(mod.anthropic, "Anthropic", lambda **kwargs: object())
+
+
+def test_anthropic_unforced_call_carries_thinking(anthropic_provider):
+    kwargs = anthropic_provider._build_kwargs([], TOOLS)
+    assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": 16384}
+
+
+def test_anthropic_forced_call_omits_thinking(anthropic_provider):
+    """The whole point of forcing: the client-side caps abort a stream that is
+    still thinking, so under force_tool the request must NOT enable thinking."""
+    kwargs = anthropic_provider._build_kwargs([], TOOLS, force_tool=True)
+    assert "thinking" not in kwargs
+
+
+def test_anthropic_forced_call_without_budget_keeps_max_tokens(anthropic_provider, monkeypatch):
+    _patch_anthropic_client(monkeypatch)
+    p = AnthropicProvider(model="m", api_key="k", thinking_budget=0)
+    kwargs = p._build_kwargs([], TOOLS, force_tool=True)
+    assert "thinking" not in kwargs
+    assert kwargs["max_tokens"] == p._max_tokens

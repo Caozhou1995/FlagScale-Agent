@@ -2395,8 +2395,33 @@ class WorkerAgent:
         # Only trips while the response is PURE thinking: once text or tool
         # calls exist, the response already has visible output and aborting
         # would only truncate genuine work.
+        #
+        # force_tool exemption (measured, round 5 regex-chess trial gfpT6ap):
+        # the endpoint forces thinking ON server-side, so a forced call still
+        # thinks FIRST — and both caps abort the stream during that thinking,
+        # so the mandatory tool call is never reached and the enforcement is
+        # toothless (two caps fired, acts stayed at 2). When the escalation
+        # ladder demands a tool call, the caps must stand down: the model is
+        # already forced to end its turn with a tool call, so letting the
+        # thinking finish is bounded by the server-side max_tokens.
+        #
+        # Squeeze override (user directive, 2026-10-30): when the kernel's
+        # escalation ladder reaches the HARD STOP rung and STILL no
+        # write/edit has landed, it sets self._thinking_cap_override (e.g.
+        # 3000). The override WINS over the force_tool exemption (order
+        # matters below): a squeezed 3000-token budget that actually fires
+        # is the mechanism; an exemption that disables the cap entirely
+        # just re-creates the unlimited-thinking failure it was meant to
+        # fix. Once a write/edit succeeds the kernel clears the override
+        # and the budget returns to the configured value.
         from flagscale_agent.react.thinking_cap import ThinkingCapCounter
-        cap_budget = getattr(self.config, "thinking_budget", 0) or 0
+        _sq = getattr(self, "_thinking_cap_override", None)
+        if _sq and _sq > 0:
+            cap_budget = int(_sq)
+        elif force_tool:
+            cap_budget = 0
+        else:
+            cap_budget = getattr(self.config, "thinking_budget", 0) or 0
         thinking_counter = ThinkingCapCounter()
 
         # ── Intra-stream degenerate-repeat breaker (thinking channel) ──
@@ -2502,8 +2527,27 @@ class WorkerAgent:
                 return stream
         _silence_state = {"tripped_at": None}
 
+        # force_tool exemption for the silence watchdog too (same measured
+        # failure mode as the token cap above): the endpoint forces thinking
+        # ON, the watchdog would close the stream mid-thinking, and the
+        # mandatory tool call would never be reached.
+        # Squeeze override wins (same ordering as cap_budget above): when the
+        # kernel has squeezed the thinking budget to a small token floor, the
+        # in-stream wall watchdog must not stand down entirely — a 3000-token
+        # budget still needs a wall bound so a slow endpoint cannot out-wait
+        # the squeeze. Scale it from the configured wall by the same ratio as
+        # the token budget, with a hard floor of 90s.
+        _sq = getattr(self, "_thinking_cap_override", None)
+        if _sq and _sq > 0:
+            _base = getattr(self.config, "thinking_budget", 0) or 0
+            _ratio = (float(_sq) / float(_base)) if _base > 0 else 0.0
+            _wd_limit = max(90, int(self.IN_STREAM_THINKING_WALL_SEC * _ratio)) \
+                if _ratio > 0 else 90
+        else:
+            _wd_limit = 0 if force_tool else self.IN_STREAM_THINKING_WALL_SEC
+
         def _silence_watchdog():
-            limit = self.IN_STREAM_THINKING_WALL_SEC
+            limit = _wd_limit
             if limit <= 0:
                 return
             while not _wd_done.wait(1.0):
@@ -2521,7 +2565,7 @@ class WorkerAgent:
                     pass
                 return
 
-        if self.IN_STREAM_THINKING_WALL_SEC > 0:
+        if _wd_limit > 0:
             _wd = threading.Thread(
                 target=_silence_watchdog, name="stream-silence-watch",
                 daemon=True)
@@ -2553,9 +2597,8 @@ class WorkerAgent:
                     # that state.
                     if (not thinking_capped and not content_parts
                             and not tool_calls and _stream_t0 is not None
-                            and self.IN_STREAM_THINKING_WALL_SEC > 0
-                            and time.time() - _stream_t0
-                            >= self.IN_STREAM_THINKING_WALL_SEC):
+                            and _wd_limit > 0
+                            and time.time() - _stream_t0 >= _wd_limit):
                         capped_now = True
                         thinking_capped = True
                         reasoning_only = True

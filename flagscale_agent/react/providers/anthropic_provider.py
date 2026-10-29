@@ -168,7 +168,19 @@ class AnthropicProvider(LLMProvider):
             # `anthropic>=0.39.0` range the container resolves.
             kwargs.setdefault("extra_body", {})["temperature"] = self._temperature
         if self._thinking_budget and self._thinking_budget > 0:
-            kwargs["thinking"] = {"type": "enabled", "budget_tokens": self._thinking_budget}
+            # NOTE (user flag, 2026-10-30): the serving endpoint FORCES
+            # thinking on regardless of this kwarg, so omitting it under
+            # force_tool would not stop the model from thinking. The real
+            # lever is client-side: when force_tool is armed, agent.py
+            # stands down the token cap and the in-stream wall-clock cap so
+            # the mandatory tool call can actually be reached (the thinking
+            # is then bounded by the server-side max_tokens). This kwarg is
+            # still omitted under force_tool to avoid requesting a budget
+            # the enforced call will not honor.
+            if force_tool:
+                kwargs["max_tokens"] = self._max_tokens
+            else:
+                kwargs["thinking"] = {"type": "enabled", "budget_tokens": self._thinking_budget}
         if system:
             # Split static body from dynamic dashboard for prompt caching.
             # The dashboard (Turn counter, memory keys) changes every turn and
