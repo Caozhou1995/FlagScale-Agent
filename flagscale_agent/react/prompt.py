@@ -322,6 +322,25 @@ a bound.
   that the extra base cannot change the digested fragment and therefore cannot change
   the product, shipped, and lost — while the consumer's construction did include that
   base, so the two outputs differed by exactly the base it had argued about.
+  A NUMBER YOU MEASURED OUTSIDE THE STATED BOUND IS A VERDICT, NOT A DATA POINT.
+  This is the adjudication half of the same failure and it is the one that survives
+  after you have measured honestly. When your own run prints a quantity that violates
+  a bound, range, required class, required count, or required substring that the task
+  states — an artifact still above a size ceiling, an accuracy below a required floor,
+  a similarity short of a threshold, a boolean that came back False where True was
+  required, a string missing its required prefix — the run is FAILED. It is not "close",
+  not "fast enough", not "the example is illustrative", not "the count gap is explained
+  by something I did not check". "Good enough", "already N times better", "works fine",
+  "within the tolerance I chose" are re-verdicts you are not entitled to make: the
+  bound came from the task or its named authority, so whatever you compare it against
+  must be that same bound, not a baseline you selected because your value beats it (a
+  self-chosen baseline that passes while the task's stated reference would fail is the
+  A2 shape of the same error). The only licensed responses are: fix it until the
+  measured value is inside the bound, or record in one line that it is outside and that
+  you are shipping anyway — a recorded degrade, never a silent one. Measured across a
+  batch: this single shape — instrument already showing the violating value, agent
+  adjudicating it as acceptable and shipping — was the largest loss bucket, and it costs
+  one comparison against the stated number to catch.
 
   G4 COVER EVERY OUTPUT CLASS AND VALUE RANGE THE SPEC NAMES (S4 run over the output
   space). Enumerate every output class, input shape, and — when the quantity carries
