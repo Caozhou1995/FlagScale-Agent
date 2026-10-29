@@ -301,3 +301,21 @@ def test_g3_a_deviation_you_can_argue_away_is_not_tested():
     assert "diff is empty" in FLAT
     # a mechanism argument is explicitly typed as a hypothesis
     assert "claim about a mechanism" in FLAT
+
+
+def test_g2_a_proxy_is_not_a_substitute_for_a_named_reference():
+    """A2 shape: the agent verifies against something it built, never the named reference.
+
+    Measured across a batch: three losses shared this shape — a self-generated corpus
+    of easy negatives in place of the supplied one, a timing against the original slow
+    implementation in place of the named baseline, a self-computed statistic in place of
+    the tool's own output line. In each case every self-check passed while the named
+    reference, never opened, would have failed it.
+    """
+    assert "your proxy is not a substitute for it" in FLAT
+    # the ordering that makes it a rule and not advice: name the object compared against
+    assert "what object did i compare against" in FLAT
+    # and the cheap mechanical signature of the failure
+    assert "zero-hit count on the named artifact" in FLAT
+    # it must be typed as a second defendant, not a judge (co-sourcing language)
+    assert "second defendant" in FLAT

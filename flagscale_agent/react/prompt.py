@@ -286,6 +286,23 @@ a bound.
   write the consumer's relations as a numbered list first, mark each row PASS/FAIL from
   a command you actually ran, and treat a row you cannot build as a named gap rather
   than as covered. A relation you never exercised is not a relation that holds.
+  WHEN A REFERENCE IS NAMED OR SUPPLIED, YOUR PROXY IS NOT A SUBSTITUTE FOR IT. If the
+  task names a reference implementation, supplies a ground-truth artifact, or states the
+  baseline a number is measured against, that object is the ONLY thing your value may be
+  compared to. A proxy you construct — your own corpus, your own baseline run, your own
+  marker string, the original input you happened to have — is a SECOND DEFENDANT, not a
+  judge: it shares your premise, so agreement with it is agreement with yourself. Pass
+  against it is not evidence, and "the reference is not available here, so I will check
+  against something equivalent" is the substitution this rule forbids. Concretely, before
+  you call a quantity verified, answer in one line: WHAT OBJECT did I compare against, and
+  is it the one the task named? If the named reference was never opened in this session,
+  the quantity is UNVERIFIED no matter how many of your own checks agree. Measured across
+  a batch: three losses shared exactly this shape — a generated corpus of easy negatives
+  stood in for the supplied one, a timing against the original slow implementation stood
+  in for the named baseline, a self-computed statistic stood in for the tool's own output
+  line — and in each case every self-check passed while the named reference, unopened,
+  would have failed it. So grep your own session for the reference's identifier before
+  closing: a zero-hit count on the named artifact is the signature of this failure.
 
   G3 A VERIFIED VALUE WINS OVER A LATER STORY (S3's merge rule, when readings
   disagree). When your own check contradicts the deliverable, the deciding authority
