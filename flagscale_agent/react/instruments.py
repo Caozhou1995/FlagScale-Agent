@@ -675,10 +675,10 @@ The task text does not state its requirements itself — it NAMES an external
 standard and defers to it ("check that X satisfies <standard>'s requirements",
 "per the manufacturer's protocol", "as specified by <spec>"). Those clauses are
 not in the task text, so a checklist built only from the task text looks
-complete while being incomplete: measured loss -- an agent read in the standard
-that a protective base was required before a recognition site, then dropped it
-because it judged the checker "less likely to verify it", and failed on exactly
-that clause while every clause it did satisfy passed.
+complete while being incomplete: measured loss -- an agent read a mandatory
+clause in the standard, then dropped it because it judged the checker "less
+likely to verify it", and failed on exactly that clause while every clause it
+did satisfy passed.
 
 So when you read the standard, WRITE DOWN WHAT IT SAID, one clause per entry.
 A clause you never write down is a clause you will silently drop.
@@ -686,12 +686,12 @@ A clause you never write down is a clause you will silently drop.
 COPY THIS SHAPE, filled in:
 
   "requirements_read": [
-    {"clause": "the recognition site needs at least 1 protective base 5' of it",
-     "source": "the standard's design-requirements page (protocol section)",
-     "covered_by": "I add one extra base at the 5' end of every synthesized segment"},
-    {"clause": "the measured span excludes any added tail",
-     "source": "the same page, measurement section",
-     "covered_by": "every reading is taken on the annealing portion only"}
+    {"clause": "<one checkable clause, quoted or paraphrased from the standard>",
+     "source": "<where in the standard it appears>",
+     "covered_by": "<how the deliverable satisfies it, or 'dropped: <reason>'>"},
+    {"clause": "<a second clause from the same or another part of the standard>",
+     "source": "<the same page, <section>>",
+     "covered_by": "<the concrete construction or measurement that satisfies it>"}
   ]
 
 What each key is for (all free text -- nothing parses them):

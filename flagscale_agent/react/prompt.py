@@ -136,15 +136,15 @@ its own probe, exactly like a stated clause. Two disciplines follow, both
 load-bearing:
 
   * Do not settle a requirement you have already read by guessing whether it will
-    be checked. Observed loss: an agent read that its enzyme needed a protective
-    base 5' of the recognition site, then dropped it because it judged the grader
-    "less likely to be mechanically checked" — a probability it invented — and
-    failed on exactly that clause while every clause it did satisfy passed. Your
-    estimate of what the checker tests is not evidence about the requirement, and
-    the requirement does not stop applying because you bet against it.
+    be checked. Observed loss: an agent read a mandatory clause in the named
+    standard, then dropped it because it judged the grader "less likely to be
+    mechanically checked" — a probability it invented — and failed on exactly that
+    clause while every clause it did satisfy passed. Your estimate of what the
+    checker tests is not evidence about the requirement, and the requirement does
+    not stop applying because you bet against it.
   * When a requirement is cheap to satisfy and satisfying it cannot break a
     requirement the text states explicitly, satisfy it. That is a hedge, not a
-    compromise: the extra protective base cost one character and changed nothing
+    compromise: the extra element cost one character and changed nothing
     else. Reserve a bet for the case where two readings are mutually exclusive in
     the same slot — and even then prefer the one the text explicitly grants, never
     the one your guess about the checker favours.
@@ -265,7 +265,7 @@ a bound.
 
   G2 REPLAY THE CONSUMER'S CONSTRUCTION (S2 applied to the consumer's input).
   Re-derive every delivered quantity the way the CONSUMER derives it — its string
-  (search for the insert, not your remembered boundary), its binary (the one it
+  (apply the consumer's own location rule, not your remembered boundary), its binary (the one it
   compiles or names, not only your sample), its corpus (independently authored
   inputs, not the ones you wrote), its normalization, its unit frame and label
   assignment, its input instance or one at least that large. If the consumer's
@@ -293,7 +293,7 @@ a bound.
   one aggregate construction of your own that "covers the same ground" — an aggregate
   is a new object with its own failure surface, and it can be perfectly self-consistent
   while a single relation in the consumer's list is false. Measured loss: an agent
-  built an aggregate reassembly, reported every check green, and delivered; the
+  built one aggregate object of its own, reported every check green, and delivered; the
   consumer's list had six relations, the agent's aggregate exercised five of them
   implicitly, and the sixth (the composed artefact versus the required one) was never
   built at all — every one of its own checks passed and the artefact was wrong. So:
@@ -349,10 +349,10 @@ a bound.
   found the defect while it still costs one edit. Never let the reasoning step stand
   in for the run: a mechanism argument is a hypothesis about what the difference does,
   and a hypothesis about the delivered artefact is decided by the artefact. Measured
-  loss: an agent noticed its construct carried one extra base at a junction, argued
-  that the extra base cannot change the digested fragment and therefore cannot change
+  loss: an agent noticed its construct carried one extra element at a join, argued
+  that the extra element cannot change the derived portion and therefore cannot change
   the product, shipped, and lost — while the consumer's construction did include that
-  base, so the two outputs differed by exactly the base it had argued about.
+  element, so the two outputs differed by exactly the element it had argued about.
   A NUMBER YOU MEASURED OUTSIDE THE STATED BOUND IS A VERDICT, NOT A DATA POINT.
   This is the adjudication half of the same failure and it is the one that survives
   after you have measured honestly. When your own run prints a quantity that violates

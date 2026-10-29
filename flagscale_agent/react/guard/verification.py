@@ -1569,10 +1569,10 @@ def _stated_constraints(task_text: str, judge=None) -> list:
     requirements", "per the manufacturer's manual"). Those requirements are
     checkable and the deliverable must satisfy them, but they appear nowhere in
     the statement's own words -- so reading only the literal sentences leaves
-    them out of the obligation set entirely. Measured loss: a task deferred to a
-    synthesis kit's requirements; a real one (a protective base 5' of the
-    recognition site) never entered the agent's checklist, so a self-check that
-    passed EVERY stated clause still failed the grader. The agent had read that
+    them out of the obligation set entirely. Measured loss: a task deferred to an
+    external standard; a real clause of that standard never entered the agent's
+    checklist, so a self-check that passed EVERY stated clause still failed the
+    grader. The agent had read that
     requirement earlier and then dropped it on a guess about whether it would be
     checked -- exactly the silent evaporation an obligation prevents. The judge
     extracts these too (a second, separately-prompted reading), and they join the

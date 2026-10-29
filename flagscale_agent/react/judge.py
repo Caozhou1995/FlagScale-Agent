@@ -857,9 +857,8 @@ TASK STATEMENT:
     #: language+domain task with no shape to key off, so it crosses this boundary
     #: and never a regex in the guard.
     #:
-    #: The measured loss this exists for: a task said only "make sure the cut
-    #: sites satisfy NEB's requirements". A real requirement of that standard --
-    #: at least one protective base 5' of the recognition site -- never entered
+    #: The measured loss this exists for: a task said only "make sure X satisfies
+    #: the vendor's requirements". A real clause of that standard never entered
     #: the agent's checklist, so a self-check that passed every stated clause
     #: still failed the grader. The agent HAD read the requirement and then
     #: dropped it on a guess about whether it would be checked. The point of

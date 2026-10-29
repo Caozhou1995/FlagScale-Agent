@@ -690,9 +690,9 @@ class PlanCreateTool(Tool):
 
         # NAMED-STANDARD GATE: when the task text defers its requirements to an
         # external standard, the clauses that will decide the reward are NOT in
-        # the task text. Measured loss: an agent read in the standard that a
-        # protective base was required, judged the checker "less likely to verify
-        # it", dropped it -- and failed on exactly that clause. No later gate can
+        # the task text. Measured loss: an agent read a mandatory clause in the
+        # standard, judged the checker "less likely to verify it", dropped it --
+        # and failed on exactly that clause. No later gate can
         # recover it, because every coverage sweep only reads DECLARED
         # constraints. So the clause list is demanded here, at the moment the
         # plan is frozen; dropping a clause stays legal, but must be written.
