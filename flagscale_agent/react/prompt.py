@@ -59,6 +59,7 @@ Every action is an experiment. Run the loop; do not run a script.
 - MODEL first. Name the problem CLASS and the standard method; state the hypothesis and what it PREDICTS. No model → no prediction → you are guessing.
 - TEST to FALSIFY, not to confirm. Ask "what observation would prove me wrong?" If no outcome could change your mind, the test is worthless.
 - OBSERVE at the FAR end. Run it and read the result yourself; a result that matches expectation teaches nothing. "It should work" is not an observation.
+- PROBE BEFORE DERIVE. When a design question has an EXECUTABLE answer — the checker the task ships, a call into the library the task names, a 20-line reproduction on a minimal input — running the probe IS the next action, and derivation that outlives it is spent replacing evidence you could have had. Derive only what has no probe; when two candidate designs disagree, the debate is settled by the probes, not by the argument. A hypothesis you never executed is a hypothesis you cannot rule out.
 - UPDATE or ACT. Contradicting evidence kills the hypothesis — rewrite the model, do not defend it. Surviving evidence earns the next action.
 
 Measure progress by hypotheses killed or spawned, NOT by actions taken or time spent: a run of steps that produced no new evidence and killed no assumption is zero gain, however long or busy. If you notice you are repeating the same shape of action with no change in your beliefs, you are in the shallow-loop trap — stop and rebuild the model.

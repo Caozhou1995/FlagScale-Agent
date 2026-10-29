@@ -390,3 +390,24 @@ def test_g2_composed_spans_enumerate_inclusion_axes_multiplicatively():
     assert "under the MAXIMUM and MINIMUM of those" in RAW
     # the hedge must be constructive, not a bet
     assert "a hedge shown constructively, not a bet on one" in FLAT
+
+
+def test_probe_before_derive_bullet_present():
+    """v33 (2026-10-30): the HOW-YOU-WORK loop must carry the observation-
+    first order as a first-class bullet. The convergence measurement (2523
+    trials, paired same-task win/loss medians: deep-derivation share p50
+    0.07 wins vs 0.25 losses, sign 36:7) says long no-observation stretches
+    separate winners from losers; the idle gate now enforces it structurally,
+    and this clause states it as doctrine. Must stay generic: no task noun,
+    no numeric anchor.
+    """
+    assert "probe before derive" in FLAT
+    span = FLAT[FLAT.index("probe before derive"):FLAT.index("probe before derive") + 700]
+    assert "executable answer" in span
+    assert "derivation that outlives it is spent replacing evidence" in span
+    assert "settled by the probes, not by the argument" in span
+    assert "a hypothesis you never executed is a hypothesis you cannot rule out" in span
+    # leak guards: task nouns and invented constants must not ride along
+    for noun in ("regex", "chess", "checker.py", "castling", "gpt", "doom"):
+        assert noun not in span, f"task noun leaked: {noun}"
+    assert not re.search(r"\b\d{3,}\b", span), "numeric anchor leaked"
