@@ -331,7 +331,7 @@ class TestKernelCappedNudge:
         assert "runtime length cap" in nudge
         assert "<previous_reasoning>" in nudge
         assert "long reasoning" in nudge
-        assert "Land the next concrete step NOW" in nudge
+        assert "Your next message MUST contain exactly ONE tool call that" in nudge
         # Capped reasoning must direct persisting the delivery contract
         # (path/format/constraints) that this reasoning block already fixed.
         assert "delivery contract" in nudge
@@ -398,7 +398,7 @@ class TestKernelCappedNudge:
         nudges = [m for m in h.history.messages
                   if m.get("role") == "user" and "previous_reasoning" in (m.get("content") or "")]
         assert len(nudges) == 6
-        assert "Land the next concrete step NOW" in nudges[0]["content"]
+        assert "Your next message MUST contain exactly ONE tool call that" in nudges[0]["content"]
         assert "HARD STOP" not in nudges[0]["content"]
         assert all("HARD STOP" in m["content"] for m in nudges[1:])
         # Escalation is not one-shot: every later cap keeps demanding action.

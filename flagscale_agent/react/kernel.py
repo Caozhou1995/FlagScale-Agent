@@ -678,18 +678,36 @@ class AgentKernel:
                                     # First cap this turn: bounded recap (not the
                                     # whole stream) so the next call spends its
                                     # input budget on acting, not re-reading.
+                                    #
+                                    # A menu ("either call a tool ... or write
+                                    # your answer") leaves the model free to keep
+                                    # deriving, and measured trajectories show it
+                                    # does: a cap that merely ADVISES action is
+                                    # followed by another full stream of the same
+                                    # reasoning. The directive therefore names ONE
+                                    # mandatory class of action and makes the
+                                    # artifact-on-disk the default, not an option.
                                     nudge = (
                                         "[system: your reasoning reached its runtime length cap "
                                         "and was stopped. Your reasoning so far is reproduced "
-                                        "BELOW AS A BOUNDED TAIL — do NOT continue it.\n"
-                                        "Land the next concrete step NOW: either call a tool to "
-                                        "test your next hypothesis, or write your answer to "
-                                        "disk. Deep problems are solved stepwise; experiments "
-                                        "beat more thinking. If your reasoning already fixed the "
-                                        "delivery contract (deliverable path, format, "
-                                        "constraints), `memory_write` it first and then write "
-                                        "that file — an imperfect file that exists beats a "
-                                        "perfect draft that never lands.\n\n"
+                                        "BELOW AS A BOUNDED TAIL — do NOT continue it; continuing "
+                                        "it will be cut at exactly the same wall again.\n"
+                                        "Your next message MUST contain exactly ONE tool call that "
+                                        "puts state on disk or reads the world:\n"
+                                        "  • `write_file` the artifact you have already derived to "
+                                        "the delivery path the task names — even partial, even "
+                                        "imperfect. An imperfect file on disk can be edited; a "
+                                        "perfect derivation that never lands cannot, and it scores "
+                                        "exactly like no work at all; or\n"
+                                        "  • `shell` ONE command that tests your single strongest "
+                                        "remaining hypothesis and prints its result.\n"
+                                        "If your reasoning already fixed the delivery contract "
+                                        "(path, format, constraints), `memory_write` it first so it "
+                                        "survives, then write that file. Do not explain, do not "
+                                        "plan, do not summarize, do not reason further: emit the "
+                                        "tool call immediately. Then iterate from what that call "
+                                        "returns — a wrong concrete answer you can see beats a "
+                                        "right one you are still deriving.\n\n"
                                         "<previous_reasoning>\n"
                                         f"{_cap_tail}\n"
                                         "</previous_reasoning>"
