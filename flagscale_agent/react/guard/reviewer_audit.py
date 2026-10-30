@@ -348,6 +348,44 @@ class ReviewerAuditGuard(Guard):
         self._write_state(state)
 
     # ── the two phases ───────────────────────────────────────────────────────
+    def _maybe_tick(self, ctx: GuardContext) -> None:
+        """Time-based fallback: dispatch the FIRST audit past ~40% of budget.
+
+        Measured root cause this closes: single-shot agents under short walls
+        do not declare completion until the last minutes, so a trigger keyed
+        only on plan_update declarations never fires (three consecutive
+        production batches produced ZERO dispatches while the reviewer's
+        quality was independently proven). check_pre runs before every tool
+        call, so a time-based tick here cannot be missed. One dispatch, ever:
+        once an audit exists, the declaration hook and continuity take over.
+        """
+        if self._stats_fn is None:
+            return
+        state = self._state()
+        if state.get("seq"):
+            return  # an audit already exists — declaration path owns the rest
+        try:
+            st = self._stats_fn()
+        except Exception:
+            return
+        if not isinstance(st, dict):
+            return
+        budget = float(st.get("budget", 0) or 0)
+        remaining = float(st.get("remaining", 0) or 0)
+        if budget <= 0:
+            return
+        if remaining < max(240.0, 0.20 * budget):
+            return  # too late to be useful — same thin-wall rule as check_post
+        if budget - remaining <= 0.40 * budget:
+            return
+        if self._audit_dir() is None or self._spawn_fn is None:
+            return
+        seq = int(state.get("seq", 0) or 0) + 1
+        n = self._snapshot(ctx)
+        if n <= 0:
+            return
+        self._dispatch(ctx, seq)
+
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         """Declaration landed -> snapshot + dispatch. NEVER blocks."""
         if not self._enabled():
@@ -374,9 +412,19 @@ class ReviewerAuditGuard(Guard):
         return None
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
-        """Unread reviewer findings block the next call — once per report."""
+        """Unread reviewer findings block the next call — once per report.
+
+        Also hosts the TIME-BASED fallback dispatch: a single-shot agent
+        under a short wall (measured across three batches: all plan_update
+        declarations land in the last 3 minutes) never reaches this guard's
+        declaration hook in time, so the reviewer would never be dispatched
+        at all. Past ~40% of the budget with no audit yet, dispatch once —
+        check_pre runs before EVERY tool call, so this tick cannot be missed
+        the way a declaration-driven trigger can.
+        """
         if not self._enabled():
             return None
+        self._maybe_tick(ctx)
         d = self._audit_dir()
         if d is None:
             return None

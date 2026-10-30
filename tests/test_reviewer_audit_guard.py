@@ -154,6 +154,72 @@ def test_no_findings_file_does_not_block(tmp_path):
     assert g.check_pre(_ctx(tmp_path, tool="shell")) is None
 
 
+# ── time-based fallback tick (single-shot agents never declare early) ───────
+
+def test_time_tick_dispatches_past_40pct_when_no_audit_yet(tmp_path):
+    """Production evidence (3 batches, ZERO dispatches): single-shot agents
+    land their plan_update declarations in the last 3 minutes of the wall,
+    so a declaration-only trigger never fires. Past ~40% of the budget with
+    no audit yet, check_pre must dispatch ONCE, on any tool call."""
+    calls = []
+
+    def rec(**kw):
+        calls.append(kw)
+        return "reviewer pid=7 session=auditor"
+
+    stats = {"budget": 1800.0, "remaining": 1000.0}   # elapsed ~44%
+    g = _guard(tmp_path, spawn=rec, stats=lambda: stats)
+    g.check_pre(_ctx(tmp_path, tool="shell"))
+    assert len(calls) == 1, f"expected 1 tick dispatch, got {len(calls)}"
+    assert calls[0]["goal"], "tick dispatch must carry the audit goal"
+    st = (tmp_path / AUDIT_DIRNAME / AUDIT_STATE_FILENAME)
+    assert st.is_file() and json.loads(st.read_text()).get("seq") == 1
+    assert (tmp_path / AUDIT_DIRNAME / SNAPSHOT_FILENAME).is_file()
+
+
+def test_time_tick_does_not_fire_before_40pct(tmp_path):
+    stats = {"budget": 1800.0, "remaining": 1100.0}   # elapsed ~39%
+    g = _guard(tmp_path, stats=lambda: stats)
+    g.check_pre(_ctx(tmp_path, tool="shell"))
+    assert not (tmp_path / AUDIT_DIRNAME).exists(), "fired too early"
+
+
+def test_time_tick_never_double_dispatches(tmp_path):
+    stats = {"budget": 1800.0, "remaining": 900.0}    # elapsed ~50%
+    g = _guard(tmp_path, stats=lambda: stats)
+    for _ in range(5):
+        g.check_pre(_ctx(tmp_path, tool="shell"))
+    st = tmp_path / AUDIT_DIRNAME / AUDIT_STATE_FILENAME
+    assert json.loads(st.read_text()).get("seq") == 1, "must dispatch once"
+
+
+def test_time_tick_thin_budget_suppressed(tmp_path):
+    stats = {"budget": 1800.0, "remaining": 300.0}    # < 20% left: too late
+    g = _guard(tmp_path, stats=lambda: stats)
+    g.check_pre(_ctx(tmp_path, tool="shell"))
+    assert not (tmp_path / AUDIT_DIRNAME).exists()
+
+
+def test_time_tick_yields_to_existing_audit(tmp_path):
+    """Once ANY audit exists (declaration path or previous tick), the tick
+    must not add a second one — continuity owns the rest of the run."""
+    d = tmp_path / AUDIT_DIRNAME
+    d.mkdir()
+    (d / AUDIT_STATE_FILENAME).write_text(json.dumps({"seq": 2, "review_id": "auditor"}))
+    stats = {"budget": 1800.0, "remaining": 900.0}
+    rec = _Recorder()
+    g = _guard(tmp_path, spawn=rec, stats=stats)
+    g.check_pre(_ctx(tmp_path, tool="shell"))
+    assert not rec.calls, "tick duplicated an existing audit"
+
+
+def test_time_tick_no_stats_fn_is_silent(tmp_path):
+    g = ReviewerAuditGuard(session_dir_fn=lambda: str(tmp_path),
+                           spawn_fn=_Recorder(), stats_fn=None,
+                           enabled_fn=lambda: True)
+    assert g.check_pre(_ctx(tmp_path, tool="shell")) is None
+
+
 def test_override_demands_adjudication_not_a_bare_retry(tmp_path):
     g = _guard(tmp_path)
     _arm(tmp_path, g, "VIOLATION: x\nEVIDENCE: y\nFIX: z\n")
