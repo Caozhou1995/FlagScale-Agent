@@ -60,6 +60,8 @@ Key design decisions:
 
 from __future__ import annotations
 
+import os
+
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 from flagscale_agent.react.guard.utils import READ_ONLY_TOOLS
 
@@ -266,6 +268,18 @@ class TimeBudgetGuard(Guard):
         # cadence guards (memory_discipline) advance on real work rather than on
         # every check pass.
         if not ctx.tool_name:
+            return None
+
+        # Audit reviewers are exempt from pacing ceremony. Measured root cause
+        # (kv-store-grpc, 2026-10-30): a reviewer subprocess inherits the full
+        # harness prompt, so this guard fires its 65%/78%/86%/91% ritual nudges
+        # at it — four long checkpoint messages that consumed the reviewer's
+        # usable rounds before it ever reached the findings write (its log
+        # showed it still ANALYSING at 91%). A reviewer's job is one linear
+        # read-then-write; pacing advice written for a task agent is pure
+        # meta-ceremony to it, and each wasted round re-triggered the parent's
+        # redispatch loop. The stamp is set by reviewer_audit.make_spawn_fn.
+        if os.environ.get("FLAGSCALE_AUDIT_REVIEWER"):
             return None
 
         stats = None

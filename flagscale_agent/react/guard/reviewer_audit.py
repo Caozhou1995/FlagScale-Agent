@@ -118,6 +118,36 @@ assertion, that is finding #1:
              requirement, quoted with the record index.
   FIX:       the exact assertion to run against the delivered path now.
 
+A SPECIAL CASE of #1 that deserves its own finding: a quantity the agent
+EARLIER read as ambiguous and promised to HEDGE (transcript shows both a
+naming of the ambiguity and a commitment to satisfy both readings). If the
+delivered artifact satisfies only one reading, that is finding #2:
+  VIOLATION: HEDGE-DECLARED-THEN-FORGOTTEN — the agent promised to satisfy
+             BOTH readings of "<requirement>" (its own hedge commitment,
+             record index N) but the delivered artifact satisfies only the
+             "<per-item>" reading; the "<combined>" reading measures <value>,
+             which violates the stated bound.
+  EVIDENCE:  the hedge commitment quoted from the transcript, then the
+             measurement of the OTHER construction against the delivered
+             artifact (the number you computed).
+  FIX:       the exact check of the hedge-promised construction to run now
+             (e.g. the union/combined count the promise named), before the
+             next action.
+
+The third class: the agent's executed assertion measures a NEIGHBOURING
+construction of the stated requirement — its own helper (a fixed-offset
+strip, a re-derived count, its own parser) — while the task text's literal
+wording pins a different boundary. An equivalent-looking gate that measures
+the agent's construction is NOT an assertion on the task's construction.
+That is finding #3:
+  VIOLATION: GATE-DEFINITION-SHIFT — the task states "<requirement>", whose
+             literal executable form is "<task-worded check>", but the
+             agent's gate checks "<agent's construction>" instead. The two
+             agree on the agent's own case by assumption only.
+  EVIDENCE:  the agent's gate line quoted, beside the task-text wording it
+             does not literally test.
+  FIX:       run the task-worded assertion against the delivered path now.
+
 INCREMENTAL OUTPUT — the parent agent may be killed at ANY moment (its wall
 clock is independent of yours). So write each finding to {output} THE MOMENT
 you are confident in it: create the file with finding #1 as soon as you have
