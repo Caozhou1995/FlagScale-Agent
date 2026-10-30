@@ -78,7 +78,8 @@ def test_step_done_snapshots_transcript_and_dispatches(tmp_path):
     assert len(spawn.calls) == 1
     goal = spawn.calls[0]["goal"]
     # one doctrine-clause finding template + one TASK-GATE template line
-    # 1 doctrine-clause + TASK-GATE + hedge-case + gate-definition-shift = 4
+    # 1 doctrine-clause + TASK-GATE + hedge-case + gate-definition-shift
+    # + class-4 (stated property of the delivered artifact) = 5
     assert goal.count("VIOLATION:") == 5
     assert "TASK-GATE" in goal, "the reviewer must be told to check stated task requirements first"
     assert "Compile every numeric bound" in goal
