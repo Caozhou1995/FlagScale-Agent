@@ -104,6 +104,13 @@ lines:
   FIX:       the concrete corrective action, addressed to the agent, in one
              sentence.
 
+INCREMENTAL OUTPUT — the parent agent may be killed at ANY moment (its wall
+clock is independent of yours). So write each finding to {output} THE MOMENT
+you are confident in it: create the file with finding #1 as soon as you have
+it, then APPEND findings #2/#3 as you confirm them (append, never rewrite the
+file). A truncated file with one real finding is a delivered audit; an empty
+file because you were still composing the perfect report is a lost audit.
+
 Rules:
 - Report BEHAVIOUR, not style. "It never measured the quantity it delivered"
   is a finding; "it was verbose" is not.
