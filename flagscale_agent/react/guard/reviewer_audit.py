@@ -104,6 +104,20 @@ lines:
   FIX:       the concrete corrective action, addressed to the agent, in one
              sentence.
 
+The FIRST finding to check is the TASK-GATE one: the transcript's first
+records contain the task text. List every requirement it states — each numeric
+bound, size cap, format rule, named output file, named tool to use. For EACH,
+check the transcript shows a runnable assertion the agent actually EXECUTED
+against the artifact it will deliver (a grep, a byte count, a run of the
+shipped checker — not a mention). If a stated requirement has no executed
+assertion, that is finding #1:
+  VIOLATION: G1 "Compile every numeric bound the task text states into a
+             runnable assertion" — the task states "<requirement>" but no
+             executed assertion covers it.
+  EVIDENCE:  the agent's own gate/check output (or its absence) for that
+             requirement, quoted with the record index.
+  FIX:       the exact assertion to run against the delivered path now.
+
 INCREMENTAL OUTPUT — the parent agent may be killed at ANY moment (its wall
 clock is independent of yours). So write each finding to {output} THE MOMENT
 you are confident in it: create the file with finding #1 as soon as you have

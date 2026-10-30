@@ -76,7 +76,11 @@ def test_step_done_snapshots_transcript_and_dispatches(tmp_path):
     assert "G1 bytes not model" in rows[0]["content"], (
         "the doctrine must be IN the file the reviewer reads, not recalled")
     assert len(spawn.calls) == 1
-    assert spawn.calls[0]["goal"].count("VIOLATION:") == 1
+    goal = spawn.calls[0]["goal"]
+    # one doctrine-clause finding template + one TASK-GATE template line
+    assert goal.count("VIOLATION:") == 2
+    assert "TASK-GATE" in goal, "the reviewer must be told to check stated task requirements first"
+    assert "Compile every numeric bound" in goal
 
 
 def test_snapshot_is_bounded(tmp_path):
