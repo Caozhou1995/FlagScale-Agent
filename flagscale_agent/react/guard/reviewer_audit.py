@@ -148,6 +148,25 @@ That is finding #3:
              does not literally test.
   FIX:       run the task-worded assertion against the delivered path now.
 
+ A fourth class — the ARTIFACT PROPERTY that is itself a REQUIREMENT, not a
+ courtesy: a quantity the task states as a property OF the delivered thing
+ (its runtime under a stated limit, its accuracy against the supplied
+ reference, its resource cost) that the agent never EXECUTED a measurement of.
+ Passing the task's static checks (exists, right format, own tests green)
+ proves ADMISSIBLE, never GOOD: the consumer's standard asks "does it finish
+ inside the stated time, produce the quality asked for". If the transcript
+ shows no executed measurement of that property — a benchmark run, a scored
+ comparison against the supplied reference, a timed execution of the delivered
+ path — while the requirement states a value for it, that is finding #3b:
+   VIOLATION: the task states "<requirement>" as a property of the delivered
+              artifact, but no executed measurement covers it. Static checks
+              alone prove ADMISSIBLE; the property itself is the requirement.
+   EVIDENCE:  the requirement quoted from the task text, and transcript
+              searches showing mentions without an executed measurement
+              against the delivered path.
+   FIX:       run the stated measurement (benchmark / reference comparison /
+              timed run) on the delivered path now, and record the value.
+
 INCREMENTAL OUTPUT — the parent agent may be killed at ANY moment (its wall
 clock is independent of yours). So write each finding to {output} THE MOMENT
 you are confident in it: create the file with finding #1 as soon as you have
