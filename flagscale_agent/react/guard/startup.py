@@ -43,6 +43,7 @@ urllib+timeout, ping, dig) and BLOCKS the first heavy op until one is made.
 from __future__ import annotations
 
 import abc
+import os
 import re
 import time
 
@@ -607,6 +608,15 @@ class StartupGuard(Guard):
         ]
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Audit reviewer: a minutes-long, read-only child whose ONLY job is to
+        # read a snapshot and append findings. The startup ceremony (backup
+        # override round-trip + non-overridable research gate + probe rules)
+        # would burn its whole wall on ritual — measured: a 165s reviewer died
+        # at timeout having produced zero findings, its log showing the first
+        # three turns spent satisfying this pipeline instead of reading. The
+        # stamp is set by reviewer_audit.make_spawn_fn on the child env.
+        if os.environ.get("FLAGSCALE_AUDIT_REVIEWER"):
+            return None
         if not ctx.tool_name:
             return None
         self._pending_phase = None

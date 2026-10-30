@@ -76,6 +76,16 @@ class TestResolveQuery:
         q2 = _run_single_shot_append_nudge(q)
         assert q2 == q
 
+    def test_audit_reviewer_never_gets_the_nudge(self, monkeypatch):
+        """The audit reviewer is parent-launched; the nudge tells it to fan out
+        workers, which contradicts its single job (read snapshot, append
+        findings) and burned reviewer turns on planning to delegate."""
+        from flagscale_agent.react.agent import _run_single_shot_append_nudge
+        monkeypatch.setenv("FLAGSCALE_AUDIT_REVIEWER", "1")
+        q = _run_single_shot_append_nudge("audit the snapshot")
+        assert q == "audit the snapshot"
+        assert MULTI_AGENT_NUDGE_SUFFIX not in q
+
 
 class TestFinalizeNoReport:
     def _mk(self, tmp_path):

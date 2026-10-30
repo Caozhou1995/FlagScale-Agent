@@ -220,3 +220,33 @@ def test_continuity_reuses_the_same_reviewer_session(tmp_path):
     assert "reviewer" in fn(resume_task_id="auditor", message="M2")
     rp = tmp_path / AUDIT_DIRNAME / "reviewer" / "auditor" / "resume.prompt"
     assert rp.read_text() == "M2", "continuity needs the resume pointer on disk"
+
+
+def test_second_dispatch_skipped_only_while_reviewer_alive(tmp_path):
+    """Flock contention (measured: two reviewers fought in
+    acquire_session_lock and both stalled) — a LIVE reviewer suppresses a
+    second dispatch; a dead (reaped/zombie) one must not."""
+    from flagscale_agent.react.guard.reviewer_audit import make_spawn_fn
+
+    fn = make_spawn_fn(session_dir_fn=lambda: str(tmp_path),
+                       agent_bin="/bin/true")
+    out1 = fn(goal="G", deadline_minutes=1)
+    assert "reviewer pid=" in out1
+    pid = int(out1.split("pid=")[1].split()[0])
+    pidfile = tmp_path / AUDIT_DIRNAME / "reviewer" / "auditor.pid"
+    assert pidfile.read_text() == str(pid)
+
+    # /bin/true exits instantly; wait until it is gone from /proc, then the
+    # zombie (not yet reaped) must NOT suppress: empty cmdline = dead.
+    import time as _t
+    for _ in range(50):
+        if not Path(f"/proc/{pid}/cmdline").exists():
+            break
+        _t.sleep(0.02)
+    out2 = fn(goal="G2", deadline_minutes=1)
+    assert "SKIP" not in out2, f"dead reviewer suppressed dispatch: {out2}"
+
+    # A LIVE pid (this test process, non-empty cmdline) MUST suppress.
+    pidfile.write_text(str(os.getpid()))
+    out3 = fn(goal="G3", deadline_minutes=1)
+    assert "SKIP" in out3 and "still running" in out3

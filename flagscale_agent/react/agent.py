@@ -231,6 +231,11 @@ def _run_single_shot_append_nudge(query, worker=False, resume=False):
     """
     if worker or resume or not query:
         return query
+    # Audit reviewers are parent-launched read-only auditors: the nudge tells
+    # them to fan out workers, which contradicts their single job (read the
+    # snapshot, append findings) and burned turns on planning to delegate.
+    if os.environ.get("FLAGSCALE_AUDIT_REVIEWER"):
+        return query
     if MULTI_AGENT_NUDGE_SUFFIX in query:
         return query
     return f"{query}\n\n{MULTI_AGENT_NUDGE_SUFFIX}"

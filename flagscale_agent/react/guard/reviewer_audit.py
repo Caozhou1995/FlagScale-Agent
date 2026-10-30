@@ -506,6 +506,22 @@ def make_spawn_fn(session_dir_fn=None, agent_bin: str | None = None):
             root.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             return f"ERROR: cannot create reviewer session dir: {e}"
+        # Single-instance: a live reviewer from a previous audit still holds
+        # this session dir (measured: a second dispatch flock-fought the first
+        # in acquire_session_lock and both stalls). If the pid recorded on the
+        # last dispatch is alive, SKIP — the running reviewer already covers
+        # the ongoing audit, and its findings will surface via check_pre.
+        # Liveness = readable NON-EMPTY /proc/<pid>/cmdline: a reaped or
+        # zombie child (we never wait() it) has an empty cmdline, so it does
+        # not count as running.
+        pidfile = root / "auditor.pid"
+        try:
+            old = int(pidfile.read_text(encoding="ascii").strip())
+            cmd = Path(f"/proc/{old}/cmdline").read_bytes()
+            if cmd.strip(b"\x00"):
+                return f"SKIP: reviewer pid={old} still running (log={root}/../reviewer.log)"
+        except (OSError, ValueError):
+            pass
         bin_ = agent_bin or os.environ.get("FLAGSCALE_AGENT_BIN") or "flagscale-agent"
         env = dict(os.environ)
         env["FLAGSCALE_SESSION_ROOT"] = str(root)
@@ -542,6 +558,10 @@ def make_spawn_fn(session_dir_fn=None, agent_bin: str | None = None):
                     cwd=os.getcwd())
         except Exception as e:
             return f"ERROR: reviewer launch failed: {e}"
+        try:
+            pidfile.write_text(str(proc.pid), encoding="ascii")
+        except Exception:
+            pass
         return f"reviewer pid={proc.pid} session=auditor log={log}"
 
     return _fn

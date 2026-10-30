@@ -497,3 +497,30 @@ def test_same_batch_research_does_not_clear_gate_for_sibling():
     rp.observe_post(GuardContext(tool_name="web_fetch", tool_args={},
                                  tool_result="real docs"))
     assert rp.check(_tool("read_file")) is None
+
+
+class TestAuditReviewerExemption:
+    """The audit reviewer is a minutes-long read-only child: the startup
+    ceremony must not burn its wall on ritual (measured: a 165s reviewer died
+    at timeout with zero findings, its first turns spent on backup/research
+    gates instead of reading the snapshot)."""
+
+    def test_audit_reviewer_env_disables_all_startup_phases(self, monkeypatch):
+        monkeypatch.setenv("FLAGSCALE_AUDIT_REVIEWER", "1")
+        g = StartupGuard(single_shot=True)
+        # The exact call shape the production reviewer dies on: first shell.
+        v = g.check_pre(_shell("ls"))
+        assert v is None
+        # Research gate: a read_file with no research done must also pass.
+        rp = _phase(g, "research")
+        rp._researched = False
+        rp._call_count = 0
+        v = g.check_pre(_tool("read_file"))
+        assert v is None
+
+    def test_without_env_the_gates_still_fire(self, monkeypatch):
+        # Negative control for the test above: same calls with the env unset.
+        monkeypatch.delenv("FLAGSCALE_AUDIT_REVIEWER", raising=False)
+        g = StartupGuard(single_shot=True)
+        v = g.check_pre(_shell("ls"))
+        assert v is not None and v.action == "block"
