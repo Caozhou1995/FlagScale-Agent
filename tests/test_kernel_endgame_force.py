@@ -125,15 +125,20 @@ def test_endgame_no_stats_no_crash():
 
 
 def test_endgame_threshold_boundary_inclusive():
-    """Exactly 85.0 arms; 84.9 does not (threshold is inclusive >=)."""
+    """Arm threshold is budget-dependent (forecast-arming): for a 900s
+    budget with a 240s in-stream wall the threshold is 58.3% (= max(50,
+    85 - 240/900*100)), so both 58.3% and anything above arm; below it
+    does not. Boundary is inclusive >=."""
     cap_a = {}
     k = _make_kernel(
-        {"elapsed": 765, "budget": 900, "remaining": 135, "pct": 85.0}, capture=cap_a)
+        {"elapsed": 525, "budget": 900, "remaining": 135, "pct": 58.4},
+        capture=cap_a)
     k.run_turn()
     assert cap_a.get("force_tool") is True
 
     cap_b = {}
     k2 = _make_kernel(
-        {"elapsed": 764, "budget": 900, "remaining": 136, "pct": 84.9}, capture=cap_b)
+        {"elapsed": 524, "budget": 900, "remaining": 376, "pct": 58.2},
+        capture=cap_b)
     k2.run_turn()
     assert "force_tool" not in cap_b

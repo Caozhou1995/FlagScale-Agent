@@ -95,6 +95,10 @@ class AgentKernel:
     # value >1 gives it room to react while still catching a stuck re-emit loop
     # long before max_iter.
     MAX_CONSECUTIVE_COMPLETION_BLOCKS = 5
+    # In-stream thinking wall: mirrors agent's IN_STREAM_THINKING_WALL_SEC
+    # (240s, agent.py L1279). Used by the endgame arming arithmetic so the
+    # forced-call window is guaranteed to contain a stream boundary.
+    STREAM_THINKING_WALL_SEC = 240
     # Saturation nudge: from this consecutive-saturated-call count on, the
     # kernel DROPS the saturated filler message from history and injects a
     # directive that FORBIDS continuing the text stream (hard convergence).
@@ -340,9 +344,39 @@ class AgentKernel:
                 # wall itself is the exit, and a turn that ends with only
                 # reasoning on record scores zero no matter how good the
                 # reasoning was.
+                #
+                # Stream-boundary arithmetic (measured, dna-assembly trial
+                # srrzyo4 2026-10-31): the arm point is checked HERE, at the
+                # top of the loop, but the 85% crossing usually happens while
+                # a thinking stream is ALREADY in flight — that stream is
+                # unforced and only ends when its own in-stream wall
+                # (240s) or the budget wall kills it. For a 900s budget the
+                # endgame window after 85% is 135s < 240s, so NO stream
+                # boundary ever lands inside the window: the forced call is
+                # attached to a stream that dies at the wall with the tool
+                # call never reached (observed: 🔧=0 across the whole trial,
+                # 92% nudge printed 9s before death). The fix is to arm
+                # EARLY ENOUGH that a stream boundary is guaranteed before
+                # the wall: the arm threshold must be pulled earlier by the
+                # stream wall as a share of budget, i.e.
+                #   threshold = max(50, 85 - (stream_wall / budget) * 100)
+                # so the worst case is one stream that starts at the arm
+                # point and ends at most stream_wall seconds later — with
+                # (threshold/100)*budget - stream_wall seconds of window
+                # left for the forced call to run. For 900s that is
+                # 85 - 26.7 = 58.3% (forced call gets ~135s guaranteed);
+                # for 3600s it is 85 - 6.7 = 78.3%.
                 _tb_pct = (
                     _tb_stats.get("pct") if isinstance(_tb_stats, dict) else None)
-                if isinstance(_tb_pct, (int, float)) and _tb_pct >= 85.0:
+                _tb_budget = (
+                    _tb_stats.get("budget") if isinstance(_tb_stats, dict) else None)
+                _arm_thr = 85.0
+                if (isinstance(_tb_budget, (int, float)) and _tb_budget > 0):
+                    _arm_thr = max(
+                        50.0,
+                        85.0 - (self.STREAM_THINKING_WALL_SEC
+                                / float(_tb_budget)) * 100.0)
+                if isinstance(_tb_pct, (int, float)) and _tb_pct >= _arm_thr:
                     self._force_tool_next = True
                     self._thinking_cap_override = 3000
 
