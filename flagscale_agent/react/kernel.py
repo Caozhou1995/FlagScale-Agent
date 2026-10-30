@@ -321,6 +321,31 @@ class AgentKernel:
                     result.stop_reason = "time_budget_exhausted"
                     break
 
+                # ── Endgame posture (structural, not prose) ──
+                # Measured failure (trial 4CHXYAh, 2026-10-30): a 900s budget,
+                # 5 tool calls total, and in the final 19 seconds the model
+                # wrote "I must bank NOW" and spent them deliberating HOW to
+                # call write_file vs shell — the turn died at 100% with zero
+                # bytes on disk. Prose checkpoints (the soft guard's 90%
+                # block) only gate OBSERVATION calls; nothing structurally
+                # constrains pure reasoning, and reasoning is exactly what
+                # the endgame burns. So from >= 85% of budget spent to the
+                # end of the turn, EVERY remaining request is constrained
+                # the same way the cap-escalation ladder constrains a
+                # runaway thinker: the next stream must carry a tool call
+                # (prose-only is not a legal completion) and its thinking
+                # budget is squeezed so server-forced thinking cannot eat
+                # the round before the tool call is reached. This is
+                # budget-driven, not cap-driven, so it stays armed — the
+                # wall itself is the exit, and a turn that ends with only
+                # reasoning on record scores zero no matter how good the
+                # reasoning was.
+                _tb_pct = (
+                    _tb_stats.get("pct") if isinstance(_tb_stats, dict) else None)
+                if isinstance(_tb_pct, (int, float)) and _tb_pct >= 85.0:
+                    self._force_tool_next = True
+                    self._thinking_cap_override = 3000
+
                 # Guard reset happens per-turn (at line 101), not per-iteration
                 d.judge.reset_turn()
 
