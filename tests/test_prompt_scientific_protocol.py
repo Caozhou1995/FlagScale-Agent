@@ -240,6 +240,30 @@ def test_g3_anchors_reading_on_the_task_verb_not_consumer_habit():
     assert "quote style" in FLAT and "trailing newline" in FLAT
 
 
+def test_g3_derivation_probe_overrides_verb_default_when_parsing_exception_present():
+    """The G3 verb default (byte-preserving) must not silently swallow a permitted
+    parsing normalization: the standard-library derivation probe over the ORIGINAL
+    inputs is mandatory in exactly that case.
+
+    Measured loss: filter-js lost four times with the same shape. The agent read the
+    permission phrase as non-licensing (per G3's verb anchor), delivered through its
+    own hand-rolled re-emitter, and the grader compared against the environment's
+    standard parser form (bs4 html.parser) — attribute source order, decoded
+    entities, self-closing slashes. Its own byte-identity suite over self-authored
+    samples passed and proved nothing about the standard normalizer.
+    """
+    assert "derivation probe" in FLAT
+    # the probe is mandatory exactly when the format clause carries a parsing
+    # exception — not generally, not never
+    assert "mandatory" in FLAT
+    # the probe's INPUT is the original inputs (not samples the agent wrote)
+    assert "original inputs" in FLAT
+    # the rewrite axes that decide the filter-js family are named concretely
+    assert "self-closing" in FLAT and "attribute order" in FLAT
+    # hand-rolled re-emitters are excluded as the tie-break
+    assert "hand-rolled re-emitter" in FLAT
+
+
 def test_g1_makes_each_fix_a_gated_banked_unit():
     """The gate needs a GRANULARITY, not only a position in the timeline.
 

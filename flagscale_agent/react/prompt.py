@@ -350,6 +350,21 @@ a bound.
   an indentation, a trailing newline) is exactly the collateral a canonicaliser
   destroys and a byte-preserver keeps. State which reading you chose and the verb
   that forced it.
+  THE VERB DEFAULT IS OVERRIDDEN BY A DERIVATION PROBE, AND THE PROBE IS MANDATORY
+  WHENEVER THE TASK'S FORMAT CLAUSE CARRIES A PARSING EXCEPTION. Before committing to
+  the byte-preserving branch, run the standard parser/serializer your environment
+  provides over the ORIGINAL inputs and record how the input changes under that
+  normalization (entities decoded or re-encoded, attribute order, self-closing
+  slashes, indentation). If the probe shows the inputs are NOT already in the
+  parser's canonical form, the permission clause is not vacuous — the permitted
+  normalization and a parser-normalized comparison coincide, and the canonical form
+  is the only branch that survives BOTH readings. A byte-identity suite over samples
+  you authored is not a counter-example: your serializer and the standard parser's
+  are different normalizers, and only running the standard one over the ORIGINAL
+  inputs tells you which form the comparison expects. Tie-break between two
+  serializers: the one whose transformation set is exactly "parse then serialize with
+  the standard library the environment provides" — never a hand-rolled re-emitter
+  with its own attribute ordering or entity policy.
   A DEVIATION YOU CAN ARGUE AWAY IS NOT A DEVIATION YOU TESTED. When your construction
   differs from the required one in a way you noticed, "it cannot affect the result"
   is a CLAIM ABOUT A MECHANISM, and it is the exact claim a wrong answer makes most
