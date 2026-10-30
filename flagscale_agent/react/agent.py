@@ -598,6 +598,21 @@ class WorkerAgent:
             ReviewerFeedbackGuard)
         guard_registry.register(ReviewerFeedbackGuard(
             session_dir_fn=lambda: self._session_dir))
+        # Reviewer audit guard: at every completion declaration, snapshot the
+        # transcript and dispatch an INDEPENDENT reviewer to compare it against
+        # the doctrine; unread findings block the next call once. The reviewer
+        # is one long-lived worker session (resumed across audits), so it keeps
+        # its own context instead of re-deriving it. Disabled inside a reviewer
+        # (env stamp) so an audit never spawns an audit of itself.
+        from flagscale_agent.react.guard.reviewer_audit import (
+            ReviewerAuditGuard, make_spawn_fn)
+        self._audit_guard = ReviewerAuditGuard(
+            session_dir_fn=lambda: self._session_dir,
+            spawn_fn=make_spawn_fn(session_dir_fn=lambda: self._session_dir),
+            stats_fn=self._task_budget_stats,
+            enabled_fn=lambda: not os.environ.get("FLAGSCALE_AUDIT_REVIEWER"),
+        )
+        guard_registry.register(self._audit_guard)
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
