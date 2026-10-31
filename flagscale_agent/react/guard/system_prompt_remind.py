@@ -17,19 +17,17 @@
 Fires when the agent DECLARES a step complete (plan_update step_done, and any
 batch row that declares one). That is the single moment where self-confirmation
 is most likely and least checked: the agent has just convinced ITSELF, the
-acceptance form was just filled in, and the next action feels like progress.
+mechanical acceptance form was just filled in, and the next action feels like
+progress.
 
-The guard injects a short POINTER list back to the doctrine already in the
-system prompt — it deliberately does not restate the doctrine. Restating it
-would (a) burn context every single step, and (b) let the agent satisfy the
-reminder by reading a paraphrase instead of re-reading the rule. Four
-questions, no content: did you run the protocol, did you look at the delivered
-bytes, is your recorded observation literally verbatim, and are you about to
-cross one of your own negative constraints.
-
-No cooldown by design: the beat is per declaration, not per session. An agent
-that declares ten steps gets ten beats, because a stale "I checked last time"
-is exactly the rationalisation this exists to interrupt.
+The guard BLOCKS the declaration exactly ONCE per step (a beat, not a barrier):
+the agent must then do its scientific self-review — did I run the protocol,
+did I read the delivered bytes, is my recorded observation verbatim, does my
+next action cross a negative constraint — and re-issue the SAME plan_update.
+The re-issued declaration is not blocked again: the review is the agent's own
+judgment, the harness does not grade it. The harness side does exactly one
+thing — one block per step, nothing else — and never blocks any other agent
+behaviour.
 """
 
 from __future__ import annotations
@@ -37,51 +35,60 @@ from __future__ import annotations
 from . import Guard, GuardContext, GuardVerdict
 
 _REMIND_MESSAGE = """
-[SystemPromptRemind] You just declared a step complete. Before the next action,
-answer these four to yourself — in one line each, not in prose:
-  1. Did you run the four-step protocol (S1 locate the producer -> S2 enumerate
-     constructions with numbers -> S3 merge on arithmetic -> S4 enumerate once
-     more after green) for the quantity this step decided? Which step did you skip?
-  2. Have you READ the actual bytes at the delivery path since your last write —
-     or are you reporting your model of them? Open the file, measure it, quote it.
-  3. Is the `observed` you recorded a VERBATIM substring of a real tool output
-     from this session, or a paraphrase/summary of what you believe happened?
+[Remind] This step-done declaration is blocked ONCE — the beat, not a refusal.
+Do your scientific self-review NOW, then re-issue the SAME plan_update (it will
+pass). Answer to yourself, one line each:
+  1. What did this step OBSERVE from the world (a command's real output), and
+     what did it merely REASON? Reasoning is not evidence.
+  2. Did you read the actual bytes at the delivery path — or your model of them?
+  3. Is the `observed` you recorded a verbatim substring of a real tool output?
   4. Does your next intended action cross one of your own negative constraints?
-     Re-read the forbidden list before acting, not after being blocked.
-If any answer is "no" or "I think so", the step is not done — fix it now, while
-the fix still costs one edit instead of one run.
+     (Re-read the forbidden list before acting, not after being blocked.)
+  5. What trap in the TASK's real goal could this step have walked into — and
+     what evidence rules it out?
+The review is yours; the harness does not grade it. It only guarantees the beat
+happened. Re-issue the same declaration and continue.
 """
 
 
 class SystemPromptRemindGuard(Guard):
-    """Inject-only self-check beat on every completion declaration."""
+    """Block a completion declaration ONCE per step; never block anything else.
+
+    First submission of a step_done / batch-with-done / complete is blocked with
+    the self-review pointer. The agent does its scientific self-review and
+    re-issues the SAME declaration; the re-issue passes (the review is the
+    agent's own judgment — the harness does not grade it, it only guarantees
+    the beat happened). Every other tool call and every other plan_update is
+    untouched.
+    """
 
     name = "system_prompt_remind"
-    # Sits just after PlanUpdateGuard (50) so it observes the declaration the
-    # plan guard just acted on, and before the generic advisories (72/90).
+    # Sits just after PlanUpdateGuard (50) so it sees the declaration before
+    # the plan guard acts on it, and before the generic advisories (72/90).
     priority = 58
 
-    def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
-        return None  # Inject-only
+    def __init__(self) -> None:
+        # Signatures already beaten once this session: one beat per step.
+        self._beaten: set[str] = set()
 
-    def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+    def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if ctx.tool_name != "plan_update":
             return None
         args = ctx.tool_args or {}
         if not _declares_completion(args):
             return None
-        result = (ctx.tool_result or "").lstrip()
-        # Only when the declaration actually LANDED: a blocked or errored
-        # plan_update changed no state, so there is no completion to interrogate.
-        if not result or result.startswith("ERROR") or result.startswith(
-            "[BLOCKED BY GUARD]"
-        ):
-            return None
-        return GuardVerdict.inject(
+        sig = _declaration_sig(args)
+        if sig in self._beaten:
+            return None  # already beaten once this step — let it through
+        self._beaten.add(sig)
+        return GuardVerdict.block(
             _REMIND_MESSAGE,
             reason="system_prompt_remind_beat",
             category="system_prompt_remind",
         )
+
+    def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        return None  # the beat is pre-side; nothing to inject afterwards
 
 
 def _declares_completion(args: dict) -> bool:
@@ -102,3 +109,32 @@ def _declares_completion(args: dict) -> bool:
         if str(row.get("status") or "").strip().lower() == "done":
             return True
     return False
+
+
+def _declaration_sig(args: dict) -> str:
+    """Identity of the declaration — one beat per step, not one per retry.
+
+    step_done: the step number is the identity. batch: the SET of done row ids
+    is the identity (a re-issued batch with the same rows is the same beat;
+    new rows added later are a different beat). complete: one beat for the
+    whole plan, keyed on the action alone. Fields the agent may legitimately
+    change between the block and the re-issue — acceptance_act, notes,
+    evidence, assumptions — do NOT change the signature: the re-issued
+    declaration must pass without a second block.
+    """
+    action = str(args.get("action") or "").strip().lower()
+    if action in ("step_done", "complete"):
+        return f"{action}:{args.get('step_id')}" if action == "step_done" else action
+    if action == "batch":
+        ids = []
+        for i, r in enumerate(args.get("updates") or []):
+            if not isinstance(r, dict):
+                continue
+            if str(r.get("status") or "").strip().lower() != "done":
+                continue
+            sid = r.get("step_id")
+            # A done row with no usable id must still be distinct: fall back
+            # to its position so two id-less batches cannot share one beat.
+            ids.append(str(sid) if sid is not None else f"idx{i}")
+        return "batch:" + ",".join(sorted(ids))
+    return action

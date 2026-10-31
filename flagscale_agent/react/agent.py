@@ -492,29 +492,16 @@ class WorkerAgent:
         # stay legitimate).
         from flagscale_agent.react.guard.sleep_spacing import SleepSpacingGuard
         guard_registry.register(SleepSpacingGuard())
-        # FirstArtifactGuard: block the next tool call once a run has spent its
-        # turn budget with no write to the delivery path. Measured failure: a
-        # run produced ~200KB of design reasoning across 4 turns, issued one
-        # shell command and ZERO writes, and the verifier's first read was
-        # 'no such file'. Every existing text-only nudge stayed unreachable
-        # (all three fired 0 times) because that run makes FEW turns each with
-        # one tool call — so the distinguishing quantity is "turns consumed
-        # before the delivery path was first mutated", which only this guard
-        # measures. One-shot and overridable, so a healthy run is never
-        # livelocked.
-        from flagscale_agent.react.guard.first_artifact import FirstArtifactGuard
-        # Both probes are REQUIRED for the guard's task-scoped liveness check:
-        # without them it cannot tell "no task in flight" from "task delivered
-        # already", so it falls back to session-wide turn counting and keeps
-        # blocking after the work is done (measured: 4+ consecutive blocks
-        # after a verified delivery, plus blocks on pure Q&A turns).
-        # `get_active()` reads the plan pointer, so a completed/absent plan
-        # makes the guard stand down; the declared delivery paths let it see an
-        # artifact that is already on disk.
-        guard_registry.register(FirstArtifactGuard(
-            active_plan_fn=self.task_plan.get_active,
-            declared_paths_fn=self._declared_delivery_paths,
-        ))
+        # FirstArtifactGuard: REMOVED 2026-10-31 (operator directive).
+        # Reason: the guard's judgement source is a delivery path it INFERS by
+        # parsing the task text, so its block message is wrong whenever the
+        # inference is wrong or absent (measured this session: it fired on a
+        # grading path inherited from a plan TEMPLATE — a literal
+        # '<batch>/<task>__*' glob — while the real task was an analysis with no
+        # such path). Operator principle: a harness mechanism that is complex
+        # AND easy to get wrong should be deleted, not patched. The failure mode
+        # it targeted (reasoning with no artifact write) is better served by the
+        # prompt-level delivery doctrine than by a text-inference gate.
 
         # Reliability guards (P7)
 
@@ -552,17 +539,17 @@ class WorkerAgent:
         # agent's belief in it survives. Never
         # blocks.
         guard_registry.register(DeliverableSurvivalGuard())
-        # CompletionArtifactGate (always active, block): at the moment the
-        # [TASK_COMPLETE] sentinel is emitted, block unless EVERY absolute
-        # deliverable path the TASK STATEMENT names has actually been observed
-        # by a tool call in this session. Measured: 4 of 10 "agent said done,
-        # verifier said 0" trials had never created the named artifact at all
-        # (FileNotFoundError: /app/re.json, File /tmp/frame.bmp does not exist)
-        # or left it empty (assert '40 tests passed' in ''). A prompt clause
-        # cannot falsify the agent's belief that it wrote the file; a check on
-        # history can. Overridable so a trivial/uninferable task cannot livelock.
-        from flagscale_agent.react.guard.completion_artifact import CompletionArtifactGate
-        guard_registry.register(CompletionArtifactGate())
+        # NOTE: CompletionArtifactGate was REMOVED after measurement. It tried to
+        # enumerate task-named "artifact" paths by regex over the task statement
+        # and block [TASK_COMPLETE] until each was observed. Two independent
+        # reviews killed it: (1) its extractor could not separate INPUT paths
+        # from OUTPUT paths deterministically, so the coverage number was
+        # measured on a neighbouring construction; (2) a tool result reading
+        # "No such file or directory" counted as an observation, so the gate
+        # discharged itself on exactly the failure it existed to catch. A regex
+        # over natural language cannot enumerate what a task wants produced —
+        # the real defect behind "said done, scored 0" is failing to understand
+        # the task's actual goal and its traps, which no path-pattern gate fixes.
         # SystemPromptRemindGuard (always active, inject-only): at every
         # completion DECLARATION (plan_update step_done / batch-with-done /
         # complete) inject a four-question pointer back to the doctrine already
