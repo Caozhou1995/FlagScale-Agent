@@ -44,7 +44,7 @@ count and don't tick.
 
 Side-channel guard: on deliverable+threshold tasks, a fact only clears a block if
 OBSERVED AT THE DELIVERABLE (edit + re-run + measure), not derived in scratch/prototype/
-on paper. This wires PRINCIPLE 2 into the stall clearance bar.
+on paper. This wires the prompt's "systematic, not ritual" discipline into the stall clearance bar.
 
 Mechanism limit: guards run in check_post (AFTER a tool call). If the agent goes
 silent with no tool calls, the guard never fires until the next call. In practice
