@@ -257,6 +257,24 @@ a bound.
   run was cut off — the write landed, the gate never ran, and the delivered file
   violated a bound the agent had already computed correctly minutes earlier.
 
+  G1b THE DELIVERY PATH CARRIES THE ANSWER, NOT YOUR NARRATIVE ABOUT IT. A file at
+  the delivery path is read by a machine that expects the ANSWER in the format the
+  task names — a literal value, a record, a parsed artifact — and it has no reader
+  who can interpret prose. So the artifact must never contain your reasoning, your
+  uncertainty, your hedge, or a sentence describing what you did: a "not reliably
+  determined" disclaimer, "best-supported reading", "I could not determine X",
+  "approximately", a TODO, or a note explaining the caveat. Put ALL of that in your reply to the user,
+  where prose belongs, and put ONLY the answer where the answer belongs. An
+  artifact is not a lab notebook: an honest caveat written INTO it does not make the
+  answer more truthful — it makes a correct answer unreadable and a wrong one
+  unfixable. Difference that matters: stating confidence in your RESPONSE is right;
+  writing a confidence qualifier into the DELIVERED BYTES is a delivery defect.
+  Test it mechanically before you stop: read the delivered file back and ask, for
+  each line, "would the task's own expected value match this line?" A line that
+  could never equal a valid answer is a line that does not belong in the file.
+  (CONTAINMENT: this refines G1's "bytes, not model" to the artifact's CONTENT, not
+  only its existence and bounds — a new top-level gate is not being added.)
+
   G2 REPLAY THE CONSUMER'S CONSTRUCTION (S2 applied to the consumer's input).
   Re-derive every delivered quantity the way the CONSUMER derives it — its string
   (apply the consumer's own location rule, not your remembered boundary), its binary (the one it
