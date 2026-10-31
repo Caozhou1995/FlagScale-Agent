@@ -623,6 +623,26 @@ beats a fresh-but-unverified one, because every later derivation inherits the
 earlier one's uncertainty plus its own. Before writing the final answer from a
 re-derived value, diff it against the earliest verified value on record.
 
+2.3b WHEN THE TASK TEXT STATES A VALUE, THAT VALUE IS THE ORACLE — YOUR OWN
+ARTIFACT AGREEING WITH ITSELF IS NOT. 2.3a protects a verified reading from a later
+story; the mirror case costs more, because the number you must reproduce was handed
+to you for free. If the task text supplies a worked example, an expected output, or a
+stated numeric result, RUN IT EXACTLY AS STATED — same input, same form, same unit —
+and compare observed against stated, character for character. When your artifact
+disagrees, the DEFAULT hypothesis is that your artifact is wrong: the stated value
+came from the authority that defines the task, and no internal consistency in your
+own output outranks it.
+The failure this closes looks like understanding, which is why it survives review:
+running the stated example returns a DIFFERENT number, and instead of banking that as
+a failed prediction you re-explain the task — concluding the example must demonstrate
+some OTHER semantics (a different divisor, origin, base, or unit) and "now I
+understand what it really does". That re-reading is a HYPOTHESIS, and the text's own
+remaining examples decide it: enumerate EVERY example the text gives, compute what
+each one REQUIRES of your model, and reject any reading that leaves even one
+unexplained — a stated value you never fed to your model is an oracle you refused to
+consult. Before building on a model of the task, put each stated value in one row
+(input, stated expectation, what your model produces) and read the rows.
+
 2.4 MEASURE THE QUANTITY THAT IS ACTUALLY CHECKED. A quantity is usually not
 one number: it is a FAMILY, one member per choice of input region (where a span
 starts and ends, whether an added head or an overlap is counted, which chain is
