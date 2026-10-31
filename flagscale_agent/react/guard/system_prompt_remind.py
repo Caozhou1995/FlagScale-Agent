@@ -41,7 +41,8 @@ pass). Answer to yourself, one line each:
   1. What did this step OBSERVE from the world (a command's real output), and
      what did it merely REASON? Reasoning is not evidence.
   2. Did you read the actual bytes at the delivery path — or your model of them?
-  3. Is the `observed` you recorded a verbatim substring of a real tool output?
+  3. Is the reading you just recorded something you actually saw printed, or a
+     paraphrase stitched from memory and expectation?
   4. Does your next intended action cross one of your own negative constraints?
      (Re-read the forbidden list before acting, not after being blocked.)
   5. What trap in the TASK's real goal could this step have walked into — and
@@ -118,8 +119,8 @@ def _declaration_sig(args: dict) -> str:
     is the identity (a re-issued batch with the same rows is the same beat;
     new rows added later are a different beat). complete: one beat for the
     whole plan, keyed on the action alone. Fields the agent may legitimately
-    change between the block and the re-issue — acceptance_act, notes,
-    evidence, assumptions — do NOT change the signature: the re-issued
+    change between the block and the re-issue — the evidence text, notes, and
+    any other prose — do NOT change the signature: the re-issued
     declaration must pass without a second block.
     """
     action = str(args.get("action") or "").strip().lower()

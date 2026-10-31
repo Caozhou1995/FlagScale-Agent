@@ -170,13 +170,13 @@ _FRAME_STEP_ACCEPTANCE = [
     "reading dominates, cover the top-2 (or top-k) in the same run — an undominated "
     "ambiguity is a coin flip whose wrong side costs a whole run. This is the hedge/bet "
     "rule applied at BUILD time, not a new doctrine.",
-    "HARNESS DECLARATION SHAPES (convention / deliverable_reading / assumptions): there "
-    "are no forced declaration forms — the guard no longer checks them. What matters at "
-    "planning time: a step that rests on a derived convention must carry a probe whose "
-    "output could have refuted it; a step that emits a graded artifact must state its "
-    "path; a load-bearing premise you could not test is a labelled gap, not a silent "
-    "one. A task's EXAMPLE value locks FORM (shape, units, stride), never a specific "
-    "value or base.",
+    "WHAT A STEP CLOSE OWES: a step that rests on a derived convention carries the probe "
+    "whose output could have refuted it; a step that emits a graded artifact names the "
+    "path it lands at; a load-bearing premise you could not test is stated as a labelled "
+    "gap rather than passed over. Report these as substance inside the step's own "
+    "verification text — there is no separate declaration form to fill in, and a step "
+    "with nothing of that kind to say simply states what it did. A task's EXAMPLE value "
+    "locks FORM (shape, units, stride), never a specific value or base.",
 ]
 
 
@@ -264,25 +264,10 @@ class PlanCreateTool(Tool):
                     "the task is mechanical and fast action is clearly right; fill it when "
                     "the task needs a theory before you act. You can update it later via "
                     "plan_update(thinking=...). "
-                    "For any task whose deliverable is judged by a grader/verifier "
-                    "separate from your own reasoning, answer these three here "
-                    "before committing to an approach: "
-                    "(1) SUCCESS PREDICATE — state the exact condition the checker "
-                    "applies to the deliverable, in the checker's own shape (a value, "
-                    "a set, a count, a range, a file, a behavior — whatever the "
-                    "task's contract literally says; quote it verbatim). Do not "
-                    "re-express it in your own preferred format. "
-                    "(2) INDEPENDENT ORACLE — name the tool or method that decides "
-                    "that predicate WITHOUT sharing your assumptions: it must be "
-                    "capable of rejecting your answer (a reference engine, a "
-                    "differential check, a property test — never your own pipeline "
-                    "re-run on your own parse). Confirm it is actually "
-                    "installable/reachable BEFORE planning around it. "
-                    "(3) SELF-CORRECTION LOOP — if the oracle rejects your premises "
-                    "or your answer, state the concrete retry path (fix the parse, "
-                    "switch method, re-read the contract). If any of the three has "
-                    "no answer, that is a wrong-approach signature — change the "
-                    "approach, not the answer. "
+                    "Keep it a model, not a form: no headings to fill in, no questions to "
+                    "answer in order. A model is worth writing when it tells you what to do "
+                    "next and what would prove you wrong; if it does neither, it is a "
+                    "description, not a model."
                 ),
             },
             "forbidden": {
