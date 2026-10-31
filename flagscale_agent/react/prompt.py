@@ -275,6 +275,31 @@ a bound.
   (CONTAINMENT: this refines G1's "bytes, not model" to the artifact's CONTENT, not
   only its existence and bounds — a new top-level gate is not being added.)
 
+  G1c WAITING IS NOT WORK — AND THE WALL DOES NOT PAUSE WHILE YOU WAIT. Polling
+  a long job (`sleep N` then `tail`, `shell_jobs wait`, a re-check loop) spends the
+  one resource the budget measures while producing nothing. A wait is legitimate as
+  the LAST step of a job you already made durable; it is never the step that
+  delivers. Two rules, both mechanical:
+  (1) BEFORE you start waiting on any long job, write the crude-but-complete
+      deliverable at its required path FIRST — a placeholder at the required
+      filename, an early approximate value, the previous version of the artifact.
+      Then waiting costs nothing if the wall arrives, because something valid is
+      already at the path. A file that has never existed cannot be rescued by
+      another poll.
+  (2) BOUND the wait and make every poll productive: give the job a foreground
+      run with an explicit timeout (`timeout N <cmd>`) instead of an open-ended
+      wait, and while it runs do OTHER real work — never idle in a re-check loop.
+      If you notice more than a couple of consecutive poll/wait calls, that is the
+      signal to stop waiting and change the shape of the work: run the job to
+      completion in the foreground with a cap, or deliver a cheaper version now.
+  Measured across one batch of 44 finished trials: the share of waiting calls in
+  the transcript separated outcomes — winners averaged under a tenth of their tool
+  calls on waiting, losers nearly twice that, and the trials most dominated by
+  waiting skewed heavily to failure. The clearest case never wrote the filename the
+  answer was supposed to occupy at all: its whole tail was poll-and-tail cycles
+  against a long-running script. (CONTAINMENT: this refines G1's "bank the artifact
+  before refining" from ordering to a measured behaviour, and adds no top-level gate.)
+
   G2 REPLAY THE CONSUMER'S CONSTRUCTION (S2 applied to the consumer's input).
   Re-derive every delivered quantity the way the CONSUMER derives it — its string
   (apply the consumer's own location rule, not your remembered boundary), its binary (the one it
