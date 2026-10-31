@@ -60,3 +60,8 @@ def _isolate_worker_identity_env(monkeypatch):
     for key in _WORKER_IDENTITY_ENV:
         monkeypatch.delenv(key, raising=False)
     yield
+
+# v64 rebuild (2026-10-31): the retired v63 prompt-wording tests are archived
+# under tests/_retired_v63 and must NOT be collected — see that dir's README
+# and docs/prompt_invariants.md.
+collect_ignore_glob = ["_retired_v63/*"]

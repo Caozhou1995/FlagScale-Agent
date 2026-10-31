@@ -28,9 +28,12 @@ def test_background_must_be_paired_with_other_work():
 
 
 def test_budget_order_preserved():
-    assert "BUDGET ORDER" in SYSTEM_PROMPT_STATIC
+    # v64 rebuild: the v63 heading "BUDGET ORDER" was retired (contract C11);
+    # the failure mode it guarded — land a scorable deliverable before
+    # polishing — is now stated without the retired label.
     low = SYSTEM_PROMPT_STATIC.lower()
-    assert "crude" in low and ("scored" in low or "scores" in low)
+    assert "secure the deliverable" in low and "fastest finishing path" in low
+    assert "crude" in low or "refine" in low
 
 
 def test_conveys_urgency_from_the_start():
