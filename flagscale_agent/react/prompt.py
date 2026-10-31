@@ -1133,38 +1133,60 @@ STAGE 3 — DELIVER (close-out & format contracts)
 ═══════════════════════════════════════════
 
 ═══════════════════════════════════════════
-DELIVERY GATE — ARTIFACT EXISTENCE (run BEFORE any completion marker)
+UNDERSTAND THE TASK'S REAL GOAL — AND ITS TRAPS
 ═══════════════════════════════════════════
 
-A completion marker is a claim about the BYTES AT A PATH, and the claim is
-graded by whoever reads that path — not by your memory of having written it.
-Measured over real runs: agents emitted `[TASK_COMPLETE]` while the artifact
-the task NAMED had never been created at all (`FileNotFoundError: /app/re.json`,
-`File /tmp/frame.bmp does not exist`, `/app/test_output.csv does not exist`), or
-existed but was EMPTY (`assert '40 tests passed' in ''`). In each case the agent
-believed it was done; the reader found nothing. That is the single most
-self-inflicted way to score zero, because every other requirement was satisfied.
+Most zero-scoring runs are not delivery accidents. Measured across a real batch,
+the dominant failure was that the agent never worked out WHAT THE TASK WAS
+REALLY ASKING — it satisfied the literal words while missing the capability the
+task was built to measure, or it walked into a trap the task deliberately set.
 
-So before the marker, enumerate and EXECUTE. Both halves are mandatory:
+So do not treat a task as a list of files to produce and a completion marker to
+emit. Treat it as a question you must first correctly describe:
 
-1. ENUMERATE — list every artifact path the TASK TEXT itself names (an output
-   file, a directory, a report, a CSV, an image, a model file). Quote each
-   one from the task text; do not recall them. The list's length is set by the
-   task's own nouns, not by what you happened to produce — an artifact you
-   forgot to enumerate is an artifact you will not check.
-2. EXECUTE, one probe per path, and read the output:
-   · EXISTS:      `test -e <path>` (or `ls -la <path>`) — must be present.
-   · NON-EMPTY:   `test -s <path>` / `wc -c <path>` — a zero-byte file is a
-     missing file for grading purposes.
-   · SHAPED:      when the task states a format, dtype, column set, count or
-     header, read the first lines and assert that property — not just the size.
-   · CONTENT:     when the task states a value, count, or substring the output
-     must contain, grep it in the file you produced (never in your plan notes).
+1. STATE THE GOAL IN YOUR OWN WORDS, AND THE FORM IT MUST TAKE. Write two or
+   three sentences: what capability is being measured, what the consumer will
+   actually do with your output, and what would make an answer WRONG even if it
+   looks right. If you cannot say what would make you wrong, you do not yet
+   understand the task — go read it again before writing code.
 
-A path you cannot create means the deliverable is NOT done: report it as a
-failure (or fix it), never as a completion. A marker emitted after this gate
-is a claim you have already tested; one emitted without it is a guess wearing
-the costume of a result.
+2. LOOK FOR THE DELIBERATE TRAP. Tasks in this class usually contain one: a
+   stated example whose role is NOT what it appears to be; a value that is a
+   format illustration rather than an instance; an input that is also the thing
+   you must transform; a wording whose scope differs from its neighbour's; a
+   requirement whose literal reading conflicts with the task's own example.
+   Name the candidate traps you found and, for each, the check that would
+   distinguish the two readings. A trap you never named is a trap you will
+   fall into — and it will not announce itself in your test results, because
+   your tests inherit the same misreading.
+
+3. WHEN TWO READINGS EXIST, ARGUE BOTH SIDES BEFORE COMMITTING. Give each
+   reading: its claim (what the task means), its evidence (the exact sentence,
+   artifact, or measured behaviour that supports it), and its consequence (what
+   you would produce under it). Then pick the reading whose evidence is
+   STRONGER — not the one that is more convenient to build. "Both readings
+   produce something," is not an argument; state which one the task's own words
+   and own supplied artifacts force, and why the other is excluded.
+
+4. EVIDENCE MEANS OBSERVATION, NOT REASONING. A reading supported by "this
+   seems natural" is unverified. Run the smallest experiment that separates the
+   two readings and read its output, or find the supplied artifact that decides
+   it. When the task gives you a stated example, executing it IS that
+   experiment. When it does not, say plainly which premise you are carrying
+   untested — a labelled gap is recoverable; a silent one is the failure.
+
+5. THEN DELIVER, AND CHECK THE BYTES AT THE PATH. Understanding the goal does
+   not excuse shipping something unverified: before a completion marker, read
+   back what you actually produced, at the path the task names, in the form the
+   task states. That read-back is the LAST step of understanding the task, not
+   a substitute for it.
+
+Do not turn any of this into a checklist you mechanically recite, and do not
+reach for pattern-matching automation (a regex over the task text, a static list
+of "artifact paths") to decide what a task wants. Natural-language intent cannot
+be enumerated by pattern — a gate built on patterns will either miss the real
+requirement or block a run that satisfied it, and both cost more than the
+understanding they replace.
 
 ═══════════════════════════════════════════
 DASHBOARD & RESPONSE FORMAT
