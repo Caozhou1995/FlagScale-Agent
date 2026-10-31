@@ -51,7 +51,6 @@ def _plan_create_tool(tp, session_id=""):
 
     class _Shim(PlanCreateTool):
         def execute(self, **kwargs):
-            kwargs.setdefault("calibration", dict(_CAL_SHIM))
             return super().execute(**kwargs)
 
     return _Shim(tp) if not session_id else _Shim(tp, session_id)
@@ -106,12 +105,8 @@ class TestPlanCreateToolStructuredSteps:
         assert "Plan created" in result
         plan = tp.get_active()
         # The fixed FRAME step is prepended at index 0; agent steps shift +1.
-        # The fixture's oracle binding lands at the head of the first agent
-        # step's acceptance (oracle-at-frame contract), so the authored items
-        # follow it.
-        a0 = plan["steps"][1]["acceptance"]
-        assert a0[0].startswith("Oracle:")
-        assert a0[-2:] == ["A1", "A2"]
+        # v65: no oracle binding — acceptance carries exactly the authored items.
+        assert plan["steps"][1]["acceptance"] == ["A1", "A2"]
         assert plan["steps"][2]["acceptance"] == ["B1"]
 
     def test_mixed_steps(self, plan_dir):
@@ -126,11 +121,8 @@ class TestPlanCreateToolStructuredSteps:
         )
         assert "Plan created" in result
         plan = tp.get_active()
-        # the oracle binding precedes the authored acceptance on the first
-        # agent step (oracle-at-frame contract)
-        a0 = plan["steps"][1]["acceptance"]
-        assert a0[0].startswith("Oracle:")
-        assert a0[-1:] == ["A1"]
+        # v65: no oracle binding — authored acceptance only.
+        assert plan["steps"][1]["acceptance"] == ["A1"]
         assert plan["steps"][2]["acceptance"] == []
 
     def test_backward_compatible_string_steps(self, plan_dir):
@@ -140,8 +132,8 @@ class TestPlanCreateToolStructuredSteps:
         assert "Plan created" in result
         plan = tp.get_active()
         assert plan["steps"][1]["title"] == "A"
-        # a promoted string step carries only the oracle binding line
-        assert [l.startswith("Oracle:") for l in plan["steps"][1]["acceptance"]] == [True]
+        # v65: a promoted string step carries no oracle binding — empty acceptance.
+        assert plan["steps"][1]["acceptance"] == []
 
     def test_dict_without_title_fails(self, plan_dir):
         tp = TaskPlan(plan_dir)
@@ -277,19 +269,3 @@ class TestPlanToolsThinking:
 # creation call, so they get a minimal valid declaration injected here. The
 # contract itself -- including the refusal -- is covered in
 # tests/test_oracle_at_frame.py.
-@pytest.fixture(autouse=True)
-def _default_oracle_for_creation(monkeypatch):
-    from flagscale_agent.react.tools.plan_create import PlanCreateTool
-
-    original = PlanCreateTool.execute
-
-    def execute(self, **kwargs):
-        if kwargs.get("oracle") in (None, ""):
-            kwargs["oracle"] = {
-                "oracle": "test decider",
-                "premise_source": "provided",
-                "first_exercise": "true",
-            }
-        return original(self, **kwargs)
-
-    monkeypatch.setattr(PlanCreateTool, "execute", execute)

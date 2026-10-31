@@ -17,17 +17,6 @@
 import json
 
 from flagscale_agent.react.tools.base import Tool
-from flagscale_agent.react.instruments import check_calibration
-from flagscale_agent.react.instruments import check_instrument_input
-from flagscale_agent.react.instruments import check_requirements_read
-from flagscale_agent.react.oracle import (
-    ORACLE_ACCEPTANCE_ITEM,
-    STATED_CONSTRAINT_ITEM,
-    AMBIGUITY_ANCHOR_ITEM,
-    PREMISE_SOURCES,
-    build_oracle_binding_line,
-    declares_external_premise,
-)
 
 
 # The fixed review step the harness appends to EVERY plan. It is the single
@@ -117,9 +106,6 @@ _FRAME_STEP_ACCEPTANCE = [
     "specific to this task ('do not re-run the same command with a bigger timeout — read "
     "the partial output and change the approach'), not virtues ('be careful'). Append "
     "more later with plan_update(action='add_forbidden').",
-    ORACLE_ACCEPTANCE_ITEM,
-    STATED_CONSTRAINT_ITEM,
-    AMBIGUITY_ANCHOR_ITEM,
     "FRAMING. State in one line: (a) the problem CLASS and its standard method — naming "
     "the class hands you the method AND its failure modes at once, and reaching for a "
     "sweep or brute-force enumeration is the tell that the class was never identified; "
@@ -184,13 +170,13 @@ _FRAME_STEP_ACCEPTANCE = [
     "reading dominates, cover the top-2 (or top-k) in the same run — an undominated "
     "ambiguity is a coin flip whose wrong side costs a whole run. This is the hedge/bet "
     "rule applied at BUILD time, not a new doctrine.",
-    "HARNESS DECLARATION SHAPES (convention / deliverable_reading / assumptions): the "
-    "guard message states the exact accepted shape when it fires, so do not pre-engineer "
-    "them here. What matters at planning time is only this: a step that rests on a derived "
-    "convention must carry a probe whose output could have refuted it; a step that emits a "
-    "graded artifact must state its path; a load-bearing premise you could not test is a "
-    "labelled gap, not a silent one. A task's EXAMPLE value locks FORM (shape, units, "
-    "stride), never a specific value or base.",
+    "HARNESS DECLARATION SHAPES (convention / deliverable_reading / assumptions): there "
+    "are no forced declaration forms — the guard no longer checks them. What matters at "
+    "planning time: a step that rests on a derived convention must carry a probe whose "
+    "output could have refuted it; a step that emits a graded artifact must state its "
+    "path; a load-bearing premise you could not test is a labelled gap, not a silent "
+    "one. A task's EXAMPLE value locks FORM (shape, units, stride), never a specific "
+    "value or base.",
 ]
 
 
@@ -297,67 +283,6 @@ class PlanCreateTool(Tool):
                     "switch method, re-read the contract). If any of the three has "
                     "no answer, that is a wrong-approach signature — change the "
                     "approach, not the answer. "
-                    "Bind the oracle at framing time: write its FIRST exercise "
-                    "(the exact command/check that runs it) into the acceptance "
-                    "of the FIRST load-bearing step, so the acceptance→verification "
-                    "channel forces the oracle's evidence to exist early, while the "
-                    "premises are still cheap to revise."
-                ),
-            },
-            "oracle": {
-                "type": "object",
-                "description": (
-                    "REQUIRED. The oracle that will decide this task, with a "
-                    "premise EXTERNAL to your own implementation. Object with "
-                    "keys: `premise_source` (one of 'differential' | 'provided' "
-                    "| 'consumer'), `oracle` (what decides it), and "
-                    "`first_exercise` (the exact command/check that runs it). "
-                    "When supplied, its first exercise is bound into the "
-                    "acceptance of the FIRST load-bearing step you list, so the "
-                    "acceptance->verification channel forces the oracle's "
-                    "evidence to exist early. A self-authored premise_source is "
-                    "refused. If the task text names NO deciding tool at all, "
-                    "declare that explicitly: premise_source 'consumer', oracle "
-                    "text 'none: <why no external decider exists>' -- an "
-                    "auditable declaration, not an omission. Omitting this field "
-                    "REFUSES plan creation."
-                ),
-                "properties": {
-                    "premise_source": {"type": "string"},
-                    "oracle": {"type": "string"},
-                    "first_exercise": {"type": "string"},
-                    "named_arbiter": {
-                        "type": "string",
-                        "description": (
-                            "The tool/library the TASK TEXT itself names as the "
-                            "decider of a disputed quantity — quote it from the "
-                            "task text (the sentence saying whose output is the "
-                            "ground truth). This is not the hidden checker: it is "
-                            "a name the task gives you to read. Write \"none\" only "
-                            "after checking that the task text names no deciding "
-                            "tool: an OMITTED key reads as 'never looked' and is "
-                            "refused at plan close, while \"none\" is an explicit, "
-                            "auditable declaration."
-                        ),
-                    },
-                    "deliverable_path": {
-                        "type": "string",
-                        "description": (
-                            "The artifact path you actually deliver. When set, the "
-                            "named arbiter must be run against THIS path before the "
-                            "plan may close — pointing it at a hand-typed sample or "
-                            "a re-derived substring measures the tool's arithmetic, "
-                            "not your shipped bytes."
-                        ),
-                    },
-                },
-            },
-            "oracle_step_id": {
-                "type": "integer",
-                "description": (
-                    "Optional : the 1-based number of the agent step that is the "
-                    "FIRST load-bearing step, so the oracle's first exercise binds "
-                    "to THAT step's acceptance (default: the first listed step)."
                 ),
             },
             "forbidden": {
@@ -394,72 +319,13 @@ class PlanCreateTool(Tool):
                     ]
                 },
             },
-            "calibration": {
-                "type": "object",
-                "description": (
-                    "REQUIRED. Instrument 1 of 4: prove your check works BEFORE "
-                    "you trust it. Run the instrument you will rely on ONCE on a "
-                    "case whose answer you ALREADY know, and record what it said. "
-                    "You authored the instrument, so it shares your blind spot — an "
-                    "uncalibrated check reporting PASS only tells you it agrees "
-                    "with itself. Keys: `instrument` (the exact check/command), "
-                    "`known_case` (a case whose answer is already known and "
-                    "external to the instrument — a value read from the task's own "
-                    "data, a prior observed result, a supplied reference), "
-                    "`observed` (what the instrument actually reported on it), "
-                    '`matches` = "yes" | "no" | "no_known_case". If no such case '
-                    'exists, say "no_known_case" — an honest answer, but it '
-                    "obliges you to show a NEGATIVE CONTROL later (the instrument "
-                    'must be seen to FIRE on a bad input). If it says "no", your '
-                    "instrument is broken and is refused: every PASS it produces "
-                    "afterwards is noise."
-                ),
-                "properties": {
-                    "instrument": {"type": "string"},
-                    "known_case": {"type": "string"},
-                    "observed": {"type": "string"},
-                    "matches": {
-                        "type": "string",
-                        "enum": ["yes", "no", "no_known_case"],
-                    },
-                },
-                "required": ["instrument", "matches"],
-            },
-            "requirements_read": {
-                "type": "array",
-                "description": (
-                    "REQUIRED when the task text defers its requirements to an "
-                    "external standard ('make sure X satisfies <standard>'s "
-                    "requirements', 'per the <vendor> protocol', 'as specified by "
-                    "<spec>'). Those clauses are NOT in the task text, so a "
-                    "checklist built only from the task text looks complete while "
-                    "being incomplete. Write down what the standard actually said, "
-                    "one entry per clause: {clause, source, covered_by}. "
-                    "`covered_by` = how the plan satisfies it, or "
-                    "'dropped: <reason>' when you deliberately do not. Dropping is "
-                    "allowed; dropping SILENTLY is what this field stops."
-                ),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "clause": {"type": "string"},
-                        "source": {"type": "string"},
-                        "covered_by": {"type": "string"},
-                    },
-                    "required": ["clause"],
-                },
-            },
         },
-        "required": ["title", "steps", "calibration"],
+        "required": ["title", "steps"],
     }
 
     def __init__(self, task_plan, session_id: str = "", task_text_fn=None):
         self._plan = task_plan
         self._session_id = session_id
-        # The ORIGINAL task text, used to decide whether `requirements_read`
-        # applies (the task defers to a named external standard). Injected as a
-        # callable so the tool reads the live task text rather than a snapshot.
-        self._task_text_fn = task_text_fn
 
     def execute(self, **kwargs) -> str:
         title = kwargs["title"]
@@ -497,67 +363,6 @@ class PlanCreateTool(Tool):
         if not normalized:
             return "ERROR: At least one step is required."
 
-        # Oracle-at-frame: validate the DECLARED shape of a supplied oracle and
-        # bind its first exercise to the step the agent designates as load-bearing
-        # (F4: a JSON-encoded string is decoded, like `steps` above; F3: the target
-        # is explicit, not silently "whatever was listed first").
-        oracle = kwargs.get("oracle")
-        if isinstance(oracle, str):
-            oracle = oracle.strip()
-            if oracle.startswith("{"):
-                try:
-                    oracle = json.loads(oracle)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-        # DECLARATION REQUIRED AT CREATION (measured loss, 2026-10-27):
-        # the schema exposes `oracle`, the FRAME acceptance demands it, and the
-        # model still omitted the kwarg -- the plan was created with oracle: {},
-        # so the binding/arbiter machinery never armed and the downstream gates
-        # (which fire only on a BOUND oracle) were all inert. A declaration the
-        # agent can silently skip is not a declaration: refuse creation until the
-        # agent commits one, the same way `steps` is required. This is a SHAPE
-        # gate (same honest scope as declares_external_premise) -- it forces the
-        # naming of a decider up front; it cannot prove the premise is external.
-        if oracle is None or not oracle:
-            return (
-                "ERROR: plan_create requires an oracle declaration -- the plan's "
-                "FRAME acceptance is built around one, and a plan created without "
-                "it arms none of the verification machinery. Provide an oracle "
-                "dict: 'premise_source' (one of: "
-                + " | ".join(PREMISE_SOURCES)
-                + "), non-empty 'oracle' (what decides the task's key quantity) "
-                "and 'first_exercise' (the exact command that runs it). If the "
-                "task text names NO deciding tool at all, say so explicitly in "
-                "the 'oracle' text (premise_source 'consumer', oracle text "
-                "'none: <why no external decider exists>') -- that is an "
-                "auditable declaration, not an omission. This is a declaration, "
-                "not proof: name the artifact so a reader can check it."
-            )
-        if not declares_external_premise(oracle):
-            return (
-                "ERROR: oracle must DECLARE an external-premise source. Provide "
-                "'premise_source' (one of: "
-                + " | ".join(PREMISE_SOURCES)
-                + "), non-empty 'oracle' and 'first_exercise', and no extra keys. "
-                "A self-authored/unknown premise_source, a missing leg, or an "
-                "annex key is refused. Note: this is a declaration, not proof -- "
-                "name the external artifact so a reader can check it."
-            )
-        binding = build_oracle_binding_line(oracle["oracle"], oracle["first_exercise"])
-        # F3: bind to the step the agent marks load-bearing when it says so,
-        # else the first listed step (the convention is stated in the FRAME
-        # acceptance text: "list that step first, or pass its index").
-        target_idx = 0
-        raw_idx = kwargs.get("oracle_step_id")
-        if isinstance(raw_idx, int) and 1 <= raw_idx <= len(normalized):
-            target_idx = raw_idx - 1
-        target = normalized[target_idx]
-        if isinstance(target, dict):
-            target.setdefault("acceptance", [])
-            target["acceptance"] = [binding] + list(target["acceptance"])
-        else:
-            normalized[target_idx] = {"title": str(target), "acceptance": [binding]}
-
         # Harness-appended FIXED steps — the plan standard template. The FIRST
         # step frames the plan (divergence check + qualifier/facet extraction +
         # wall-aware first cut + premortem + standard-method), and the LAST two
@@ -581,73 +386,11 @@ class PlanCreateTool(Tool):
 
         thinking = kwargs.get("thinking", "") or ""
         forbidden = kwargs.get("forbidden")
-        calibration = kwargs.get("calibration")
-        # F: LLM tool arguments can arrive JSON-encoded instead of parsed
-        # (same transport drift `steps` and `oracle` already tolerate above).
-        # Without this the agent can submit a perfectly standard object and be
-        # refused forever with "malformed" while its retries stay identical --
-        # observed 6 consecutive refusals with zero new information.
-        if isinstance(calibration, str):
-            _raw = calibration.strip()
-            if _raw.startswith("{"):
-                try:
-                    calibration = json.loads(_raw)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-        # INSTRUMENT 1 GATE: refuse to create the plan without a calibration
-        # declaration. This is the load-bearing half of the mechanism -- the
-        # schema only *asks*, this refuses, and only a refusal changes behaviour
-        # (measured: the advisory forms of every earlier mechanism were ignored).
-        _cal_refusal = check_calibration(calibration)
-        if _cal_refusal is not None:
-            return f"ERROR: {_cal_refusal[1]}"
-
-        # INSTRUMENT 1b GATE: the calibration binds the INSTRUMENT; this binds
-        # the INPUT it is handed. Measured losses in this class were all inputs,
-        # not instruments: a correctly calibrated tool fed a span the agent
-        # picked (skipping the prefix the consumer's own construction includes)
-        # returned a value inside the bound while the consumer's construction of
-        # the same quantity crossed it. Both readings were defensible; only one
-        # decided the reward. Refusing here -- not at plan close -- because this
-        # is the moment the construction is being chosen, and a declaration
-        # demanded 20 steps later cannot change that choice.
-        _inp_refusal = check_instrument_input(calibration)
-        if _inp_refusal is not None:
-            return f"ERROR: {_inp_refusal[1]}"
-
-        # NAMED-STANDARD GATE: when the task text defers its requirements to an
-        # external standard, the clauses that will decide the reward are NOT in
-        # the task text. Measured loss: an agent read a mandatory clause in the
-        # standard, judged the checker "less likely to verify it", dropped it --
-        # and failed on exactly that clause. No later gate can
-        # recover it, because every coverage sweep only reads DECLARED
-        # constraints. So the clause list is demanded here, at the moment the
-        # plan is frozen; dropping a clause stays legal, but must be written.
-        # Accepted inside calibration as well as top-level (instrument_input
-        # precedent: the calibration object is the declaration home).
-        requirements_read = kwargs.get("requirements_read")
-        if requirements_read is None and isinstance(calibration, dict):
-            requirements_read = calibration.get("requirements_read")
-        if isinstance(requirements_read, str):
-            _raw = requirements_read.strip()
-            if _raw.startswith("["):
-                try:
-                    requirements_read = json.loads(_raw)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-        _req_refusal = check_requirements_read(
-            self._task_text_fn() if self._task_text_fn else "", requirements_read)
-        if _req_refusal is not None:
-            return f"ERROR: {_req_refusal[1]}"
 
         try:
             plan = self._plan.create(title, normalized, self._session_id, thinking=thinking,
-                                     oracle=oracle, forbidden=forbidden,
-                                     calibration=calibration,
-                                     requirements_read=requirements_read)
+                                     forbidden=forbidden)
             forbidden_report = self._forbidden_report(plan)
-            oracle_report = self._oracle_report(oracle)
             return (
                 "Plan created.\n\n"
                 "NOTE: this is the FlagScale-Agent Plan STANDARD TEMPLATE. The harness "
@@ -658,45 +401,12 @@ class PlanCreateTool(Tool):
                 "and provide verification evidence for each acceptance criterion. All "
                 "fixed steps are SKIPPABLE with a reasonable reason, but do not skip "
                 "them silently.\n\n"
-                + oracle_report
                 + forbidden_report
                 + self._time_budget_report(normalized)
                 + f"{self._plan.summary()}"
             )
         except Exception as e:
             return f"ERROR: {e}"
-
-    def _oracle_report(self, oracle: dict) -> str:
-        """State the oracle declaration back to the agent at creation time.
-
-        Part C of the measured fix (2026-10-27): the agent wrote a
-        self-congratulatory 'oracle: ...' line in its thinking text while never
-        passing the kwarg, and nothing echoed the declaration state -- so the
-        gap was invisible until every downstream gate turned out inert. The
-        refusal (part A) closes creation-time silence; this echo closes the
-        creation-time loop on the success path, the same one-time echo the
-        forbidden list gets. Named tools referenced in the declaration are
-        quoted verbatim from the AGENT'S OWN dict -- nothing here invents or
-        suggests a tool name (no grader leak).
-        """
-        decider = str(oracle.get("oracle", "")).strip()
-        source = str(oracle.get("premise_source", "")).strip()
-        exercise = str(oracle.get("first_exercise", "")).strip()
-        arbiter = oracle.get("named_arbiter")
-        arbiter_note = ""
-        if isinstance(arbiter, str) and arbiter.strip():
-            arbiter_note = f"  named arbiter (the tool the task text names): {arbiter.strip()}\n"
-        return (
-            f"oracle declaration (you promised this; it MUST really be run before completion):\n"
-            f"  premise_source: {source}\n"
-            f"  oracle (decider): {decider}\n"
-            f"  first_exercise: {exercise}\n"
-            f"{arbiter_note}"
-            "  WARNING - key discipline: an external decider the task text names must be run"
-            " against THE DELIVERABLE ITSELF, not against a sample you constructed. When your"
-            " reading and its reading disagree, ITS reading wins; do not explain the gap away"
-            " as 'my script has a bug' and switch back to your own quantity.\n\n"
-        )
 
     def _forbidden_report(self, plan: dict) -> str:
         """Confirm back to the agent the prohibitions it just committed to.

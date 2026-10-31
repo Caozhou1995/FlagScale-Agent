@@ -472,9 +472,7 @@ class TaskPlan:
             yaml.dump({"active_id": plan_id}, f)
 
     def create(self, title: str, steps: List, session_id: str = "", thinking: str = "",
-               oracle: Optional[dict] = None, forbidden: Optional[List] = None,
-               calibration: Optional[dict] = None,
-               requirements_read: Optional[List] = None) -> dict:
+               forbidden: Optional[List] = None) -> dict:
         """Create a new plan.
         
         Args:
@@ -492,12 +490,6 @@ class TaskPlan:
                       thinking is a single overwrite-style slot holding the
                       current understanding of the WHOLE task, and it is the
                       home for deliberate/deep reasoning as opposed to fast action.
-            oracle: Optional independent-oracle declaration (a mapping with
-                    ``oracle``/``premise_source``/``first_exercise``). Persisted
-                    at the plan level so the completion boundary can read what
-                    oracle the agent BOUND -- turning the framing-time
-                    declaration into something the presentation path can check
-                    was actually EXERCISED, not merely named. Empty when absent.
             forbidden: Optional list of NEGATIVE constraints -- the actions this
                     plan must NOT take. Symmetric to ``steps``: steps are what to
                     do, ``forbidden`` is what not to do, and both are authored by
@@ -580,25 +572,6 @@ class TaskPlan:
                 "steps": step_list,
                 "thinking": (thinking or "").strip(),
                 "thinking_updated": time.time() if (thinking or "").strip() else 0.0,
-                # The independent-oracle declaration bound at framing time. Kept
-                # at the plan level (not only as prose on a step's acceptance) so
-                # the completion boundary can read WHERE the oracle lives and
-                # check it was EXERCISED -- a declaration becomes load-bearing
-                # only when the presentation path can see it.
-                "oracle": dict(oracle) if isinstance(oracle, dict) else {},
-                # Instrument 1 (CALIBRATION): the case whose answer was already
-                # known, and what the agent's own check said about it. Stored at
-                # plan level because it governs EVERY later self-report: an
-                # instrument that disagreed with a known answer makes all of its
-                # subsequent PASS claims worthless, which no step-local field
-                # could express.
-                "calibration": dict(calibration) if isinstance(calibration, dict) else {},
-                # The clause list drawn from an external standard the task text
-                # defers to. Persisted so the clause set exists as DATA (not
-                # reasoning text) and a dropped clause is visible as "dropped:"
-                # rather than absent.
-                "requirements_read": list(requirements_read)
-                if isinstance(requirements_read, (list, tuple)) else [],
                 # Instrument 3 (PRE-REGISTRATION): predictions written BEFORE a
                 # run, each with an id so it can be SETTLED later. Append-only;
                 # an unsettled entry is a live obligation on plan completion.

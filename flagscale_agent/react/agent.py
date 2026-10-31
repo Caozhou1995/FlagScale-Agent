@@ -117,7 +117,6 @@ from flagscale_agent.react.guard.reviewer_deadline import ReviewerDeadlineGuard
 from flagscale_agent.react.guard.post_evict_recovery import PostEvictRecoveryGuard
 from flagscale_agent.react.guard.knowledge_skill import KnowledgeSkillGuard
 from flagscale_agent.react.guard.arg_type import ArgTypeGuard
-from flagscale_agent.react.guard.verification import VerificationGuard
 
 from flagscale_agent.react.prompt_builder import PromptBuilder
 from flagscale_agent.react.tool_executor import ToolExecutor, tool_display_summary
@@ -621,10 +620,9 @@ class WorkerAgent:
         # Knowledge-first guard (always active, inject-only)
         self._knowledge_guard = KnowledgeSkillGuard()
         guard_registry.register(self._knowledge_guard)
-        # Verification discipline guard — now keeps ONLY the plan step_done
-        # evidence gate; the terminal completion gates moved into the plan's
-        # fixed review step (tools/plan_create.py). Re-enabled.
-        # guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals, task_text_fn=lambda: self._mech_original_task() + "\n\n" + self._mech_last_user_turn(), full_log_fn=lambda: list(self.history._full_log), stats_fn=self._task_budget_stats))
+        # Verification discipline guard — retired 2026-11-01 (plan 字段化繁为简):
+        # verification.py 已删除（死代码：注册行注释多年，字段门全部退役）。
+        # step_done 证据门由 plan 的固定 Review 步骤承载（tools/plan_create.py）。
 
         deps = KernelDeps(
             provider=self.provider,
@@ -694,8 +692,7 @@ class WorkerAgent:
         self.tool_registry.register(MemoryReadTool(self.memory))
         self.tool_registry.register(MemoryListTool(self.memory))
         self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
-        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id,
-                                         task_text_fn=lambda: self._mech_original_task()))
+        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
         self.tool_registry.register(RecallSearchTool(self._session_dir))
@@ -1298,51 +1295,8 @@ class WorkerAgent:
     INTRA_STREAM_CYCLE_TAIL_CHARS = 4096
     INTRA_STREAM_CYCLE_DISTINCT_MAX = 32
 
-    def _declared_delivery_paths(self) -> list:
-        """Delivery paths the CURRENT plan declares, as an explicit list.
-
-        Read by the first-artifact guard to answer one question it cannot answer
-        from message history: has the artifact this task is graded on already
-        landed on disk? The active plan's oracle names that path when the plan
-        binds one; a plan that binds none yields an empty list, which makes the
-        guard fall back to its history-only behaviour (it never guesses a path).
-
-        Deliberately task-scoped, not session-scoped: a path declared by an
-        earlier, completed plan says nothing about the current turn.
-        """
-        try:
-            active = self.task_plan.get_active() or {}
-        except Exception:
-            return []
-        paths = []
-        oracle = active.get("oracle") or {}
-        if isinstance(oracle, dict):
-            declared = oracle.get("deliverable_path")
-            if isinstance(declared, str) and declared.strip():
-                paths.append(declared.strip())
-        # A LOCAL_FIRST_CUT/step acceptance may name the delivery path too; scan
-        # both so a plan that only states it in a step still counts.
-        for step in active.get("steps") or []:
-            if not isinstance(step, dict):
-                continue
-            for crit in step.get("acceptance") or []:
-                if not isinstance(crit, str):
-                    continue
-                for token in crit.split():
-                    tok = token.strip("()[],;:\"'`")
-                    if tok.startswith("/") and "." in tok.rsplit("/", 1)[-1]:
-                        paths.append(tok)
-        # De-duplicate, preserving order; cap so a pathological plan cannot make
-        # the guard stat a huge list every iteration.
-        seen, out = set(), []
-        for p in paths:
-            if p in seen:
-                continue
-            seen.add(p)
-            out.append(p)
-            if len(out) >= 5:
-                break
-        return out
+    # v65: _declared_delivery_paths() 已随 first-artifact guard 与 plan oracle
+    # 字段一并退役（其唯一调用方已删除）。
 
     def _mech_original_task(self) -> str:
         """First user turn of the session = the original task text, verbatim.
@@ -1983,8 +1937,7 @@ class WorkerAgent:
         from flagscale_agent.react.tools.plan_create import PlanCreateTool
         self.tool_registry.register(MemoryWriteTool(
             self.memory, self._session_id, task_plan=self.task_plan))
-        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id,
-                                         task_text_fn=lambda: self._mech_original_task()))
+        self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
         # Re-register the proposal tool under the restored session id (same
         # capture-at-registration issue as memory_write/plan_create above).
         self.tool_registry.register(ProposalTool(self.proposals, self._session_id))

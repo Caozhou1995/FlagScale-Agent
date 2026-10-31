@@ -64,15 +64,12 @@ BARE_NUMBER_PAIR_PAT = re.compile(r"(?<![\w.])(\d{1,6})(?![\w.])")
 # Files whose strings are rendered into an agent message.
 AGENT_FACING = [
     "flagscale_agent/react/prompt.py",
-    "flagscale_agent/react/oracle.py",
     "flagscale_agent/react/judge.py",
-    "flagscale_agent/react/guard/verification.py",
-    # Tool schemas and the instruments module are read by the model verbatim
-    # (base.py converts `parameters` into the tool's JSON schema), so they are
-    # agent-facing text in exactly the same sense as the prompt.
+    # Tool schemas are read by the model verbatim (base.py converts
+    # `parameters` into the tool's JSON schema), so they are agent-facing text
+    # in exactly the same sense as the prompt.
     "flagscale_agent/react/tools/plan_update.py",
     "flagscale_agent/react/tools/plan_create.py",
-    "flagscale_agent/react/instruments.py",
 ]
 
 REPO_ROOT_MOUNT = '"source":"/nfs/caozhou/fa_eval/FlagScale-Agent"'

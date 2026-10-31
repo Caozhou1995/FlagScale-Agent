@@ -38,9 +38,8 @@ class TestFrameStepPremortem:
         # The frame step tells the agent to diff its own convention against any
         # reference artifacts present, before inventing one.
         t = _frame_text()
-        assert "reference artifacts" in t
-        assert "expected_" in t or "golden" in t
-        assert "diff" in t.lower()
+        assert "reference or golden artifacts" in t
+        assert "diff your convention against them" in t.lower()
 
     def test_premortem_harness_use_it_as_grader(self):
         # A present test/verify harness must be USED as the grader, not shadowed
@@ -52,4 +51,4 @@ class TestFrameStepPremortem:
     def test_premortem_is_unconditional_guidance(self):
         # No workspace detection: the guidance is static text on the frame step.
         t = _frame_text().lower()
-        assert "if reference artifacts are present" in t
+        assert "if reference or golden artifacts are present" in t

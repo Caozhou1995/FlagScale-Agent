@@ -67,7 +67,7 @@ def _repo_with_prompt(tmp_path, extra: str) -> pathlib.Path:
     (repo / "flagscale_agent/react/guard").mkdir(parents=True)
     src = (REPO / "flagscale_agent/react/prompt.py").read_text()
     (repo / "flagscale_agent/react/prompt.py").write_text(src + extra)
-    for rel in ("oracle.py", "judge.py", "guard/verification.py"):
+    for rel in ("judge.py",):  # v65: oracle.py / guard/verification.py 已退役
         real = REPO / "flagscale_agent/react" / rel
         (repo / "flagscale_agent/react" / rel).write_text(
             real.read_text() if real.is_file() else "")

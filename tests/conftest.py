@@ -64,4 +64,8 @@ def _isolate_worker_identity_env(monkeypatch):
 # v64 rebuild (2026-10-31): the retired v63 prompt-wording tests are archived
 # under tests/_retired_v63 and must NOT be collected — see that dir's README
 # and docs/prompt_invariants.md.
-collect_ignore_glob = ["_retired_v63/*"]
+# v65 rebuild (2026-11-01): plan 字段化繁为简退役的测试归档在 _retired_v65
+# （oracle/calibration/requirements_read/convention/deliverable_reading/
+# assumptions/acceptance_act/differential/negative_control/bound_margin/
+# arbiter_act/oracle_act + verification.py/oracle.py/instruments.py）。
+collect_ignore_glob = ["_retired_v63/*", "_retired_v65/*"]

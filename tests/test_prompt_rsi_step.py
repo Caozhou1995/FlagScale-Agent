@@ -23,7 +23,6 @@ def _plan_create_tool(tp, session_id=""):
 
     class _Shim(PlanCreateTool):
         def execute(self, **kwargs):
-            kwargs.setdefault("calibration", dict(_CAL_SHIM))
             return super().execute(**kwargs)
 
     return _Shim(tp) if not session_id else _Shim(tp, session_id)
@@ -159,19 +158,3 @@ def test_language_rule_has_no_paraphrased_switch_prohibition():
 # creation call, so they get a minimal valid declaration injected here. The
 # contract itself -- including the refusal -- is covered in
 # tests/test_oracle_at_frame.py.
-@pytest.fixture(autouse=True)
-def _default_oracle_for_creation(monkeypatch):
-    from flagscale_agent.react.tools.plan_create import PlanCreateTool
-
-    original = PlanCreateTool.execute
-
-    def execute(self, **kwargs):
-        if kwargs.get("oracle") in (None, ""):
-            kwargs["oracle"] = {
-                "oracle": "test decider",
-                "premise_source": "provided",
-                "first_exercise": "true",
-            }
-        return original(self, **kwargs)
-
-    monkeypatch.setattr(PlanCreateTool, "execute", execute)

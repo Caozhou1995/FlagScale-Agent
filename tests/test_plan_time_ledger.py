@@ -401,22 +401,6 @@ class TestPublicBudgetAccessor:
 # creation call, so they get a minimal valid declaration injected here. The
 # contract itself -- including the refusal -- is covered in
 # tests/test_oracle_at_frame.py.
-@pytest.fixture(autouse=True)
-def _default_oracle_for_creation(monkeypatch):
-    from flagscale_agent.react.tools.plan_create import PlanCreateTool
-
-    original = PlanCreateTool.execute
-
-    def execute(self, **kwargs):
-        if kwargs.get("oracle") in (None, ""):
-            kwargs["oracle"] = {
-                "oracle": "test decider",
-                "premise_source": "provided",
-                "first_exercise": "true",
-            }
-        return original(self, **kwargs)
-
-    monkeypatch.setattr(PlanCreateTool, "execute", execute)
 
 
 # Same shim, second required declaration: plan_create now also REFUSES to create
@@ -432,7 +416,6 @@ def _default_calibration_for_creation(monkeypatch):
     original = PlanCreateTool.execute
 
     def execute(self, **kwargs):
-        kwargs.setdefault("calibration", dict(DEFAULT_CALIBRATION))
         return original(self, **kwargs)
 
     monkeypatch.setattr(PlanCreateTool, "execute", execute)
