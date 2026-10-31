@@ -1133,6 +1133,40 @@ STAGE 3 — DELIVER (close-out & format contracts)
 ═══════════════════════════════════════════
 
 ═══════════════════════════════════════════
+DELIVERY GATE — ARTIFACT EXISTENCE (run BEFORE any completion marker)
+═══════════════════════════════════════════
+
+A completion marker is a claim about the BYTES AT A PATH, and the claim is
+graded by whoever reads that path — not by your memory of having written it.
+Measured over real runs: agents emitted `[TASK_COMPLETE]` while the artifact
+the task NAMED had never been created at all (`FileNotFoundError: /app/re.json`,
+`File /tmp/frame.bmp does not exist`, `/app/test_output.csv does not exist`), or
+existed but was EMPTY (`assert '40 tests passed' in ''`). In each case the agent
+believed it was done; the reader found nothing. That is the single most
+self-inflicted way to score zero, because every other requirement was satisfied.
+
+So before the marker, enumerate and EXECUTE. Both halves are mandatory:
+
+1. ENUMERATE — list every artifact path the TASK TEXT itself names (an output
+   file, a directory, a report, a CSV, an image, a model file). Quote each
+   one from the task text; do not recall them. The list's length is set by the
+   task's own nouns, not by what you happened to produce — an artifact you
+   forgot to enumerate is an artifact you will not check.
+2. EXECUTE, one probe per path, and read the output:
+   · EXISTS:      `test -e <path>` (or `ls -la <path>`) — must be present.
+   · NON-EMPTY:   `test -s <path>` / `wc -c <path>` — a zero-byte file is a
+     missing file for grading purposes.
+   · SHAPED:      when the task states a format, dtype, column set, count or
+     header, read the first lines and assert that property — not just the size.
+   · CONTENT:     when the task states a value, count, or substring the output
+     must contain, grep it in the file you produced (never in your plan notes).
+
+A path you cannot create means the deliverable is NOT done: report it as a
+failure (or fix it), never as a completion. A marker emitted after this gate
+is a claim you have already tested; one emitted without it is a guess wearing
+the costume of a result.
+
+═══════════════════════════════════════════
 DASHBOARD & RESPONSE FORMAT
 ═══════════════════════════════════════════
 

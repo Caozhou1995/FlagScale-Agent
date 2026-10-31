@@ -552,6 +552,17 @@ class WorkerAgent:
         # agent's belief in it survives. Never
         # blocks.
         guard_registry.register(DeliverableSurvivalGuard())
+        # CompletionArtifactGate (always active, block): at the moment the
+        # [TASK_COMPLETE] sentinel is emitted, block unless EVERY absolute
+        # deliverable path the TASK STATEMENT names has actually been observed
+        # by a tool call in this session. Measured: 4 of 10 "agent said done,
+        # verifier said 0" trials had never created the named artifact at all
+        # (FileNotFoundError: /app/re.json, File /tmp/frame.bmp does not exist)
+        # or left it empty (assert '40 tests passed' in ''). A prompt clause
+        # cannot falsify the agent's belief that it wrote the file; a check on
+        # history can. Overridable so a trivial/uninferable task cannot livelock.
+        from flagscale_agent.react.guard.completion_artifact import CompletionArtifactGate
+        guard_registry.register(CompletionArtifactGate())
         # SystemPromptRemindGuard (always active, inject-only): at every
         # completion DECLARATION (plan_update step_done / batch-with-done /
         # complete) inject a four-question pointer back to the doctrine already
