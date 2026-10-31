@@ -61,6 +61,32 @@ def _isolate_worker_identity_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     yield
 
+
+@pytest.fixture(autouse=True)
+def _isolate_flagscale_home(tmp_path, monkeypatch):
+    """Point FLAGSCALE_HOME at a per-test temp dir.
+
+    Why this is not optional: FLAGSCALE_HOME is exported in the developer shell
+    (and in CI images) to the REAL store, and every path helper derives from
+    ``get_dot_flagscale_root()`` → ``$FLAGSCALE_HOME/sessions``. A test that
+    constructs a WorkerAgent without an explicit ``session_dir`` therefore
+    makedirs a real session directory. Measured 2026-11-01: 278 of 371 session
+    dirs under the real store were empty shells (a conversation.json holding
+    only the system prompt, 0 user turns), and each dir's ``.session.lock``
+    ``cmd`` field recorded ``tests/ -q`` as the launcher.
+
+    Isolate on FLAGSCALE_HOME rather than FLAGSCALE_SESSION_ROOT: some test
+    files install their own autouse fixture that monkeypatch.delenv's
+    FLAGSCALE_SESSION_ROOT/FLAGSCALE_SESSION_ID (they exist to exercise the
+    fallback path), which would erase a process-level override mid-test.
+    FLAGSCALE_HOME sits above that boundary in the derivation chain
+    (FLAGSCALE_HOME → sessions/memory/proposals/tasks), so redirecting it
+    sandboxes every store at once and cannot be undone by a nested delenv of
+    the finer-grained vars.
+    """
+    monkeypatch.setenv("FLAGSCALE_HOME", str(tmp_path / ".flagscale"))
+    yield
+
 # v64 rebuild (2026-10-31): the retired v63 prompt-wording tests are archived
 # under tests/_retired_v63 and must NOT be collected — see that dir's README
 # and docs/prompt_invariants.md.

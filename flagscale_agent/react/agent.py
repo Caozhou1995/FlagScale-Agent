@@ -1013,6 +1013,14 @@ class WorkerAgent:
     def _save_conversation(self, completed: bool = False, session_summary: str = None):
         if not self.history.messages:
             return
+        # A history holding only the system prompt is not a conversation: it is
+        # the state every process reaches right after __init__ refreshes the
+        # prompt, before the first user turn. Persisting it materializes a
+        # session dir with a 25KB conversation.json, 0 user turns and
+        # turn_count 0 — that is exactly the empty-shell accumulation (278 of
+        # 371 dirs measured 2026-11-01). Defer the save to the first real turn.
+        if not any(m.get("role") != "system" for m in self.history.messages):
+            return
         # Keep the resume-list preview in sync with the actual conversation.
         # If no explicit summary is provided, regenerate one from the current
         # input history on EVERY save — otherwise a summary written by an old

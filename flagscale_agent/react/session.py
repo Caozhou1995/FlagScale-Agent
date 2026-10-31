@@ -126,17 +126,46 @@ def release_session_lock(fd: int) -> None:
             pass
 
 
+def conversation_has_real_content(conv_path: str) -> bool:
+    """True if conversation.json records at least one non-system message.
+
+    A session dir whose conversation.json holds ONLY the system prompt carries
+    nothing a user could resume: no user turn, no assistant turn, turn_count 0.
+    Such a file is a byproduct of process startup (the system prompt is
+    persisted by the first save / atexit flush before any user input), not a
+    conversation. Treating it as content is exactly what pinned 278 empty
+    shells on disk (measured 2026-11-01).
+
+    Unreadable/absent file → False (no recoverable content).
+    """
+    try:
+        with open(conv_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    for m in data.get("messages") or []:
+        if isinstance(m, dict) and m.get("role") != "system":
+            return True
+    return False
+
+
 def dir_empty_except_lock(session_dir: str) -> bool:
-    """True if session_dir holds nothing but the lock file, dotfiles, and
-    EMPTY subdirectories.
+    """True if session_dir holds nothing recoverable: only the lock file,
+    dotfiles, EMPTY subdirectories, and/or a system-prompt-only
+    conversation.json.
 
     Empty subdirs (a freshly-created swap_store/ or plans/ that never
     received data) carry no information and must not pin an abandoned
     session dir on disk forever — that was the accumulation bug: __init__
     always materializes swap_store/, so a reload's old dir could never
     satisfy the old dotfile-only predicate. Any real content at any depth
-    (a conversation.json, a swap shard, a plan yaml) still counts as
-    non-empty and protects the directory.
+    (a conversation.json with a real turn, a swap shard, a plan yaml) still
+    counts as non-empty and protects the directory.
+
+    A conversation.json holding only the system prompt is admitted as empty
+    for the same reason: it is a startup artifact, not a conversation.
     """
     try:
         entries = os.listdir(session_dir)
@@ -148,6 +177,8 @@ def dir_empty_except_lock(session_dir: str) -> bool:
         p = os.path.join(session_dir, e)
         if os.path.isdir(p) and not os.listdir(p):
             continue  # empty subdir — ignorable
+        if e == "conversation.json" and not conversation_has_real_content(p):
+            continue  # system-prompt-only session — startup artifact
         return False
     return True
 
