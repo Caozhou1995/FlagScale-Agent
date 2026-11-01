@@ -54,6 +54,13 @@ pass). Answer to yourself, one line each:
   5. TRAP — does your next intended action cross one of your own negative
      constraints? Re-read the forbidden list before acting, not after being
      blocked.
+  6. HISTORICAL CLAIMS — every "compared to a past run / last time it was X"
+     claim needs THIS-session disk bytes from that run's artifacts (a cat of
+     its reward/verifier file), not a memory receipt or narrative. If you
+     cannot produce the bytes now, write the claim as UNVERIFIED.
+  7. KILL-CLASS — before writing "OOM/SIGKILL/timeout killed it" as fact,
+     read the actual evidence (dmesg, cgroup memory.events, or the parent's
+     spawn parameters); until then attribute only as candidate.
 The review is yours; the harness does not grade it. It only guarantees the beat
 happened. Re-issue the same declaration and continue.
 """

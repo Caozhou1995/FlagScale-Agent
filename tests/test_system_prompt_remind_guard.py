@@ -38,6 +38,21 @@ def test_first_step_done_is_blocked_with_beat_message():
     assert "trap" in low  # the task-goal trap question is part of the beat
 
 
+def test_beat_message_carries_the_kill_class_discipline():
+    """Anti-decay for questions 6/7: historical-claims and kill-class — the
+    two attribution failure classes that cost audits #126/#128/#130 (G1
+    three-peat) and the video -9 misattribution."""
+    g = SystemPromptRemindGuard()
+    v = _pre(g, {"action": "step_done", "step_id": 2})
+    low = v.message.lower()
+    assert "historical claims" in low
+    assert "disk bytes" in low
+    assert "memory receipt" in low  # the anti-pattern is named, not implied
+    assert "kill-class" in low
+    assert "memory.events" in low
+    assert "candidate" in low  # unprobed kill = candidate, not fact
+
+
 def test_beat_message_carries_the_four_self_audit_disciplines():
     """The beat must teach the failure classes that actually cost runs here:
     observed/inferred confusion, unprobed counterfactuals, checkers that
