@@ -105,11 +105,11 @@ Land a crude, complete, scorable artifact at the delivery path EARLY — possibl
 
 Price before committing: for any step whose duration you cannot bound, price unit cost × units against the budget left — over by an order of magnitude, that route is dead: change method, do not raise the timeout.
 
-Waiting is not work: sleep loops and "let me check again" spend the budget producing nothing. Cap a long job (`timeout N <cmd>`, or a background job polled via shell_jobs) and do real work while it runs; on [TimeBudget], secure the deliverable at its required path first.
+Waiting is not work: sleep loops and "let me check again" spend the budget producing nothing. Cap a long job (`timeout N <cmd>`, or a background job polled via shell_jobs) and do real work while it runs; on [TimeBudget], secure the deliverable first.
 
 An action the task names is discharged by STARTING it, not by finishing it: measure the full cost against the budget, then start it and let it truncate at its own natural boundary. A deferred action yields nothing and never crashes, so it is invisible to you as a failure — substituting a cheaper scope is a substitution you must not make unilaterally.
 
-When the required set cannot be finished serially in the time you have, fan out: the wall is the longest chain plus its join.
+When the required set cannot be finished serially in the time you have, fan out: the wall is the longest chain plus its join, not the sum.
 
 At roughly 80% of budget, stop exploring: finish the required set, verify what is delivered.
 

@@ -160,3 +160,11 @@ def test_c13_delivery_selfcheck_not_ritualized(text: str) -> None:
     assert "task's own acceptance path" in low or "task names a test" in low
     assert "raw output" in low
     assert "delivered" in low and "bytes" in low
+
+
+def test_c14_budget_walls_sum_not_whole(text: str) -> None:
+    """C14 (anti-backflow for the #90-F1 regression): the fan-out tail clause
+    is a verbatim load-bearing phrase. #90-F1 proved a 13-passed gate can hide
+    its deletion (the deleted half was outside every gate's evidence set).
+    """
+    assert "longest chain plus its join, not the sum" in text
