@@ -66,13 +66,14 @@ class TestResolveQuery:
         assert "\n" not in text  # one line, appended after a blank line
 
     def test_user_task_nudge_helper_appends_once(self):
-        """The wiring-level helper appends exactly one blank-line-separated nudge."""
+        """[DISABLED 2026-11-01 per user ruling] The single-shot multi-agent
+        nudge append is disabled: _run_single_shot_append_nudge now returns the
+        query untouched, so no nudge is ever appended."""
         from flagscale_agent.react.agent import _run_single_shot_append_nudge
 
         q = _run_single_shot_append_nudge("analyze logs")
-        assert q.startswith("analyze logs\n\n")
-        assert q.count(MULTI_AGENT_NUDGE_SUFFIX) == 1
-        # Idempotent: a query already carrying the nudge is not re-suffixed.
+        assert q == "analyze logs"
+        assert MULTI_AGENT_NUDGE_SUFFIX not in q
         q2 = _run_single_shot_append_nudge(q)
         assert q2 == q
 
