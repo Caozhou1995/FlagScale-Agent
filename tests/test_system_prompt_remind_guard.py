@@ -35,38 +35,43 @@ def test_first_step_done_is_blocked_with_beat_message():
     low = v.message.lower()
     assert "blocked once" in low
     assert "re-issue" in low
-    assert "trap" in low  # the task-goal trap question is part of the beat
+    # The beat is a review instruction, not a pass — re-issuing is the ONLY
+    # escape, and the harness states it will pass.
+    assert "it will pass" in low
 
 
-def test_beat_message_carries_the_kill_class_discipline():
-    """Anti-decay for questions 6/7: historical-claims and kill-class — the
-    two attribution failure classes that cost audits #126/#128/#130 (G1
-    three-peat) and the video -9 misattribution."""
-    g = SystemPromptRemindGuard()
-    v = _pre(g, {"action": "step_done", "step_id": 2})
-    low = v.message.lower()
-    assert "historical claims" in low
-    assert "disk bytes" in low
-    assert "memory receipt" in low  # the anti-pattern is named, not implied
-    assert "kill-class" in low
-    assert "memory.events" in low
-    assert "candidate" in low  # unprobed kill = candidate, not fact
-
-
-def test_beat_message_carries_the_four_self_audit_disciplines():
-    """The beat must teach the failure classes that actually cost runs here:
-    observed/inferred confusion, unprobed counterfactuals, checkers that
-    cannot fail, and same-shape retry loops."""
+def test_beat_message_carries_the_three_parts_in_order():
+    """The beat is THREE parts, in this order (user-directed 2026-11-01):
+    (1) re-read the system prompt, (2) did you actually get it right,
+    (3) does what you think match what you did."""
     g = SystemPromptRemindGuard()
     v = _pre(g, {"action": "step_done", "step_id": 1})
     low = v.message.lower()
-    assert "observed vs inferred" in low
-    assert "counterfactual" in low
-    assert "verifier must be able to fail" in low
-    assert "strike count" in low
-    # anti-decay: the old generic wording must NOT return (it taught nothing
-    # actionable and was replaced because four real failure classes were absent)
-    assert "what did this step observe from the world" not in low
+    i1 = low.index("re-read your system prompt")
+    i2 = low.index("did you actually get it right")
+    i3 = low.index("does what you think match what you did")
+    assert i1 < i2 < i3, "the three parts must appear in the stated order"
+    # part 1 must forbid answering from memory, part 3 must compare vs bytes
+    assert "not from memory" in low
+    assert "bytes you actually produced" in low or "delivered" in low
+
+
+def test_old_seven_question_payload_does_not_return():
+    """Anti-decay in the OTHER direction: the 7 numbered questions were removed
+    on 2026-11-01 because they had decayed into a checklist that was answered
+    without changing anything. They must not creep back."""
+    g = SystemPromptRemindGuard()
+    v = _pre(g, {"action": "step_done", "step_id": 2})
+    low = v.message.lower()
+    for dead in (
+        "observed vs inferred",
+        "counterfactual",
+        "verifier must be able to fail",
+        "strike count",
+        "historical claims",
+        "kill-class",
+    ):
+        assert dead not in low, f"removed 7-question item came back: {dead}"
 
 
 def test_reissue_of_same_step_passes():

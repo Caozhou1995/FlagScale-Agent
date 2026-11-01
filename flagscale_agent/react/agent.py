@@ -564,8 +564,12 @@ class WorkerAgent:
         # targets (self-confirmation at the moment of claiming done) recurs at
         # every declaration. Pointer-only, never a paraphrase of the doctrine.
         # Never blocks.
-        # [DISABLED 2026-11-01 per user ruling: step_done 科学自省 beat 暂停]
-        # guard_registry.register(SystemPromptRemindGuard())
+        # Three-part scientific self-review beat: (1) re-read the system prompt,
+        # (2) did you actually get it right, (3) does what you think match what
+        # you did. Pointer-only, never a paraphrase of the doctrine.
+        # Never blocks anything except the first submission of a declaration.
+        # [RE-ENABLED 2026-11-01 per user ruling: 三部分科学自省 beat 开启]
+        guard_registry.register(SystemPromptRemindGuard())
         # PollSpacingGuard (always active, inject-only): after consecutive
         # poll_tasks/dispatch_many rounds that return not-ready with nothing in
         # between, nudge toward real work between looks (or one bounded sleep)

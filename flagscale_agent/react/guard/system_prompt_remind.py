@@ -36,31 +36,20 @@ from . import Guard, GuardContext, GuardVerdict
 
 _REMIND_MESSAGE = """
 [Remind] This step-done declaration is blocked ONCE — the beat, not a refusal.
-Do your scientific self-review NOW, then re-issue the SAME plan_update (it will
-pass). Answer to yourself, one line each:
-  1. OBSERVED vs INFERRED — separate what you actually SAW printed (a command's
-     real output) from what you reasoned to. Label each claim you wrote; never
-     present an inference in observed clothing.
-  2. COUNTERFACTUAL — every "X causes Y / X would fix it" claim you recorded is
-     UNVERIFIED until you run the smallest probe that toggles X and read the
-     result. Name the probe you ran, or downgrade the claim to a hypothesis.
-  3. VERIFIER MUST BE ABLE TO FAIL — if this step trusted a self-built checker,
-     has it ever gone red on a seeded defect? If not, corrupt one thing it
-     claims to check and confirm it flags that; a checker that cannot fail
-     checks nothing.
-  4. STRIKE COUNT — is this attempt the same shape as a failure you already had?
-     Two same-shape strikes: stop and rebuild the model (state what observation
-     would change your prediction) instead of trying a third variant.
-  5. TRAP — does your next intended action cross one of your own negative
-     constraints? Re-read the forbidden list before acting, not after being
-     blocked.
-  6. HISTORICAL CLAIMS — every "compared to a past run / last time it was X"
-     claim needs THIS-session disk bytes from that run's artifacts (a cat of
-     its reward/verifier file), not a memory receipt or narrative. If you
-     cannot produce the bytes now, write the claim as UNVERIFIED.
-  7. KILL-CLASS — before writing "OOM/SIGKILL/timeout killed it" as fact,
-     read the actual evidence (dmesg, cgroup memory.events, or the parent's
-     spawn parameters); until then attribute only as candidate.
+Do this review NOW, then re-issue the SAME plan_update (it will pass). Three
+parts, in order:
+
+  1. RE-READ YOUR SYSTEM PROMPT. Not from memory — re-read the actual doctrine
+     text you were given, and re-check this step against it.
+
+  2. DID YOU ACTUALLY GET IT RIGHT? Not "did I do something", not "did my own
+     check pass". Right about the thing the task is really asking for.
+
+  3. DOES WHAT YOU THINK MATCH WHAT YOU DID? Put the two side by side: the rule
+     or reading you concluded, and the bytes you actually produced/delivered.
+     If they differ by even one element, you are not done — that gap is the
+     step.
+
 The review is yours; the harness does not grade it. It only guarantees the beat
 happened. Re-issue the same declaration and continue.
 """
