@@ -45,14 +45,15 @@ _REVIEW_STEP_ACCEPTANCE = [
     "in which it is false and why that is a safe bet.",
     "PRE-MORTEM. Assume you are wrong: name the single point most likely to fool you and "
     "say how you ruled it out.",
-    "REVIEWER, a deliberate trade-off, not a mandate. Know its benefit — a fresh context "
-    "surfaces the defect "
-    "your own tests cannot construct — and price it against the time budget of a worker's "
-    "whole deadline. "
-    "Dispatch one when the change can fail SILENTLY (a "
-    "parser, permission, config, serialization or cross-call-site boundary, or a "
-    "multi-file behaviour change); skip it for a trivial single-file edit and self-verify. "
-    "STATE the decision and WHY, tied to that predicate.",
+    # [DISABLED 2026-11-01 per user ruling: Review 步骤的 reviewer 派出指引暂停]
+    # "REVIEWER, a deliberate trade-off, not a mandate. Know its benefit — a fresh context "
+    # "surfaces the defect "
+    # "your own tests cannot construct — and price it against the time budget of a worker's "
+    # "whole deadline. "
+    # "Dispatch one when the change can fail SILENTLY (a "
+    # "parser, permission, config, serialization or cross-call-site boundary, or a "
+    # "multi-file behaviour change); skip it for a trivial single-file edit and self-verify. "
+    # "STATE the decision and WHY, tied to that predicate.",
 ]
 
 
@@ -115,21 +116,22 @@ _FRAME_STEP_ACCEPTANCE = [
     "better method, a more correct method, or an unconsidered decomposition — and rule on "
     "each (adopt / reject with the reason). You framed this plan, so its premises are "
     "invisible to you; that is why the ruling is written down rather than thought.",
-    "DIVERGER (a deliberate trade-off, not a mandate). Know its benefit — it probes the "
-    "FRAMING before any artifact exists, the cheapest moment to fix a wrong premise — and "
-    "price it against the time budget of a worker's whole deadline. Dispatch spawn_worker with "
-    "role=\"diverger\" and a READ-ONLY contract when the framing is genuinely open (a novel "
-    "or ambiguous task, several plausible decompositions, an irreversible direction): a "
-    "fresh context does not inherit your premises, which is the whole point. The diverger "
-    "tag is a LEAF role: no reviewer preset, and it cannot itself spawn. Skip it when "
-    "the framing is settled and cheap to state (a small well-specified edit) OR when the wall "
-    "is short (worker deadline under ~45 min): a diverger that never settles is spent budget "
-    "with nothing to read, and framing probes do not fit a short run. If you dispatch one "
-    "anyway, its output must be a script or a written analysis you can run and read yourself, "
-    "and poll it at most twice before proceeding on your own framing — the dispatch does not "
-    "buy you a veto over the clock. STATE the decision and WHY in plan notes. Its findings are "
-    "CLAIMS — reproduce or refute each. A reviewer needs a FROZEN artifact and belongs at the "
-    "Review step, never here.",
+    # [DISABLED 2026-11-01 per user ruling: plan Frame 的 diverger 派出暂停]
+    # "DIVERGER (a deliberate trade-off, not a mandate). Know its benefit — it probes the "
+    # "FRAMING before any artifact exists, the cheapest moment to fix a wrong premise — and "
+    # "price it against the time budget of a worker's whole deadline. Dispatch spawn_worker with "
+    # "role=\"diverger\" and a READ-ONLY contract when the framing is genuinely open (a novel "
+    # "or ambiguous task, several plausible decompositions, an irreversible direction): a "
+    # "fresh context does not inherit your premises, which is the whole point. The diverger "
+    # "tag is a LEAF role: no reviewer preset, and it cannot itself spawn. Skip it when "
+    # "the framing is settled and cheap to state (a small well-specified edit) OR when the wall "
+    # "is short (worker deadline under ~45 min): a diverger that never settles is spent budget "
+    # "with nothing to read, and framing probes do not fit a short run. If you dispatch one "
+    # "anyway, its output must be a script or a written analysis you can run and read yourself, "
+    # "and poll it at most twice before proceeding on your own framing — the dispatch does not "
+    # "buy you a veto over the clock. STATE the decision and WHY in plan notes. Its findings are "
+    # "CLAIMS — reproduce or refute each. A reviewer needs a FROZEN artifact and belongs at the "
+    # "Review step, never here.",
     "FIRST CUT AND CONTEXT. (a) Order steps so a minimal but complete, scorable deliverable "
     "lands at the required path BEFORE scaling up, then refine in place and "
     "write-through the same artifact (never rewrite from scratch) — whatever is on "

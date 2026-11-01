@@ -227,17 +227,19 @@ def _run_single_shot_append_nudge(query, worker=False, resume=False):
     Only headless user-task runs get the nudge: worker contracts and parent
     resume messages are parent-authored text and must never be rewritten.
     Idempotent — a query already carrying the nudge is returned unchanged.
+    [DISABLED 2026-11-01 per user ruling: single_shot 自动 append 多agent nudge 暂停]
     """
-    if worker or resume or not query:
-        return query
-    # Audit reviewers are parent-launched read-only auditors: the nudge tells
-    # them to fan out workers, which contradicts their single job (read the
-    # snapshot, append findings) and burned turns on planning to delegate.
-    if os.environ.get("FLAGSCALE_AUDIT_REVIEWER"):
-        return query
-    if MULTI_AGENT_NUDGE_SUFFIX in query:
-        return query
-    return f"{query}\n\n{MULTI_AGENT_NUDGE_SUFFIX}"
+    # if worker or resume or not query:
+    #     return query
+    # # Audit reviewers are parent-launched read-only auditors: the nudge tells
+    # # them to fan out workers, which contradicts their single job (read the
+    # # snapshot, append findings) and burned turns on planning to delegate.
+    # if os.environ.get("FLAGSCALE_AUDIT_REVIEWER"):
+    #     return query
+    # if MULTI_AGENT_NUDGE_SUFFIX in query:
+    #     return query
+    # return f"{query}\n\n{MULTI_AGENT_NUDGE_SUFFIX}"
+    return query
 
 
 def _resolve_budget_sec_impl(config) -> float | None:
@@ -558,7 +560,8 @@ class WorkerAgent:
         # targets (self-confirmation at the moment of claiming done) recurs at
         # every declaration. Pointer-only, never a paraphrase of the doctrine.
         # Never blocks.
-        guard_registry.register(SystemPromptRemindGuard())
+        # [DISABLED 2026-11-01 per user ruling: step_done 科学自省 beat 暂停]
+        # guard_registry.register(SystemPromptRemindGuard())
         # PollSpacingGuard (always active, inject-only): after consecutive
         # poll_tasks/dispatch_many rounds that return not-ready with nothing in
         # between, nudge toward real work between looks (or one bounded sleep)
@@ -589,32 +592,34 @@ class WorkerAgent:
         # wall-clock budget — 2 not-ready polls of the same reviewer-class task
         # near the deadline refuse the next poll (adjudicate from evidence
         # already held); far from the deadline it stays fully silent.
-        guard_registry.register(ReviewerDeadlineGuard(stats_fn=self._task_budget_stats))
+        # [DISABLED 2026-11-01 per user ruling: reviewer 相关 guard 全部暂停]
+        # guard_registry.register(ReviewerDeadlineGuard(stats_fn=self._task_budget_stats))
         # Reviewer feedback guard (completion-time gate): a reviewer-class child
         # this session spawned that is still un-adjudicated blocks text-only
         # [TASK_COMPLETE] — poll_tasks(check) it and fold its findings in first,
         # or override naming the reviewer task_id. Reads the per-session spawn
         # registry (spawn.record_spawn); the global ledger cannot scope to this
         # closing session. See guard/reviewer_feedback.py.
-        from flagscale_agent.react.guard.reviewer_feedback import (
-            ReviewerFeedbackGuard)
-        guard_registry.register(ReviewerFeedbackGuard(
-            session_dir_fn=lambda: self._session_dir))
+        # from flagscale_agent.react.guard.reviewer_feedback import (
+        #     ReviewerFeedbackGuard)
+        # guard_registry.register(ReviewerFeedbackGuard(
+        #     session_dir_fn=lambda: self._session_dir))
         # Reviewer audit guard: at every completion declaration, snapshot the
         # transcript and dispatch an INDEPENDENT reviewer to compare it against
         # the doctrine; unread findings block the next call once. The reviewer
         # is one long-lived worker session (resumed across audits), so it keeps
         # its own context instead of re-deriving it. Disabled inside a reviewer
         # (env stamp) so an audit never spawns an audit of itself.
-        from flagscale_agent.react.guard.reviewer_audit import (
-            ReviewerAuditGuard, make_spawn_fn)
-        self._audit_guard = ReviewerAuditGuard(
-            session_dir_fn=lambda: self._session_dir,
-            spawn_fn=make_spawn_fn(session_dir_fn=lambda: self._session_dir),
-            stats_fn=self._task_budget_stats,
-            enabled_fn=lambda: not os.environ.get("FLAGSCALE_AUDIT_REVIEWER"),
-        )
-        guard_registry.register(self._audit_guard)
+        # [DISABLED 2026-11-01 per user ruling: reviewer 相关 guard 全部暂停]
+        # from flagscale_agent.react.guard.reviewer_audit import (
+        #     ReviewerAuditGuard, make_spawn_fn)
+        # self._audit_guard = ReviewerAuditGuard(
+        #     session_dir_fn=lambda: self._session_dir,
+        #     spawn_fn=make_spawn_fn(session_dir_fn=lambda: self._session_dir),
+        #     stats_fn=self._task_budget_stats,
+        #     enabled_fn=lambda: not os.environ.get("FLAGSCALE_AUDIT_REVIEWER"),
+        # )
+        # guard_registry.register(self._audit_guard)
         # Post-evict recovery guard (always active)
         guard_registry.register(PostEvictRecoveryGuard())
         # Knowledge-first guard (always active, inject-only)
@@ -1789,8 +1794,9 @@ class WorkerAgent:
         # for efficiency and completion quality. Workers and resumed workers are
         # excluded — their contract/resume text is parent-authored and must not
         # be rewritten.
-        query = _run_single_shot_append_nudge(
-            query, worker=is_worker(), resume=resolve_resume_query() is not None)
+        # [DISABLED 2026-11-01 per user ruling: single_shot 自动 append 多agent nudge 暂停]
+        # query = _run_single_shot_append_nudge(
+        #     query, worker=is_worker(), resume=resolve_resume_query() is not None)
         self.history.append({"role": "user", "content": query})
         try:
             self._react_loop()
