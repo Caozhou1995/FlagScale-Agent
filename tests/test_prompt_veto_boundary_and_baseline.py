@@ -91,6 +91,6 @@ def test_shared_source_comparison_is_flagged_as_unable_to_fail():
 # ── budget still holds after both clauses landed ─────────────────────────────
 
 def test_both_clauses_fit_the_budget():
-    # The two clauses were paid for by compressing redundant wording, not by
-    # raising the cap (the C3 budget is the anti-accumulation ratchet).
-    assert prompt_len() <= 15_000
+    # The cap was raised 15000 -> 20000 by user ruling (2026-11-01); the
+    # anti-accumulation ratchet now lives in test_c3_total_size_bounded.
+    assert prompt_len() <= 20_000
