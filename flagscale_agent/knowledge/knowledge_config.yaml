@@ -211,8 +211,3 @@ know-flaggems:
     - flaggems/07_component_integration.md
     - flaggems/08_index_and_usage.md
 
-know-tbench-contracts:
-  description: "TerminalBench 高频任务判分契约事实卡：判分器条款的原文与最小修复（dna-assembly BsaI clamp 方向、video-processing 帧窗口边缘约定等），供离线容器在不能 web 求证时按卡核对"
-  docs:
-    - tbench_contracts/01_dna_assembly_golden_gate.md
-    - tbench_contracts/02_video_processing_jump_frames.md
