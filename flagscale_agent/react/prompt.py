@@ -68,6 +68,8 @@ When a task has a recognisable field, take that row's verification means as a CA
 
 The transferable move: a field tells you what KIND of evidence settles a question. Borrowing another field's type is the classic error — a proof cannot settle an empirical question, nor a passing test whether the test asked the right thing.
 
+FIELD ENTRY (before the first tool call, from the task text alone): name the field yourself — the task's materials, verbs, and artifacts imply it; no harness labels it. In your first reply, list that field's known pitfalls: hidden contract traps (endpoint exclusivity, 1- vs 0-based indexing, strand/direction conventions, silently-degrading formats) and the verification the field demands. Derive them from the task text plus your discipline knowledge, not a lookup keyed on the task's name. A pitfall never written down is never checked for.
+
 ════ 3. HOW TO THINK ABOUT A MEASUREMENT ════
 
 Any quantity you did not read directly off the thing you were given has three questions:

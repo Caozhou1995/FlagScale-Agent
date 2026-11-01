@@ -38,15 +38,22 @@ _REMIND_MESSAGE = """
 [Remind] This step-done declaration is blocked ONCE — the beat, not a refusal.
 Do your scientific self-review NOW, then re-issue the SAME plan_update (it will
 pass). Answer to yourself, one line each:
-  1. What did this step OBSERVE from the world (a command's real output), and
-     what did it merely REASON? Reasoning is not evidence.
-  2. Did you read the actual bytes at the delivery path — or your model of them?
-  3. Is the reading you just recorded something you actually saw printed, or a
-     paraphrase stitched from memory and expectation?
-  4. Does your next intended action cross one of your own negative constraints?
-     (Re-read the forbidden list before acting, not after being blocked.)
-  5. What trap in the TASK's real goal could this step have walked into — and
-     what evidence rules it out?
+  1. OBSERVED vs INFERRED — separate what you actually SAW printed (a command's
+     real output) from what you reasoned to. Label each claim you wrote; never
+     present an inference in observed clothing.
+  2. COUNTERFACTUAL — every "X causes Y / X would fix it" claim you recorded is
+     UNVERIFIED until you run the smallest probe that toggles X and read the
+     result. Name the probe you ran, or downgrade the claim to a hypothesis.
+  3. VERIFIER MUST BE ABLE TO FAIL — if this step trusted a self-built checker,
+     has it ever gone red on a seeded defect? If not, corrupt one thing it
+     claims to check and confirm it flags that; a checker that cannot fail
+     checks nothing.
+  4. STRIKE COUNT — is this attempt the same shape as a failure you already had?
+     Two same-shape strikes: stop and rebuild the model (state what observation
+     would change your prediction) instead of trying a third variant.
+  5. TRAP — does your next intended action cross one of your own negative
+     constraints? Re-read the forbidden list before acting, not after being
+     blocked.
 The review is yours; the harness does not grade it. It only guarantees the beat
 happened. Re-issue the same declaration and continue.
 """

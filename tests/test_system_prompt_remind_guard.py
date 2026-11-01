@@ -38,6 +38,22 @@ def test_first_step_done_is_blocked_with_beat_message():
     assert "trap" in low  # the task-goal trap question is part of the beat
 
 
+def test_beat_message_carries_the_four_self_audit_disciplines():
+    """The beat must teach the failure classes that actually cost runs here:
+    observed/inferred confusion, unprobed counterfactuals, checkers that
+    cannot fail, and same-shape retry loops."""
+    g = SystemPromptRemindGuard()
+    v = _pre(g, {"action": "step_done", "step_id": 1})
+    low = v.message.lower()
+    assert "observed vs inferred" in low
+    assert "counterfactual" in low
+    assert "verifier must be able to fail" in low
+    assert "strike count" in low
+    # anti-decay: the old generic wording must NOT return (it taught nothing
+    # actionable and was replaced because four real failure classes were absent)
+    assert "what did this step observe from the world" not in low
+
+
 def test_reissue_of_same_step_passes():
     g = SystemPromptRemindGuard()
     args = {"action": "step_done", "step_id": 3}

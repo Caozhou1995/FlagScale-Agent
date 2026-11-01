@@ -86,6 +86,35 @@ class WebFetchTool(Tool):
                 stream=True,
             )
             resp.raise_for_status()
+        except requests.HTTPError as e:
+            # Site IS reachable — it answered with an HTTP status. A 403/407 is
+            # a refusal (bot-block, auth, proxy denial), not an outage. Saying
+            # "the network is unavailable" here taught a solver to declare the
+            # whole network dead on a 403 (2026-11-01 dna-assembly run: proxy
+            # tunnel refused NEB → agent concluded "Network is blocked" and
+            # never tried a diagnostic again).
+            code = e.response.status_code if e.response is not None else "?"
+            return (
+                f"[WEB_FETCH_HTTP_{code}] {url} is REACHABLE but refused this "
+                f"request (HTTP {code}). The network path works; this host is "
+                f"blocking bots / this request shape. Do NOT conclude 'network "
+                f"is blocked' — diagnose instead: (1) retry with a browser "
+                f"User-Agent, (2) try the alternate domain or an archive/"
+                f"mirror endpoint, (3) test reachability of a known-good "
+                f"domain (e.g. pypi mirror) to separate site-block from "
+                f"network-block, (4) check whether a local copy of the fact "
+                f"exists (installed package docs, load_knowledge)."
+            )
+        except requests.exceptions.ProxyError as e:
+            return (
+                f"[WEB_FETCH_PROXY_REFUSED] Could not retrieve {url}: the "
+                f"configured proxy refused the CONNECT tunnel ({e}). The "
+                f"proxy is alive but denies this destination. Diagnose: "
+                f"(1) print the proxy env (echo $HTTP_PROXY), (2) test "
+                f"whether a known-good destination passes through the same "
+                f"proxy, (3) try a destination the proxy whitelists, or use "
+                f"an offline source for the fact."
+            )
         except requests.RequestException as e:
             msg = (
                 f"[WEB_FETCH_NETWORK_ERROR] Could not retrieve {url}: {e}\n"

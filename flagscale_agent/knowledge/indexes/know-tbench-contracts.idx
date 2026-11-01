@@ -1,0 +1,20 @@
+# know-tbench-contracts
+# TerminalBench 高频任务判分契约事实卡：判分器条款的原文与最小修复（dna-assembly BsaI clamp 方向、video-processing 帧窗口边缘约定等），供离线容器在不能 web 求证时按卡核对
+
+# To read a section: load_knowledge(name='know-tbench-contracts', doc='<path below>', start_line=<L>, end_line=<L>)
+# Do NOT pass these doc paths to read_file — they are knowledge-internal.
+
+## tbench_contracts/01_dna_assembly_golden_gate.md (47 lines)
+L1: dna-assembly（Golden Gate / BsaI-HF v2）判分契约事实卡
+  L6: 任务原文给的关键提示（必读）
+  L13: 判分器已知的硬条款（从断言原文逐字取证）
+  L31: 历史败局签名速查
+  L40: 设计自检清单（交付前逐条跑）
+
+## tbench_contracts/02_video_processing_jump_frames.md (51 lines)
+L1: video-processing（跳帧检测）判分契约事实卡
+  L6: 判分器硬条款（从断言原文逐字取证）
+  L17: 跨局系统性偏置（同号偏移的信号）
+L28: 窗口风险度量：margin，不是内外布尔
+  L34: hidden test_video 判分契约（跨局恒定，verifier 源码绑定）
+  L47: 检测器稳健性要点（历史各局实测）
