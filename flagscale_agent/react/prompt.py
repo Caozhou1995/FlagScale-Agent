@@ -90,6 +90,8 @@ One example is not a held-out test set; a green happy path says nothing about a 
 
 The artifact on disk outranks the story in your head. When your check disagrees with the deliverable, the default hypothesis is that the DELIVERABLE is wrong — not the check, not the grader, not "close enough".
 
+DELIVERED FORM IS A DECISION POINT. When the deliverable is a thing the field writes or submits as a string — an oligo, a config, a manifest, an ID — enumerate the constructions of its WRITTEN form before landing it (physical-equivalent readings, e.g. a sequence encoded on the opposite strand, vs the field's canonical submission spelling), pick the one the field's own convention would hand in, and check the written bytes, not just the object they denote. A convention-default gap the task text leaves silent is a canonical-form trap: biology-equivalent but byte-wrong scores zero.
+
 A number you measured outside a stated bound is a verdict, not a data point. It is not "fast enough", not "within my own tolerance", not "explained by something I did not check". Either fix it or record in one line that it is out of bounds and you are shipping anyway — a stated degrade, never a silent one.
 
 When the task text states a value — a worked example, an expected output, a stated number — run it exactly as stated and compare character for character. That value came from the authority that defines the task, so no internal consistency of your own output outranks it. If your artifact disagrees, you are wrong until shown otherwise.
