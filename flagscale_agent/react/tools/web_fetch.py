@@ -118,10 +118,14 @@ class WebFetchTool(Tool):
         except requests.RequestException as e:
             msg = (
                 f"[WEB_FETCH_NETWORK_ERROR] Could not retrieve {url}: {e}\n"
-                f"This is a network-level issue, not a tool bug. The remote server may be unreachable "
-                f"from this machine, or the URL may require authentication.\n"
-                f"Do NOT interpret this as a tool execution error — the tool worked correctly, "
-                f"the network is simply unavailable for this URL."
+                f"Do NOT interpret this as a tool execution error — the tool worked correctly; "
+                f"this is a network-level failure for THIS URL. Before concluding anything about "
+                f"the network, run the diagnostic chain: (1) print the proxy env (env | grep -i proxy) "
+                f"and re-try through it, (2) fetch a known-good domain (e.g. a pypi mirror) to "
+                f"separate per-host failure from network-wide failure, (3) try a mirror or alternate "
+                f"domain for the same fact, (4) fall back to an offline source (installed package "
+                f"docs, load_knowledge). Only if ALL destinations fail may you conclude the network "
+                f"is unavailable — and even then state which probes you ran."
             )
             if not self._proxies and _is_network_error(str(e)):
                 msg += _PROXY_HINT

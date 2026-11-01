@@ -109,6 +109,26 @@ class TestWebFetchTool:
         assert "tool execution error" in result.lower()
         assert "tool worked correctly" in result.lower()
 
+    def test_network_error_carries_diagnostic_chain(self):
+        """Generic network errors must teach diagnosis, not 'network unavailable'.
+
+        2026-11-01 dna-assembly: the old message said the network was
+        'simply unavailable'; the solver concluded the network was dead
+        and never ran a diagnostic. The message must now carry the probe
+        chain and forbid the conclusion without probes.
+        """
+        import requests
+        tool = WebFetchTool()
+        with patch("flagscale_agent.react.tools.web_fetch.requests.get",
+                    side_effect=requests.ConnectionError("Connection refused")):
+            result = tool.execute(url="https://example.com")
+        assert "diagnostic chain" in result.lower()
+        for probe in ("proxy env", "known-good domain", "mirror", "offline source"):
+            assert probe in result.lower(), f"missing probe step: {probe}"
+        assert "only if all destinations fail" in result.lower()
+        # the old defeatist phrasing must not return
+        assert "simply unavailable" not in result.lower()
+
 
 class TestExtractText:
     def test_main_tag(self):

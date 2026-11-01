@@ -50,11 +50,31 @@ class TestDirEmptyExceptLock:
         assert dir_empty_except_lock(d) is True
 
     def test_dir_with_conversation_not_empty(self, tmp_path):
+        # d1d820b admitted system-prompt-only conversation.json as empty (a
+        # startup artifact, not a conversation). A dir is non-empty only
+        # when conversation.json records at least one non-system message —
+        # i.e. something a user could actually resume.
         d = str(tmp_path / "hasconv")
         os.makedirs(d)
         with open(os.path.join(d, "conversation.json"), "w") as f:
-            json.dump({}, f)
+            json.dump({"messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hello"},
+            ]}, f)
         assert dir_empty_except_lock(d) is False
+
+    def test_dir_with_metadata_only_conversation_is_empty(self, tmp_path):
+        # Companion to d1d820b: a conversation.json holding only startup
+        # artifacts (no non-system message) admits the dir as empty so the
+        # sweeper can reap it — that pinned 278 shells forever (measured
+        # 2026-11-01). This test pins the NEW semantics in the positive.
+        d = str(tmp_path / "metajson")
+        os.makedirs(d)
+        with open(os.path.join(d, "conversation.json"), "w") as f:
+            json.dump({"session_id": "x", "messages": [
+                {"role": "system", "content": "only the system prompt"},
+            ]}, f)
+        assert dir_empty_except_lock(d) is True
 
     def test_dir_with_empty_swap_store_subdir_is_empty(self, tmp_path):
         # Semantics flip (2026-09): SwapStore/TaskPlan __init__ always
@@ -162,7 +182,9 @@ class TestRestoreSessionGuard:
     def test_nonempty_old_dir_not_cleaned(self, fake_agent):
         old = str(fake_agent._sessions_root + "/aaaa1111")
         with open(os.path.join(old, "conversation.json"), "w") as f:
-            json.dump({"session_id": "aaaa1111"}, f)
+            json.dump({"messages": [
+                {"role": "user", "content": "resume me"},
+            ]}, f)
         new_dir = str(fake_agent._sessions_root + "/eeee5555")
         os.makedirs(new_dir)
         _restore_lock_prefix(fake_agent, {"session_id": "eeee5555"}, new_dir)
@@ -220,15 +242,31 @@ class TestCleanStaleEmptySessions:
         assert os.path.isdir(d)
 
     def test_stale_nonempty_is_kept(self, tmp_path):
-        # Only emptiness differs: recoverable content pins the dir forever.
+        # Only emptiness differs: recoverable content (a non-system message)
+        # pins the dir forever.
         d = str(tmp_path / "stale_data")
+        os.makedirs(d)
+        with open(os.path.join(d, "conversation.json"), "w") as f:
+            json.dump({"messages": [
+                {"role": "user", "content": "real turn"},
+            ]}, f)
+        self._age(d, CLEAN_MIN_AGE_SEC + 3600)
+        removed = clean_stale_empty_sessions(str(tmp_path))
+        assert d not in removed
+        assert os.path.isdir(d)
+
+    def test_stale_metadata_only_conversation_is_swept(self, tmp_path):
+        # d1d820b companion: metadata-only conversation.json is a startup
+        # artifact, not a conversation — the sweeper must reap it (this is
+        # what reclaimed the 278 shells; the old spec pinned them forever).
+        d = str(tmp_path / "stale_meta")
         os.makedirs(d)
         with open(os.path.join(d, "conversation.json"), "w") as f:
             json.dump({"session_id": "x"}, f)
         self._age(d, CLEAN_MIN_AGE_SEC + 3600)
         removed = clean_stale_empty_sessions(str(tmp_path))
-        assert d not in removed
-        assert os.path.isdir(d)
+        assert d in removed
+        assert not os.path.isdir(d)
 
     def test_missing_root_is_noop(self, tmp_path):
         removed = clean_stale_empty_sessions(str(tmp_path / "does_not_exist"))
