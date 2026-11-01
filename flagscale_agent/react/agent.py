@@ -450,9 +450,13 @@ class WorkerAgent:
         # NetworkProbePhase (lightweight probe before the 1st heavy net op,
         # single-shot only) → ResearchPhase (one research pass before real work,
         # single-shot only). Replaces the standalone BackupGuard.
-        from flagscale_agent.react.guard.startup import StartupGuard
-        self._startup_guard = StartupGuard()
-        guard_registry.register(self._startup_guard)
+        # DISABLED (user directive 2026-11-01, fast-iteration mode): the ordered
+        # startup pipeline (backup/probe/research) gates the first shell call and
+        # costs a full turn per phase without measurably improving outcomes in
+        # recent trials. Comment out to re-enable; nothing else depends on it.
+        # from flagscale_agent.react.guard.startup import StartupGuard
+        # self._startup_guard = StartupGuard()
+        # guard_registry.register(self._startup_guard)
         from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
         guard_registry.register(CompileRedirectGuard())
         guard_registry.register(ShellSafetyGuard())
