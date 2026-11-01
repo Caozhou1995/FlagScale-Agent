@@ -41,6 +41,21 @@ def _is_protected_path(path: str) -> bool:
     return False
 
 
+def _is_append_only_audit_report(path: str) -> bool:
+    """True for an auditor's cumulative findings file (prop_810728da).
+
+    The audit report is a SHARED deliverable that accumulates across rounds (one
+    measured session reached 160 KB / 909 lines). A `mode='write'` on it silently
+    destroys every earlier audit — and the path is easy to confuse with the
+    auditor's own empty `findings.md` shell in <session>/audit/reviewer/. The
+    filename alone is enough to identify it: no other artifact in this harness
+    legitimately uses that name as a scratch target, and a false positive only
+    costs one `mode='append'` retry, whereas the false negative costs every past
+    audit in the file.
+    """
+    return os.path.basename(path) == "findings.md"
+
+
 class WriteFileTool(Tool):
     name = "write_file"
     description = (
@@ -91,6 +106,26 @@ class WriteFileTool(Tool):
 
         if _is_protected_path(path):
             return f"ERROR: Cannot write to protected system path: {path}"
+
+        # prop_810728da: an audit findings file is APPEND-ONLY. A mode='write'
+        # that would shrink it destroys earlier audits (it is a cross-round
+        # deliverable), and the path is easy to confuse with the auditor's own
+        # empty findings.md shell. Only a shrinking overwrite is refused — a
+        # first write (file absent) or a growing rewrite passes.
+        if (mode == "write" and _is_append_only_audit_report(path)
+                and os.path.exists(path)):
+            try:
+                if len(content.encode("utf-8")) < os.path.getsize(path):
+                    return (
+                        f"ERROR: {path} is an audit report and is APPEND-ONLY — "
+                        "this mode='write' would DISCARD the audit sections "
+                        "already in it. Re-send with mode='append' to add the new "
+                        "section below the existing ones. (Each audit round appends "
+                        "its own '## Audit #N' section; an overwrite loses every "
+                        "earlier round permanently.)"
+                    )
+            except OSError:
+                pass  # size probe failed -> fall through to the normal write path
 
         # Shrink guard (mode=write only): a silent overwrite that shrinks the
         # existing file by >50% is the signature of a truncated retry — the

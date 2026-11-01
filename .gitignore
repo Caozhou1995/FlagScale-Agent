@@ -37,3 +37,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# prompt backups: keep on disk, never in the version index
+*.v*bak*
+*.py.bak*

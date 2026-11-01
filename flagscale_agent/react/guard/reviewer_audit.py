@@ -78,7 +78,11 @@ SNAPSHOT_FILENAME = "transcript.jsonl"
 # reading and bury the decision lines it is looking for.
 SNAPSHOT_MAX_BYTES = 90_000
 FINDINGS_FILENAME = "findings.md"
-
+# prop_8754e12a: cap on rendered blocked-call rows. A run can accumulate hundreds
+# of blocks (measured: 200 rows -> 67 KB on their own), and the snapshot's byte
+# cap exists precisely so an auditor reads intent+outcome rather than a flood.
+# The overflow is reported as a count, so nothing is silently lost.
+_BLOCKED_MAX_ROWS = 20
 # Per-message cap in the snapshot. Large tool results are the bulk of a
 # transcript and the least useful to an auditor reading for BEHAVIOUR; keeping
 # the head (the intent) and the tail (the outcome) preserves what it needs
@@ -103,6 +107,17 @@ lines:
              index), showing the behaviour.
   FIX:       the concrete corrective action, addressed to the agent, in one
              sentence.
+
+FIX EXECUTABILITY — a FIX that embeds a shell/python command must have been RUN
+by you before you write it down. Paste-able commands are the whole value of a
+FIX and the one part that fails silently: a brace/quote/union slip reads fine and
+dies on execution (measured: `any(k in tb for k in ({{'A1','Z1'}}|{{'A2'}}))` —
+a set union inside any()'s iterable — was only caught by re-running it by hand).
+So: run each embedded command once against the real path, and if it cannot run in
+your environment, say so IN THE FIX line ("unverified: needs the delivered tree")
+rather than presenting it as runnable. A prescribed-but-broken command is a worse
+finding than no finding, because the parent will execute it and read the failure
+as its own mistake.
 
 The FIRST finding to check is the TASK-GATE one: the transcript's first
 records contain the task text. List every requirement it states — each numeric
@@ -313,6 +328,38 @@ class ReviewerAuditGuard(Guard):
                 content = (content[:_MSG_HEAD] + "\n…[truncated]…\n"
                            + content[-_MSG_TAIL:])
             buf.append({"i": len(buf), "role": role, "content": content})
+        # prop_8754e12a: record calls a guard PREVENTED, as their own rows. An
+        # auditor reading only message history cannot tell "the agent never tried
+        # to measure X" from "the agent tried and a guard stopped it" — Audit #83
+        # concluded an entire finding from exactly that ambiguity. These rows are
+        # marked `blocked` so they are never mistaken for executed tool calls.
+        # BOUNDED like every other row: a run can accumulate hundreds of blocks
+        # (measured 200 -> 67 KB), and the snapshot's whole point is that an
+        # auditor gets intent+outcome under a byte cap, not a flood.
+        blocked = list(getattr(ctx, "blocked_tool_calls", None) or ())
+        for b in blocked[:_BLOCKED_MAX_ROWS]:
+            buf.append({
+                "i": len(buf),
+                "role": "guard_block",
+                "blocked": True,
+                "content": (f"tool={b.get('name', '?')} was PREVENTED by guard "
+                            f"{b.get('guard', '?') or '?'} "
+                            f"(action={b.get('action', '?')}, "
+                            f"reason={b.get('reason', '?') or '?'}). "
+                            "This call NEVER EXECUTED — its absence from the "
+                            "transcript is not evidence the agent did not attempt "
+                            "it, and any claim it made afterwards must be read "
+                            "against this block."),
+            })
+        if len(blocked) > _BLOCKED_MAX_ROWS:
+            buf.append({
+                "i": len(buf),
+                "role": "guard_block",
+                "blocked": True,
+                "content": (f"[{len(blocked) - _BLOCKED_MAX_ROWS} further blocked "
+                            f"calls omitted for length; {len(blocked)} total this "
+                            "turn]"),
+            })
         path = d / SNAPSHOT_FILENAME
         try:
             d.mkdir(parents=True, exist_ok=True)
@@ -349,7 +396,7 @@ class ReviewerAuditGuard(Guard):
         # never more than half the remaining time.
         return max(1.0, min(6.0, remaining / 120.0))
 
-    def _dispatch(self, ctx: GuardContext, seq: int) -> None:
+    def _dispatch(self, ctx: GuardContext, seq: int, records: int = 0) -> None:
         d = self._audit_dir()
         if d is None or self._spawn_fn is None:
             return
@@ -404,8 +451,14 @@ class ReviewerAuditGuard(Guard):
         if text.startswith("ERROR"):
             return
         new_id = review_id or "auditor"
+        # prop_c36e61f7: this used to write `state.get("snapshot_records")` —
+        # reading the field it was about to write, so it round-tripped null
+        # forever (production seq=7 still null). The dispatch must record the
+        # size of the transcript the reviewer was handed, otherwise neither the
+        # reviewer nor a later audit can reconcile how much it actually saw —
+        # index shifts in a bounded snapshot stay invisible.
         state.update({"review_id": new_id or review_id, "seq": seq,
-                      "snapshot_records": state.get("snapshot_records"),
+                      "snapshot_records": int(records),
                       "dispatched_at": time.time(),
                       "findings_mtime": _mtime(findings)})
         self._write_state(state)
@@ -447,7 +500,7 @@ class ReviewerAuditGuard(Guard):
         n = self._snapshot(ctx)
         if n <= 0:
             return
-        self._dispatch(ctx, seq)
+        self._dispatch(ctx, seq, n)
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         """Declaration landed -> snapshot + dispatch. NEVER blocks."""
@@ -471,7 +524,7 @@ class ReviewerAuditGuard(Guard):
         n = self._snapshot(ctx)
         if n <= 0:
             return None
-        self._dispatch(ctx, seq)
+        self._dispatch(ctx, seq, n)
         return None
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:

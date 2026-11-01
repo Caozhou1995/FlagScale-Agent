@@ -107,24 +107,52 @@ def record_spawn(session_dir, task_id, role):
 
 def read_session_spawns(session_dir):
     """Return this session's spawn records (best-effort; [] on any failure)."""
+    return read_session_spawns_ex(session_dir)[0]
+
+
+def read_session_spawns_ex(session_dir):
+    """Return (records, error).
+
+    prop_136fce9c: the two per-session registries used to fail in OPPOSITE
+    directions with the same silent `except: return []`. For read_adjudications
+    an unreadable file is harmless (a reviewer stays gated). For the SPAWN
+    registry it is not: a corrupt/truncated/unreadable spawned.jsonl empties
+    ReviewerFeedbackGuard's view of the session, so the gate silently PASSES and
+    a spawned reviewer is never adjudicated — a fail-OPEN that looks exactly
+    like "no reviewers were spawned". A MISSING file is the legitimate empty
+    case (no spawns yet) and reports error=None; any other read/parse failure
+    reports a reason so the caller can surface an advisory instead of passing
+    silently. Records parsed before the failure are still returned — a partial
+    view is better than none.
+    """
     if not session_dir:
-        return []
+        return [], None
     out = []
+    p = Path(session_dir) / SUBAGENTS_DIRNAME / SPAWN_REGISTRY_FILENAME
     try:
-        p = Path(session_dir) / SUBAGENTS_DIRNAME / SPAWN_REGISTRY_FILENAME
-        for line in p.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict) and rec.get("task_id"):
-                out.append(rec)
-    except Exception:
-        return []
-    return out
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return [], None
+    except Exception as exc:  # unreadable = fail-open risk, report it
+        return [], f"cannot read {p}: {exc.__class__.__name__}: {exc}"
+    bad_lines = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            bad_lines += 1
+            continue
+        if isinstance(rec, dict) and rec.get("task_id"):
+            out.append(rec)
+        else:
+            bad_lines += 1
+    if bad_lines:
+        return out, (f"{bad_lines} unparseable record(s) in {p.name} — "
+                     "the reviewer view may be INCOMPLETE")
+    return out, None
 
 
 # Per-session ADJUDICATION registry: <session_dir>/subagents/adjudicated.jsonl

@@ -185,7 +185,9 @@ class AnthropicProvider(LLMProvider):
             # Split static body from dynamic dashboard for prompt caching.
             # The dashboard (Turn counter, memory keys) changes every turn and
             # must be AFTER the cache_control breakpoint to avoid invalidating
-            # the cached static body (~22K chars / ~5.5K tokens).
+            # the cached static body. Do not write the static body's size here:
+            # a measurement in a comment drifts silently as the prompt is edited.
+            # Measure it with prompt.prompt_len() if you need the number.
             sep = "\n---\n["
             idx = system.find(sep)
             if idx >= 0:

@@ -111,5 +111,17 @@ class MemoryListTool(Tool):
         header = f"Showing {min(shown, total)}/{total} entries"
         if type_filter or domain_filter or keyword:
             header += " (filtered)"
+        if shown < total:
+            # prop_8ad3a23b: a truncated list was indistinguishable from a
+            # complete one — the body simply stopped, so an agent hunting a key
+            # it could not see concluded the key was absent and then cited one it
+            # never saw (audits #78/#81). The remainder gets an explicit
+            # prohibition, not a silent cut.
+            header += (
+                f"\nTRUNCATED at limit={limit}: {total - shown} entries are NOT "
+                "listed below. An unlisted key is not evidence of its absence and "
+                "must NOT be cited or quoted — re-run with a larger limit, narrow "
+                "with a filter, or memory_read the exact key to confirm it exists."
+            )
 
         return header + "\n" + "\n".join(lines)

@@ -27,6 +27,8 @@ Three action levels:
 from __future__ import annotations
 
 import abc
+import sys
+import traceback
 from dataclasses import dataclass, field
 from flagscale_agent.react import display
 from typing import Literal, Any
@@ -43,6 +45,10 @@ class GuardContext:
     turn_count: int = 0
     recent_tool_names: list[str] = field(default_factory=list)
     recent_tool_history: list[dict] = field(default_factory=list)
+    # prop_8754e12a: calls a guard PREVENTED from running, as their own record.
+    # Kept separate from recent_tool_history because that list means "executed";
+    # guards read it as evidence of progress.
+    blocked_tool_calls: list[dict] = field(default_factory=list)
     context_pressure: float = 0.0
     evictable_indexes: list[int] = field(default_factory=list)
 
@@ -335,6 +341,25 @@ class GuardRegistry:
             return 1
         return 2  # overridable block
 
+    def _call_guard(self, guard: Guard, method: str, args: tuple, default: Any = None) -> Any:
+        """Call one guard method, degrading a raising guard to `default`.
+
+        prop_daeed114: guard faults must never escape the registry. Interactive
+        run() only catches KeyboardInterrupt, so one unexpected exception inside
+        a guard would kill the process and lose the turn. Every call site that
+        invokes guard-owned code outside the collect loop routes through here.
+        """
+        try:
+            return getattr(guard, method)(*args)
+        except Exception:
+            print(
+                f"[guard-error] guard {guard.name!r} raised in {method}; "
+                "treated as no-op this turn:",
+                file=sys.stderr,
+            )
+            traceback.print_exc()
+            return default
+
     def _resolve(self, ctx: GuardContext, phase: str) -> GuardVerdict | None:
         """Shared block/escalate resolution for pre/post checks.
 
@@ -365,7 +390,6 @@ class GuardRegistry:
         inject_pairs: list[tuple[Guard, GuardVerdict]] = []
         first_reason = ""
 
-        check = (lambda g: g.check_pre(ctx)) if phase == "pre" else (lambda g: g.check_post(ctx))
         # Collect EVERY violation per guard, not just its first. A guard with
         # several independent sub-rules short-circuits check_pre at the first hit;
         # reporting only that one makes the agent fix a violation, retry, and
@@ -376,7 +400,27 @@ class GuardRegistry:
 
         for guard in self._guards:
             seen_rule: set[tuple[str, str]] = set()
-            for verdict in collect(guard):
+            # Per-guard fault isolation (prop_daeed114): a raising guard must
+            # degrade to an advisory inject, never escape _resolve. Without
+            # this, any unexpected exception inside one guard's check kills the
+            # whole interactive process (run() only catches KeyboardInterrupt)
+            # and the turn is lost. A failed guard prints its traceback and
+            # contributes a soft inject; the other guards still resolve.
+            try:
+                verdicts = collect(guard)
+            except Exception:
+                print(
+                    f"[guard-error] guard {guard.name!r} raised in "
+                    f"{phase}-check; excluded from this resolve:",
+                    file=sys.stderr,
+                )
+                traceback.print_exc()
+                inject_messages.append(
+                    f"[guard fault] {guard.name} raised during {phase}-check; "
+                    "its checks are skipped this turn (see stderr)."
+                )
+                continue
+            for verdict in verdicts:
                 if verdict is None:
                     continue
 
@@ -436,7 +480,10 @@ class GuardRegistry:
                     and ctx.override_reason
                     and guard.name == self._last_surfaced
                     and verdict.reason == self._last_surfaced_reason
-                    and guard.accept_override(ctx.override_reason, ctx)
+                    and self._call_guard(
+                        guard, "accept_override", (ctx.override_reason, ctx),
+                        default=False
+                    )
                 ):
                     display.guard_overridden(guard.name, ctx.override_reason)
                     # Intra-guard gate-crosstalk prevention: a single guard may
@@ -447,7 +494,9 @@ class GuardRegistry:
                     # and if it returns a new block with a different reason, report
                     # THAT instead of silently releasing. This prevents an
                     # override reason written for Gate 1 from releasing Gate 5.
-                    new_verdict = check(guard)
+                    new_verdict = self._call_guard(
+                        guard, f"check_{phase}", (ctx,), default=None
+                    )
                     if (
                         new_verdict is not None
                         and new_verdict.action in ("block", "escalate")
@@ -519,11 +568,12 @@ class GuardRegistry:
                         # guard, so its _MAX_DENIALS valve never fired and the
                         # pair stayed deadlocked until the wall-clock ran out.
                         # Only blocks count: an inject was never refused.
-                        if ex_verdict.action == "block" and ex_verdict.overridable:
-                            try:
-                                ex_guard.note_merged_refusal(ex_verdict)
-                            except AttributeError:
-                                pass
+                        if (ex_verdict.action == "block" and ex_verdict.overridable
+                                and hasattr(ex_guard, "note_merged_refusal")):
+                            self._call_guard(
+                                ex_guard, "note_merged_refusal", (ex_verdict,),
+                                default=None
+                            )
                         ex_text = ex_verdict.message
                         if ex_owner:
                             ex_text += f"\n\n[blocked by guard: {ex_owner}]"
@@ -560,7 +610,7 @@ class GuardRegistry:
                                    if not ov.attach_on_block}
                 for ig in self._guards:
                     if id(ig) in injected_guards:
-                        ig.block_not_surfaced()
+                        self._call_guard(ig, "block_not_surfaced", (), default=None)
                 if attached:
                     surfaced.message += (
                         "\n\n[concurrent trigger-bound guard advisory]\n"
@@ -631,7 +681,7 @@ class GuardRegistry:
         was surfaced on turn N (the block and its override live in different turns).
         """
         for guard in self._guards:
-            guard.reset_turn()
+            self._call_guard(guard, "reset_turn", (), default=None)
 
     def reset_repeat_convergence(self):
         """Clear the repeat-block convergence streak.

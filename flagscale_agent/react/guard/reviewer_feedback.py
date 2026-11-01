@@ -105,6 +105,12 @@ class ReviewerFeedbackGuard(Guard):
         # (it can be reassigned on session restore) — never a frozen string.
         self._session_dir_fn = session_dir_fn
         self._ledger = ledger
+        # prop_136fce9c: set by _live_reviewers when the spawn registry could
+        # not be read/parsed. Distinct from "no reviewers": the gate cannot
+        # see the session, so silence would be a fail-OPEN. Surfaced as an
+        # advisory inject (never a block — an unreadable file must not hold the
+        # completion hostage), cleared on every call so it cannot go stale.
+        self._registry_warning = None
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _session_dir(self):
@@ -130,9 +136,12 @@ class ReviewerFeedbackGuard(Guard):
         Returns [(task_id, status), ...]; [] when nothing is pending or any
         lookup fails (fail-silent).
         """
+        # Cleared on EVERY call so a warning from an earlier resolve can never
+        # outlive the condition that produced it (prop_136fce9c).
+        self._registry_warning = None
         try:
             from flagscale_agent.react.multi_agent.spawn import (
-                read_session_spawns, read_adjudications)
+                read_session_spawns_ex, read_adjudications)
             from flagscale_agent.react.multi_agent.contract import (
                 ROLE_REVIEWER, ROLE_RE_REVIEWER)
             from flagscale_agent.react.multi_agent.ledger import (
@@ -152,8 +161,10 @@ class ReviewerFeedbackGuard(Guard):
         # it a SETTLED-WITHOUT-REPORT reviewer is re-listed every completion
         # turn forever (the ledger has no terminal status to move to).
         adjudicated = read_adjudications(sd)
+        spawn_recs, spawn_err = read_session_spawns_ex(sd)
+        self._registry_warning = spawn_err
         out = []
-        for rec in read_session_spawns(sd):
+        for rec in spawn_recs:
             role = rec.get("role") or ""
             if role not in reviewer_roles:
                 continue
@@ -207,6 +218,22 @@ class ReviewerFeedbackGuard(Guard):
             return None
         live = self._live_reviewers()
         if not live:
+            # prop_136fce9c: an unreadable spawn registry empties `live`, which
+            # is indistinguishable from "no reviewers were spawned" — the
+            # original fail-OPEN. Never BLOCK on it (a corrupt file must not
+            # hold completion hostage) but do say so, so the agent can inspect
+            # the registry before trusting a blind pass.
+            if self._registry_warning:
+                return GuardVerdict.inject(
+                    "[ReviewerFeedback] cannot verify that no reviewer of THIS "
+                    f"session is un-adjudicated: {self._registry_warning}. The "
+                    "spawn registry is the only record of which reviewers this "
+                    "session started; with it unreadable this gate is BLIND. "
+                    "Inspect <session>/subagents/spawned.jsonl before treating "
+                    "this completion as adjudicated.",
+                    reason="reviewer_feedback_registry_unreadable",
+                    category="reviewer_feedback",
+                )
             return None
         tasks = ", ".join(f"{tid}({st})" for tid, st in live)
         return GuardVerdict.block(

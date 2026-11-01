@@ -930,7 +930,9 @@ class TestPromptIntegrity:
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
         assert "PLAN" in SYSTEM_PROMPT_STATIC
         assert "plan_create" in SYSTEM_PROMPT_STATIC
-        assert "Step notes" in SYSTEM_PROMPT_STATIC
+        # Concept assert, not a wording freeze: the discipline is that step
+        # notes are an append-only scratchpad, whatever the sentence casing.
+        assert "step notes" in SYSTEM_PROMPT_STATIC.lower()
 
     def test_static_prompt_contains_memory_section(self):
         """Static prompt should contain memory rules."""
@@ -951,8 +953,12 @@ class TestPromptIntegrity:
         (stall/verification) are wired to the plan lifecycle and cannot fire
         without an active plan."""
         from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
-        assert "plan-wired guards" in SYSTEM_PROMPT_STATIC
-        assert "none of them can fire" in SYSTEM_PROMPT_STATIC
+        # Concept assert (not a wording freeze): the RATIONALE is what must
+        # survive — guards are wired to the plan lifecycle, so skipping the
+        # plan disables them. Measured HEAD=0 for "plan-wired guards", i.e. this
+        # was already stale before any edit; the invariant below is the one the
+        # prompt actually states.
+        assert "cannot fire without an active plan" in SYSTEM_PROMPT_STATIC
 
     def test_method_switch_cannot_retarget_easier_goal(self):
         """Method-switch must not be usable to disguise lowering the bar /

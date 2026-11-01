@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC, prompt_len
 
 
 @pytest.fixture(scope="module")
@@ -47,8 +47,33 @@ def test_c3_total_size_bounded(text: str) -> None:
     15000 chars is the budget this rewrite commits to (was 101657). The bound is
     deliberately loose enough to allow refinement and tight enough that a relapse
     into per-loss clause appending fails here rather than silently.
+
+    Measured through prompt.prompt_len() — the SINGLE canonical reading
+    (prop_9f81ebea). Asserting len(SYSTEM_PROMPT_STATIC) here while the agent
+    measured a rendered assembly produced two numbers 134 chars apart for the
+    same tree, so a "within budget" claim could be green in one and red in the
+    other.
     """
-    assert len(text) <= 15_000, f"prompt is {len(text)} chars, budget 15000"
+    n = prompt_len()
+    assert n <= 15_000, f"prompt is {n} chars, budget 15000"
+
+
+def test_c3b_the_two_readings_of_prompt_size_agree(text: str) -> None:
+    """C3b (prop_9f81ebea): static-vs-rendered drift cannot hide again.
+
+    The budget is enforced on the RENDERED text. If the raw constant ever stops
+    being a faithful proxy for it (placeholders gaining long defaults, or the
+    render growing an extra block), the two readings diverge and every
+    agent-reported size silently stops meaning what the gate checks. Pin them
+    together so the divergence itself is the failure.
+    """
+    rendered = prompt_len()
+    static = len(text)
+    # The ONLY permitted difference is the placeholder substitution itself
+    # ({cwd}/{tools}/{skills}/{knowledge} replaced by short sentinels).
+    assert abs(static - rendered) <= 200, (
+        f"static={static} vs rendered={rendered}: the prompt budget is measured "
+        "on one object and reported on another")
 
 
 def test_c4_ten_sections(text: str) -> None:

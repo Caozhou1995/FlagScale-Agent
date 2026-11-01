@@ -201,6 +201,15 @@ class AgentKernel:
         # from "something executed successfully". Surfaced to guards as
         # ctx.recent_tool_history. Reset at the start of every run_turn().
         self._recent_tool_history: list[dict] = []
+        # prop_8754e12a: calls a guard PREVENTED from running, kept as their own
+        # record. Deliberately NOT mixed into _recent_tool_history — that ledger
+        # means "this executed" and first_e2e_run.py reads it as evidence, so a
+        # blocked entry there would forge progress. This list exists so an
+        # auditor can distinguish "never attempted" from "attempted and blocked":
+        # Audit #83's central finding rested on one shell call that a guard
+        # swallowed, visible only because the guard banner happened to be the
+        # record. Reset per turn with the execution ledger.
+        self._blocked_tool_calls: list[dict] = []
         # Live per-turn iteration counter, updated at the TOP of every loop
         # iteration so a consumer INSIDE the turn (a guard asking "how many
         # actions have I already spent?") sees a real number. KernelResult only
@@ -248,6 +257,7 @@ class AgentKernel:
         # once the agent has clearly stalled on the gate.
         self._consecutive_completion_blocks = 0
         self._recent_tool_history = []  # reset the per-turn execution ledger
+        self._blocked_tool_calls = []   # reset the per-turn blocked-call record
         # Auto-append fallback: one hand-back per incident. A new user turn
         # re-arms it (a genuinely stuck model can hit it again next turn,
         # which is correct — each turn then costs at most the threshold).
@@ -1156,6 +1166,18 @@ class AgentKernel:
                         if verdict is not None:
                             if verdict.action in ("block", "escalate"):
                                 blocked_indices.add(i)
+                                # prop_8754e12a: a prevented call leaves a durable
+                                # record OUTSIDE the execution ledger. Without it,
+                                # "attempted and blocked" and "never attempted"
+                                # are indistinguishable downstream (Audit #83's
+                                # central finding rested entirely on one blocked
+                                # shell call that happened to survive as a banner).
+                                self._blocked_tool_calls.append({
+                                    "name": tc.get("name", ""),
+                                    "guard": getattr(verdict, "guard_name", "") or "",
+                                    "reason": verdict.reason or "",
+                                    "action": verdict.action,
+                                })
                                 # Deduplicate block/escalate across tool_calls
                                 msg_key = verdict.message
                                 if msg_key not in _seen_injects:
@@ -1556,6 +1578,7 @@ class AgentKernel:
             assistant_text=assistant_text,
             llm_responded=llm_responded,
             recent_tool_history=list(self._recent_tool_history),
+            blocked_tool_calls=list(self._blocked_tool_calls),
         )
 
     def _apply_verdict(self, verdict: GuardVerdict, pre: bool) -> bool:

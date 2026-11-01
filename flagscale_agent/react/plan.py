@@ -386,6 +386,65 @@ def is_fixed_step(step: dict) -> bool:
     return "fixed template" in title or "fixed step" in title
 
 
+# Markers that mean "the observation itself reports a failure or an absence of
+# evidence". Checked only when someone claims outcome="hit" (prop_ec1ea12f): a
+# hit is a success claim, so its own text must not contradict it.
+# Word-boundary matching, NOT substring: "missing" contains "miss" but reports
+# no miss, and a bare substring rule would block honest hits and teach the agent
+# to reword the observation instead of the outcome.
+_MISS_MARKERS = (
+    "half-miss", "half miss", "partly", "partially", "inconclusive",
+    "not measured", "unmeasured", "not tested", "untested", "no evidence",
+    "did not reproduce", "didn't reproduce", "failed", "substituted",
+    "only some", "mixed result",
+)
+# Sentences carrying a RESOLUTION marker describe a failure that was already
+# dealt with ("the earlier attempt failed; after fixing the root it then held").
+# They are skipped wholesale, at SENTENCE granularity: deleting the resolution
+# phrase from the whole text (the first attempt) left the bare "failed" behind and
+# wrongly blocked the honest hit — measured red in
+# tests/test_settle_rejects_half_miss.py::test_honest_hits_are_not_blocked.
+_MISS_EXEMPT = (
+    "was fixed", "then held", "after fixing", "is no longer", "used to fail",
+    "has since", "resolved",
+)
+
+
+def _observed_reports_a_miss(observed: str) -> bool:
+    """True when the settlement text itself reports a miss or absent evidence.
+
+    Deliberately conservative in ONE direction only: it can block a `hit`, never
+    force one. A false negative (an observation reporting a miss without using
+    any marker) leaves the old behaviour intact; a false positive costs the
+    agent one re-settle with honest wording, which is the direction we want the
+    error to fall — the plan's hit-rate records what happened, and an inflated
+    one is worse than a missing one.
+
+    Word-boundary matching, not substring: "missing" contains "miss" but reports
+    no miss, and a bare substring rule would block honest hits and teach the
+    agent to reword the observation instead of recording the truth.
+    """
+    text = (observed or "").strip().lower()
+    if not text:
+        return False
+    sentences = [s for s in re.split(r"[.;\n]", text) if s.strip()]
+    # A resolution marker means "from here on". Everything BEFORE it describes a
+    # failure that was already dealt with ("the earlier attempt failed; after
+    # fixing the root it then held"), so scanning starts at the marker's own
+    # sentence. Exempting per-sentence instead was measured wrong: the split put
+    # "failed" and "after fixing" in different sentences, so the failure half was
+    # still scanned and the honest hit was blocked.
+    start = 0
+    for i, sentence in enumerate(sentences):
+        if any(ph in sentence for ph in _MISS_EXEMPT):
+            start = i
+    for sentence in sentences[start:]:
+        for marker in _MISS_MARKERS:
+            if re.search(r"(?<![\w-])" + re.escape(marker) + r"(?![\w-])", sentence):
+                return True
+    return False
+
+
 class TaskPlan:
     """Manages structured task plans with YAML persistence."""
 
@@ -1044,6 +1103,23 @@ class TaskPlan:
             if oc not in ("hit", "miss", "not_run"):
                 raise ValueError(
                     'outcome must be "hit", "miss" or "not_run"'
+                )
+            # prop_ec1ea12f: a "hit" whose own observed text reports a miss is a
+            # self-refuting settlement. Measured case (dna v66, pred_7a3be81f):
+            # the observation said "Half-hit, half-miss against the compound
+            # statement" and was still settled as `hit`, so the plan's hit-rate
+            # recorded a success the run did not have — and a compound
+            # prediction's wrong half silently became invisible.
+            # A compound prediction must be SPLIT into per-outcome entries;
+            # settling it as `hit` is refused rather than reinterpreted.
+            obs = str(observed or "").strip()
+            if oc == "hit" and _observed_reports_a_miss(obs):
+                raise ValueError(
+                    f'prediction {prediction_id!r} cannot be settled "hit": its own '
+                    f"prediction_observed reports a miss/doubt ({obs[:200]!r}). A hit "
+                    "must not cover a half-miss — split the compound prediction into "
+                    "one entry per outcome and settle each, or settle this one "
+                    '"miss"/"not_run" with the observed text that says why.'
                 )
             preds = plan.get("predictions") or []
             target = None
