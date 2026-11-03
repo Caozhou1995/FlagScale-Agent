@@ -160,7 +160,7 @@ def test_c11_no_legacy_section_names(text: str) -> None:
 def test_c12_no_chinese_prose(text: str) -> None:
     """C12: English prose only; short quoted examples are allowed.
 
-    Matches the repo's existing contract (tests/test_context_v3.py::
+    Matches the repo's existing contract (tests/test_context.py::
     test_static_prompt_is_english): deliberate teaching snippets inside double
     quotes are data, not prose. Only Chinese OUTSIDE a quoted example fails.
     """

@@ -87,11 +87,4 @@ def _isolate_flagscale_home(tmp_path, monkeypatch):
     monkeypatch.setenv("FLAGSCALE_HOME", str(tmp_path / ".flagscale"))
     yield
 
-# An earlier prompt rebuild archived the superseded prompt-wording tests
-# under tests/_retired_v63 and must NOT be collected — see that dir's README
-# and docs/prompt_invariants.md.
-# A later plan simplification archived the tests for retired plan fields in _retired_v65
-# （oracle/calibration/requirements_read/convention/deliverable_reading/
-# assumptions/acceptance_act/differential/negative_control/bound_margin/
-# arbiter_act/oracle_act + verification.py/oracle.py/instruments.py）。
-collect_ignore_glob = ["_retired_v63/*", "_retired_v65/*", "_retired_20261103/*"]
+collect_ignore_glob = []

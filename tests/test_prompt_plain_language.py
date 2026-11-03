@@ -64,7 +64,7 @@ def test_unexplained_internal_coinage_is_named_a_defect():
 
 def test_coinage_rule_stays_english_prose():
     # The static prompt is English-only outside the quoted author note
-    # (per test_context_v3); the voice rule must stay in that register so the
+    # (per test_context); the voice rule must stay in that register so the
     # model recognises NEW offenders rather than a frozen word list.
     sec = _response_format_section()
     assert "Unexplained shorthand is a defect" in sec
