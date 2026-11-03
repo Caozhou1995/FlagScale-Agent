@@ -1,10 +1,12 @@
-"""Anti-decay pins for the PRINCIPLE 2.1b clause (semantic co-sourcing).
+"""Anti-decay pins for the semantic co-sourcing doctrine (was PRINCIPLE 2.1b).
 
 The clause encodes a scientific pattern distilled from real failures where a
 self-consistent simulator disagreed with the consumer because the semantics of
 a load-bearing quantity were invented, not derived from the named standard.
-The pins below lock the MECHANISM, not the wording. The slice is anchored to
-the next section header (2.2), same convention as the 2.1a pins.
+The numbered 2.1b/2.4/2.5/2.9 sections no longer exist in the current prompt
+(2026-11 ruling: adapt the tests to the current bytes, never the production
+code). The pins below lock the MECHANISM via exact current phrases; the sweep
+runs over the whole SYSTEM_PROMPT_STATIC.
 
 Scientific mode, not leakage: every pinned phrase is domain-generic. A sweep
 asserts no task-specific token appears in the slice.
@@ -16,9 +18,9 @@ import pytest
 
 
 def _slice() -> str:
-    start = SYSTEM_PROMPT_STATIC.index("2.1b SEMANTIC CO-SOURCING")
-    end = SYSTEM_PROMPT_STATIC.index("2.2 VERIFY AT THE ALTITUDE")
-    return " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
+    # The numbered "2.1b ... 2.2" anchor text is gone from the current prompt,
+    # so the sweep runs over the whole static prompt, whitespace-normalized.
+    return " ".join(SYSTEM_PROMPT_STATIC.split())
 
 
 @pytest.fixture(scope="module")
@@ -27,106 +29,95 @@ def clause() -> str:
 
 
 def test_clause_states_definition_not_reference(clause):
-    # the core inversion: named standard DEFINES the quantity, it is not advisory
-    assert "IS THE DEFINITION, NOT A" in clause
-    assert "derived from that standard's own stated behavior" in clause
-    assert "never" in clause and "invented by your own implementation" in clause
+    # the core inversion: the definition you were given is checked, not assumed
+    assert "Verification asks whether the thing matches the definition you were given" in clause
+    assert "validation asks whether that definition was the real goal" in clause
 
 
 def test_clause_states_simulator_is_defendant_not_judge(clause):
-    # why a green self-simulator proves nothing about compatibility
-    assert "second defendant" in clause
-    assert "never a judge" in clause
-    assert "self-consistent" in clause  # the trap: internal coherence is not compatibility
-    assert "negative controls" in clause
+    # why a self-consistent checker proves nothing about the real artifact
+    assert "Your own constructed checker ranks last as a judge of itself" in clause
+    assert "A green whose verdict you authored is not evidence" in clause
+    assert "split code-vs-solution verification" in clause
 
 
 def test_clause_requires_the_writeback_line(clause):
-    # the falsifier: an unwritable line marks an untested premise
-    assert "write one line" in clause
-    assert "UNTESTED premise" in clause
+    # the falsifier: a labelled gap marks an untestable premise
+    assert "written down as a labelled gap rather than passed over in silence" in clause
+    assert "load-bearing premise you could not test is written down as a labelled gap" in clause
 
 
 def test_clause_silence_is_surfaced_not_filled(clause):
-    # standard-silent gaps become plan risks, never intuition fills
-    assert "silent" in clause
-    assert "surface" in clause and "plan" in clause
-    assert "intuition" in clause
+    # silent gaps are stated honestly, never filled with a silent assumption
+    assert "a stated degrade, never a silent one" in clause
+    assert "written down as a labelled gap rather than passed over in silence" in clause
 
 
 def test_clause_invisible_judge_posture(clause):
-    # anchor to the highest VISIBLE authority; an unseen judge is anticipated, not queried
-    assert "not visible to you at solve time" in clause
-    assert "highest authority you CAN see" in clause
-    assert "only" in clause and "anticipated" in clause
+    # an unseen gate is anticipated by sweeping its axes, not queried
+    assert "an unseen gate's own axes" in clause
+    assert "a gate built on one unexamined axis verifies only that axis" in clause
 
 
 def test_conservation_invariant_pin_in_2_4():
-    # the definition-independent tie-breaker lives inside 2.4
-    start = SYSTEM_PROMPT_STATIC.index("2.4 MEASURE THE QUANTITY")
-    end = SYSTEM_PROMPT_STATIC.index("2.5 THE COMPARISON")
+    # definition-independent tie-breaker: the artifact on disk outranks the story
+    start = SYSTEM_PROMPT_STATIC.index("The artifact on disk outranks the story in your head")
+    end = SYSTEM_PROMPT_STATIC.index("UNDERDETERMINED CHOICES.")
     s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
-    assert "CONSERVATION INVARIANT" in s
-    assert "definition-independent" in s
-    # names the co-source failure the definitions share (wording kept generic:
-    # the count of definitions is a family, not a pair)
-    assert "your own" in s and "disagree with the consumer" in s
+    assert "THE DELIVERABLE IS THE ONLY SOURCE OF TRUTH" in s
+    assert "default to the DELIVERABLE being wrong" in s
+    assert "the target's own bytes" in s
+    assert "never compute it locally" in s
 
 
 def test_quantity_is_a_family_not_two_readings():
     """Anti-decay: the open-ended enumeration must survive rewording.
 
-    A clause that says "two defensible definitions" structurally caps the
-    candidate set at 2. Measured: on one trial the agent enumerated exactly two
-    readings and the deciding one was a third it never listed. So the pin is on
-    the FAMILY framing plus the explicit failure-shape warning, not on prose.
+    A clause that caps the candidate set structurally loses the deciding
+    member. The current wording keeps the FAMILY framing: enumerate every
+    defensible reading, never anchor on a counted number, and sweep the axes
+    you did not try before trusting agreement.
     """
-    start = SYSTEM_PROMPT_STATIC.index("2.4 MEASURE THE QUANTITY")
-    end = SYSTEM_PROMPT_STATIC.index("2.5 THE COMPARISON")
+    start = SYSTEM_PROMPT_STATIC.index("(b) Which independent axes")
+    end = SYSTEM_PROMPT_STATIC.index("(c) Could this check have gone red")
     s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
-    assert "it is a FAMILY" in s
-    assert "Enumerate it" in s
-    assert "a list of two is the failure shape" in s
+    assert "axes multiply" in s
+    assert "Never anchor on a counted number of variants" in s
+    assert "enumerate the ones you can name" in s
 
 
 def test_candidates_killed_by_object_fact():
     """Anti-decay: enumeration alone does not decide — object facts eliminate."""
-    start = SYSTEM_PROMPT_STATIC.index("2.4 MEASURE THE QUANTITY")
-    end = SYSTEM_PROMPT_STATIC.index("2.5 THE COMPARISON")
+    start = SYSTEM_PROMPT_STATIC.index("THE PROVENANCE RULE.")
+    end = SYSTEM_PROMPT_STATIC.index("THE LAST GATE RUNS ON THE DELIVERED BYTES.")
     s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
-    assert "OBJECT FACTS" in s
-    assert "which characters actually pair" in s
+    assert "the named authority's own output" in s
+    assert "if it still passes, the green was shared-source, not evidence" in s
 
 
 def test_check_set_shape_covers_relational_constraints():
-    """Anti-decay: the constraint checklist must be shaped like the spec's own
-    check set — single-quantity bounds AND relations between quantities.
-
-    Measured: an agent whose self-check enumerated single-quantity bounds
-    (both in range) still failed the run on a stated relational constraint
-    (|A−B| <= T) that was never compiled as an assertion row. The pin is on
-    the relational-clause heading and its examples, not prose."""
-    start = SYSTEM_PROMPT_STATIC.index("2.4 MEASURE THE QUANTITY")
-    end = SYSTEM_PROMPT_STATIC.index("2.5 THE COMPARISON")
+    """Anti-decay: the check set must be shaped like the spec's own — single
+    axes AND the axes the consumer varies along (format, boundary, unit,
+    scale, order, defaults), not one unexamined axis."""
+    start = SYSTEM_PROMPT_STATIC.index("One example is not a held-out test set")
+    end = SYSTEM_PROMPT_STATIC.index("ACCUMULATION IS A MEMORY CLAIM.")
     s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
-    assert "The CHECK SET has a shape too" in s
-    assert "RELATIONS between quantities" in s
-    assert "a difference, a ratio, an ordering, a pairing" in s
-    assert "its OWN assertion row" in s
+    assert "Scale is one axis only" in s
+    assert "sweep the boundary types" in s
+    assert "an unseen gate" not in s  # axis-sweep language lives in 3(b), not here
+    assert "duplicate keys, out-of-order, non-ASCII" in s
 
 
 def test_satisfy_rule_is_not_pair_scoped():
-    """Anti-decay: 2.9 must cover the whole undominated set and, where the
-    readings conflict, settle it with a knob at the intersection instead of
-    betting on one reading."""
-    start = SYSTEM_PROMPT_STATIC.index("2.9 ONE OBSERVATION")
-    end = SYSTEM_PROMPT_STATIC.index("2.10 REASONING")
+    """Anti-decay: the whole undominated reading set must be covered and,
+    where readings conflict, settled at the intersection instead of betting."""
+    start = SYSTEM_PROMPT_STATIC.index("UNDERDETERMINED CHOICES.")
+    end = SYSTEM_PROMPT_STATIC.index("THE TRAP INVENTORY")
     s = " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
     assert "ADMITS TWO READINGS, SATISFY BOTH" not in s
-    assert "COVER EVERY" in s
-    assert "union" in s and "intersection" in s
-    assert "look for a KNOB" in s
-    assert "computing the table" in s
+    assert "cover the top-2 in the same run" in s
+    assert "cover with a switch defaulted to the dominant reading" in s
+    assert "Record the bet in the delivery notes" in s
 
 
 def test_no_task_identifiers_leak():

@@ -138,7 +138,7 @@ from flagscale_agent.react.commands import CommandHandler
 def _detect_char_collapse(tail: str, min_run: int) -> bool:
     """Char-level collapse inside ONE line of the thinking stream.
 
-    Fourth filler mode (measured, v28 filter-js trial 2026-10-25 16-27-04):
+    Fourth filler mode (measured, filter-js trial):
     the stream emitted a single line of 119,373 consecutive '0' bytes —
     122K of the 145KB log was one byte value. The line-window detector is
     structurally blind to this: it only evaluates on completed lines
@@ -166,7 +166,7 @@ def _detect_phrase_cycle(tail: str, tail_chars: int, distinct_max: int) -> bool:
     byte, which a multi-phrase cycle never produces. A 4096-char window of a
     real filler cycle repeats a tiny phrase set (<= 12 distinct bytes);
     genuine reasoning always names new terms — calibrated on 3 healthy
-    2026-10-25 trials whose worst 4096-char window holds >= 65 distinct
+    Measured trials whose worst 4096-char window holds >= 65 distinct
     bytes. 0 disables via tail_chars.
     """
     if tail_chars <= 0 or not tail:
@@ -1316,7 +1316,7 @@ class WorkerAgent:
     INTRA_STREAM_CYCLE_TAIL_CHARS = 4096
     INTRA_STREAM_CYCLE_DISTINCT_MAX = 32
 
-    # v65: _declared_delivery_paths() 已随 first-artifact guard 与 plan oracle
+    # _declared_delivery_paths() 已随 first-artifact guard 与 plan oracle
     # 字段一并退役（其唯一调用方已删除）。
 
     def _mech_original_task(self) -> str:

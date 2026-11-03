@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""prop_fcd2f2d5 — a FIX line's embedded command must be RUN before it is written.
+"""a FIX line's embedded command must be RUN before it is written.
 
 Measured defect (Audit #87-F3): a FIX line prescribed
 `any(k in tb for k in ({...}|{'A1'}))` — a set union inside any()'s iterable,

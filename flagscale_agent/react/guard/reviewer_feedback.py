@@ -105,7 +105,7 @@ class ReviewerFeedbackGuard(Guard):
         # (it can be reassigned on session restore) — never a frozen string.
         self._session_dir_fn = session_dir_fn
         self._ledger = ledger
-        # prop_136fce9c: set by _live_reviewers when the spawn registry could
+        # set by _live_reviewers when the spawn registry could
         # not be read/parsed. Distinct from "no reviewers": the gate cannot
         # see the session, so silence would be a fail-OPEN. Surfaced as an
         # advisory inject (never a block — an unreadable file must not hold the
@@ -137,7 +137,7 @@ class ReviewerFeedbackGuard(Guard):
         lookup fails (fail-silent).
         """
         # Cleared on EVERY call so a warning from an earlier resolve can never
-        # outlive the condition that produced it (prop_136fce9c).
+        # outlive the condition that produced it.
         self._registry_warning = None
         try:
             from flagscale_agent.react.multi_agent.spawn import (
@@ -218,7 +218,7 @@ class ReviewerFeedbackGuard(Guard):
             return None
         live = self._live_reviewers()
         if not live:
-            # prop_136fce9c: an unreadable spawn registry empties `live`, which
+            # an unreadable spawn registry empties `live`, which
             # is indistinguishable from "no reviewers were spawned" — the
             # original fail-OPEN. Never BLOCK on it (a corrupt file must not
             # hold completion hostage) but do say so, so the agent can inspect

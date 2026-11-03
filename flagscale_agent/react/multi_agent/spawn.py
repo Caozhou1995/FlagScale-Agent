@@ -113,7 +113,7 @@ def read_session_spawns(session_dir):
 def read_session_spawns_ex(session_dir):
     """Return (records, error).
 
-    prop_136fce9c: the two per-session registries used to fail in OPPOSITE
+    the two per-session registries used to fail in OPPOSITE
     directions with the same silent `except: return []`. For read_adjudications
     an unreadable file is harmless (a reviewer stays gated). For the SPAWN
     registry it is not: a corrupt/truncated/unreadable spawned.jsonl empties

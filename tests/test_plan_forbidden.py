@@ -221,4 +221,4 @@ def test_plan_create_schema_exposes_forbidden(plan):
     assert "forbidden" in P.parameters["properties"]
 
 
-# v65: oracle 字段已退役——默认 oracle 注入 fixture 一并删除。
+# oracle 字段已退役——默认 oracle 注入 fixture 一并删除。

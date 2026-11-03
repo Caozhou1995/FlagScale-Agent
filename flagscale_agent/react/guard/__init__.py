@@ -45,7 +45,7 @@ class GuardContext:
     turn_count: int = 0
     recent_tool_names: list[str] = field(default_factory=list)
     recent_tool_history: list[dict] = field(default_factory=list)
-    # prop_8754e12a: calls a guard PREVENTED from running, as their own record.
+    # calls a guard PREVENTED from running, as their own record.
     # Kept separate from recent_tool_history because that list means "executed";
     # guards read it as evidence of progress.
     blocked_tool_calls: list[dict] = field(default_factory=list)
@@ -344,7 +344,7 @@ class GuardRegistry:
     def _call_guard(self, guard: Guard, method: str, args: tuple, default: Any = None) -> Any:
         """Call one guard method, degrading a raising guard to `default`.
 
-        prop_daeed114: guard faults must never escape the registry. Interactive
+        guard faults must never escape the registry. Interactive
         run() only catches KeyboardInterrupt, so one unexpected exception inside
         a guard would kill the process and lose the turn. Every call site that
         invokes guard-owned code outside the collect loop routes through here.
@@ -400,7 +400,7 @@ class GuardRegistry:
 
         for guard in self._guards:
             seen_rule: set[tuple[str, str]] = set()
-            # Per-guard fault isolation (prop_daeed114): a raising guard must
+            # Per-guard fault isolation: a raising guard must
             # degrade to an advisory inject, never escape _resolve. Without
             # this, any unexpected exception inside one guard's check kills the
             # whole interactive process (run() only catches KeyboardInterrupt)

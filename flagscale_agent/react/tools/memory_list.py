@@ -112,7 +112,7 @@ class MemoryListTool(Tool):
         if type_filter or domain_filter or keyword:
             header += " (filtered)"
         if shown < total:
-            # prop_8ad3a23b: a truncated list was indistinguishable from a
+            # a truncated list was indistinguishable from a
             # complete one — the body simply stopped, so an agent hunting a key
             # it could not see concluded the key was absent and then cited one it
             # never saw (audits #78/#81). The remainder gets an explicit

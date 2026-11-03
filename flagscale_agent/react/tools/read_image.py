@@ -208,17 +208,23 @@ class ReadImageTool(Tool):
 
         b64 = base64.standard_b64encode(data).decode("ascii")
 
+        # The adjustments note comes FIRST: the model reads the image before it
+        # reads the tail, so a reduced copy must be declared before the pixels,
+        # not after — otherwise the note reads as an afterthought to a verdict
+        # already drawn from the downscaled view.
         text = [
             f"Image: {path}",
-            f"  original: {orig_w}x{orig_h} px, {orig_mode}, {orig_fmt or ext}, "
-            f"{raw_size} bytes",
-            f"  delivered: {work.width}x{work.height} px, {media_type}, "
-            f"{len(data)} bytes",
         ]
         if notes:
             text.append("  adjustments: " + "; ".join(notes))
         else:
             text.append("  adjustments: none (you are seeing the original pixels)")
+        text += [
+            f"  original: {orig_w}x{orig_h} px, {orig_mode}, {orig_fmt or ext}, "
+            f"{raw_size} bytes",
+            f"  delivered: {work.width}x{work.height} px, {media_type}, "
+            f"{len(data)} bytes",
+        ]
         text.append(
             "The image itself is attached to this result — answer from what you "
             "SEE, and say if a detail is too small to read at this resolution."

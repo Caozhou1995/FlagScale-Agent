@@ -61,9 +61,25 @@ def test_acceptance_facet_clause_present_in_frame_step():
 
 
 def test_acceptance_facet_clause_present_in_static_prompt():
-    """The static prompt's FRAME line must name it too, so it survives a
-    plan-tool bypass (agents that skip plan_create still see the discipline)."""
-    assert ACCEPTANCE_FACET_CLAUSE in SYSTEM_PROMPT_STATIC
+    """The static prompt must carry the same discipline, so it survives a
+    plan-tool bypass (agents that skip plan_create still see it).
+
+    Measured 2026-11-03: SYSTEM_PROMPT_STATIC contains no "facet" token at all
+    (the section heading lives only in plan_create), so this test no longer
+    looks for the name. It binds the SUBSTANCE the static prompt does carry:
+    "Before building, make AT LEAST ONE executed check per verifiable clause of
+    the task text. The count is fixed by the clause count, not by how many
+    faces you happen to think of, so a short list is a defect and not a
+    judgment call." Deleting that sentence turns this test red.
+    """
+    text = " ".join(SYSTEM_PROMPT_STATIC.lower().split())
+    assert "at least one executed check per verifiable clause" in text
+    assert "fixed by the clause count" in text
+    assert "short list is a defect" in text
+    # the clause must not be reopenable to unbounded model choice
+    for banned in ("as many as you can think of", "list as many as",
+                   "use your judgment"):
+        assert banned not in text, f"static prompt reopened unbounded choice: {banned}"
 
 
 def test_facet_set_is_externally_anchored():
@@ -81,8 +97,10 @@ def test_facet_set_is_externally_anchored():
     assert "fixed by the clause count" in text, (
         "the clause must state that the row count is FIXED BY the clause count"
     )
-    # (b) one row per clause -- the shape that makes the count checkable
-    assert "one row per verifiable clause" in text
+    # (b) one check per clause -- the shape that makes the count checkable
+    # (current wording "ONE executed check per verifiable clause"; the old
+    # "one row per verifiable clause" no longer exists in the clause)
+    assert "one executed check per verifiable clause" in text
     # (c) no escape hatch back to unbounded model choice
     for banned in ("as many as you can think", "whatever feels",
                    "list as many", "as you see fit", "use your judgment"):

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""prop_136fce9c — the spawn registry must not fail OPEN silently.
+"""the spawn registry must not fail OPEN silently.
 
 Both per-session registries used one `except Exception: return []`. For
 read_adjudications that is fail-SAFE (a reviewer stays gated). For the SPAWN

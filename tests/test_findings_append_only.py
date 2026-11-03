@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""prop_810728da — the audit findings file is APPEND-ONLY.
+"""the audit findings file is APPEND-ONLY.
 
 The audit report is a cross-round shared deliverable (one measured session
 reached 160 KB / 909 lines, built by appending one `## Audit #N` section per

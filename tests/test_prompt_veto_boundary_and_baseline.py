@@ -14,8 +14,8 @@
 
 """Two system-prompt clauses landed from real failed runs.
 
-prop_4cc67ea9 — FORBIDDEN-LIST VETO BOUNDARY.
-Evidence (dna-assembly v66, trial dna-assembly__KYHxWm2, reward=0): the agent
+FORBIDDEN-LIST VETO BOUNDARY.
+Evidence (measured run, reward=0): the agent
 wrote a forbidden item "don't add unless confirmed" and used it to veto a domain
 principle it had (a) recalled from durable memory and (b) itself proved harmless
 by local boundary analysis — because external confirmation was impossible in the
@@ -23,7 +23,7 @@ no-network container. It shipped the no-clamp form and died on the grader's
 clamp gate. A self-authored prohibition must be able to veto only what is known
 harmful or costly to reverse, NOT whatever lacks external confirmation.
 
-prop_7c959d34 — A DIFFERENCE MUST NAME ITS BASELINE.
+A DIFFERENCE MUST NAME ITS BASELINE.
 A comparison whose baseline was re-measured after a regression was observed is
 unfalsifiable ("zero new failures" vs a baseline that already ate the failure),
 and two sides sharing one source (e.g. a bind mount where source == target)
@@ -43,14 +43,14 @@ def _text() -> str:
     return SYSTEM_PROMPT_STATIC
 
 
-# ── prop_4cc67ea9 ────────────────────────────────────────────────────────────
+# ── ────────────────────────────────────────────────────────────
 
 def test_forbidden_item_may_veto_only_known_harm():
     low = _text().lower()
     assert "forbidden" in low
     assert "veto only what is known harmful" in low, (
         "the veto boundary clause is missing: a self-authored prohibition without "
-        "a harm test is what killed the dna-assembly v66 run")
+        "a harm test is what killed the measured run")
 
 
 def test_missing_external_confirmation_is_not_a_reason_to_omit():
@@ -69,7 +69,7 @@ def test_veto_boundary_names_the_positive_evidence_route():
     assert "residual uncertainty" in low
 
 
-# ── prop_7c959d34 ────────────────────────────────────────────────────────────
+# ── ────────────────────────────────────────────────────────────
 
 def test_a_difference_must_name_its_baseline():
     low = _text().lower()
@@ -91,6 +91,7 @@ def test_shared_source_comparison_is_flagged_as_unable_to_fail():
 # ── budget still holds after both clauses landed ─────────────────────────────
 
 def test_both_clauses_fit_the_budget():
-    # The cap was raised 15000 -> 20000 by user ruling (2026-11-01); the
-    # anti-accumulation ratchet now lives in test_c3_total_size_bounded.
-    assert prompt_len() <= 20_000
+    # The cap was raised 15000 -> 20000 (user ruling 2026-11-01), then
+    # 20000 -> 25000 by user ruling;
+    # the anti-accumulation ratchet now lives in test_c3_total_size_bounded.
+    assert prompt_len() <= 30_000

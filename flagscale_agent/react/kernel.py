@@ -201,7 +201,7 @@ class AgentKernel:
         # from "something executed successfully". Surfaced to guards as
         # ctx.recent_tool_history. Reset at the start of every run_turn().
         self._recent_tool_history: list[dict] = []
-        # prop_8754e12a: calls a guard PREVENTED from running, kept as their own
+        # calls a guard PREVENTED from running, kept as their own
         # record. Deliberately NOT mixed into _recent_tool_history — that ledger
         # means "this executed" and first_e2e_run.py reads it as evidence, so a
         # blocked entry there would forge progress. This list exists so an
@@ -1166,7 +1166,7 @@ class AgentKernel:
                         if verdict is not None:
                             if verdict.action in ("block", "escalate"):
                                 blocked_indices.add(i)
-                                # prop_8754e12a: a prevented call leaves a durable
+                                # a prevented call leaves a durable
                                 # record OUTSIDE the execution ledger. Without it,
                                 # "attempted and blocked" and "never attempted"
                                 # are indistinguishable downstream (Audit #83's

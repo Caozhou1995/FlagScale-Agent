@@ -404,5 +404,5 @@ class TestThinking:
         assert "当前问题模型" not in tp.summary()
 
 
-# v65: oracle 字段已随 RSI 简化退役——本 fixture（为历史 oracle 注入默认值）
+# oracle 字段已随 plan 简化退役——本 fixture（为历史 oracle 注入默认值）
 # 一并删除。plan_create 不再要求/接受 oracle。

@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Anti-decay pins for PRINCIPLE 2.4 / 2.9's DEFINITION-AXIS requirement.
+"""Anti-decay pins for the DEFINITION-AXIS requirement (current wording).
 
-Why this file exists (measured 2026-10-28, terminal-bench dna-assembly trial
-fbokQzg): the agent DID sweep design parameters -- a full `for Lf in 15..36:
+Why this file exists (measured terminal-bench run): the agent DID sweep design parameters -- a full `for Lf in 15..36:
 for Lr in 15..36:` grid calling the real temperature tool on every candidate --
 and it DID apply the knob/intersection rule. It still scored 0, because it
 pinned the MEASUREMENT DEFINITION to one construction of the measured input
@@ -24,11 +23,11 @@ quantity over the annealing tract PLUS the leading bases of the 5' tail that
 re-match the template. The design axis was swept; the definition axis was not,
 and every row of its table agreed with itself.
 
-So the clause must assert two things that cannot be paraphrased away:
-  (a) the axis list is not the object's axes alone -- the consumer's INPUT
-      CONSTRUCTION is a second kind of axis, and
-  (b) the knob search must fold the definition axis into the grid BEFORE
-      choosing a value, or it returns "the best of the wrong family".
+Adapted to the current prompt rewrite (ruling: current code wins, tests
+follow). The old PRINCIPLE clauses were re-homed into Section 3 (a/b/c)
+of THE LOOP; each test below quotes the current verbatim clause that carries
+the same capability: the consumer's span/input construction is an axis, it is
+swept like any other, and an un-swept axis leaves the miss invisible.
 """
 
 import re
@@ -45,44 +44,48 @@ def _flat() -> str:
 FLAT = _flat()
 
 
-def test_axis_list_covers_the_consumers_input_construction_not_only_the_object():
-    assert "each axis the CONSUMER's input construction varies along" in FLAT
+def test_span_not_formula_ambiguity_is_pinned():
+    """The measured failure: not the formula, but WHICH SPAN feeds it."""
+    assert "The ambiguity is rarely the formula but the span fed in" in FLAT
 
 
-def test_the_two_kinds_of_axis_are_named_as_different_kinds():
-    assert "Those two kinds of axis are different axes" in FLAT
+def test_consumer_fixes_the_span_so_sweep_it():
+    """The consumer's input construction is an axis: name how it fixes the
+    span, and sweep that parameter like any other."""
+    assert "name how the consumer fixes its span and sweep that parameter" in FLAT
 
 
-def test_the_failure_shape_is_stated_so_the_clause_cannot_be_softened():
-    """The exact miss: sweep design params, pin the definition, lose the run."""
-    assert ("sweeping the design parameters while pinning the measurement "
-            "definition leaves the deciding dimension unscanned") in FLAT
+def test_reading_set_built_from_self_picked_offsets_is_incomplete():
+    """The wrong-family verdict: a reading set you built from your own choices
+    cannot cover the deciding construction."""
+    assert "A reading set built from offsets you picked is incomplete by construction" in FLAT
 
 
-def test_hidden_party_ambiguity_is_located_in_the_span_not_the_formula():
-    assert "the ambiguity is rarely in its formula" in FLAT
-    assert "almost always in WHICH SPAN gets fed to that formula" in FLAT
+def test_axes_multiply_and_are_enumerated():
+    """The definition axis is one of several independent axes; enumerate, do
+    not anchor on a counted number."""
+    assert "An axis is a choice no fact settled, and axes multiply" in FLAT
+    assert "Never anchor on a counted number of variants" in FLAT
 
 
-def test_knob_search_must_fold_the_definition_axis_into_the_grid_first():
-    assert "fold the definition axis into the grid FIRST" in FLAT
-    assert ("sweep the design parameter and each defensible construction of "
-            "the measured input TOGETHER") in FLAT
+def test_do_not_trust_the_agreement_of_unchecked_rows():
+    """Every row of the sweep agreeing is not evidence: the untried members
+    must be checked before the agreement is trusted (the invisible miss)."""
+    assert "check the ones you did not try before you trust the agreement" in FLAT
 
 
-def test_knob_search_under_a_pinned_definition_is_named_as_the_wrong_family():
-    assert ("A knob search whose reading set is missing the deciding member "
-            "returns a confident answer that is merely the best of the wrong "
-            "family") in FLAT
+def test_unseen_gate_axes_are_swept():
+    """The clause generalises to any deciding party's gate (format, boundary,
+    unit, scale, order, defaults)."""
+    assert ("it varies along axes too (format, boundary, unit, scale, order, "
+            "defaults)") in FLAT
 
 
-def test_the_miss_is_invisible_from_inside_because_every_row_agrees():
-    assert ("the miss is invisible from inside, because every row agrees") in FLAT
-
-
-def test_2_9_axis_count_points_back_at_both_kinds_of_axis():
-    assert ("the count is set by the axes the object AND the consumer's input "
-            "construction vary along") in FLAT
+def test_independent_computation_paths_for_each_axis():
+    """Compute each reading by a path that does not share source with the
+    others -- the shared-source check cannot fail."""
+    assert ("compute each by a path that does not share source with the "
+            "others") in FLAT
 
 
 def test_clause_stays_task_agnostic():

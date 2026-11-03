@@ -151,12 +151,12 @@ class PlanUpdateGuard(Guard):
 
     # plan_update actions that are ALWAYS a substantive response: they mutate the
     # plan's real state (a step advanced/finished/abandoned, subtasks added,
-    # acceptance refined, a batch of steps updated). Any of these earns a full
+    # acceptance refined). Any of these earns a full
     # reset — including the escalation counter — because the agent genuinely moved
     # the plan forward, not merely pinged the guard.
     _PROGRESS_ACTIONS = frozenset((
         "step_done", "step_skip", "complete", "abandon",
-        "add_steps", "update_acceptance", "batch", "add_forbidden",
+        "add_steps", "update_acceptance", "add_forbidden",
     ))
 
     @staticmethod
@@ -185,7 +185,7 @@ class PlanUpdateGuard(Guard):
         rationalization that let the thrash resume, so notes ALONE no longer
         clear the block. Real cognition must have moved, shown by EITHER:
           - a genuine progress action (step done/skipped, plan complete/abandon,
-            steps added, acceptance refined, batch) — plan state actually moved; or
+            steps added, acceptance refined) — plan state actually moved; or
           - a rebuilt plan-level problem MODEL (a fresh ``thinking`` with a
             falsifiable prediction) — deliberate thinking actually happened.
         plan_create (a whole new plan) also clears.

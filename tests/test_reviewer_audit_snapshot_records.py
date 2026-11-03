@@ -9,7 +9,7 @@ def _state(tmp_path):
 
 
 def test_dispatch_records_the_snapshot_size(tmp_path):
-    """prop_c36e61f7: snapshot_records must record what the reviewer received.
+    """snapshot_records must record what the reviewer received.
 
     The original wrote `state.get("snapshot_records")` — reading the field it
     was about to write — so the value round-tripped null forever (production

@@ -36,24 +36,27 @@ def test_first_step_done_is_blocked_with_beat_message():
     assert "blocked once" in low
     assert "re-issue" in low
     # The beat is a review instruction, not a pass — re-issuing is the ONLY
-    # escape, and the harness states it will pass.
-    assert "it will pass" in low
+    # escape, and the harness states the re-issue passes once the evidence
+    # lines are present.
+    assert "passes when" in low
 
 
 def test_beat_message_carries_the_three_parts_in_order():
-    """The beat is THREE parts, in this order (user-directed 2026-11-01):
-    (1) re-read the system prompt, (2) did you actually get it right,
-    (3) does what you think match what you did."""
+    """The beat's parts must appear in the message, in this order: the
+    unverified-layer prompt, the failure receipt, the trap-inventory walk,
+    then the fresh probe, and finally the risk sweep."""
     g = SystemPromptRemindGuard()
     v = _pre(g, {"action": "step_done", "step_id": 1})
     low = v.message.lower()
-    i1 = low.index("re-read your system prompt")
-    i2 = low.index("did you actually get it right")
-    i3 = low.index("does what you think match what you did")
-    assert i1 < i2 < i3, "the three parts must appear in the stated order"
-    # part 1 must forbid answering from memory, part 3 must compare vs bytes
-    assert "not from memory" in low
-    assert "bytes you actually produced" in low or "delivered" in low
+    i1 = low.index("unverified layer")
+    i2 = low.index("failure receipt")
+    i3 = low.index("trap inventory walk")
+    i4 = low.index("fresh probe")
+    i5 = low.index("risk sweep")
+    assert i1 < i2 < i3 < i4 < i5, "the beat parts must appear in the stated order"
+    # the walk must demand a real output, and the sweep must demand settlement
+    assert "real output" in low
+    assert "blocks this declaration" in low or "settle it now" in low
 
 
 def test_old_seven_question_payload_does_not_return():

@@ -14,16 +14,18 @@
 
 """SystemPromptRemindGuard — the step_done self-interrogation beat.
 
-Fires when the agent DECLARES a step complete (plan_update step_done, and any
-batch row that declares one). That is the single moment where self-confirmation
+Fires when the agent DECLARES a step complete (plan_update step_done or
+complete). That is the single moment where self-confirmation
 is most likely and least checked: the agent has just convinced ITSELF, the
 mechanical acceptance form was just filled in, and the next action feels like
 progress.
 
 The guard BLOCKS the declaration exactly ONCE per step (a beat, not a barrier):
-the agent must then do its scientific self-review — did I run the protocol,
-did I read the delivered bytes, is my recorded observation verbatim, does my
-next action cross a negative constraint — and re-issue the SAME plan_update.
+the agent must then do its scientific self-review — W1 a failure receipt
+(you have settled-too-early at this kind of step before), W2 an item-by-item
+TRAP INVENTORY walk over this step's deliverable, W3 one fresh probe never
+run in this step with its real output, and a RISK SWEEP of logged-but-
+unresolved risks — and re-issue the SAME plan_update.
 The re-issued declaration is not blocked again: the review is the agent's own
 judgment, the harness does not grade it. The harness side does exactly one
 thing — one block per step, nothing else — and never blocks any other agent
@@ -36,29 +38,49 @@ from . import Guard, GuardContext, GuardVerdict
 
 _REMIND_MESSAGE = """
 [Remind] This step-done declaration is blocked ONCE — the beat, not a refusal.
-Do this review NOW, then re-issue the SAME plan_update (it will pass). Three
-parts, in order:
+Re-issue the SAME plan_update WITH the evidence lines below — the re-issue
+passes when they are present. The grader is INVISIBLE to you (if you could
+read it you would just copy it) — so these lines are DERIVED, from the task
+text and environment signals, never from a grader file.
 
-  1. RE-READ YOUR SYSTEM PROMPT. Not from memory — re-read the actual doctrine
-     text you were given, and re-check this step against it.
+  W0 UNVERIFIED LAYER. Name the ONE layer of this deliverable you have NOT
+  checked yet — the consumer's own parse/interface contract, the boundary you
+  assumed, the branch you never ran. If your last rounds re-checked layers you
+  already proved green, you spent them in the wrong place: go verify the
+  unproven layer FIRST, then re-issue. Answering "nothing unverified" requires
+  naming every layer and the check that covered it.
 
-  2. DID YOU ACTUALLY GET IT RIGHT? Not "did I do something", not "did my own
-     check pass". Right about the thing the task is really asking for.
+  W1 FAILURE RECEIPT. You have failed at this kind of step — repeatedly. The
+  record's pattern is the same: the correct check was reachable and never
+  run. Your first pass is treated as settled-too-early, NOT as wrong — the
+  right answer was usually within reach of one more probe.
 
-  3. DOES WHAT YOU THINK MATCH WHAT YOU DID? Put the two side by side: the rule
-     or reading you concluded, and the bytes you actually produced/delivered.
-     If they differ by even one element, you are not done — that gap is the
-     step.
+  W2 TRAP INVENTORY WALK. Walk the Section-5 TRAP INVENTORY item by item
+  against THIS step's deliverable and choices. For each item write one line:
+  APPLIES -> what the choice is and how you checked it, or N/A -> why it
+  cannot bite here. Enumerate FIRST, judge later — the missed item is the
+  failure mode this beat exists to catch.
+
+  W3 FRESH PROBE. Paste ONE command you have NOT run in this step, with its
+  real output, reading the delivered bytes. If you cannot produce a fresh
+  probe, say what you tried to run and why nothing new was runnable —
+  confidence without a fresh probe is exactly what this beat blocks.
+
+  RISK SWEEP: list every risk you LOGGED during this step and left
+  unresolved (the suspended "Hmm." moments — a risk named but never settled).
+  For each, write how it was resolved: the evidence that decided it and which
+  side won. A logged-but-unresolved risk blocks this declaration — settle it
+  now or name the probe you refuse to run and why.
 
 The review is yours; the harness does not grade it. It only guarantees the beat
-happened. Re-issue the same declaration and continue.
+happened. Re-issue the same declaration WITH the evidence lines and continue.
 """
 
 
 class SystemPromptRemindGuard(Guard):
     """Block a completion declaration ONCE per step; never block anything else.
 
-    First submission of a step_done / batch-with-done / complete is blocked with
+    First submission of a step_done / complete declaration is blocked with
     the self-review pointer. The agent does its scientific self-review and
     re-issues the SAME declaration; the re-issue passes (the review is the
     agent's own judgment — the harness does not grade it, it only guarantees
@@ -98,47 +120,42 @@ class SystemPromptRemindGuard(Guard):
 def _declares_completion(args: dict) -> bool:
     """True when this plan_update declares at least one step DONE.
 
-    Three shapes carry a declaration: the single-step `action=step_done`, an
-    `action=batch` whose rows include `status: done`, and `action=complete`
-    (the whole plan claimed finished — the strongest declaration of all).
+    Two shapes carry a declaration: the single-step `action=step_done`,
+    `action=complete` (the whole plan claimed finished — the strongest
+    declaration of all), and the `batch` form carrying any row with
+    status DONE (defense in depth: the tool dropped `batch`, but a
+    hand-rolled caller can still route one through).
     """
     action = str(args.get("action") or "").strip().lower()
-    if action in ("step_done", "complete"):
-        return True
-    if action != "batch":
-        return False
-    for row in args.get("updates") or ():
-        if not isinstance(row, dict):
-            continue
-        if str(row.get("status") or "").strip().lower() == "done":
-            return True
-    return False
+    if action == "batch":
+        updates = args.get("updates") or []
+        return any(
+            isinstance(u, dict) and str(u.get("status") or "").strip().lower() == "done"
+            for u in updates
+        )
+    return action in ("step_done", "complete")
 
 
 def _declaration_sig(args: dict) -> str:
     """Identity of the declaration — one beat per step, not one per retry.
 
-    step_done: the step number is the identity. batch: the SET of done row ids
-    is the identity (a re-issued batch with the same rows is the same beat;
-    new rows added later are a different beat). complete: one beat for the
-    whole plan, keyed on the action alone. Fields the agent may legitimately
-    change between the block and the re-issue — the evidence text, notes, and
-    any other prose — do NOT change the signature: the re-issued
-    declaration must pass without a second block.
+    step_done: the step number is the identity. batch: the set of DONE row
+    ids (any change to which rows are declared done is a NEW declaration);
+    rows not carrying DONE — notes-only edits — never key it. complete: one
+    beat for the whole plan, keyed on the action alone. Fields the agent
+    may legitimately change between the block and the re-issue — the
+    evidence text, notes, and any other prose — do NOT change the
+    signature: the re-issued declaration must pass without a second block.
     """
     action = str(args.get("action") or "").strip().lower()
-    if action in ("step_done", "complete"):
-        return f"{action}:{args.get('step_id')}" if action == "step_done" else action
+    if action == "step_done":
+        return f"{action}:{args.get('step_id')}"
     if action == "batch":
-        ids = []
-        for i, r in enumerate(args.get("updates") or []):
-            if not isinstance(r, dict):
-                continue
-            if str(r.get("status") or "").strip().lower() != "done":
-                continue
-            sid = r.get("step_id")
-            # A done row with no usable id must still be distinct: fall back
-            # to its position so two id-less batches cannot share one beat.
-            ids.append(str(sid) if sid is not None else f"idx{i}")
-        return "batch:" + ",".join(sorted(ids))
+        ids = sorted(
+            str(u.get("step_id"))
+            for u in (args.get("updates") or [])
+            if isinstance(u, dict)
+            and str(u.get("status") or "").strip().lower() == "done"
+        )
+        return f"batch:{','.join(ids)}"
     return action

@@ -421,7 +421,7 @@ class TestMeasuredChecks:
 
 
 class TestRoundtripMeasurement:
-    """prop_086f15d4: a structured-text edit carries a MEASURED canonical
+    """a structured-text edit carries a MEASURED canonical
     round-trip observation (parse -> canonical re-serialize -> byte-compare)
     appended to the validity measurement. Real subprocesses, no mocking —
     the boundary under test is the measurement itself."""

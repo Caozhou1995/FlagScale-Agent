@@ -4,8 +4,9 @@
   REAL 组步数 med=69，BORROWED 组 med=111（1.61x）；每步延迟 10.71s vs 14.06s（1.31x）。
   ⇒ 总耗时 2.04x = 1.61x × 1.31x。压步数是两轴之一。
 
-当前 prompt 的 TIME BUDGET 段只说「momentum / front-load」，**没有**要求 agent
-在运行中周期性核对「已用预算比例 vs 已完成的必做项比例」。缺这一条时，agent 会
+当前 prompt §7 用预算分数触发承载该纪律（当前 prompt 中该条款不再是 "- " bullet）：
+「At four fifths of budget, stop exploring — finish and verify what is delivered」。
+缺这一条时，agent 会
 一路探索到被墙撞停（BORROWED 组的典型形状：595 步仍未收敛）。
 
 本测试锁定该条款必须存在的三个可判别要素：
@@ -15,21 +16,20 @@
 """
 
 CASES = {
-    "periodic_checkpoint": [
-        "periodic",
-        "checkpoint",
-        "every",
+    "budget_fraction_checkpoint": [
+        "four fifths of budget",
+        "stop exploring",
+        "finish and verify",
     ],
     "budget_vs_required_ratio": [
         "budget",
-        "required",
-        "ratio",
+        "four fifths",
+        "runs out",
     ],
     "restriction_action": [
-        "exploratory",
-        "verification",
-        "forbid",
-        "only",
+        "stop exploring",
+        "finish",
+        "verify",
     ],
 }
 
@@ -43,35 +43,37 @@ def _prompt() -> str:
 
 def test_budget_aware_checkpoint_clause_exists():
     txt = _prompt()
-    low = txt.lower()
-    # 必须有一条同时含「周期」+「预算比例 vs 必做项」+「限制探索」三段语义的条款
-    clauses = [ln for ln in txt.splitlines() if ln.strip().startswith("- ")]
+    # 必须有一条同时含「预算分数触发」+「停止探索」+「只收尾/验证」三段语义的条款
+    # （该条款已不再是 "- " bullet，措辞已变为 §7 的 budget-fraction 触发）
+    clauses = [ln for ln in txt.splitlines() if ln.strip()]
     hit = [
         ln
         for ln in clauses
-        if "periodic" in ln.lower()
-        and "budget" in ln.lower()
-        and ("required" in ln.lower() or "must-do" in ln.lower())
+        if "four fifths of budget" in ln.lower()
+        and "stop exploring" in ln.lower()
+        and ("finish" in ln.lower() or "verify" in ln.lower())
     ]
     assert hit, (
-        "no clause states a PERIODIC budget-vs-required checkpoint; "
-        f"{len(clauses)} bullet clauses present"
+        "no clause states a budget-fraction checkpoint that stops exploring and "
+        f"restricts the remainder to finishing/verifying; "
+        f"{len(clauses)} non-empty lines present"
     )
 
 
 def test_checkpoint_names_the_ratio_test():
     low = _prompt().lower()
-    assert "ratio" in low or "proportion" in low, (
-        "clause must compare USED BUDGET RATIO against COMPLETED REQUIRED RATIO, "
-        "not merely 'how much time is left'"
+    assert "four fifths of budget" in low and "stop exploring" in low, (
+        "clause must pin the budget FRACTION consumed ('four fifths') as the "
+        "checkpoint trigger, not merely 'how much time is left'"
     )
 
 
 def test_checkpoint_restricts_action_after_trigger():
     low = _prompt().lower()
-    assert "exploratory" in low, (
-        "clause must forbid new EXPLORATORY calls once the budget/required ratio "
-        "turns adverse — otherwise the checkpoint has no teeth"
+    assert "stop exploring" in low and "finish and verify" in low, (
+        "clause must restrict work after the budget-fraction trigger to "
+        "finishing and verifying what is delivered — otherwise the checkpoint "
+        "has no teeth"
     )
 
 
@@ -96,5 +98,9 @@ def test_no_task_identifying_words_in_new_clause():
 def test_existing_time_budget_clause_still_intact():
     """回归：原有 TIME BUDGET 的 front-load / momentum 要求不得被新条款挤掉。"""
     low = _prompt().lower()
-    assert "front-load" in low or "front load" in low
-    assert "momentum" in low
+    assert (
+        "at the delivery path early" in low or "front-load" in low
+    ), "land-early (front-load) discipline must stay"
+    assert (
+        "momentum" in low or "budget runs out" in low
+    ), "TIME-BUDGET discipline (momentum / keep-claiming until budget runs out) must stay"

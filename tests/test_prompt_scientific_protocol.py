@@ -1,22 +1,22 @@
-"""The scientific protocol (S1-S4) must stay task-agnostic AND stay executable.
+"""The loop protocol (S1-S5) must stay task-agnostic AND stay executable.
 
-Two distinct failure modes are pinned here.
+The prompt moved from the old S1-S4 doctrine to the 10-section THE LOOP
+architecture; this suite was re-pointed at the CURRENT wording (owner ruling:
+production code is authoritative, tests adapt). The two pinned failure modes
+are unchanged.
 
-1. LEAKAGE (the old black-list could not catch this). A black-list only fires on
-   words someone remembered to list. The measured near-miss: a clause was written
-   with "1.39 above a stated maximum of 72" plus "a sub-span rather than the whole",
-   which together identify one specific benchmark instance even though not one
-   black-listed word appears. So leakage is checked in BOTH directions:
-     (a) no domain noun appears (black-list, kept for the known offenders), and
-     (b) no bare numeric constant appears (white-list of *numbers allowed*, because
-         a story told in specific values is an instance, not a principle).
-   Numbers the rule legitimately needs -- tolerance wording, counts of steps --
-   are written in words rather than digits, so the digit scan stays clean and any
-   future digit is a deliberate act rather than an accident.
+1. LEAKAGE. A black-list only fires on words someone remembered to list, and a
+   story told in specific measured values describes ONE instance, not a
+   principle. So leakage is checked in BOTH directions:
+     (a) no domain noun appears (black-list), and
+     (b) no bare numeric constant appears (white-list of *numbers allowed*).
+   Numbers the rule legitimately needs are written in words rather than digits,
+   so the digit scan stays clean and any future digit is a deliberate act.
 
-2. SOFTENING. A protocol that is only "be careful about definitions" satisfies any
-   text check while teaching nothing. Each of the four steps must retain its
-   OBLIGATION (a verb that demands an artifact), not merely its topic word.
+2. SOFTENING. A protocol that is only "be careful" satisfies any text check
+   while teaching nothing. Each loop step must retain its OBLIGATION in the
+   prompt bytes -- every assert below targets wording that IS present, and goes
+   RED if that clause is deleted.
 """
 
 import re
@@ -34,9 +34,9 @@ def has_word(term: str) -> bool:
     """Word-boundary containment.
 
     Substring matching is the wrong test for short domain nouns: 'ligation' is a
-    substring of 'obligation', 'gene' of 'degenerate', 'snap' of 'snapshot'. Using
-    a bare `in` here produces false leaks and then pressures a future editor to
-    REMOVE a correct English word instead of keeping the clause honest.
+    substring of 'obligation', 'gene' of 'degenerate'. Using a bare `in` here
+    produces false leaks and then pressures a future editor to REMOVE a correct
+    English word instead of keeping the clause honest.
     """
     return re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", FLAT) is not None
 
@@ -54,22 +54,24 @@ BANNED_NUMERIC_CONSTANTS = (
     "0.21", "0.41", "1.39", "5.41", "73.39", "63.48", "67.72",
 )
 
+STEP_RE = re.compile(r"(?m)^(S\d+)\s+[A-Z]")
+
 
 def test_protocol_section_present():
-    """The four-step protocol exists as a named block, not as scattered advice."""
-    assert "the scientific protocol" in FLAT
-    for tag in ("s1 locate the producer", "s2 enumerate the constructions",
-                "s3 merge on arithmetic", "s4 keep enumerating after green"):
-        assert tag in FLAT, f"missing protocol step: {tag}"
+    """The loop exists as a named block: one method, five steps."""
+    assert "the loop" in FLAT
+    for tag in ("s1 observe", "s2 hypothesize", "s3 test", "s4 read", "s5 revise"):
+        assert tag in FLAT, f"missing loop step: {tag}"
 
 
 def test_each_step_carries_an_obligation_and_an_output():
-    """Each step must demand a produced artifact, not describe a topic.
+    """Each step is numbered and actionable, not scattered advice.
 
-    'The output of Sn is ...' is the contract that makes the step executable: a
-    stranger can ask to see it. Four steps, four outputs.
+    The numbered 'S<n>' tags are the contract that makes the steps executable: a
+    stranger can refer to S3 and ask what it demands. Five steps, five tags.
     """
-    assert FLAT.count("the output of s") == 4, "every protocol step needs a stated output"
+    steps = STEP_RE.findall(SRC.read_text(encoding="utf-8"))
+    assert steps == ["S1", "S2", "S3", "S4", "S5"], f"loop steps, got {steps}"
 
 
 def test_no_domain_nouns_leak():
@@ -83,354 +85,82 @@ def test_no_instance_identifying_numbers():
         assert banned not in FLAT, f"instance-identifying constant leaked: {banned}"
 
 
-def test_merge_rule_does_not_hardcode_a_tolerance():
-    """The tolerance must be sourced from the task, never a constant in the text.
+def test_tolerance_is_sourced_not_chosen():
+    """A tolerance must be sourced from the task, never a constant of the agent's own.
 
-    Owner's ruling: tolerances differ per task, so the clause states where a
-    tolerance comes FROM and what to do when the task states none.
+    The old merge clause with its hardcoded tolerance is gone; the surviving
+    obligation is that an agent-picked tolerance is a claim about preference,
+    not about the target, and an in-bound reading must not be argued away.
     """
-    assert "not yours to choose and it is not a constant across tasks" in FLAT
-    assert "unresolved" in FLAT
-    # Scope the literal scan to the MERGE rule only: the rest of the document
-    # legitimately contains budget percentages ("80% of budget"), so a file-wide
-    # ban would fail on correct text and teach nothing.
-    span = FLAT[FLAT.index("merge only on a number"):FLAT.index("the enumeration is not finished")]
-    assert not re.search(r"tolerance\s+(of|is|=)\s+\d", span)
-    assert "%" not in span
+    assert "a tolerance you picked is a claim about your preference rather than about the target" in FLAT
+    assert 'not "within my own tolerance"' in FLAT
 
 
-def test_merge_requires_arithmetic_not_verbal_reasoning():
-    """The specific deletion this rule forbids: merging by 'obviously the same'."""
-    assert "merge only on a number, never on a hunch" in FLAT
-    assert "these two constructions obviously describe the same thing" in FLAT
+def test_values_are_read_off_the_target_not_computed_locally():
+    """The specific substitution this rule forbids: reading a value out of your
+    own derivation instead of off the delivered bytes."""
+    assert "read every shared value off the target by alignment, never compute it locally" in FLAT
+    assert "per-component correctness is the seductive error" in FLAT
 
 
-def test_s4_obligates_enumeration_after_checks_pass():
-    """The S4 obligation is the one that flipped the measured outcome."""
-    assert "does not end when your checks pass" in FLAT
-    assert "what else could be fed to that formula" in FLAT
-    # It must be tied to the after-banking moment, not to a generic 'review'.
-    assert "already banked" in FLAT or "already at its delivery path" in FLAT
+def test_green_does_not_end_the_enumeration():
+    """The obligation that flipped the measured outcome: checks passing is not
+    the end of the work, and a green run can still ship the wrong thing."""
+    assert "stopping at the first evidence is the commonest way a green run ships the wrong thing" in FLAT
+    assert "a green happy path says nothing about a branch it never reached" in FLAT
+    assert "would this run still have produced this result if i were wrong" in FLAT
 
 
 def test_protocol_is_referenced_as_the_core_of_the_section():
-    """The four steps must be declared the reusable core, so 2.x reads as instances."""
-    assert "reusable core of every clause in this section" in FLAT
+    """The loop must be declared the one method, so later sections read as instances."""
+    assert "there is one method" in FLAT
+    assert "read them as instances, never a second doctrine" in FLAT
 
 
-import re
-from pathlib import Path
-
-SRC = Path(__file__).resolve().parents[1] / "flagscale_agent" / "react" / "prompt.py"
-RAW = re.sub(r"\s+", " ", SRC.read_text(encoding="utf-8"))
-FLAT = RAW.lower()
-
-# Top-level protocol steps: a line starting with "S<n> " (the doctrine).
-STEP_RE = re.compile(r"(?m)^\s{2}(S\d+)\s+[A-Z]")
-GATE_RE = re.compile(r"(?m)^\s{2}(G\d+)\s+[A-Z]")
-
-STEPS = STEP_RE.findall(SRC.read_text(encoding="utf-8"))
-GATES = GATE_RE.findall(SRC.read_text(encoding="utf-8"))
+def test_evidence_sources_are_ranked():
+    """The loop ranks evidence instead of averaging it: task text > recorded
+    death > own checker, and an imagined grader weighs zero."""
+    for tag in ("e1 the task text's own named authority", "e2 the task text's own wording",
+                "e3 a recorded death on this same task class", "e4 your own constructed checker"):
+        assert tag in FLAT, f"missing evidence rank: {tag}"
+    assert "an imagined grader weighs zero" in FLAT
+    # the fix that makes the rank actionable: named authority -> runnable check
+    assert "turn every such pointer into a runnable check" in FLAT
 
 
-def test_doctrine_has_exactly_four_steps():
-    """S1-S4 is the whole doctrine. Nine 'steps' was the ratchet this fixes.
+def test_reading_anchors_on_the_task_verb_not_consumer_habit():
+    """Where a phrase admits several readings, the task's own words pin the one.
 
-    Measured history: S grew 4 -> 9, one new step per losing batch, each restating
-    a 2.x corollary. A doctrine that gains an item per observed loss is no longer a
-    doctrine, and the reader cannot tell rule from instance. The count is pinned so
-    a future loss cannot quietly add S10.
+    The permission/requirement distinction survives as the superset rule: take
+    the reading satisfying EVERY constraint in play, never the convenient one.
     """
-    assert STEPS == ["S1", "S2", "S3", "S4"], f"doctrine must stay at four steps, got {STEPS}"
+    assert "take the one the task's own verb and nouns pin, not the convenient one" in FLAT
+    assert "prefer the form satisfying every constraint in play (the superset)" in FLAT
+    assert "an element no stated rule forbids and one reading demands is free" in FLAT
 
 
-def test_delivery_gate_exists_as_five_checks():
-    """Everything else lives under ONE gate, as checks that name their parent step."""
-    assert "the delivery gate" in FLAT
-    assert GATES == ["G1", "G2", "G3", "G4", "G5"], f"gate checks, got {GATES}"
-    # Each check declares which doctrine step it applies — otherwise it is a new
-    # top-level rule wearing a G label.
-    for tag, parent in (
-        ("g1 bytes, not model", "s1"),
-        ("g2 replay the consumer's construction", "s2"),
-        ("g3 a verified value wins over a later story", "s3"),
-        ("g4 cover every output class", "s4"),
-        ("g5 validate the instrument", "s1"),
-    ):
-        assert tag in FLAT, f"missing gate check: {tag}"
-        span = FLAT[FLAT.index(tag):FLAT.index(tag) + 400]
-        assert parent in span, f"{tag} must name its parent step {parent}"
+def test_measurement_needs_a_could_have_gone_red_check():
+    """A measurement the agent did not read off the artifact is a story.
 
-
-def test_gate_carries_the_containment_rule():
-    """The anti-ratchet rule must be stated IN the prompt, not just in tests."""
-    assert "does not grow new top-level steps" in FLAT
-    assert "doctrine that grows one item per observed loss stops being doctrine" in FLAT
-
-
-def test_g1_gates_the_delivered_bytes():
-    """G1 carries the byte-fact obligations the measured losses lacked.
-
-    Two loss shapes: a model symbol never located on the delivered bytes (the
-    consumer found the component missing while every in-model check passed), and a
-    stated bound treated as a goal rather than a pre-write gate (the final write was
-    never re-measured, and the honest report did not rescue it).
+    The three questions (span fed in, axes, could-this-go-red) are the loop's
+    answer to a self-consistent but source-less number.
     """
-    # (1) bounds become runnable assertions over the DELIVERED file.
-    assert "compile every numeric bound" in FLAT
-    assert "reads the" in FLAT and "delivered file" in FLAT
-    # (2) named components are located on the bytes, with a stated location.
-    assert "locate on those bytes" in FLAT
-    assert '"it is in my design" is not a location' in FLAT
-    # (3) the last write must be followed by a gate run; honesty is not a gate.
-    assert "re-run the gate after the last write" in FLAT
-    assert "unverified write" in FLAT
-    assert "an honest report of an out-of-bound deliverable still fails" in FLAT
-    # The gate set is task-derived, never invented constants (anti-leakage).
-    assert "comes from the task's own stated constraints" in FLAT
-    assert "never from constants you invent" in FLAT
-    # (4) the gate is not a wrap-up step — postponed verification dies to the wall.
-    assert "the gate is not a wrap-up step" in FLAT
-    assert "postpone" in FLAT and "the wall will eat" in FLAT
+    assert "could this check have gone red" in FLAT
+    assert "check against that, never against your own code, which only restates your assumptions" in FLAT
+    assert "a difference must name the baseline it was measured against" in FLAT
+    # accumulation claim: bounded or streamed, never unmeasured
+    assert "bound it" in FLAT and "stream it" in FLAT
 
 
-def test_g4_covers_value_range_not_only_class():
-    """The range half is what a shape-correct, value-wrong deliverable dies on."""
-    assert "value range the spec names" in FLAT
-    assert "outside the range the anchors imply is still wrong" in FLAT
-
-
-def test_g4_calibrates_the_scale_not_only_the_identity():
-    """An anchor used to IDENTIFY a feature has not placed it on the axis.
-
-    Measured loss: the agent wrote the correct external anchor values, questioned
-    the axis unit five times, and still delivered the raw axis — 2.37x off. It had
-    argued from a RATIO between its own two readings, and a ratio is invariant under
-    uniform scaling, so it agreed in both frames and could not discriminate. The one
-    decisive test was a single division it never performed.
-    """
-    assert "calibrate the scale, not just the identity" in FLAT
-    # the decisive operation must be named as an operation on numbers
-    assert "your_reading" in FLAT and "known_value" in FLAT
-    # the invariance that makes the ratio useless must be stated, not implied
-    assert "invariant under uniform scaling" in FLAT
-    assert "ratio between two of your own readings" in FLAT
-    # an anchor used only for identification is called out as half a job
-    assert "has done half its job" in FLAT
-
-
-def test_g3_anchors_reading_on_the_task_verb_not_consumer_habit():
-    """'identical / unchanged / do not alter' dominate as BYTE-PRESERVING.
-
-    Measured loss: the task said the output must be functionally identical apart
-    from removed substrings, and permitted normalization during parsing. The agent
-    read the permission as a requirement, canonicalised through a parser, and lost
-    on every incidental attribute the spec never mentioned. It had ENUMERATED both
-    readings correctly — enumeration alone does not pick one.
-    """
-    assert "anchor the reading on the task's own verb" in FLAT
-    assert "byte-preserving" in FLAT
-    # the permission/requirement distinction is the crux (phrase kept de-identified:
-    # a verbatim grant quote would trip tests/test_no_harness_grader_leak.py)
-    assert "may occur during parsing" in FLAT and "permission" in FLAT
-    assert "does not require" in FLAT
-    # the tie-break is fewest changed bytes, not the tidier output
-    assert "changes the fewest bytes" in FLAT
-    # and the collateral is named concretely
-    assert "quote style" in FLAT and "trailing newline" in FLAT
-
-
-def test_g3_derivation_probe_overrides_verb_default_when_parsing_exception_present():
-    """The G3 verb default (byte-preserving) must not silently swallow a permitted
-    parsing normalization: the standard-library derivation probe over the ORIGINAL
-    inputs is mandatory in exactly that case.
-
-    Measured loss: filter-js lost four times with the same shape. The agent read the
-    permission phrase as non-licensing (per G3's verb anchor), delivered through its
-    own hand-rolled re-emitter, and the grader compared against the environment's
-    standard parser form (bs4 html.parser) — attribute source order, decoded
-    entities, self-closing slashes. Its own byte-identity suite over self-authored
-    samples passed and proved nothing about the standard normalizer.
-    """
-    assert "derivation probe" in FLAT
-    # the probe is mandatory exactly when the format clause carries a parsing
-    # exception — not generally, not never
-    assert "mandatory" in FLAT
-    # the probe's INPUT is the original inputs (not samples the agent wrote)
-    assert "original inputs" in FLAT
-    # the rewrite axes that decide the filter-js family are named concretely
-    assert "self-closing" in FLAT and "attribute order" in FLAT
-    # hand-rolled re-emitters are excluded as the tie-break
-    assert "hand-rolled re-emitter" in FLAT
-
-
-def test_g1_makes_each_fix_a_gated_banked_unit():
-    """The gate needs a GRANULARITY, not only a position in the timeline.
-
-    G1 already said "re-run the gate after the last write", which an agent can
-    honour while stacking every unverified edit behind that single final gate.
-    Measured loss: the agent located the real defect at the end of its budget,
-    announced the write, was cut off, and the delivered file violated a bound it
-    had computed correctly minutes earlier — the whole run's correct analysis
-    scored zero because the last edit and its gate were two units, not one.
-    """
-    assert "pack each fix as edit" in FLAT
-    assert "as one unit" in FLAT
-    # the prohibition is on STACKING unverified edits, stated as a bar on order
-    assert "may not begin" in FLAT
-    # and the payoff is named in terms of what survives the cutoff
-    assert "last written" in FLAT and "last verified version" in FLAT
-    # an unmeasured change is not an improvement — it replaced a known-good state
-    assert "hypothesis that has replaced" in FLAT
-    # the honest exit for an unfinished change is revert, not ship-unmeasured
-    assert "revert to the banked version" in FLAT
-
-
-def test_g2_replays_the_assertion_list_not_an_aggregate():
-    """A self-consistent aggregate can hide a false relation in the consumer's list.
-
-    Measured loss: the consumer checked a set of relations between parts; the agent
-    built one aggregate reassembly, reported every check green, and delivered. The
-    aggregate exercised most relations implicitly and never built the composed
-    artefact at all, so every self-check passed and the deliverable was wrong.
-    """
-    assert "replay the assertion list" in FLAT
-    # aggregate substitution is named as the thing being forbidden
-    assert "covers the same ground" in FLAT
-    # the aggregate is characterised by WHY it fails, not merely banned
-    assert "its own failure surface" in FLAT
-    # the required output is a numbered list with a real command behind each row
-    assert "numbered list" in FLAT
-    assert "pass/fail from" in FLAT
-    # a row that cannot be built is a NAMED GAP, never silently covered
-    assert "named gap" in FLAT
-    assert "never exercised is not a relation that holds" in FLAT
-
-
-def test_g3_a_deviation_you_can_argue_away_is_not_tested():
-    """A mechanism argument about the delivered artefact is decided by the artefact.
-
-    G3 already said a check contradicting the deliverable outranks a later story,
-    but it left open the LOOPHOLE this closes: when the agent's construction differs
-    from the required one and the agent EXPLAINS the difference as inert, that
-    explanation is a hypothesis, not a measurement. Measured loss: the agent noticed
-    one extra base at a junction, argued it cannot change the digested fragment and
-    therefore cannot change the product, shipped, and the consumer's construction did
-    include that base — the two outputs differed by exactly the base argued about.
-    """
-    assert "a deviation you can argue away is not a deviation you tested" in FLAT
-    # the conversion the clause demands: build BOTH and diff, do not argue
-    assert "build both constructions" in FLAT
-    # and the earned-right condition is an empty diff WITH A NUMBER, not a story
-    assert "diff is empty" in FLAT
-    # a mechanism argument is explicitly typed as a hypothesis
-    assert "claim about a mechanism" in FLAT
-
-
-def test_g2_a_proxy_is_not_a_substitute_for_a_named_reference():
-    """A2 shape: the agent verifies against something it built, never the named reference.
-
-    Measured across a batch: three losses shared this shape — a self-generated corpus
-    of easy negatives in place of the supplied one, a timing against the original slow
-    implementation in place of the named baseline, a self-computed statistic in place of
-    the tool's own output line. In each case every self-check passed while the named
-    reference, never opened, would have failed it.
-    """
-    assert "your proxy is not a substitute for it" in FLAT
-    # the ordering that makes it a rule and not advice: name the object compared against
-    assert "what object did i compare against" in FLAT
-    # and the cheap mechanical signature of the failure
-    assert "zero-hit count on the named artifact" in FLAT
-    # it must be typed as a second defendant, not a judge (co-sourcing language)
-    assert "second defendant" in FLAT
-
-
-def test_g4_check_list_is_built_from_the_consumers_path():
-    """A4 shape: every check row corresponds to the agent's own output, none to the
-    consumer's named object — so a green suite coexists with a missing deliverable.
-
-    Measured across a batch: four losses in one shape, each with a check set built from
-    the artifacts the agent happened to write while the consumer's named object (a file
-    at a fixed path, a CLI flag, an input instance) was never exercised once.
-    """
-    assert "build the check list from the consumer's path" in FLAT
-    # the enumeration rule: one row per object the CONSUMER names
-    assert "one row per named object" in FLAT
-    # the tell, stated so it is greppable in a session
-    assert "a name with no row is an unverified face" in FLAT
-
-
-def test_g3_unseen_reference_means_minimise_the_movement():
-    """A2 sub-shape: acceptance is similarity to a reference the agent cannot open, the
-    reference is a refinement OF the given input, and similarity distance is monotone in
-    how far the agent moves — so an aggressive transform loses no matter how good it looks
-    by a self-chosen criterion.
-
-    Measured loss: every structural clause passed (exists/ran/schema/not-trivial/no-overlap/
-    single-component) and the only failure was per-item IoU against the unseen reference;
-    the run had escalated its transform to maximise its own invented agreement score and had
-    written out 'my threshold is my own choice, not the task's'.
-    """
-    assert "when the judge is an unseen reference" in FLAT
-    # rule (a): an invented threshold is a hypothesis, never a licence to escalate
-    assert "your invented number is a hypothesis to be labelled as such" in FLAT
-    # rule (b): similarity to the STARTING input is not similarity to the reference's OUTPUT
-    assert "not the graded one" in FLAT
-    # the minimisation directive itself
-    assert "minimal transformation that satisfies the clauses" in FLAT
-
-
-def test_29_reading_set_must_contain_the_consumers_data_driven_span():
-    """"Two readings agree" is worthless when both are the same fixed offset.
-
-    Measured loss: the agent enumerated exactly two readings of a measured region
-    (with and without a fixed-length flanking segment), both comfortably inside
-    the bound, and delivered. The consumer instead GREW the measured region by how
-    much of the template suffix the flanking segment happened to match, so the
-    deciding construction was a k the agent never enumerated. The lesson is not
-    "enumerate more" but "name how the consumer FIXES its span": a constant
-    offset, an end-of-string rule, or a data-driven match.
-    """
-    assert "a reading set built from offsets you picked is incomplete" in FLAT
-    assert "by construction" in FLAT
-    # the parameter must be swept, and the value computed at each setting
-    assert "for k in 1..max_match" in FLAT
-    assert "compute the quantity at each k" in FLAT
-    # the three ways a consumer fixes a span must be named
-    assert "a constant offset, an end-of-string rule, or a" in FLAT
-    assert "data-driven match" in FLAT
-    # and the tell that distinguishes family-vs-fixed must be stated
-    assert "lived at a fixed offset" in FLAT
-
-
-def test_g2_composed_spans_enumerate_inclusion_axes_multiplicatively():
-    """"The part that does X" of a decorated record has one reading per inclusion
-    choice of every decoration — and the uncomputed one decides (measured four
-    losses on the same bound, each decided by a differently-composed span).
-    """
-    assert "enumerate the composition axes" in FLAT
-    assert "multiplicatively" in FLAT
-    assert "include the header or not, include the suffix or not" in FLAT
-    assert "under the MAXIMUM and MINIMUM of those" in RAW
-    # the hedge must be constructive, not a bet
-    assert "a hedge shown constructively, not a bet on one" in FLAT
-
-
-def test_probe_before_derive_bullet_present():
-    """v33 (2026-10-30): the HOW-YOU-WORK loop must carry the observation-
-    first order as a first-class bullet. The convergence measurement (2523
-    trials, paired same-task win/loss medians: deep-derivation share p50
-    0.07 wins vs 0.25 losses, sign 36:7) says long no-observation stretches
-    separate winners from losers; the idle gate now enforces it structurally,
-    and this clause states it as doctrine. Must stay generic: no task noun,
-    no numeric anchor.
-    """
-    assert "probe before derive" in FLAT
-    span = FLAT[FLAT.index("probe before derive"):FLAT.index("probe before derive") + 700]
-    assert "executable answer" in span
-    assert "derivation that outlives it is spent replacing evidence" in span
-    assert "settled by the probes, not by the argument" in span
-    assert "a hypothesis you never executed is a hypothesis you cannot rule out" in span
+def test_observe_before_derive_bullet_present():
+    """The observation-first order is a first-class step: a reading from the
+    world precedes the view, and the cheapest refuting experiment runs first.
+    (Old 'probe before derive' wording is gone; the concept survives as S1/S3.)"""
+    assert "s1 observe" in FLAT
+    span = FLAT[FLAT.index("s1 observe"):FLAT.index("s2 hypothesize")]
+    assert "get a reading from the world before forming a view" in span
+    assert "no reading, not yet work" in span
+    assert "run the cheapest experiment that could prove you wrong" in FLAT  # header line 1
     # leak guards: task nouns and invented constants must not ride along
     for noun in ("regex", "chess", "checker.py", "castling", "gpt", "doom"):
         assert noun not in span, f"task noun leaked: {noun}"

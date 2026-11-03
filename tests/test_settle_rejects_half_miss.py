@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""prop_ec1ea12f — a `hit` may not cover a half-miss.
+"""a `hit` may not cover a half-miss.
 
-Measured defect (dna v66, pred_7a3be81f): the settlement arrived with
+Measured defect: the settlement arrived with
 prediction_observed = "Half-hit, half-miss against the compound statement" and
 was recorded as `hit`. The plan then counted a success the run did not have, and
 the wrong half of the compound prediction became invisible — the pre-registration

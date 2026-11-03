@@ -42,7 +42,7 @@ def _is_protected_path(path: str) -> bool:
 
 
 def _is_append_only_audit_report(path: str) -> bool:
-    """True for an auditor's cumulative findings file (prop_810728da).
+    """True for an auditor's cumulative findings file.
 
     The audit report is a SHARED deliverable that accumulates across rounds (one
     measured session reached 160 KB / 909 lines). A `mode='write'` on it silently
@@ -107,7 +107,7 @@ class WriteFileTool(Tool):
         if _is_protected_path(path):
             return f"ERROR: Cannot write to protected system path: {path}"
 
-        # prop_810728da: an audit findings file is APPEND-ONLY. A mode='write'
+        # an audit findings file is APPEND-ONLY. A mode='write'
         # that would shrink it destroys earlier audits (it is a cross-round
         # deliverable), and the path is easy to confuse with the auditor's own
         # empty findings.md shell. Only a shrinking overwrite is refused — a

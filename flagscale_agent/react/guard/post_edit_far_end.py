@@ -89,7 +89,7 @@ _RENDER_PROBE = (
     "print('render-ok')\n"
 )
 
-# Round-trip stability probe (prop_086f15d4): a MEASURED (not requested)
+# Round-trip stability probe: a MEASURED (not requested)
 # observation for structured-text deliverables. For a file whose extension
 # maps to a stdlib parser, the probe parses the file, re-serializes it with
 # the SAME library's canonical serializer, and compares bytes:
@@ -654,7 +654,7 @@ class PostEditFarEndGuard(Guard):
                 render_failure = cls._render_probe(path)
                 if render_failure:
                     return render_failure
-            # prop_086f15d4: after the validity check PASSes, a structured
+            # after the validity check PASSes, a structured
             # text file ALSO gets the measured round-trip stability probe.
             # Advisory only — a DIFFERS verdict is an observation (the
             # consumer may normalize), never a gate. The validity line is

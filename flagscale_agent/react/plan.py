@@ -387,7 +387,7 @@ def is_fixed_step(step: dict) -> bool:
 
 
 # Markers that mean "the observation itself reports a failure or an absence of
-# evidence". Checked only when someone claims outcome="hit" (prop_ec1ea12f): a
+# evidence". Checked only when someone claims outcome="hit": a
 # hit is a success claim, so its own text must not contradict it.
 # Word-boundary matching, NOT substring: "missing" contains "miss" but reports
 # no miss, and a bare substring rule would block honest hits and teach the agent
@@ -1104,8 +1104,8 @@ class TaskPlan:
                 raise ValueError(
                     'outcome must be "hit", "miss" or "not_run"'
                 )
-            # prop_ec1ea12f: a "hit" whose own observed text reports a miss is a
-            # self-refuting settlement. Measured case (dna v66, pred_7a3be81f):
+            # a "hit" whose own observed text reports a miss is a
+            # self-refuting settlement. Measured case:
             # the observation said "Half-hit, half-miss against the compound
             # statement" and was still settled as `hit`, so the plan's hit-rate
             # recorded a success the run did not have — and a compound

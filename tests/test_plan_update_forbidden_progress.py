@@ -44,7 +44,7 @@ def test_existing_progress_actions_are_unchanged():
     # A regression here silently disarms the stall detector for a real action.
     expected = {
         "step_done", "step_skip", "complete", "abandon",
-        "add_steps", "update_acceptance", "batch", "add_forbidden",
+        "add_steps", "update_acceptance", "add_forbidden",
     }
     assert PlanUpdateGuard._PROGRESS_ACTIONS == frozenset(expected)
 

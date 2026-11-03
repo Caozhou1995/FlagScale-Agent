@@ -12,18 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The reviewer/diverger dispatch is a CONSCIOUS TRADE-OFF, not unconditional.
+"""Only the leak guard survives from the old reviewer/diverger dispatch tests.
 
 The plan's fixed Frame step used to order a diverger UNCONDITIONALLY, and the
-reviewer demand used to read as if it fired at every step_done, so a trivial
-2-line edit was over-provisioned. A later revision priced the dispatch by an
-abstract T0/T1/T2 "task tier", but that grading was opaque — a reader could not
-tell what tier a task was without memorizing the definitions. The gate now asks
-the agent to WEIGH the worker's BENEFIT against its TIME-BUDGET COST and DECIDE,
-stating the decision either way — no tier label to memorize. The demand lives in
-the two acceptance blocks (tools/plan_create.py) and the two prompt-level demand
-sites (react/prompt.py). The reviewer demand is anchored at the plan's FIXED
-Review step, NOT at each step_done.
+reviewer demand used to read as if it fired at every step_done. Both dispatch
+guidance blocks were later disabled outright — the Frame diverger and the
+Review reviewer prompts are no longer in _FRAME_STEP_ACCEPTANCE /
+_REVIEW_STEP_ACCEPTANCE — so the tests that asserted their wording no longer
+have a subject. What remains worth guarding is that the frame-step text beside
+them never picks up a task-specific threshold.
 """
 
 import re
@@ -57,42 +54,8 @@ def _no_unconditional_both_halves(low: str) -> None:
     assert "both halves" not in low, "unconditional 'BOTH halves' mandate leaked"
 
 
-class TestTradeoffGateInAcceptanceBlocks:
-    def test_frame_acceptance_names_the_tradeoff(self):
-        low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
-        assert "a deliberate trade-off, not a mandate" in low
-        assert "benefit" in low
-        assert "time budget" in low
-        assert "state the decision and why" in low
-        _no_tier_label(low)
-        _no_unconditional_both_halves(low)
-
-    def test_review_acceptance_names_the_tradeoff(self):
-        low = _norm(" ".join(_REVIEW_STEP_ACCEPTANCE))
-        assert "a deliberate trade-off, not a mandate" in low
-        assert "benefit" in low
-        assert "time budget" in low
-        assert "state the decision and why" in low
-        _no_tier_label(low)
-
-    def test_benefit_and_cost_are_both_spelled_out(self):
-        # the agent must know WHY a worker is worth it, and WHAT it costs
-        low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
-        assert "before any artifact exists" in low  # diverger benefit
-        assert "whole deadline" in low  # cost
-        lo_r = _norm(" ".join(_REVIEW_STEP_ACCEPTANCE))
-        assert "fresh context" in lo_r  # reviewer benefit
-        assert "whole deadline" in lo_r  # cost
-
-
 class TestFrameAcceptanceLinksStillPresent:
-    """The trade-off gate must not remove the frame-step discipline beside it."""
-
-    def test_diverger_role_tagging_preserved(self):
-        low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))
-        assert 'role="diverger"' in low
-        assert "leaf role" in low
-        assert "fresh context" in low
+    """The frame-step discipline beside the dispatch guidance must stay leak-free."""
 
     def test_no_task_specific_threshold_leak(self):
         low = _norm(" ".join(_FRAME_STEP_ACCEPTANCE))

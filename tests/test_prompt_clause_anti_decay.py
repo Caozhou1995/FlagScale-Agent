@@ -43,26 +43,48 @@ def _clause(prefix):
 
 
 def test_facet_forbids_merging_rows():
-    """Merging clauses into one row silently hides the face it absorbed."""
+    """Merging clauses into one row silently hides the face it absorbed.
+
+    Current wording (2026-11-03): "when in doubt split rather than merge,
+    because a merged row hides the face it absorbed — never fold several
+    clauses into one entry". The positive rule, the reason, and the explicit
+    prohibition are each pinned; deleting any one of them goes red.
+    """
     t = _clause(FACET)
-    assert "never fold several clauses into one row" in t
-    for banned in ("may fold several clauses", "merge related clauses",
-                   "combine clauses into a single row"):
+    assert "when in doubt split rather than merge" in t
+    assert "a merged row hides the face it absorbed" in t
+    assert "never fold several clauses into one entry" in t
+    for banned in ("may fold several clauses into one entry",
+                   "merge related clauses into a single row",
+                   "combine clauses into a single entry"):
         assert banned not in t
 
 
 def test_facet_requires_an_observed_result_not_an_expected_one():
-    """A row claiming what the agent BELIEVES would happen is not a check."""
+    """An entry claiming what the agent BELIEVES would happen is not a check.
+
+    Current wording: "(c) the observed result when you ran it" and "one
+    claiming the result you expect is not a check either". The ban is stated
+    in the clause itself, so it is asserted as a required sentence rather than
+    as a bare absence (a bare-absence assert on "result you expect" would be
+    contradicted by the current text).
+    """
     t = _clause(FACET)
-    assert "observed result" in t and "you ran it" in t
-    for banned in ("result you expect", "expected result you believe",
-                   "what you expect to see"):
+    assert "the observed result when you ran it" in t
+    assert "no executed probe is a sentence, not a check" in t
+    assert "claiming the result you expect is not a check either" in t
+    for banned in ("the result you expect counts as a check",
+                   "expected result you believe is acceptable",
+                   "what you expect to see counts as the result"):
         assert banned not in t
 
 
 def test_facet_requires_closeout_review_of_the_manifest():
+    """Current wording: "Close-out reviews this list clause by clause, not your
+    memory of it" — every entry reviewed, not recalled."""
     t = _clause(FACET)
-    assert "close-out reviews this manifest row by row" in t
+    assert "close-out reviews this list clause by clause" in t
+    assert "not your memory of it" in t
     for banned in ("close-out may skim", "close-out is optional",
                    "review it if convenient"):
         assert banned not in t

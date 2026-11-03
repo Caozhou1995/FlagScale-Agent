@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""prop_8754e12a — a PREVENTED call must survive as its own record.
+"""a PREVENTED call must survive as its own record.
 
 Measured cost of NOT having this: Audit #83's central finding rested entirely on
 the fact that the only shell call in the audited window was swallowed by a

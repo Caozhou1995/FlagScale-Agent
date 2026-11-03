@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""prop_78aa241f — the 75% cold-consumer override is EVIDENCE-bound, not prose.
+"""the 75% cold-consumer override is EVIDENCE-bound, not prose.
 
 The 75% gate's block message demands the agent paste the exact command it ran
 against the delivery artifact and the output it produced. A reason that merely

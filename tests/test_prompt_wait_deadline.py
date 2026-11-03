@@ -1,22 +1,16 @@
 """G13: A WAIT ARGUMENT IS A DEADLINE, NOT A HINT.
 
-If an API accepts a wait/throttle/deadline argument, the caller uses it to
-guarantee a side effect has COMPLETED (port listening, file flushed, process
-spawned). The wait must be honoured up to the deadline even if there is NO
-output during the wait; an idle-detection early-exit heuristic ("return after
-N ms of silence") is forbidden as the sole settle mechanism, because it loses
-the race against a one-shot consumer that does not retry.
+History: this file guarded a wait-deadline clause that the previous prompt.py
+carried. RULING: 以现在代码为准，修改单测. In the current bytes the clause is
+GONE (grep 0 for 'A WAIT ARGUMENT', 'not a hint', 'one-shot', 'no retry',
+'idle'/'silence' settle wording) — the prompt rewrite did not re-home it. Per the
+ruling: capability genuinely absent => delete that test function with a
+one-line comment; do NOT invent capability and do NOT assert a tautology.
 
-Derived from a quantitative race measurement (jobs/2026-10-21__08-10-31,
-headless-terminal): the grader issues ONE retry-less request right after the
-wait call returns; the delivered implementation's idle-based early exit
-returned at ~100 ms while the side effect (server port) became ready at
-+186 ms => ECONNREFUSED. The wait argument was treated as a hint, not a
-deadline. Also requires the pre-delivery self-check: replay the CONSUMER'S
-literal invocation shape (one-shot, no retry) against a wait set to N.
+Kept: the no-leak gate — prompt.py must stay free of task-identifying words,
+which is a property of the CURRENT file and can still go RED.
 """
 import re
-import subprocess
 from pathlib import Path
 
 PROMPT = Path(__file__).resolve().parents[1] / "flagscale_agent" / "react" / "prompt.py"
@@ -33,31 +27,30 @@ FORBIDDEN = [
 ]
 
 
-def test_g13_deadline_clause_present():
-    assert "A WAIT ARGUMENT IS A DEADLINE, NOT A HINT" in TEXT
-
-
-def test_g13_forbids_idle_heuristic_early_exit():
-    # The clause must explicitly forbid settling via a silence/idle heuristic
-    # when a wait deadline is given, and require honouring the full deadline.
-    assert re.search(r"even if (there is )?(absolutely )?no output", TEXT, re.I)
-    assert re.search(r"not a hint|not a suggestion", TEXT, re.I)
-
-
-def test_g13_requires_one_shot_consumer_shape_selfcheck():
-    # Pre-delivery self-check: replay the consumer's literal invocation shape
-    # (a single retry-less probe) after honouring the wait.
-    assert re.search(r"one[- ]shot", TEXT, re.I)
-    assert re.search(r"no retry|without retry|not retry", TEXT, re.I)
-
-
-def test_g13_side_effect_examples_are_generic():
-    # Generic side-effect classes, no task-specific vocabulary.
-    for kw in ["port", "flush", "spawn"]:
-        assert re.search(kw, TEXT, re.I)
+# DELETED (case B, capability absent in current prompt.py):
+#   test_g13_deadline_clause_present — the clause 'A WAIT ARGUMENT IS A
+#   DEADLINE, NOT A HINT' is absent from the current file (grep 0).
+#   test_g13_forbids_idle_heuristic_early_exit — 'not a hint' / 'no output'
+#   settle wording is absent from the current file.
+#   test_g13_requires_one_shot_consumer_shape_selfcheck — 'one-shot' /
+#   'no retry' self-check wording is absent from the current file.
+#   test_g13_side_effect_examples_are_generic — 'port listening' / 'flushed' /
+#   'spawned' side-effect classes are absent from the current file.
 
 
 def test_no_task_identifying_words_added():
     body = TEXT.lower()
     for pat in FORBIDDEN:
         assert not re.search(pat, body), f"leak pattern in prompt: {pat}"
+
+
+def test_deadline_terms_when_present_stay_generic():
+    """If deadline/wait wording is ever (re-)introduced, it must stay generic.
+
+    Guards against the old leak class re-entering via a future re-home of the
+    G13 clause. Passes today only because the current terms are generic.
+    """
+    for m in re.finditer(r"deadline", TEXT, re.I):
+        ctx = TEXT[max(0, m.start() - 60): m.end() + 60].lower()
+        for pat in FORBIDDEN:
+            assert not re.search(pat, ctx), f"leak near 'deadline': {pat}"

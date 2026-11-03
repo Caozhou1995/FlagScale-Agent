@@ -81,7 +81,7 @@ class MemoryReadTool(Tool):
         # Exact key mode
         entry = self._memory.get(key)
         if entry is None:
-            # prop_8ad3a23b: this used to be a bare "No memory found". Audits
+            # this used to be a bare "No memory found". Audits
             # #78/#81 measured the failure shape that invites: the agent read
             # this line and then, in the SAME step, quoted a body for that key in
             # its self-assessment ("Observed from world: memory_read returned …")

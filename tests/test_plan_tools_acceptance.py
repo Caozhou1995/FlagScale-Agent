@@ -105,7 +105,7 @@ class TestPlanCreateToolStructuredSteps:
         assert "Plan created" in result
         plan = tp.get_active()
         # The fixed FRAME step is prepended at index 0; agent steps shift +1.
-        # v65: no oracle binding — acceptance carries exactly the authored items.
+        # no oracle binding — acceptance carries exactly the authored items.
         assert plan["steps"][1]["acceptance"] == ["A1", "A2"]
         assert plan["steps"][2]["acceptance"] == ["B1"]
 
@@ -121,7 +121,7 @@ class TestPlanCreateToolStructuredSteps:
         )
         assert "Plan created" in result
         plan = tp.get_active()
-        # v65: no oracle binding — authored acceptance only.
+        # no oracle binding — authored acceptance only.
         assert plan["steps"][1]["acceptance"] == ["A1"]
         assert plan["steps"][2]["acceptance"] == []
 
@@ -132,7 +132,7 @@ class TestPlanCreateToolStructuredSteps:
         assert "Plan created" in result
         plan = tp.get_active()
         assert plan["steps"][1]["title"] == "A"
-        # v65: a promoted string step carries no oracle binding — empty acceptance.
+        # a promoted string step carries no oracle binding — empty acceptance.
         assert plan["steps"][1]["acceptance"] == []
 
     def test_dict_without_title_fails(self, plan_dir):

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""prop_8ad3a23b — an absence must be reported as a PROHIBITION.
+"""an absence must be reported as a PROHIBITION.
 
 Measured defect (audits #78/#81): an agent wrote "Observed from world:
 memory_read returned …" and quoted a body for a key whose read had actually

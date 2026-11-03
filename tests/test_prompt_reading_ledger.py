@@ -35,14 +35,35 @@ test which one the consumer's own material supports, and when no dominance
 exists, cover the top-2 with BOTH implementations in ONE run instead of betting
 the whole run on one. That makes ambiguity cost one run instead of six.
 
-These tests lock that discipline and keep it anchored to the EXISTING
-PRINCIPLE 4 hedge/bet rule rather than inventing a parallel doctrine.
+These tests lock that discipline and keep it anchored to the prompt's EXISTING
+hedge/bet rule rather than inventing a parallel doctrine.
+
+RE-ANCHORED 2026-11-03 (ruling: adapt the tests to the CURRENT prompt.py bytes).
+Three relations were pinned to WORDING that the current bytes no longer carry,
+while the capability itself survives:
+
+  * the label "Reading ledger" -- the static prompt no longer uses that heading;
+    the discipline appears inside UNDERDETERMINED CHOICES (§5), unlabelled.
+    Note the plan-step carrier DOES still start with "Reading ledger.", so the
+    frame-side test is untouched.
+  * "every defensible reading" -- the plan-step carrier says "List the readings
+    first, each pinned to the task text's own words". Same relation, current
+    words; the enumeration duty is still pinned verbatim.
+  * "PRINCIPLE 4" -- the current prompt has no numbered PRINCIPLE labels at all;
+    the doctrine is the hedge/bet rule, and the carrier names it as exactly that.
+
+No assertion was widened to an always-true form and none was replaced by a
+weaker one; each rewritten assert still fails if the corresponding sentence is
+softened or removed.
 """
 
 from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 from flagscale_agent.react.tools.plan_create import _FRAME_STEP_ACCEPTANCE
 
 LEDGER_CLAUSE = "Reading ledger"
+# The static prompt carries the same discipline inside UNDERDETERMINED CHOICES
+# but without the "Reading ledger" heading; this is its opening, verbatim.
+STATIC_LEDGER_ANCHOR = "when the output form is genuinely open"
 
 
 def _frame_ledger_text():
@@ -54,15 +75,28 @@ def test_reading_ledger_present_in_frame_step():
 
 
 def test_reading_ledger_present_in_static_prompt():
-    assert LEDGER_CLAUSE in SYSTEM_PROMPT_STATIC
+    """The discipline must reach the copy the agent actually reads.
+
+    Re-anchored 2026-11-03: the static prompt dropped the "Reading ledger"
+    heading and carries the same doctrine in §5 UNDERDETERMINED CHOICES. Pinning
+    the OPENING of that sentence (not the old heading) still fails if the
+    sentence is deleted or softened -- the discipline cannot vanish silently.
+    """
+    assert STATIC_LEDGER_ANCHOR in SYSTEM_PROMPT_STATIC.lower()
+    assert "resolve it by section 5's underdetermined choices rule" in SYSTEM_PROMPT_STATIC.lower()
 
 
 def test_ledger_requires_enumerating_every_defensible_reading():
-    """The ledger's whole point: enumerate FIRST, build second."""
+    """The ledger's whole point: enumerate FIRST, build second.
+
+    Re-anchored 2026-11-03: the carrier now reads "List the readings first, each
+    pinned to the task text's own words" -- the same enumerate-before-build
+    relation in the current words.
+    """
     text = " ".join(_frame_ledger_text().lower().split())
-    assert "every defensible reading" in text or "each defensible reading" in text
+    assert "list the readings first" in text
     # grounded in the task text, not invented from the parser's quirks
-    assert "task text" in text or "task's own words" in text
+    assert "each pinned to the task text's own words" in text
 
 
 def test_ledger_requires_a_dominance_test_not_a_preference():
@@ -97,9 +131,18 @@ def test_ledger_requires_top2_coverage_when_undominated():
 
 
 def test_ledger_defers_to_principle4_not_a_new_doctrine():
-    """It must reuse PRINCIPLE 4's hedge/bet rule so the two cannot drift."""
+    """It must reuse the prompt's EXISTING hedge/bet rule so the two cannot drift.
+
+    Re-anchored 2026-11-03: "PRINCIPLE 4" is gone -- the current prompt has no
+    numbered PRINCIPLE labels. The carrier states the deference in words: the
+    ledger IS the hedge/bet rule, applied at BUILD time, explicitly not a new
+    doctrine. That is the relation this test exists to pin, and it still goes
+    red if the declaring sentence is dropped or the clause starts claiming to be
+    a separate doctrine.
+    """
     text = _frame_ledger_text()
-    assert "PRINCIPLE 4" in text
+    assert "hedge/bet rule applied at BUILD time" in text
+    assert "not a new doctrine" in text
 
 
 def test_ledger_clause_is_generic():

@@ -68,8 +68,8 @@ class PlanUpdateTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "update_acceptance", "add_forbidden", "predict", "settle", "complete", "abandon", "deactivate", "reactivate", "batch", "set_thinking"],
-                "description": "What to do: step_done/step_doing/step_skip (update a step), add_steps (insert new steps), update_acceptance (modify step acceptance criteria), complete/abandon (finish the plan), deactivate (pause current plan), reactivate (resume a paused plan by id), batch (update multiple steps at once), set_thinking (rewrite the plan-level problem model — pass the new model in the 'thinking' field).",
+                "enum": ["step_done", "step_doing", "step_skip", "add_steps", "update_acceptance", "add_forbidden", "predict", "settle", "complete", "abandon", "deactivate", "reactivate", "set_thinking"],
+                "description": "What to do: step_done/step_doing/step_skip (update a step), add_steps (insert new steps), update_acceptance (modify step acceptance criteria), complete/abandon (finish the plan), deactivate (pause current plan), reactivate (resume a paused plan by id), set_thinking (rewrite the plan-level problem model — pass the new model in the 'thinking' field).",
             },
             "step_id": {
                 "type": "integer",
@@ -135,30 +135,6 @@ class PlanUpdateTool(Tool):
                 "type": "integer",
                 "description": "Insert new steps after this step (for add_steps). Omit to append at end.",
             },
-            "updates": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "step_id": {"type": "integer"},
-                        "status": {"type": "string", "enum": ["done", "doing", "skipped"]},
-                        "notes": {"type": "string"},
-                        "verification": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": (
-                                "Per-step evidence (required for a done item whose "
-                                "step has acceptance criteria — same bar as a single "
-                                "step_done). One entry per criterion, each carrying "
-                                "the observed value vs the criterion. Ignored for "
-                                "doing/skipped items."
-                            ),
-                        },
-                    },
-                    "required": ["step_id", "status"],
-                },
-                "description": "For batch action: list of step updates to apply at once.",
-            },
             "plan_id": {
                 "type": "string",
                 "description": "Plan ID to reactivate (for reactivate action).",
@@ -213,7 +189,7 @@ class PlanUpdateTool(Tool):
             },
             "_override_reason": {
                 "type": "string",
-                "description": "Override a guard block with a justification (min 5 chars). Some guard checks (step_done premise re-check, batch marking a step done, task completion re-check) block until you re-issue the same call with this field explaining why proceeding is justified. The reason is recorded, not content-checked.",
+                "description": "Override a guard block with a justification (min 5 chars). Some guard checks (step_done premise re-check, task completion re-check) block until you re-issue the same call with this field explaining why proceeding is justified. The reason is recorded, not content-checked.",
             },
         },
         "required": ["action"],
@@ -363,35 +339,6 @@ class PlanUpdateTool(Tool):
                 if not plan:
                     return f"ERROR: Could not reactivate plan '{plan_id}'. Not found or not paused."
                 return self._plan.summary()
-            elif action == "batch":
-                updates = kwargs.get("updates", [])
-                if not updates:
-                    return "ERROR: updates required for batch action."
-                status_map = {"done": "done", "doing": "doing", "skipped": "skipped"}
-                applied = 0
-                for u in updates:
-                    sid = _parse_step_id(u.get("step_id"))
-                    status = u.get("status", "")
-                    if not sid:
-                        return ("ERROR: batch update missing a valid step_id "
-                                f"(got {u.get('step_id')!r}); nothing applied. "
-                                "Use an integer or 'step_N'.")
-                    if status not in status_map:
-                        return (f"ERROR: unknown batch status {status!r} for step "
-                                f"{sid} (expected one of {sorted(status_map)}); "
-                                "nothing applied. The single-step spelling "
-                                "'skip' is NOT accepted here — use 'skipped'.")
-                    if status == "skipped":
-                        self._plan.skip_step(sid, u.get("notes", ""))
-                    else:
-                        self._plan.update_step(
-                            sid, status_map[status], u.get("notes", ""),
-                            verification=u.get("verification"),
-                        )
-                    applied += 1
-                if applied == 0:
-                    return ("ERROR: no batch update was applicable; check "
-                            "step_id and status values.")
             else:
                 return f"ERROR: Unknown action '{action}'."
             # thinking may accompany any action (e.g. step_done + updated model).

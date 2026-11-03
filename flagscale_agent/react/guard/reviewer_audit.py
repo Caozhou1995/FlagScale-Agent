@@ -78,7 +78,7 @@ SNAPSHOT_FILENAME = "transcript.jsonl"
 # reading and bury the decision lines it is looking for.
 SNAPSHOT_MAX_BYTES = 90_000
 FINDINGS_FILENAME = "findings.md"
-# prop_8754e12a: cap on rendered blocked-call rows. A run can accumulate hundreds
+# cap on rendered blocked-call rows. A run can accumulate hundreds
 # of blocks (measured: 200 rows -> 67 KB on their own), and the snapshot's byte
 # cap exists precisely so an auditor reads intent+outcome rather than a flood.
 # The overflow is reported as a count, so nothing is silently lost.
@@ -328,7 +328,7 @@ class ReviewerAuditGuard(Guard):
                 content = (content[:_MSG_HEAD] + "\n…[truncated]…\n"
                            + content[-_MSG_TAIL:])
             buf.append({"i": len(buf), "role": role, "content": content})
-        # prop_8754e12a: record calls a guard PREVENTED, as their own rows. An
+        # record calls a guard PREVENTED, as their own rows. An
         # auditor reading only message history cannot tell "the agent never tried
         # to measure X" from "the agent tried and a guard stopped it" — Audit #83
         # concluded an entire finding from exactly that ambiguity. These rows are
@@ -451,7 +451,7 @@ class ReviewerAuditGuard(Guard):
         if text.startswith("ERROR"):
             return
         new_id = review_id or "auditor"
-        # prop_c36e61f7: this used to write `state.get("snapshot_records")` —
+        # this used to write `state.get("snapshot_records")` —
         # reading the field it was about to write, so it round-tripped null
         # forever (production seq=7 still null). The dispatch must record the
         # size of the transcript the reviewer was handed, otherwise neither the

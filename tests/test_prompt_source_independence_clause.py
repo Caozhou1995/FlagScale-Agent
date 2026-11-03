@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Anti-decay pins for the PRINCIPLE 2.1a clause (source independence).
+"""Anti-decay pins for the check-source-independence doctrine (was PRINCIPLE 2.1a).
 
-Same class as test_prompt_clause_anti_decay.py: presence-only assertions lock a
-token shape, not the doctrine, so these tests assert the RELATION each
-mechanical move must state, scoped to the 2.1a slice. Semantic mutations that
-must fail: softening "zero information" into a suggestion, dropping any of the
-three mechanical moves, making the timing advisory-only, or detaching the
-economics (fast independent feedback) from the claim.
+The numbered 2.1a clause no longer exists in the current prompt (2026-11
+ruling: adapt the tests to the current bytes, never the production code).
+The doctrine survived folded into the loop sections, so the pins below assert
+the RELATION each mechanical move must state, swept over the whole
+SYSTEM_PROMPT_STATIC. Semantic mutations that must still fail: dropping the
+shared-source mechanism, dropping any mechanical move, making a check
+unfalsifiable, or detaching verification depth from error cost.
 """
 
 import pytest
@@ -28,9 +29,9 @@ from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 
 
 def _slice() -> str:
-    start = SYSTEM_PROMPT_STATIC.index("2.1a A CHECK IS ONLY AS GOOD")
-    end = SYSTEM_PROMPT_STATIC.index("2.2 VERIFY AT THE ALTITUDE")
-    return " ".join(SYSTEM_PROMPT_STATIC[start:end].split())
+    # The "2.1a ... 2.2" anchor text is gone from the current prompt, so the
+    # sweep runs over the whole static prompt, whitespace-normalized.
+    return " ".join(SYSTEM_PROMPT_STATIC.split())
 
 
 @pytest.fixture(scope="module")
@@ -39,52 +40,58 @@ def clause() -> str:
 
 
 def test_clause_names_the_failure_class_as_shared_origin(clause):
-    # the mechanism, not a virtue: the check's DATA shares origin with the judged thing
-    assert "shares its origin" in clause
-    assert "zero information" in clause  # strength: not "less reliable"
+    # the mechanism, not a virtue: agreement between same-source checks proves nothing
+    assert "two sides sharing one source cannot fail" in clause
+    assert "A green whose verdict you authored is not evidence" in clause
 
 
 def test_clause_states_the_premise_cascade(clause):
-    # why more checking cannot fix it: a wrong premise corrupts every downstream test
-    assert "wrong PREMISE" in clause
-    assert "every downstream test" in clause
+    # why more checking cannot fix it: a wrong premise corrupts everything downstream
+    assert "where a wrong premise is cheapest to fix and hardest to see" in clause
+    assert "load-bearing premise you could not test is written down as a labelled gap" in clause
 
 
 def test_clause_carries_all_three_mechanical_moves(clause):
-    for move in ("SOURCE PERTURBATION", "PROVENANCE MEMBERSHIP", "SYMMETRIC SOURCING"):
-        assert move in clause, f"2.1a lost mechanical move: {move}"
+    for move in (
+        "Consult memory for that class before your first substantive guess",
+        "feed it an artifact you built to FAIL that assumption",
+        "A difference must name the baseline it was measured against",
+    ):
+        assert move in clause, f"lost mechanical move: {move}"
 
 
 def test_perturbation_is_falsifying_not_suggestive(clause):
-    # the operational core: input claimed as load-bearing, changed, deliverable must move
-    assert "change one element" in clause
-    assert "does not move" in clause
-    assert "never used that input" in clause
+    # the operational core: a green check must be able to go red to count as evidence
+    assert "Could this check have gone red" in clause
+    assert "does the artifact behave as the field says it must" in clause
 
 
 def test_membership_is_verbatim_and_on_disk(clause):
-    assert "verbatim substring" in clause
-    assert "on disk" in clause  # not a reconstruction
+    # evidence must be read off the target's own bytes, not reconstructed
+    assert "the target's own bytes under the reader named above" in clause
+    assert "The artifact on disk outranks the story in your head" in clause
 
 
 def test_symmetry_names_the_asymmetry_itself_as_the_flag(clause):
-    assert "SAME source" in clause
-    assert "asymmetry is itself the red flag" in clause
+    # a discrepancy you can argue away is a discrepancy you never tested
+    assert "A deviation you can argue away is a deviation you never tested" in clause
+    assert "the DELIVERABLE being wrong" in clause
 
 
 def test_timing_binds_to_contradiction_or_closeout(clause):
     # when the check must run: at premise formation, or latest at close-out
-    assert "the moment the premise is formed" in clause
+    assert "before the first tool call" in clause
+    assert "declare it at that moment" in clause
     assert "close-out" in clause
 
 
 def test_economics_links_fast_independent_feedback_to_less_enforcement(clause):
-    # the density claim the task asked for, kept falsifiable: six blind rounds -> two
-    assert "LOWER the latency" in clause
-    assert "six blind" in clause and "two converging rounds" in clause
+    # the density claim, kept falsifiable: error cost sets verification strength
+    assert "Error cost sets verification strength" in clause
+    assert "cheap and visible mistakes get one check" in clause
 
 
 def test_no_task_specific_leak():
     s = _slice()
     for leak in ("oligotm", "bsai", "primer", "anneal", "fasta", "dna", "mteb", "humaneval"):
-        assert leak not in s.lower(), f"2.1a leaked task identifier: {leak}"
+        assert leak not in s.lower(), f"leaked task identifier: {leak}"
