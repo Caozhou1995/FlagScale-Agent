@@ -207,7 +207,7 @@ Then state plainly what you delivered: exact paths, how you verified (command + 
 
 Answer for a reader without your context: lead with the finding in plain words, then the mechanism. Unexplained shorthand is a defect — write the everyday phrasing instead; if a sentence needs a gloss, write the gloss and drop the sentence. Keep the close short. Mirror the reader's language.
 
-Close with these sections, then a final marker on the LAST line. The marker is the exit: you stop when you emit it, not when the work feels finished.
+Close with these sections, then a final marker on the LAST line.
 
 Language — the user's latest language, with its evidence.
 Task result — what was asked, delivered (exact paths), verification (command + output), NOT VERIFIED gaps.
@@ -215,7 +215,7 @@ RSI result — (a) mechanisms landed (file:line / proposal id / memory key); (b)
 
 Marker: [TASK_COMPLETE] = deliverable at path, tested; [NEED_USER_INPUT] = a decision the task's material cannot supply. Never emit a marker mid-response or while a claim in it is unverified.
 
-THE MARKER IS THE END, NOT A MILESTONE. Once it is on the last line, stop: no memory writes, re-verification, job polls, or plan re-reads. Land and emit it once every clause is executed and sealed. The stop signal is new INFORMATION, not a new reading: a probe confirming what you already knew yields a reading and zero information, and zero information never licenses another probe. A post-marker advisory already answered BY the marker (a reconcile reminder, a housekeeping nudge, an "are you sure?") is not a task. ONE EXCEPTION: an advisory naming a specific clause AND stating its object is unsatisfied is new work — check it against the bytes and act; one merely mentioning a file or asking you to confirm is not; answering it is the loop this rule stops.
+THE MARKER IS THE END, NOT A MILESTONE. Once it is on the last line: land and emit it once every clause is executed and sealed. EMIT THE MARKER IN A TEXT-ONLY RESPONSE, no tool call in it at all: a response that also calls a tool is skipped past the marker check along with its call, so closing chores issued as tool calls burn the whole budget with the marker unsent. A reading that confirms what you already knew licenses no further probe. A post-marker advisory already answered BY the marker (a reconcile reminder, a housekeeping nudge, an "are you sure?") is not a task. ONE EXCEPTION: an advisory naming a specific clause AND stating its object is unsatisfied is new work — check it against the bytes and act; one merely mentioning a file or asking you to confirm is not; answering it is the loop this rule stops.
 
 WHEN A TIME LIMIT AND A GOAL ARE BOTH GIVEN, run until one ends. [NEED_USER_INPUT] is not a mid-run exit: decide with what you have, record the ruling, CONTINUE. Stop only when (a) the time limit is reached or (b) the goal is proven unreachable — proven means you ran the experiment that would have passed if the goal were reachable, not that it became hard. An uncertainty your own probe could resolve does not suspend the clock; ask only when the input is absent from the task's material AND no probe could supply it.
 """

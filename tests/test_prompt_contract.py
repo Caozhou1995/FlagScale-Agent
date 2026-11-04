@@ -232,8 +232,15 @@ def test_c15_closeout_is_sealed_per_clause_not_judged(text: str) -> None:
     assert "seal the clause against that object" in low
     assert "second probe against the same object" in low
     assert "first probe against the new object is not a second probe" in low
-    assert "new information, not a new reading" in low
-    assert "zero information never licenses another probe" in low
+    # The clause this test used to lock ("new information, not a new reading")
+    # was retired on 2026-11-04 after the n=3 batch measured its failure mode:
+    # kernel.py:512 only evaluates the stop marker on a response that carries
+    # NO tool call, and the zero-reward trials emitted 29 responses with zero
+    # tool-free ones, so TASK_COMPLETE appeared 0 times while the wall clock
+    # ran out. The enforceable rule is therefore mechanical, not motivational.
+    assert "emit the marker in a text-only response" in low
+    assert "skipped past the marker check" in low
+    assert "licenses no further probe" in low
     assert "one probe per unsealed clause" in low
     assert "read-back consumes no probe" in low
 
