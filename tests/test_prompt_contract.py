@@ -317,3 +317,28 @@ def test_c19_near_miss_on_small_sample(text: str) -> None:
     low = text.lower()
     assert "a measurable score just under a stated bar" in low
     assert "not noise and not" in low
+
+
+def test_c20_self_check_is_not_the_grader(text: str) -> None:
+    """C20: when your own PASS is rejected, suspect the CHECK first.
+
+    Measured on the 16-reward-0 sweep: dna-insert recorded "5 of 5 red checks were
+    wrong check formulas while the design was correct"; pytorch-model-cli shipped
+    after a single-image probe agreed while 50 graded images missed. Both had the
+    ability to do the work — the discipline gap was trusting a self-built check.
+    """
+    low = text.lower()
+    assert "a self-check you wrote is not the grader" in low
+    assert "suspect the check before suspecting the task" in low
+
+
+def test_c21_silent_loop_and_refusal_as_reading(text: str) -> None:
+    """C21: a verbatim-repeated sentence is a stopped loop; a refused call is data.
+
+    Measured: gcode-to-text repeated one sentence 62 times in its last 300 lines
+    and never emitted a marker; gpt2-codegolf got "Cannot complete plan: 7 step(s)
+    not finished" from plan_update and then marked steps done to force it through.
+    """
+    low = text.lower()
+    assert "reappears verbatim in your own recent steps" in low
+    assert "the refusal is the reading" in low
