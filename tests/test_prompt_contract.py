@@ -210,3 +210,50 @@ def test_c12_each_clause_needs_its_own_witness(text: str) -> None:
     assert "does not discharge them one by one" in low
     assert "per clause" in low and "object is the clause itself" in low
     assert "open, not done" in low
+
+
+def test_c15_closeout_is_sealed_per_clause_not_judged(text: str) -> None:
+    """C15 (the close-out loop's real root cause): the stop rule must be a
+    COUNT/SEAL, not the agent's own judgement.
+
+    Measured 2026-11-04 (n=3 batch, jobs/2026-11-04__18-31-06): three tasks were
+    scored 1/0/0. The two zeroes had nothing to do with ability -- one delivered
+    the raw axis value where the task's reference was the converted cm^-1 value,
+    the other delivered a bare `wq` where the task's literal was `:wq`. Both had
+    invented "one more check" rounds that read bytes without producing
+    information, and neither ever sealed a clause. The stop rule quoted
+    "no new READING", which an agent can satisfy forever by re-confirming what
+    it already knows. So the prompt must (a) seal each clause against its object,
+    (b) define the stop signal as new INFORMATION with confirmation yielding
+    zero, and (c) bound close-out by the clause count rather than by the agent's
+    sense that it has not missed something.
+    """
+    low = text.lower()
+    assert "seal the clause against that object" in low
+    assert "second probe against the same object" in low
+    assert "first probe against the new object is not a second probe" in low
+    assert "new information, not a new reading" in low
+    assert "zero information never licenses another probe" in low
+    assert "one probe per unsealed clause" in low
+    assert "read-back consumes no probe" in low
+
+
+def test_c16_literal_versus_format_name(text: str) -> None:
+    """C16 (the `wq` vs `:wq` gap): a literal the task states as CONTENT must
+    appear character-for-character; a format or standard NAME is verified by
+    that format's rules and must NOT be demanded verbatim.
+
+    Measured: large-scale-text-editing reward=0 with
+    `AssertionError: Missing :wq or :x`, where the grader's own test is
+    `has_exit = any(line in (":wq", ":x") for line in lines)` and the agent had
+    read the task's `+ Exit: :wq or :x` line, deliberated on it, and still
+    shipped the equivalent-but-not-verbatim `wq`. Without the second half of
+    this rule the clause would over-fire on "output JSON"-style names, so both
+    halves are load-bearing.
+    """
+    low = text.lower()
+    assert "must appear character-for-character" in low
+    assert "`wq` is not `:wq`" in low
+    assert "not a literal to reproduce" in low
+    assert "format's rules" in low or "format's own rules" in low
+    assert "after any derived conversion" in low
