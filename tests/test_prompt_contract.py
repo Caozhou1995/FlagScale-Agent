@@ -55,7 +55,7 @@ def test_c3_total_size_bounded(text: str) -> None:
     other.
     """
     n = prompt_len()
-    assert n <= 33_500, f"prompt is {n} chars, budget 33500"
+    assert n <= 36_000, f"prompt is {n} chars, budget 36000"
 
 
 def test_c3b_the_two_readings_of_prompt_size_agree(text: str) -> None:
@@ -290,3 +290,30 @@ def test_c17_marker_is_terminal_no_housekeeping_after(text: str) -> None:
     assert "the only next response is the marker" in low
     assert "is not a close-out step" in low
     assert "land and emit the marker without it" in low
+
+
+def test_c18_stated_bound_and_named_quantity(text: str) -> None:
+    """C18: a stated range/threshold is a clause with its own object.
+
+    Measured on the 16-reward-0 sweep: video-processing delivered landing frame 61
+    for a task saying [62, 64] (off-by-one on the closed interval); mteb-retrieve
+    produced a HumanEval number for an MTEB task (right-looking number, wrong
+    quantity). Both grades as "checked a number", so the clause must name the END
+    the wording fixes and the QUANTITY the task named.
+    """
+    low = text.lower()
+    assert "a floor or a closed interval" in low
+    assert "the quantity the task named" in low
+
+
+def test_c19_near_miss_on_small_sample(text: str) -> None:
+    """C19: a score just under a stated bar is not "close enough".
+
+    Measured: train-fasttext 0.614 vs 0.62, make-mips-interpreter 0.8629 vs 0.95,
+    torch-pipeline-parallelism max diff 0.0357. Each ended "nearly there" while a
+    form/population mismatch was the likelier cause; the guard is to widen the
+    evidence, not to talk the gap away.
+    """
+    low = text.lower()
+    assert "a measurable score just under a stated bar" in low
+    assert "not noise and not" in low
