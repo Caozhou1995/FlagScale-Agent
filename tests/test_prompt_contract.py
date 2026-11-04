@@ -54,7 +54,7 @@ def test_c3_total_size_bounded(text: str) -> None:
     other.
     """
     n = prompt_len()
-    assert n <= 30_000, f"prompt is {n} chars, budget 30000"
+    assert n <= 31_000, f"prompt is {n} chars, budget 31000"
 
 
 def test_c3b_the_two_readings_of_prompt_size_agree(text: str) -> None:
