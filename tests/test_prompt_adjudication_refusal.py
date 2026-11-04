@@ -58,7 +58,7 @@ def test_g3_forbids_a_self_chosen_baseline_as_the_comparison():
     assert "one re-measured after a regression was seen proves nothing" in FLAT
     assert "not the initial baseline" in FLAT
     assert "either fix it or record in one line that it is out of bounds" in FLAT
-    assert "a stated degrade, never a silent one" in FLAT
+    assert "that licence covers only a bound you chose" in FLAT
 
 
 def test_g3_does_not_grow_a_new_top_level_gate_step():

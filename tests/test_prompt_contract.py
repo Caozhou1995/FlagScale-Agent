@@ -371,3 +371,25 @@ def test_c23_negative_completeness_names_the_unswept(text: str) -> None:
     assert "proves nothing about the cases you did not" in low
     assert "threat families you enumerated" in low
     assert "rather than reporting a clean pass" in low
+
+
+def test_c24_task_fixed_bound_is_gate_not_tradeoff(text: str) -> None:
+    """C24: the "out of bounds -> ship anyway" licence must not cover task-fixed values.
+
+    Measured (jobdir 2026-11-04__23-21-05, full 89-task n=2 batch): both reward=0
+    trials closed out normally (TASK_COMPLETE emitted, verifier ran) and their
+    failing assertions were exactly the task's own fixed numbers:
+      - dna-assembly:    assert i >= 1   (agent delivered clamp=0, computed 0>=1 itself)
+      - write-compressor: assert 3671 <= 2500 (agent computed 3675 > 2500 itself)
+    Both knew they were over the line and shipped anyway, because the prompt
+    said a number out of a stated bound may be shipped with a one-line note.
+    That licence must be narrowed to bounds the AGENT chose; a number/format/
+    literal the TASK fixes is a gate.
+    """
+    low = text.lower()
+    assert "that licence covers only a bound you chose" in low
+    assert "is a gate, not a trade-off" in low
+    assert "shipping past it scores zero" in low
+    assert "saying the requirement cannot be met" in low
+    # The old unconditional escape hatch must be gone.
+    assert "shipping anyway" not in low

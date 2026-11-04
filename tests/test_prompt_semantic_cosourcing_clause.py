@@ -49,7 +49,7 @@ def test_clause_requires_the_writeback_line(clause):
 
 def test_clause_silence_is_surfaced_not_filled(clause):
     # silent gaps are stated honestly, never filled with a silent assumption
-    assert "a stated degrade, never a silent one" in clause
+    assert "that licence covers only a bound YOU chose" in clause
     assert "written down as a labelled gap rather than passed over in silence" in clause
 
 

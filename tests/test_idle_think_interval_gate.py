@@ -169,10 +169,14 @@ class TestIdleThinkIntervalGate:
                   and "Idle think-interval" in (m.get("content") or "")]
         assert len(nudges) == 2  # advisory then structural
         s = nudges[1]["content"]
-        assert "OBSERVE FIRST" in s
+        # Convergence is now defined as landing a file first (user directive
+        # 2026-11-05); the probe is the exception when nothing is writable yet.
+        # The probe-first order must still be named, since the science half is
+        # what the earlier "state on disk only" wording dropped.
+        assert "CONVERGE = PUT A FILE ON DISK" in s
         assert "kill" in s and "hypothesis" in s
         assert "check.py" in s or "library" in s
-        assert "write_file" in s  # fallback still named
+        assert "write_file" in s
         assert getattr(kernel, "_force_tool_next", False) or True  # consumed by then; levers armed pre-flight
         assert kernel._thinking_cap_override is None  # consumed by the squeeze rung
 

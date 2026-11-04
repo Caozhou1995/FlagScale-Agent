@@ -115,13 +115,19 @@ class TestCapRecoveryEscalation:
         assert len(body) <= 4000, len(body)
         assert "HARD STOP" not in caps[0]
         # Still asks for a concrete step (unchanged contract)
-        assert "Your next message MUST contain exactly ONE tool call that" in caps[0]
+        assert "Your next message MUST contain exactly ONE tool call" in caps[0]
         # The first-cap directive must FORCE one action, not offer a menu:
         # "either call a tool ... or write your answer" is the wording that let
         # the model keep deriving (measured in the long-derivation failure
         # family: 4.5k-line trajectory, 2 read-only shell calls, no artifact).
         assert "either call a tool to" not in caps[0]
-        assert "write_file" in caps[0]
+        # Convergence must be defined as LANDING A FILE, not as "a shorter
+        # thought" (user directive 2026-11-05): the schemelike trial spent six
+        # 3000-token caps deriving in-stream before it finally wrote. The
+        # directive now names the write as the default and the probe as the
+        # exception.
+        assert "CONVERGE means LAND A FILE" in caps[0]
+        assert "`write_file`" in caps[0]
         assert "imperfect file on disk" in caps[0]
 
     def test_second_cap_in_same_turn_escalates_to_hard_stop(self):
