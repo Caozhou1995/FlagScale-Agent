@@ -279,3 +279,9 @@ def test_c17_marker_is_terminal_no_housekeeping_after(text: str) -> None:
     assert "after the marker nothing is owed" in low
     assert "any action taken once it is there is overrun" in low
     assert "land, emit, stop" in low
+    # C17b (measured): the loop fired AFTER a close-out step_done / plan complete,
+    # because the agent treated "final response" thinking as licence to run one
+    # more ls/cat/poll. The clause must make the marker the ONLY next response and
+    # name the forfeit, so a confirming re-read cannot be rationalised as progress.
+    assert "the only next response is the marker" in low
+    assert "forfeits the close-out" in low
