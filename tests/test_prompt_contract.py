@@ -279,9 +279,14 @@ def test_c17_marker_is_terminal_no_housekeeping_after(text: str) -> None:
     assert "after the marker nothing is owed" in low
     assert "any action taken once it is there is overrun" in low
     assert "land, emit, stop" in low
-    # C17b (measured): the loop fired AFTER a close-out step_done / plan complete,
-    # because the agent treated "final response" thinking as licence to run one
-    # more ls/cat/poll. The clause must make the marker the ONLY next response and
-    # name the forfeit, so a confirming re-read cannot be rationalised as progress.
+    # C17b (measured): the loop fired on large-scale-text-editing AFTER plan complete
+    # (results.json banked, apply_macros.vim byte-matched) — the agent answered its own
+    # "Now final response." with one more ls/cat/plan_update. step_done on a pass is
+    # normal progress and stays unconstrained; only PLAN COMPLETE seals the close-out,
+    # and then the marker is the ONLY next response. A stray call is "not a close-out
+    # step" (land and emit without it) rather than voiding the whole close-out, which
+    # would contradict the four-fifths rule's "land what you have and emit".
+    assert "once plan complete, every clause is sealed" in low
     assert "the only next response is the marker" in low
-    assert "forfeits the close-out" in low
+    assert "is not a close-out step" in low
+    assert "land and emit the marker without it" in low
