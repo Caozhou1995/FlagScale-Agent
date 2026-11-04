@@ -680,6 +680,14 @@ class HistoryManager:
                 continue
             if msg.get("role") == "system":
                 continue
+            # A genuine user turn carries _pin=True (set at the three entry
+            # points in agent.py). Losing one silently drops the operator's
+            # instruction, so it is never evictable. Harness-authored
+            # user-role messages (nudges, guard blocks, tool_results) are
+            # NOT pinned and remain evictable -- otherwise context could
+            # never be compressed.
+            if msg.get("_pin"):
+                continue
             if i >= protected_tail:
                 continue
             ext = msg.get("_ext_idx", i)

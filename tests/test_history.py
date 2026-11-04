@@ -267,3 +267,56 @@ class TestGetMessagesV3:
         hm.append({"role": "user", "content": "hi"})
         msgs = hm.get_messages()
         assert any(m.get("role") == "tool" and "xxxxx" in m.get("content", "") for m in msgs)
+
+
+class TestPinnedUserInstructionNeverEvicted:
+    """A genuine user turn (marked _pin=True at agent.py's three entry points)
+    must never appear in get_evictable_indexes().
+
+    Regression guard: get_evictable_indexes() used to skip only role=="system"
+    and the last 4 messages, so a user instruction outside that window could be
+    evicted along with harness noise. Losing one silently drops the operator's
+    instruction, after which the agent fabricates a version of what was asked.
+    """
+
+    def test_pinned_message_not_evictable(self):
+        hm = HistoryManager()
+        hm.set_system_prompt("sys")
+        hm.append({"role": "user", "content": "DO-NOT-LOSE-ME", "_pin": True})
+        for i in range(30):
+            hm.append({"role": "user", "content": "harness-nudge-%d" % i})
+        evictable = set(hm.get_evictable_indexes())
+        # get_messages() merges consecutive user turns into list-content
+        # blocks, so match against the raw message list that get_evictable_indexes
+        # itself walks.
+        pinned = [m for m in hm.messages if m.get("content") == "DO-NOT-LOSE-ME"][0]
+        assert pinned["_ext_idx"] not in evictable
+
+    def test_unpinned_user_messages_stay_evictable(self):
+        """Harness-authored user-role messages (nudges, guard blocks, tool
+        results) must stay evictable -- otherwise context can never compress."""
+        hm = HistoryManager()
+        hm.set_system_prompt("sys")
+        for i in range(30):
+            hm.append({"role": "user", "content": "harness-nudge-%d" % i})
+        assert len(hm.get_evictable_indexes()) >= 25
+
+    def test_pin_survives_reload(self):
+        import json
+        hm = HistoryManager()
+        hm.set_system_prompt("sys")
+        hm.append({"role": "user", "content": "KEEP", "_pin": True})
+        for i in range(20):
+            hm.append({"role": "user", "content": "n%d" % i})
+        blob = json.dumps(hm.messages)
+        assert '"_pin": true' in blob
+        hm2 = HistoryManager()
+        hm2.set_system_prompt("sys")
+        for m in json.loads(blob):
+            if m.get("role") == "system":
+                continue
+            hm2.append(m)
+        evictable = set(hm2.get_evictable_indexes())
+        kept = [m for m in hm2.messages if m.get("content") == "KEEP"][0]
+        assert kept.get("_pin") is True
+        assert kept["_ext_idx"] not in evictable

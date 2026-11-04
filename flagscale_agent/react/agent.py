@@ -1755,7 +1755,10 @@ class WorkerAgent:
 
             self._inject_context()
             self._session_input_history.append(user_input)
-            self.history.append({"role": "user", "content": user_input})
+            # _pin: a genuine user turn must never be evicted (see
+            # HistoryManager.get_evictable_indexes). Harness-authored
+            # user-role messages (nudges, guard blocks) stay evictable.
+            self.history.append({"role": "user", "content": user_input, "_pin": True})
             try:
                 self._react_loop()
             except KeyboardInterrupt:
@@ -1782,7 +1785,7 @@ class WorkerAgent:
                 self._startup_guard.set_single_shot(True)
             self._restore_for_resume()
             self._inject_context()
-            self.history.append({"role": "user", "content": resume_msg})
+            self.history.append({"role": "user", "content": resume_msg, "_pin": True})
             try:
                 self._react_loop()
             except Exception:
@@ -1815,7 +1818,7 @@ class WorkerAgent:
         # [DISABLED 2026-11-01 per user ruling: single_shot 自动 append 多agent nudge 暂停]
         # query = _run_single_shot_append_nudge(
         #     query, worker=is_worker(), resume=resolve_resume_query() is not None)
-        self.history.append({"role": "user", "content": query})
+        self.history.append({"role": "user", "content": query, "_pin": True})
         try:
             self._react_loop()
         except Exception:
