@@ -92,6 +92,6 @@ def test_shared_source_comparison_is_flagged_as_unable_to_fail():
 
 def test_both_clauses_fit_the_budget():
     # The cap was raised 15000 -> 20000 (user ruling 2026-11-01), then
-    # 20000 -> 25000 by user ruling;
+    # 20000 -> 25000 by user ruling, then 25000 -> 31000 -> 32000;
     # the anti-accumulation ratchet now lives in test_c3_total_size_bounded.
-    assert prompt_len() <= 31_000
+    assert prompt_len() <= 32_000
