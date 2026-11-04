@@ -393,3 +393,27 @@ def test_c24_task_fixed_bound_is_gate_not_tradeoff(text: str) -> None:
     assert "saying the requirement cannot be met" in low
     # The old unconditional escape hatch must be gone.
     assert "shipping anyway" not in low
+
+
+class TestUserBanOnMarkersOutranks:
+    """The marker section mandated a final marker on every response, so a user
+    instruction to withhold markers during a long monitored run was always
+    overridden by the system prompt. That clause is what prevents the failure.
+    """
+
+    def test_clause_present(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC as P
+        assert ("A user instruction forbidding markers for a stretch "
+                "outranks this section") in P
+
+    def test_says_emit_none_until_lifted(self):
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC as P
+        flat = P.lower()
+        assert "emit none until it lifts" in flat
+        assert "then close normally" in flat
+
+    def test_keeps_ordinary_marker_duty(self):
+        """The relaxation must not erase the normal duty: markers still exist."""
+        from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC as P
+        assert "[TASK_COMPLETE]" in P
+        assert "[NEED_USER_INPUT]" in P
