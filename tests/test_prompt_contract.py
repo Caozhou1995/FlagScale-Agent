@@ -342,3 +342,16 @@ def test_c21_silent_loop_and_refusal_as_reading(text: str) -> None:
     low = text.lower()
     assert "reappears verbatim in your own recent steps" in low
     assert "the refusal is the reading" in low
+
+
+def test_c22_positive_check_needs_grader_wide_sample(text: str) -> None:
+    """C22: a positive ("unchanged") check is only as good as its sample width.
+
+    Measured: filter-js-from-html self-verified on 2 clean files (benign.orig,
+    fmt.orig) while the grader ran 12 — 5 came back "Content was modified"
+    (attribute order and indentation re-serialized). The agent's own note says a
+    byte diff caught this once, so the gap was sample width, not detection.
+    """
+    low = text.lower()
+    assert "on a sample as wide as the one the grader reads" in low
+    assert "same gap as no positive check at all" in low
