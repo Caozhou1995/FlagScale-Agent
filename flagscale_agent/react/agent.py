@@ -543,7 +543,17 @@ class WorkerAgent:
         # self-kill or an overbroad rm destroys verified state while the
         # agent's belief in it survives. Never
         # blocks.
-        guard_registry.register(DeliverableSurvivalGuard())
+        # DISABLED 2026-11-05: self-exciting inject loop, measured on
+        # torch-pipeline-parallelism__wLEAhxH. Its _DESTRUCTIVE_RE matches the
+        # harmless `rm -rf __pycache__` that the agent appends to every
+        # self-check command, so each injection ("re-verify survival NOW:
+        # ls -la ...") was answered by a command that ALSO contained
+        # `rm -rf __pycache__` -> re-armed forever. Trajectory: 9 injections,
+        # 7x "I'm stuck in a loop of re-verifying. The deliverable is banked.",
+        # 18x the same `ls -la ... && md5sum ... && rm -rf __pycache__`, and
+        # TASK_COMPLETE=0 with the verifier never even starting (vf=0). The
+        # loop, not the agent's choice, was what kept the Turn from ending.
+        # guard_registry.register(DeliverableSurvivalGuard())
         # NOTE: CompletionArtifactGate was REMOVED after measurement. It tried to
         # enumerate task-named "artifact" paths by regex over the task statement
         # and block [TASK_COMPLETE] until each was observed. Two independent
