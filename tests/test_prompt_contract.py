@@ -355,3 +355,19 @@ def test_c22_positive_check_needs_grader_wide_sample(text: str) -> None:
     low = text.lower()
     assert "on a sample as wide as the one the grader reads" in low
     assert "same gap as no positive check at all" in low
+
+
+def test_c23_negative_completeness_names_the_unswept(text: str) -> None:
+    """C23: a negative ("X is blocked / absent") check is unprovable by enumeration.
+
+    Measured: filter-js-from-html's test_filter_blocks_xss saw 8 of 28 batches
+    still alert() in the real browser (assert 7 == 0) while the agent built 206
+    vectors of its own making and hit mXSS / null-byte / charset / utf-7 variants
+    zero times; its NOT VERIFIED section named only parser consistency, never the
+    possibility that the blacklist was incomplete. The prompt has no axis for
+    "you cannot prove a negative by the cases you happened to think of".
+    """
+    low = text.lower()
+    assert "proves nothing about the cases you did not" in low
+    assert "threat families you enumerated" in low
+    assert "rather than reporting a clean pass" in low
