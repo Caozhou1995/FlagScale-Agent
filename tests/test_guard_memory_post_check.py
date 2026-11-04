@@ -121,3 +121,57 @@ class TestGuardShape:
         for attr in ("_since_last", "_nudged_write_keys", "_read_nudges",
                      "COOLDOWN", "MAX_READ_NUDGES"):
             assert not hasattr(g, attr)
+
+
+class TestWriteDoneCriterion:
+    """The write inject must carry its own termination rule, not just a list.
+
+    Observed in the last full evaluation: 22 of 76 trials kept writing memory
+    after the plan completed, the worst repeating one key 17 times, because
+    the reminder said the write was "not done" but never said what DONE looks
+    like. The inject now answers that in text; it still emits on every
+    successful write (no state, no per-key dedup), so the two properties are
+    asserted together.
+    """
+
+    def test_write_inject_states_the_done_criterion(self):
+        g = MemoryPostCheckGuard()
+        v = g.check_post(_ctx("memory_write", {"key": "fact/a/b"},
+                              "Memorized [fact] 'fact/a/b' (1 chars)."))
+        assert "DONE CRITERION" in v.message
+        assert "ONCE" in v.message
+
+    def test_write_inject_forbids_rewriting_the_same_key(self):
+        g = MemoryPostCheckGuard()
+        v = g.check_post(_ctx("memory_write", {"key": "fact/a/b"},
+                              "Memorized [fact] 'fact/a/b' (1 chars)."))
+        low = v.message.lower()
+        assert "do not re-write the same key" in low
+        assert "second write of the same key" in low
+
+    def test_done_criterion_does_not_introduce_dedup_state(self):
+        # Text-only change: the always-on contract must survive it.
+        g = MemoryPostCheckGuard()
+        for _ in range(3):
+            v = g.check_post(_ctx("memory_write", {"key": "fact/a/b"},
+                                  "Memorized [fact] 'fact/a/b' (1 chars)."))
+            assert v is not None
+        for attr in ("_seen_write_keys", "_nudged_write_keys", "_write_counts"):
+            assert not hasattr(g, attr)
+
+
+class TestReadDoneCriterion:
+    def test_read_inject_states_the_done_criterion(self):
+        g = MemoryPostCheckGuard()
+        v = g.check_post(_ctx("memory_read", {"key": "fact/x/y"},
+                              "[fact] fact/x/y\nContent: foo\nCreated: now"))
+        assert "DONE CRITERION" in v.message
+        assert "re-read the same key" in v.message
+
+    def test_read_still_nudges_every_time_after_the_clause(self):
+        # The clause must not turn into a throttle.
+        g = MemoryPostCheckGuard()
+        for i in range(10):
+            v = g.check_post(_ctx("memory_read", {"key": f"fact/x/{i}"},
+                                  "[fact] k\nContent: v\nCreated: now"))
+            assert v is not None

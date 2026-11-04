@@ -66,7 +66,15 @@ class MemoryPostCheckGuard(Guard):
                 "evidenced insight → skill/knowledge.\n"
                 "  (4) KEY — would a session two weeks from now actually grep for "
                 "this key? Run memory_list(keyword='<concept>') to check for a "
-                "near-duplicate you should have reused instead.",
+                "near-duplicate you should have reused instead.\n"
+                "\n"
+                "DONE CRITERION — this reconcile is complete the moment you have "
+                "asked (1)-(4) ONCE about THIS write. Answer them in one line of "
+                "reasoning and move on. Do NOT re-write the same key to 'finish' "
+                "reconciling: a second write of the same key carries no "
+                "information the first one lacked, so it is not more reconciled, "
+                "it is just another turn. If nothing in (1)-(4) applies, the "
+                "write you already made was the complete one.",
                 reason="memory_write_reconcile",
                 category="memory_post_check_write",
             )
@@ -89,7 +97,11 @@ class MemoryPostCheckGuard(Guard):
                 "memory_list(keyword='<concept>') and reconcile the survivor.\n"
                 "  (3) GAIN — did this read actually answer your question, or do you "
                 "still not know? If the memory itself is wrong, correct it at the "
-                "source (memory_write with supersedes) rather than working around it.",
+                "source (memory_write with supersedes) rather than working around it.\n"
+                "\n"
+                "DONE CRITERION — answer (1)-(3) ONCE in reasoning, then act. This "
+                "check is not a licence to re-read the same key: a second read of "
+                "an entry you just read carries no new information.",
                 reason="memory_read_staleness",
                 category="memory_post_check_read",
             )
