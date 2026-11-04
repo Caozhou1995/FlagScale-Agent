@@ -44,7 +44,7 @@ def test_c2_all_placeholders_present_and_renderable(text: str, rendered: str) ->
 def test_c3_total_size_bounded(text: str) -> None:
     """C3: the prompt stays a high-signal set, not a clause accumulation.
 
-    15000 chars is the budget this rewrite commits to (was 101657). The bound is
+    32000 chars is the budget this rewrite commits to (was 101657). The bound is
     deliberately loose enough to allow refinement and tight enough that a relapse
     into per-loss clause appending fails here rather than silently.
 
@@ -192,3 +192,20 @@ def test_c14_budget_walls_sum_not_whole(text: str) -> None:
     its deletion (the deleted half was outside every gate's evidence set).
     """
     assert "longest chain plus its join, not the sum" in text
+
+def test_c12_each_clause_needs_its_own_witness(text: str) -> None:
+    """C12: 10.1 must forbid discharging several clauses with one command.
+
+    Two measured failures in the same batch had this exact shape: a run whose
+    own self-checks answered a nearby question, and then called the clause done.
+    One verified byte-equality of the produced file while the clause named an
+    editor exit command; another verified the stability of the author's own
+    model while the clause named two specific peaks. In both the clause's own
+    object was never witnessed, and both were scored wrong while the run felt
+    finished. The rule must demand a per-clause witness, and must say that a
+    clause whose own object cannot be named is OPEN, not merely at risk.
+    """
+    low = text.lower()
+    assert "does not discharge them one by one" in low
+    assert "per clause" in low and "object is the clause itself" in low
+    assert "open, not done" in low
