@@ -55,11 +55,15 @@ text and environment signals, never from a grader file.
   run. Your first pass is treated as settled-too-early, NOT as wrong — the
   right answer was usually within reach of one more probe.
 
-  W2 TRAP INVENTORY WALK. Walk the Section-5 TRAP INVENTORY item by item
-  against THIS step's deliverable and choices. For each item write one line:
-  APPLIES -> what the choice is and how you checked it, or N/A -> why it
-  cannot bite here. Enumerate FIRST, judge later — the missed item is the
-  failure mode this beat exists to catch.
+  W2 TRAP INVENTORY WALK. Walk the Section-5 TRAP INVENTORY LAYER by LAYER
+  against THIS step's deliverable — ENUMERATE, PARSE-SCHEMA, RANK, RUN-TIME,
+  one line each, not one line per trap you happen to think of. For each layer
+  write: what this layer produced for THIS deliverable, or N/A and why it
+  cannot bite here. PARSE-SCHEMA is its own layer and is asked FIRST: name the
+  prefix / marker / payload / tail a downstream parser slices, and the minimum
+  it asserts that the task text never states. A walk whose list is
+  word-for-word identical to your previous one proves no new layer was found —
+  that repetition is itself the signal to go look at the layer you skipped.
 
   W3 FRESH PROBE. Paste ONE command you have NOT run in this step, with its
   real output, reading the delivered bytes. If you cannot produce a fresh
