@@ -92,7 +92,8 @@ def test_tolerance_is_sourced_not_chosen():
     obligation is that an agent-picked tolerance is a claim about preference,
     not about the target, and an in-bound reading must not be argued away.
     """
-    assert "a tolerance you picked is a claim about your preference rather than about the target" in FLAT
+    assert "a tolerance you picked, or a limit you remember, is a claim about your preference rather than about the target" in FLAT
+    assert "write the limit the task states and the value your own last measurement produced on one line" in FLAT
     assert 'not "within my own tolerance"' in FLAT
 
 

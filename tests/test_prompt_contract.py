@@ -55,7 +55,7 @@ def test_c3_total_size_bounded(text: str) -> None:
     other.
     """
     n = prompt_len()
-    assert n <= 33_000, f"prompt is {n} chars, budget 33000"
+    assert n <= 33_500, f"prompt is {n} chars, budget 33500"
 
 
 def test_c3b_the_two_readings_of_prompt_size_agree(text: str) -> None:
@@ -264,3 +264,18 @@ def test_c16_literal_versus_format_name(text: str) -> None:
     assert "not a literal to reproduce" in low
     assert "format's rules" in low or "format's own rules" in low
     assert "after any derived conversion" in low
+
+
+def test_c17_marker_is_terminal_no_housekeeping_after(text: str) -> None:
+    """C17: the marker is the END, not a milestone. Once `[TASK_COMPLETE]`
+    (or `[NEED_USER_INPUT]`) is on the last line, no action may follow it.
+
+    Measured: the close-out loops that burned whole turns had an agent that
+    kept doing "one last" cat/md5/poll AFTER the decision was already closed.
+    The clause must therefore say the marker is terminal AND that any action
+    after it is overrun — wording the agent can act on without seeing a grader.
+    """
+    low = text.lower()
+    assert "after the marker nothing is owed" in low
+    assert "any action taken once it is there is overrun" in low
+    assert "land, emit, stop" in low
