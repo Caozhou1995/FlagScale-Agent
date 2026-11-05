@@ -89,7 +89,16 @@ def test_independent_computation_paths_for_each_axis():
 
 
 def test_clause_stays_task_agnostic():
-    """Scientific pattern only -- no task nouns that would leak the instance."""
+    """Scientific pattern only -- no task nouns that would leak the instance.
+
+    Measured addition (2026-11-05): a clause shipped with "a clamp 5' of a cut
+    site" as its illustrative example -- a verbatim instance of a live failing
+    task -- and this gate passed it, because neither "clamp" nor "cut site" was
+    on the list. The gate was only as wide as the nouns someone had already
+    tripped over. Any domain noun that names a concrete instance belongs here.
+    """
     for banned in ("oligotm", "primer3", "bsai", "overhang", "anneal",
-                   "dna-assembly", "plasmid", "circular"):
+                   "dna-assembly", "plasmid", "circular",
+                   "clamp", "cut site", "restriction site", "recognition site",
+                   "ggtctc", "golden gate", "lz77", "deflate", "metacirc"):
         assert banned not in FLAT.lower(), banned
