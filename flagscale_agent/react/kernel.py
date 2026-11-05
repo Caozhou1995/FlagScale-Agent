@@ -99,6 +99,30 @@ class AgentKernel:
     # (240s, agent.py L1279). Used by the endgame arming arithmetic so the
     # forced-call window is guaranteed to contain a stream boundary.
     STREAM_THINKING_WALL_SEC = 240
+    # ── Endgame force_tool cadence: 1 armed round, then 1 released round ──
+    # Arming the endgame window PERMANENTLY (every request from the arm point
+    # to the wall carries tool_choice="required") makes the turn's own exit
+    # structurally unreachable, because that constraint declares a prose-only
+    # reply illegal (providers/base.py docstring) while 10.5 of the prompt
+    # orders the agent to "EMIT THE MARKER IN A TEXT-ONLY RESPONSE, no tool
+    # call in it at all". Measured on kv-store-grpc trial UNKgJ4N
+    # (jobs/2026-11-05__06-48-27): 900.18s budget -> arm_thr 58.34% -> forced
+    # for the last 375.0s; 126 assistant rounds, ALL 126 carried tool_use,
+    # text-only rounds = 0, literal [TASK_COMPLETE] in content = 0 — while 29
+    # rounds' thinking said "emit the marker now, text-only" (all 29 after the
+    # first TimeBudget injection; 0 of the 27 before it). Control:
+    # pypi-server (182.39s, never reached the arm point) closed with a
+    # single ['text'] block ending in [TASK_COMPLETE] — the only trial in the
+    # batch that emitted the marker. So the marker was not withheld by the
+    # model; it was unavailable at the request layer.
+    # The original permanent arming was not wrong in intent: prose alone was
+    # measured to burn the wall to zero bytes on disk. The fix keeps that
+    # pressure but makes it SELF-LIMITING — force one round, release the next.
+    # Worst case the agent still gets an action every two rounds (the anti-
+    # burn property), and within two rounds it always has a legal opening to
+    # close the turn. 1 = alternate; 0 disables the release (permanent arming,
+    # the pre-fix behaviour).
+    ENDGAME_RELEASE_EVERY = 2
     # Saturation nudge: from this consecutive-saturated-call count on, the
     # kernel DROPS the saturated filler message from history and injects a
     # directive that FORBIDS continuing the text stream (hard convergence).
@@ -297,6 +321,12 @@ class AgentKernel:
 
         signal.signal(signal.SIGINT, _sigint)
 
+        # Counts loop iterations spent inside the endgame force_tool window,
+        # so the arming can alternate (see ENDGAME_RELEASE_EVERY). Initialized
+        # per TURN, not per iteration: it is the cadence phase, not a counter
+        # of work.
+        _endgame_rounds = 0
+
         try:
             for iteration in range(max_iter):
                 # Publish the live count FIRST: every in-turn consumer (a guard
@@ -387,8 +417,27 @@ class AgentKernel:
                         85.0 - (self.STREAM_THINKING_WALL_SEC
                                 / float(_tb_budget)) * 100.0)
                 if isinstance(_tb_pct, (int, float)) and _tb_pct >= _arm_thr:
-                    self._force_tool_next = True
-                    self._thinking_cap_override = 3000
+                    # SELF-LIMITING arming (see ENDGAME_RELEASE_EVERY): force
+                    # one round, then release one, so the turn always retains a
+                    # legal text-only opening in which the marker can be
+                    # emitted. Permanent arming made the exit unreachable —
+                    # measured, kv-store-grpc UNKgJ4N: 126/126 rounds carried
+                    # tool_use, 0 text-only, 0 literal [TASK_COMPLETE], while
+                    # 29 rounds' thinking said "emit the marker now, text-only".
+                    _endgame_rounds += 1
+                    _release = (
+                        self.ENDGAME_RELEASE_EVERY > 0
+                        and _endgame_rounds % self.ENDGAME_RELEASE_EVERY == 0
+                    )
+                    if not _release:
+                        self._force_tool_next = True
+                        self._thinking_cap_override = 3000
+                    else:
+                        d.display.warn(
+                            "Endgame force_tool RELEASED for this round — a "
+                            "text-only reply (marker) is a legal completion "
+                            "again; use it if the work is done."
+                        )
 
                 # Guard reset happens per-turn (at line 101), not per-iteration
                 d.judge.reset_turn()
