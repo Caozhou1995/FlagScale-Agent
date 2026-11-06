@@ -66,6 +66,65 @@ class WebFetchTool(Tool):
     def __init__(self, timeout: int = 30, proxies: dict = None):
         self._timeout = timeout
         self._proxies = proxies
+        # §4.1 change 3 — failure memory, NOT a refusal. The plan asked for a
+        # hard "2nd attempt on the same URL is forbidden" rule; the ruling was
+        # to remind on the FIRST failure instead of ever blocking. So this only
+        # records how many times each URL has failed in this tool instance, and
+        # the message says "you have tried this exact URL N times" so the agent
+        # sees its own repetition. It can still retry — sometimes a 502 really
+        # is transient — but it can no longer retry *unaware*.
+        self._fail_counts: dict[str, int] = {}
+
+    def _note_failure(self, url: str) -> str:
+        """Count failures per URL and return the repetition reminder.
+
+        §4.1 change 3, per the ruling: remind on the FIRST failure, never block.
+        The message states the count and the three axes to change (domain,
+        scheme, mirror) — what it does not do is forbid the retry.
+        """
+        n = self._fail_counts.get(url, 0) + 1
+        self._fail_counts[url] = n
+        # §4.1 change 4 — offline degradation. The unit that matters is not one
+        # URL failing but the DISTINCT-HOST count: eight R4 runs burned their
+        # budget probing domain after domain, each failure individually
+        # reasonable, the aggregate obviously hopeless. Three distinct hosts
+        # down is the point where "the network is not going to give me this
+        # fact" becomes the better hypothesis, and the run should switch to
+        # proving the answer without it.
+        hosts = {
+            u.split("//", 1)[-1].split("/", 1)[0]
+            for u in self._fail_counts
+        }
+        offline = ""
+        if len(hosts) >= 3:
+            offline = (
+                f"\n\n[web_fetch] {len(hosts)} DISTINCT hosts have now failed in "
+                f"this session. Treat external reachability as unavailable for "
+                f"this task and switch to proving the answer WITHOUT the "
+                f"network: use what the environment already holds (installed "
+                f"packages and their docs, local data files, load_knowledge / "
+                f"memory), derive the fact from first principles and state the "
+                f"assumption, and if a value genuinely cannot be established, "
+                f"write it as NOT VERIFIED with the reasoning shown. Continuing "
+                f"to probe more domains is the most expensive way to learn "
+                f"nothing."
+            )
+        if n == 1:
+            return (
+                f"\n\n[web_fetch] This exact URL has now FAILED {n} time in this "
+                f"session. If the next attempt fails too, do not keep re-issuing "
+                f"it unchanged — change one axis: a different domain for the same "
+                f"fact, a different scheme, or a mirror/archive endpoint. Repeating "
+                f"one shape is how a run burns its budget without learning anything."
+                + offline
+            )
+        return (
+            f"\n\n[web_fetch] This exact URL has now FAILED {n} times unchanged. "
+            f"Retrying it again is very unlikely to work. Change one axis: domain "
+            f"/ scheme / mirror. If all of those are exhausted, fall back to an "
+            f"offline source, or state the fact as NOT VERIFIED and move on."
+            + offline
+        )
 
     def execute(self, **kwargs) -> str:
         url = kwargs["url"]
@@ -94,6 +153,26 @@ class WebFetchTool(Tool):
             # tunnel refused NEB → agent concluded "Network is blocked" and
             # never tried a diagnostic again).
             code = e.response.status_code if e.response is not None else "?"
+            if code in (500, 502, 503, 504):
+                # A 5xx from a proxy/front-end is the proxy FAILING to reach the
+                # destination, not the site refusing us. Telling the agent "the
+                # site refused you" here is what keeps it retrying the same dead
+                # path; the whole point of §4.1 change 1 is that these two
+                # classes have opposite fixes. (protein-assembly burn: a dozen
+                # domains "failed" until ProxyHandler({}) turned 500/502 into
+                # 200 and returned the real rcsb/uniprot sequences.)
+                return (
+                    f"[WEB_FETCH_UPSTREAM_{code}] {url} came back HTTP {code} from "
+                    f"an intermediary. This is most often the PROXY failing to "
+                    f"reach the destination, not the site refusing you. Also "
+                    f"try the same URL WITHOUT the proxy, i.e. bypass it inside "
+                    f"the interpreter: requests.get(url, proxies={{}}, "
+                    f"timeout=20) (or urllib with "
+                    f"urllib.request.ProxyHandler({{}}) + build_opener). If the "
+                    f"bypassed call returns 200, the proxy was the only problem. "
+                    f"A 5xx is NOT 'network is blocked' and NOT a tool error."
+                    + self._note_failure(url)
+                )
             return (
                 f"[WEB_FETCH_HTTP_{code}] {url} is REACHABLE but refused this "
                 f"request (HTTP {code}). The network path works; this host is "
@@ -104,6 +183,7 @@ class WebFetchTool(Tool):
                 f"domain (e.g. pypi mirror) to separate site-block from "
                 f"network-block, (4) check whether a local copy of the fact "
                 f"exists (installed package docs, load_knowledge)."
+                + self._note_failure(url)
             )
         except requests.exceptions.ProxyError as e:
             return (
@@ -114,6 +194,13 @@ class WebFetchTool(Tool):
                 f"whether a known-good destination passes through the same "
                 f"proxy, (3) try a destination the proxy whitelists, or use "
                 f"an offline source for the fact."
+                + self._note_failure(url)
+                + "\n\n[web_fetch] This refusal came from the PROXY, not the "
+                  "site — a proxy-bypass form is worth trying before giving up "
+                  "on the fact: requests.get(url, proxies={}, timeout=20), or "
+                  "urllib.request.ProxyHandler({}) + build_opener. (Measured: a "
+                  "proxy that 500/502s the tunnel returns 200 on bypass and "
+                  "answers with the real authoritative content.)"
             )
         except requests.RequestException as e:
             msg = (
@@ -129,7 +216,7 @@ class WebFetchTool(Tool):
             )
             if not self._proxies and _is_network_error(str(e)):
                 msg += _PROXY_HINT
-            return msg
+            return msg + self._note_failure(url)
 
         # Read response with size limit
         try:
