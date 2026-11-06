@@ -132,11 +132,19 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         action = arguments.get("action", "")
         job_id = arguments.get("job_id", "")
         summary = action or "?"
-        if job_id:
+        if action == "wait_any":
+            ids = arguments.get("job_ids") or []
+            if isinstance(ids, list) and ids:
+                summary += f" {len(ids)} job(s)"
+        elif job_id:
             summary += f" {job_id}"
-        if action == "wait":
+        if action in ("wait", "wait_any"):
             timeout = arguments.get("timeout", 60)
-            summary += f" (≤{timeout}s)"
+            early = arguments.get("return_early_after")
+            if early is not None:
+                summary += f" (≤{timeout}s, early {early}s)"
+            else:
+                summary += f" (≤{timeout}s)"
         return summary
     if tool_name == "load_knowledge":
         doc = arguments.get("doc", "")

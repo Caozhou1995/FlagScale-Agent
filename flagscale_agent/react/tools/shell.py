@@ -1457,8 +1457,10 @@ class ShellJobsTool(Tool):
         "List, poll, wait on, or kill background shell jobs (started with "
         "shell(background=true) or auto-detached from a long healthy command). "
         "Use 'poll' to read incremental output without blocking, 'wait' to block "
-        "until a job finishes (bounded by timeout), 'list' to see all jobs, and "
-        "'kill' to terminate one."
+        "until a job finishes (bounded by timeout), 'wait_any' to block only until "
+        "the FIRST of several jobs finishes, 'list' to see all jobs, and 'kill' to "
+        "terminate one. Pass return_early_after to cap how long you are willing to "
+        "sit idle while still allowing a long timeout for a job that needs it."
     )
     def __init__(self, health_judge_fn=None, history_fn=None, resources_fn=None):
         # Optional LLM health judge (same one ShellTool uses). When provided,
@@ -1475,12 +1477,14 @@ class ShellJobsTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "poll", "wait", "kill"],
+                "enum": ["list", "poll", "wait", "wait_any", "kill"],
                 "description": (
                     "list: show all background jobs and their status. "
                     "poll: return output appended since the last poll (does NOT "
                     "block). wait: block until the job exits or `timeout` seconds "
-                    "elapse. kill: terminate the job."
+                    "elapse. wait_any: block until the FIRST of `job_ids` exits or "
+                    "`timeout` seconds elapse, then report every job's status. "
+                    "kill: terminate the job."
                 ),
             },
             "job_id": {
@@ -1490,11 +1494,30 @@ class ShellJobsTool(Tool):
                     "message. Required for poll/wait/kill; ignored for list."
                 ),
             },
+            "job_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "For action='wait_any': the jobs to watch. Returns as soon as "
+                    "ANY of them finishes; jobs still running stay in the registry."
+                ),
+            },
+            "return_early_after": {
+                "type": "integer",
+                "description": (
+                    "For action='wait'/'wait_any': return control after this many "
+                    "seconds EVEN IF the job is still running, keeping its handle "
+                    "in the registry so you can poll or wait again. This is the way "
+                    "to wait on a genuinely long job without going idle: it is not "
+                    "a failure and it does not cancel anything. Omit it for the old "
+                    "block-until-done-or-timeout behaviour."
+                ),
+            },
             "timeout": {
                 "type": "integer",
                 "description": (
-                    "For action='wait': max seconds to block before returning "
-                    "control (the job keeps running if still unfinished). "
+                    "For action='wait'/'wait_any': max seconds to block before "
+                    "returning control (the job keeps running if still unfinished). "
                     "Default 60. Keep this small and poll in a loop so you never "
                     "block on a single call for long."
                 ),
@@ -1653,6 +1676,57 @@ class ShellJobsTool(Tool):
             f"Output:\n{partial}"
         )
 
+    def _block_for(self, job, cap):
+        """Block up to `cap` seconds on ONE job, keeping the health tick alive.
+
+        Returns (finished, killed_text). `killed_text` is non-None when the
+        health monitor terminated the job mid-wait. This is the single place
+        the in-wait supervision loop lives, so `wait` and `wait_any` cannot
+        drift apart (and a hang is still caught inside ANY bounded wait).
+        """
+        deadline = time.time() + cap
+        # Cadence for the in-wait health tick: at most once per sampler
+        # interval, but no less often than every second so a fast hang
+        # is still caught within the bounded wait.
+        _tick_every = 1.0
+        _next_tick = time.time() + _tick_every
+        while time.time() < deadline:
+            if not job.running:
+                break
+            if time.time() >= _next_tick:
+                tick = self._health_tick(job)
+                if tick['kill'] and job.running:
+                    self._set_wait_hint(job, tick.get('activity', ''),
+                                         finished=False)
+                    return False, self._kill_unhealthy(job, tick['reason'])
+                # Surface live progress on the spinner so the wait line
+                # is not a frozen "🧵 shell_jobs wait" — the user sees
+                # the job's status, latest output, and health activity.
+                self._set_wait_hint(job, tick.get('activity', ''),
+                                    finished=False)
+                _next_tick = time.time() + _tick_every
+            time.sleep(min(1.0, max(0.1, deadline - time.time())))
+        return not job.running, None
+
+    @staticmethod
+    def _stop_sampler(job):
+        if job.health_sampler is not None:
+            try:
+                job.health_sampler.stop()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _coerce_sec(value):
+        """Positive int seconds, or None for absent/unparseable/non-positive."""
+        if value is None:
+            return None
+        try:
+            n = int(float(value))
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+
     def execute(self, **kwargs) -> str:
         action = kwargs.get("action", "")
         job_id = kwargs.get("job_id", "")
@@ -1662,6 +1736,15 @@ class ShellJobsTool(Tool):
         except (TypeError, ValueError):
             timeout = 60
 
+        # `return_early_after` caps how long we are willing to sit idle without
+        # cancelling anything: the job keeps running and keeps its handle. It is
+        # NOT a failure and NOT a shorter timeout — the difference is the reply,
+        # which tells the agent the handle survived so it can do other work and
+        # come back. Absent -> the historical block-until-done-or-timeout path,
+        # byte for byte.
+        early = self._coerce_sec(kwargs.get("return_early_after"))
+        cap = timeout if early is None else min(timeout, early)
+
         if action == "list":
             jobs = _JOB_REGISTRY.all()
             if not jobs:
@@ -1670,7 +1753,9 @@ class ShellJobsTool(Tool):
                 self._fmt_job_line(j) for j in jobs
             )
 
-        if action in ("poll", "wait", "kill"):
+        if action in ("poll", "wait", "wait_any", "kill"):
+            if action == "wait_any":
+                return self._wait_any(kwargs.get("job_ids"), cap, timeout, early)
             if not job_id:
                 return f"ERROR: action='{action}' requires a job_id."
             job = _JOB_REGISTRY.get(job_id)
@@ -1692,55 +1777,42 @@ class ShellJobsTool(Tool):
                 body = new_out if new_out.strip() else "(no new output since last poll)"
                 body = _truncate_output(body)
                 if not job.running:
-                    if job.health_sampler is not None:
-                        try:
-                            job.health_sampler.stop()
-                        except Exception:
-                            pass
+                    self._stop_sampler(job)
                     _JOB_REGISTRY.remove(job_id)
                     header += "  [finished — removed from registry]"
                 return f"{header}\n{body}{self._drain_job_events(job)}"
 
             if action == "wait":
-                deadline = time.time() + timeout
-                # Cadence for the in-wait health tick: at most once per sampler
-                # interval, but no less often than every second so a fast hang
-                # is still caught within the bounded wait.
-                _tick_every = 1.0
-                _next_tick = time.time() + _tick_every
-                while time.time() < deadline:
-                    if not job.running:
-                        break
-                    if time.time() >= _next_tick:
-                        tick = self._health_tick(job)
-                        if tick['kill'] and job.running:
-                            self._set_wait_hint(job, tick.get('activity', ''),
-                                                 finished=False)
-                            return self._kill_unhealthy(job, tick['reason'])
-                        # Surface live progress on the spinner so the wait line
-                        # is not a frozen "🧵 shell_jobs wait" — the user sees
-                        # the job's status, latest output, and health activity.
-                        self._set_wait_hint(job, tick.get('activity', ''),
-                                            finished=False)
-                        _next_tick = time.time() + _tick_every
-                    time.sleep(min(1.0, max(0.1, deadline - time.time())))
+                finished, killed = self._block_for(job, cap)
+                if killed is not None:
+                    return killed
                 job.t_out.join(timeout=0.5)
                 job.t_err.join(timeout=0.5)
                 header = self._fmt_job_line(job)
-                if job.running:
+                if not finished:
                     if job.health_note:
                         header += f"  🩺 {job.health_note}"
                     body = _truncate_output(job.new_output()) or "(still running)"
+                    if early is not None and early < timeout:
+                        # The whole point of the early return: the handle
+                        # SURVIVED, so the agent owes itself other work rather
+                        # than another blocking wait.
+                        return (
+                            f"{header}  [still running after {cap}s — returned "
+                            f"early on purpose, job NOT cancelled and still "
+                            f"registered as {job_id}]\n{body}\n"
+                            f"Do useful work now (prepare the dependent steps, "
+                            f"re-list the output constraints), then "
+                            f"`shell_jobs(action=\"poll\", job_id=\"{job_id}\")` "
+                            f"to check in without blocking."
+                            f"{self._drain_job_events(job)}"
+                        )
                     return (
                         f"{header}  [still running after {timeout}s wait]\n{body}\n"
                         f"Not finished yet. Poll again or wait more."
                         f"{self._drain_job_events(job)}"
                     )
-                if job.health_sampler is not None:
-                    try:
-                        job.health_sampler.stop()
-                    except Exception:
-                        pass
+                self._stop_sampler(job)
                 new_out = _truncate_output(job.new_output())
                 _JOB_REGISTRY.remove(job_id)
                 return (
@@ -1749,11 +1821,7 @@ class ShellJobsTool(Tool):
                 )
 
             if action == "kill":
-                if job.health_sampler is not None:
-                    try:
-                        job.health_sampler.stop()
-                    except Exception:
-                        pass
+                self._stop_sampler(job)
                 if job.running:
                     try:
                         job.proc.kill()
@@ -1765,5 +1833,81 @@ class ShellJobsTool(Tool):
 
         return (
             f"ERROR: unknown action '{action}'. "
-            f"Use one of: list, poll, wait, kill."
+            f"Use one of: list, poll, wait, wait_any, kill."
         )
+
+    def _wait_any(self, job_ids, cap, timeout, early):
+        """Block until the FIRST of `job_ids` finishes (or `cap` elapses).
+
+        Supervising several jobs is the normal case when you fan work out; a
+        per-job `wait` forces you to pick one and go blind on the rest. Jobs
+        still running at return KEEP their handles, so nothing is lost.
+        """
+        if not job_ids:
+            return "ERROR: action='wait_any' requires a non-empty `job_ids` list."
+        if isinstance(job_ids, str):
+            job_ids = [job_ids]
+        jobs, missing = [], []
+        for jid in job_ids:
+            job = _JOB_REGISTRY.get(jid)
+            (jobs if job is not None else missing).append(job if job is not None else jid)
+        if missing:
+            known = ", ".join(j.job_id for j in _JOB_REGISTRY.all()) or "(none)"
+            return (f"ERROR: no such job(s) {missing}. Known jobs: {known}")
+
+        deadline = time.time() + cap
+        _tick_every = 1.0
+        _next_tick = time.time() + _tick_every
+        while time.time() < deadline:
+            if any(not j.running for j in jobs):
+                break
+            if time.time() >= _next_tick:
+                for j in jobs:
+                    tick = self._health_tick(j)
+                    if tick['kill'] and j.running:
+                        return self._kill_unhealthy(j, tick['reason'])
+                _next_tick = time.time() + _tick_every
+            time.sleep(min(1.0, max(0.1, deadline - time.time())))
+
+        finished, still = [], []
+        for j in jobs:
+            (finished if not j.running else still).append(j)
+
+        lines = []
+        for j in finished:
+            j.t_out.join(timeout=0.5)
+            j.t_err.join(timeout=0.5)
+            self._stop_sampler(j)
+            out = _truncate_output(j.new_output())
+            _JOB_REGISTRY.remove(j.job_id)
+            lines.append(
+                f"{self._fmt_job_line(j)}  [FINISHED — removed from registry]\n{out}"
+                f"{self._drain_job_events(j)}"
+            )
+        for j in still:
+            note = f"  🩺 {j.health_note}" if j.health_note else ""
+            lines.append(
+                f"{self._fmt_job_line(j)}{note}  [still running — handle kept]"
+            )
+
+        if finished:
+            head = (
+                f"{len(finished)} of {len(jobs)} job(s) finished — stopping here "
+                f"because that is what 'wait_any' means. The remaining "
+                f"{len(still)} keep running under their handles."
+            )
+        elif early is not None and early < timeout:
+            head = (
+                f"No job finished within {cap}s — returned early on purpose. "
+                f"Every job is still running and NOTHING was cancelled."
+            )
+        else:
+            head = f"No job finished within {timeout}s."
+        nxt = ""
+        if still:
+            nxt = (
+                "\nNext: do useful work now, then "
+                "`shell_jobs(action=\"poll\", job_id=...)` to check in without "
+                "blocking, or another `wait_any` when you are ready to join."
+            )
+        return head + "\n" + "\n".join(lines) + nxt

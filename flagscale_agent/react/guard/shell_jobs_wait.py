@@ -24,12 +24,14 @@ re-evaluates frequently.
 
 This guard blocks any `wait` with timeout > 60s and points the agent back at the
 right pattern: a SHORT bounded wait (<=60s) in a loop with real work between
-checks, or a non-blocking `poll`. It is overridable: when every dependent step is
-already written and staged AND the output contract is confirmed, a single longer
-join can be justified with an _override_reason.
+checks, a non-blocking `poll`, or — for a genuinely long job — the SAME wait
+with `return_early_after` set, which returns control at that cap and KEEPS the
+job handle. It is overridable: when every dependent step is already written and
+staged AND the output contract is confirmed, a single longer join can be
+justified with an _override_reason.
 
-Only `action="wait"` is affected. `poll` (non-blocking), `list`, and `kill` are
-never touched.
+Only `wait` / `wait_any` are affected. `poll` (non-blocking), `list`, and `kill`
+are never touched.
 """
 
 from __future__ import annotations
@@ -40,6 +42,10 @@ from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 # Default/allowed maximum bounded wait. A wait at or below this keeps the agent in
 # the supervision loop; above it, the agent is effectively leaving the room.
 _MAX_WAIT_SEC = 60
+
+# Cap suggested when a long wait DOES carry `return_early_after` — the message
+# must name a concrete number the agent can paste, not a vague "shorter".
+_SUGGESTED_EARLY_SEC = 30
 
 
 def _coerce_int(value) -> int | None:
@@ -57,11 +63,19 @@ _MESSAGE = (
     "whole duration — synchronous blocking, not concurrency. Backgrounding exists "
     "to OVERLAP a job with other useful work.\n"
     "\n"
-    "Prefer, in order:\n"
-    "  1. `poll` (non-blocking) — read incremental output, return immediately, keep "
-    "doing real work.\n"
-    "  2. A SHORT bounded `wait` (timeout <= {max}) in a loop — check in, do other "
-    "work between checks; you stay supervising and can react to trouble early.\n"
+    "Prefer, in order — these are exact calls, copy one:\n"
+    "  1. `shell_jobs(action=\"poll\", job_id=\"job1\")` — non-blocking, reads "
+    "incremental output, returns immediately so you keep doing real work.\n"
+    "  2. `shell_jobs(action=\"wait\", job_id=\"job1\", timeout={max})` — a SHORT "
+    "bounded wait in a loop: check in, do other work between checks, stay "
+    "supervising so you can react to trouble early.\n"
+    "  3. `shell_jobs(action=\"wait\", job_id=\"job1\", timeout=600, "
+    "return_early_after={early})` — for a genuinely long job: same wait, but it "
+    "returns control after {early}s and the job KEEPS its handle. Nothing is "
+    "cancelled and it is not a failure.\n"
+    "  4. `shell_jobs(action=\"wait_any\", job_ids=[\"job1\",\"job2\"], "
+    "timeout={max})` — when several jobs are in flight: returns as soon as ANY "
+    "finishes, the rest keep running.\n"
     "\n"
     "While the job runs, PREPARE the dependent steps now: write the post-processing "
     "/ eval / conversion script, re-list every output CONSTRAINT (size, format, path, "
@@ -85,7 +99,7 @@ class ShellJobsWaitGuard(Guard):
             return None
 
         action = ctx.tool_args.get("action")
-        if action != "wait":
+        if action not in ("wait", "wait_any"):
             return None
 
         timeout = _coerce_int(ctx.tool_args.get("timeout"))
@@ -93,8 +107,17 @@ class ShellJobsWaitGuard(Guard):
         if timeout is None or timeout <= _MAX_WAIT_SEC:
             return None
 
+        # A long wait that CARRIES return_early_after is exactly the behaviour
+        # this guard exists to produce: it returns control at that cap and keeps
+        # the job handle. Only block a long wait that would sit idle the whole
+        # time, i.e. one with no early cap (or a cap >= the blocking timeout,
+        # which is the same thing under another name).
+        early = _coerce_int(ctx.tool_args.get("return_early_after"))
+        if early is not None and 0 < early < timeout:
+            return None
+
         return GuardVerdict.block(
-            _MESSAGE.format(max=_MAX_WAIT_SEC),
+            _MESSAGE.format(max=_MAX_WAIT_SEC, early=_SUGGESTED_EARLY_SEC),
             reason="long_blocking_wait",
             category="shell_jobs_wait",
         )
