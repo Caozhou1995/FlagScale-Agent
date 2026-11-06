@@ -197,6 +197,9 @@ class PlanUpdateTool(Tool):
 
     def __init__(self, task_plan):
         self._plan = task_plan
+        # Step id this call touched, set by the branch that touched it, so the
+        # delta receipt can name what changed instead of reprinting the plan.
+        self._last_touched = None
 
     def execute(self, **kwargs) -> str:
         action = kwargs["action"]
@@ -206,22 +209,27 @@ class PlanUpdateTool(Tool):
                 if not thinking or not str(thinking).strip():
                     return "ERROR: thinking text required for set_thinking."
                 self._plan.set_thinking(str(thinking))
+                # set_thinking exists to put the model IN VIEW — a delta that
+                # omits it answers a different question.
                 return self._plan.summary() + "\n\n" + _THINKING_ECHO
             if action == "step_done":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
                     return "ERROR: step_id required for step_done (integer or 'step_N' format)."
                 verification = kwargs.get("verification", [])
+                self._last_touched = step_id
                 self._plan.update_step(step_id, "done", kwargs.get("notes", ""), verification=verification)
             elif action == "step_doing":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
                     return "ERROR: step_id required for step_doing (integer or 'step_N' format)."
+                self._last_touched = step_id
                 self._plan.update_step(step_id, "doing", kwargs.get("notes", ""))
             elif action == "step_skip":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
                     return "ERROR: step_id required for step_skip (integer or 'step_N' format)."
+                self._last_touched = step_id
                 self._plan.skip_step(step_id, kwargs.get("notes", ""))
             elif action == "add_steps":
                 new_steps = kwargs.get("new_steps", [])
@@ -229,6 +237,7 @@ class PlanUpdateTool(Tool):
                     return "ERROR: new_steps required for add_steps."
                 after = _parse_step_id(kwargs.get("after_step_id"))
                 self._plan.add_steps(new_steps, after)
+                self._last_touched = after
             elif action == "update_acceptance":
                 step_id = _parse_step_id(kwargs.get("step_id"))
                 if not step_id:
@@ -236,7 +245,16 @@ class PlanUpdateTool(Tool):
                 acceptance = kwargs.get("acceptance", [])
                 if not acceptance:
                     return "ERROR: acceptance required for update_acceptance."
+                self._last_touched = step_id
                 self._plan.update_acceptance(step_id, acceptance)
+                # The caller just WROTE these criteria — echoing the stored list
+                # is the confirmation it needs, and it is the delta, not the plan.
+                out = [
+                    f"Acceptance updated for step {step_id} "
+                    f"({len(acceptance)} item(s)):"
+                ]
+                out.extend(f"  • {a}" for a in acceptance)
+                return "\n".join(out)
             elif action == "predict":
                 # INSTRUMENT 3 (pre-registration): record the expected outcome
                 # BEFORE the run. Rejected without a statement because an empty
@@ -323,9 +341,10 @@ class PlanUpdateTool(Tool):
                     )
                 return "\n".join(out)
             elif action == "complete":
-                self._plan.complete()
+                self._closed_plan = self._plan.complete()
             elif action == "abandon":
                 self._plan.abandon(kwargs.get("notes", ""))
+                self._closed_plan = {"title": "", "status": "abandoned", "steps": []}
             elif action == "deactivate":
                 plan = self._plan.deactivate()
                 if not plan:
@@ -338,6 +357,7 @@ class PlanUpdateTool(Tool):
                 plan = self._plan.reactivate(plan_id)
                 if not plan:
                     return f"ERROR: Could not reactivate plan '{plan_id}'. Not found or not paused."
+                # reactivate exists to show the plan you just resumed.
                 return self._plan.summary()
             else:
                 return f"ERROR: Unknown action '{action}'."
@@ -348,6 +368,62 @@ class PlanUpdateTool(Tool):
             if thinking and str(thinking).strip():
                 self._plan.set_thinking(str(thinking))
                 echo = "\n\n" + _THINKING_ECHO
-            return self._plan.summary() + echo
+            return self._delta_receipt(kwargs.get("action", ""), echo)
         except Exception as e:
             return f"ERROR: {e}"
+
+    def _delta_receipt(self, action: str, echo: str = "") -> str:
+        """What this call CHANGED, not a reprint of the whole plan.
+
+        Every mutating branch used to end in `return self._plan.summary()`,
+        which reprinted every step's title, acceptance, evidence and notes.
+        Measured on a 32-step plan that was 254,400 chars per receipt — the
+        plan's own state, returned to the caller that just wrote it, at a cost
+        paid on every single plan_update. The state is not lost: summary() is
+        still what plan_status returns, and it is the deliberate read-back path.
+        """
+        plan = self._plan.get_active()
+        closed = getattr(self, "_closed_plan", None)
+        if not plan:
+            # complete()/abandon() clear the active pointer, but the caller
+            # still needs to know WHICH plan it just closed and how it ended.
+            if closed:
+                steps = closed.get("steps", [])
+                done = sum(1 for s in steps if s.get("status") in ("done", "skipped"))
+                return (
+                    f"Plan '{closed.get('title', '')}' is now "
+                    f"{closed.get('status', '')}. {action} applied.\n"
+                    f"Progress: {done}/{len(steps)} — no active plan left.\n"
+                    "plan_status() shows nothing active; the closed plan remains "
+                    "on disk."
+                ) + echo
+            return "No active plan." + echo
+        steps = plan.get("steps", [])
+        done = sum(1 for s in steps if s.get("status") in ("done", "skipped"))
+        icons = {"pending": " ", "doing": "→", "done": "✓", "skipped": "-", "blocked": "!"}
+        out = [
+            f"Plan '{plan.get('title', '')}' [{plan.get('status', '')}] — "
+            f"{action} applied."
+        ]
+        touched = self._last_touched
+        if touched:
+            s = next((x for x in steps if x.get("id") == touched), None)
+            if s is not None:
+                out.append(
+                    f"  Step {s['id']}. [{icons.get(s.get('status'), '?')}] {s['title']}"
+                )
+                for v in (s.get("verification") or [])[:3]:
+                    out.append(f"    ✓ {v}")
+                if len(s.get("verification") or []) > 3:
+                    out.append(f"    (+{len(s['verification']) - 3} more evidence)")
+        out.append(f"Progress: {done}/{len(steps)}")
+        nxt = next((s for s in steps if s.get("status") in ("pending", "doing")), None)
+        if nxt is not None:
+            out.append(f"Next: Step {nxt['id']}. {nxt['title']}")
+        else:
+            out.append("No open steps left.")
+        out.append(
+            "Full plan on demand: plan_status() — one step verbatim: "
+            "plan_status(step_id=N)."
+        )
+        return "\n".join(out) + echo

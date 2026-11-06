@@ -23,15 +23,33 @@ class PlanStatusTool(Tool):
     description = (
         "Show the current task plan and progress. "
         "Use at the start of a turn to check where you left off, "
-        "or after completing steps to see what's next."
+        "or after completing steps to see what's next. Closed steps render as "
+        "one line (title + first evidence) — pass step_id to read ONE step "
+        "verbatim, including its full notes."
     )
     parameters = {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "step_id": {
+                "type": "integer",
+                "description": (
+                    "Optional. Read this one step in full (acceptance, all "
+                    "evidence, full untruncated notes)."
+                ),
+            }
+        },
     }
 
     def __init__(self, task_plan):
         self._plan = task_plan
 
     def execute(self, **kwargs) -> str:
-        return self._plan.summary()
+        step_id = kwargs.get("step_id")
+        if step_id in (None, ""):
+            return self._plan.summary()
+        try:
+            return self._plan.summary(step_id=int(step_id))
+        except (TypeError, ValueError):
+            return f"ERROR: step_id must be an integer, got {step_id!r}."
+        except Exception as e:
+            return f"ERROR: {e}"

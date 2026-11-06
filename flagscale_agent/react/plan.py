@@ -44,6 +44,11 @@ STATUS_ICONS = {
     "blocked": "!",
 }
 
+# Max chars of a closed step's FIRST verification line kept in a compact
+# render. Long enough to identify what was checked, short enough that 32
+# closed steps stay inside one screen; the full text stays on disk.
+_CLOSED_EVIDENCE_MAX = 160
+
 
 def _coerce_sec(value) -> Optional[float]:
     """Coerce a planning-time seconds estimate to a positive float, else None.
@@ -1481,11 +1486,43 @@ class TaskPlan:
                 )
         return lines
 
-    def summary(self) -> str:
+    def summary(self, compact: bool = True, step_id: Optional[int] = None) -> str:
         plan = self.get_active()
         if not plan:
             return "No active plan."
-        return self._format_plan(plan)
+        if step_id is not None:
+            return self._one_step_full(plan, step_id)
+        return self._format_plan(plan, compact=compact)
+
+    def _one_step_full(self, plan: dict, step_id: int) -> str:
+        """Full untruncated record of ONE step — the recovery path for notes.
+
+        Compact renders drop a closed step's notes; this is where they are read
+        back verbatim, so nothing is lost by the slimming.
+        """
+        s = self._find_step(plan, step_id)
+        icon = STATUS_ICONS.get(s["status"], " ")
+        out = [f"Step {s['id']}. [{icon}] {s['title']}  ({s['status']})"]
+        est = s.get("est_sec")
+        actual = s.get("actual_sec")
+        if est or actual:
+            out.append(f"  time: est {_fmt_sec(est)} / act {_fmt_sec(actual)}")
+        acceptance = s.get("acceptance") or []
+        if acceptance:
+            out.append("  Acceptance:")
+            out.extend(f"    • {a}" for a in acceptance)
+        verification = s.get("verification") or []
+        if verification:
+            out.append("  Evidence:")
+            out.extend(f"    ✓ {v}" for v in verification)
+        notes = s.get("notes") or ""
+        if notes:
+            out.append("  Notes (full):")
+            out.extend(f"    {n}" for n in notes.split("\n"))
+        deps = s.get("depends_on")
+        if deps:
+            out.append(f"  depends_on: {deps}")
+        return "\n".join(out)
 
     def _forbidden_lines(self, plan: dict) -> list:
         """Render the agent's own written prohibitions into the plan context.
@@ -1588,7 +1625,44 @@ class TaskPlan:
             + "\n</active-plan>"
         )
 
-    def _format_plan(self, plan: dict) -> str:
+    def _closed_step_line(self, s: dict) -> str:
+        """ONE line for a done/skipped step: identity + its evidence, no notes.
+
+        A closed step earns its place in a render for exactly two reasons: the
+        agent must know it was closed, and it must know WHY it was allowed to
+        close (its verification). Its running commentary — the notes — is a
+        draft, already served its purpose, and is recoverable verbatim from
+        disk via plan_status(step_id=...); reprinting it every turn is what
+        made a 32-step plan cost 199KB per turn. Evidence is NOT droppable:
+        it is the only record of what was checked before the close.
+        """
+        icon = STATUS_ICONS.get(s["status"], " ")
+        line = f"  {s['id']}. [{icon}] {s['title']}"
+        est = s.get("est_sec")
+        actual = s.get("actual_sec")
+        if est or actual:
+            bits = []
+            if est:
+                bits.append(f"est {_fmt_sec(est)}")
+            if actual is not None:
+                bits.append(f"act {_fmt_sec(actual)}")
+                if est:
+                    drift = actual - est
+                    bits.append(
+                        f"{'over' if drift > 0 else 'under'} {_fmt_sec(abs(drift))}"
+                    )
+            line += f"  ⏱ {' / '.join(bits)}"
+        verification = s.get("verification") or []
+        if verification:
+            first = verification[0].strip().replace("\n", " ")
+            if len(first) > _CLOSED_EVIDENCE_MAX:
+                first = first[:_CLOSED_EVIDENCE_MAX].rstrip() + " …"
+            line += f"  Evidence: ✓ {first}"
+            if len(verification) > 1:
+                line += f" (+{len(verification) - 1} more)"
+        return line
+
+    def _format_plan(self, plan: dict, compact: bool = True) -> str:
         lines = [f"Plan: {plan['title']} [{plan['status']}]"]
         ledger = self._time_ledger_lines(plan)
         if ledger:
@@ -1605,6 +1679,9 @@ class TaskPlan:
             for t_line in thinking.split("\n"):
                 lines.append(f"     {t_line}")
         for s in plan["steps"]:
+            if compact and s["status"] in ("done", "skipped"):
+                lines.append(self._closed_step_line(s))
+                continue
             icon = STATUS_ICONS.get(s["status"], " ")
             line = f"  {s['id']}. [{icon}] {s['title']}"
             est = s.get("est_sec")

@@ -2179,11 +2179,40 @@ class WorkerAgent:
             icon = icons.get(s.get("status", "pending"), "?")
             title = s.get("title", "") or s.get("description", "")
             notes = s.get("notes", "")
-            line = f"  [{icon}] Step {s.get('id', '?')}: {title}"
-            if notes:
-                line += f"\n      notes: {notes}"
+            status = s.get("status", "pending")
+            if status in ("done", "skipped"):
+                # A closed step carries identity + its evidence, never its notes:
+                # per-turn, 100% of this block's cost was closed-step notes
+                # (199KB of 205KB on a 32-step plan) while the notes' purpose
+                # had already been served. Evidence stays — it is the only
+                # record of what was checked before the close, and the full
+                # notes are recoverable with plan_status(step_id=N).
+                icon = icons.get(s.get("status", "pending"), "?")
+                line = f"  [{icon}] Step {s.get('id', '?')}: {title}"
+                # Identity line only (never the closed step's notes), then its
+                # evidence — the same shape every other step line uses here.
+                ev = s.get("verification") or []
+                if ev:
+                    first = ev[0].strip().replace("\n", " ")
+                    from flagscale_agent.react.plan import _CLOSED_EVIDENCE_MAX
+
+                    if len(first) > _CLOSED_EVIDENCE_MAX:
+                        first = first[:_CLOSED_EVIDENCE_MAX].rstrip() + " …"
+                    line += f"  Evidence: ✓ {first}"
+                    if len(ev) > 1:
+                        line += f" (+{len(ev) - 1} more)"
+            else:
+                line = f"  [{icon}] Step {s.get('id', '?')}: {title}"
+                if notes:
+                    line += f"\n      notes: {notes}"
+                # The acceptance criteria are what this step will be judged
+                # against — injecting them ONLY while the step is live is the
+                # other half of the slimming: before, a live step's criteria
+                # were never shown while a closed step's commentary was.
+                for item in (s.get("acceptance") or []):
+                    line += f"\n      accept: {item}"
             lines.append(line)
-            if s.get("status") in ("pending", "doing") and current_step is None:
+            if status in ("pending", "doing") and current_step is None:
                 current_step = s
         lines.append("</active-plan>")
         # Add explicit advancement instruction
