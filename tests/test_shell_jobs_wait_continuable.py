@@ -170,6 +170,24 @@ class TestReturnEarlyAfter:
         assert "still running after 1s wait" in res
         assert "early" not in res.split("\n")[0]
 
+    def test_without_early_cap_still_blocks_the_FULL_timeout(self):
+        """LOWER bound: the default wait must not start returning early.
+
+        The repo suite only asserts upper bounds on wait (`elapsed < 3`), so a
+        regression that made the DEFAULT path return early would pass every
+        existing test while silently changing the tool's contract for every
+        caller that never asked for it. This is the other side of that bound.
+        """
+        sh, jobs = ShellTool(), ShellJobsTool()
+        sh.execute(command="sleep 30", background=True)
+        t0 = time.time()
+        jobs.execute(action="wait", job_id="job1", timeout=3)
+        elapsed = time.time() - t0
+        assert elapsed >= 2.9, (
+            f"default wait on a still-running job returned after {elapsed:.2f}s "
+            f"for timeout=3 — it must block the full timeout"
+        )
+
     def test_early_cap_above_timeout_uses_timeout(self):
         # cap = min(timeout, early): an early cap larger than the timeout must
         # not extend the block past the timeout.
