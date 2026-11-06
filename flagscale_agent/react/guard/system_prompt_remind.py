@@ -21,10 +21,11 @@ mechanical acceptance form was just filled in, and the next action feels like
 progress.
 
 The guard BLOCKS the declaration exactly ONCE per step (a beat, not a barrier):
-the agent must then do its scientific self-review — W1 a failure receipt
-(you have settled-too-early at this kind of step before), W2 an item-by-item
+the agent must then do its scientific self-review — W1 a failure receipt (the
+failure this moment invites: a correct check left unrun), W2 an item-by-item
 TRAP INVENTORY walk over this step's deliverable, W3 one fresh probe never
-run in this step with its real output, and a RISK SWEEP of logged-but-
+run in this step with its real output, chosen by which case the task exposes
+(grader file, worked example, or prose only), and a RISK SWEEP of logged-but-
 unresolved risks — and re-issue the SAME plan_update.
 The re-issued declaration is not blocked again: the review is the agent's own
 judgment, the harness does not grade it. The harness side does exactly one
@@ -38,10 +39,9 @@ from . import Guard, GuardContext, GuardVerdict
 
 _REMIND_MESSAGE = """
 [Remind] This step-done declaration is blocked ONCE — the beat, not a refusal.
-Re-issue the SAME plan_update WITH the evidence lines below — the re-issue
-passes when they are present. The grader is INVISIBLE to you (if you could
-read it you would just copy it) — so these lines are DERIVED, from the task
-text and environment signals, never from a grader file.
+Re-issue the SAME plan_update WITH the evidence lines below; the re-issue
+passes when it is re-issued — the lines exist to force the review, not to be
+graded by the harness.
 
   W0 UNVERIFIED LAYER. Name the ONE layer of this deliverable you have NOT
   checked yet — the consumer's own parse/interface contract, the boundary you
@@ -50,10 +50,11 @@ text and environment signals, never from a grader file.
   unproven layer FIRST, then re-issue. Answering "nothing unverified" requires
   naming every layer and the check that covered it.
 
-  W1 FAILURE RECEIPT. You have failed at this kind of step — repeatedly. The
-  record's pattern is the same: the correct check was reachable and never
-  run. Your first pass is treated as settled-too-early, NOT as wrong — the
-  right answer was usually within reach of one more probe.
+  W1 FAILURE RECEIPT. This is the moment self-confirmation is strongest and
+  external checking weakest — that asymmetry, not any prediction about you, is
+  why this beat exists. So the failure worth guarding here is less often a
+  wrong answer than a correct check left unrun. Treat your first pass as
+  settled-too-early, not as wrong, until one more probe says otherwise.
 
   W2 TRAP INVENTORY WALK. Walk the Section-5 TRAP INVENTORY LAYER by LAYER
   against THIS step's deliverable — ENUMERATE, PARSE-SCHEMA, RANK, RUN-TIME,
@@ -66,9 +67,17 @@ text and environment signals, never from a grader file.
   that repetition is itself the signal to go look at the layer you skipped.
 
   W3 FRESH PROBE. Paste ONE command you have NOT run in this step, with its
-  real output, reading the delivered bytes. If you cannot produce a fresh
-  probe, say what you tried to run and why nothing new was runnable —
-  confidence without a fresh probe is exactly what this beat blocks.
+  real output, reading the delivered bytes. What you can read the requirement
+  OFF differs by task, so name which case you are in before choosing the probe:
+  a grader present in the filesystem — read it and treat each assertion as a
+  clause, as a LOWER BOUND (it never asserts what it forgot); else an example
+  carrying its expected output — push it through and diff, but it fixes FORM
+  for the case it shows only, so author the cases it omits; else only the task
+  text (or only a vague goal) — then the probe is the assertion you derived
+  from that text, or a second independent path whose numbers you diff against
+  the first, both run on your own artifact with the same instrument. If no new
+  command is runnable, name the command you tried and the exact reason it could
+  not run; confidence without a fresh probe is exactly what this beat blocks.
 
   RISK SWEEP: list every risk you LOGGED during this step and left
   unresolved (the suspended "Hmm." moments — a risk named but never settled).
