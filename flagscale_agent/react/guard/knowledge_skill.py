@@ -19,13 +19,23 @@ Part of the three-phase guard framework:
   • MIDDLE — this guard: CONTINUOUS research nudges throughout the task.
   • END    — VerificationGuard: completion-time verification.
 
-Logic (MIDDLE phase only):
+Logic (MIDDLE phase only, ADVISORY ONLY — this guard never blocks):
 - Track tool calls since last knowledge/skill/web_fetch load.
 - Every 30 calls without a research load → inject a reminder.
-- Every 80 calls without a research load → block (overridable).
+- On the call that crosses 80 calls → inject an ESCALATED reminder once
+  (the 30-call rhythm resumes afterwards).
 - After any research load (web_fetch/load_knowledge/load_skill), inject an
   information-gain self-check (three-state: ACQUIRED / MISSING / SELF-FILLABLE).
 - Meta tools (evict, plan, memory) don't count toward the threshold.
+
+The 80-call threshold used to return GuardVerdict.block(). It is an inject now:
+the gate still fires at the same call count, but "you have not consulted an
+external reference for a while" is a reminder about a missing habit, not an
+irreversibly-wrong action — blocking execution bought nothing the text did not,
+and cost a full round trip each time. The escalation is latched (a flag cleared
+only by a research load / override), because the block decision here reads a
+PROJECTED counter that is never written back for a not-yet-executed call; a bare
+`calls_since >= 80` inject would re-fire on every call past the mark.
 
 The START-phase duties this guard USED to carry — the single-shot early
 research gate and the network probe gate — now live in StartupGuard
@@ -70,6 +80,12 @@ class KnowledgeSkillGuard(Guard):
         # counter and the block (see _re_read_exempt).
         self._mandated_reverify = False
         self._mandated_path = ""
+        # One-shot escalation latch for the 80-call mark: the decision below
+        # reads a PROJECTED count (counter+1) that is never written back for a
+        # call that has not executed yet, so a bare `>= BLOCK_THRESHOLD` inject
+        # would re-fire on every call past the mark. The latch makes the
+        # escalated text land exactly once per cycle.
+        self._escalated = False
 
     def _re_read_exempt(self, ctx: GuardContext) -> bool:
         """True when ctx is a guard-mandated cold re-read / re-issued edit.
@@ -100,6 +116,7 @@ class KnowledgeSkillGuard(Guard):
         # Knowledge/skill loaded — reset counter.
         if ctx.tool_name in self._KNOWLEDGE_TOOLS:
             self._calls_since_knowledge = 0
+            self._escalated = False
             return None
 
         # A guard-mandated cold re-read / re-issued edit is exempt: the guard
@@ -116,11 +133,12 @@ class KnowledgeSkillGuard(Guard):
         # retried call does not inflate the count on every check_pre pass.
         calls_since = self._calls_since_knowledge + 1
 
-        if calls_since >= self.BLOCK_THRESHOLD:
-            # Do NOT reset counter here — only reset in accept_override if override succeeds
-            return GuardVerdict.block(
-                f"[KnowledgeSkill] {self.BLOCK_THRESHOLD} tool calls without loading "
-                "domain knowledge, skills, or external references. Consider "
+        if calls_since >= self.BLOCK_THRESHOLD and not self._escalated:
+            self._escalated = True
+            return GuardVerdict.inject(
+                f"[KnowledgeSkill] {calls_since} tool calls without loading "
+                "domain knowledge, skills, or external references — this is the "
+                "heavy mark. Before your next irreversible step, consider "
                 "load_knowledge()/load_skill() (INTERNAL domains), web_fetch() "
                 "(EXTERNAL domains, for any field where your prior knowledge may not "
                 "reflect standard methods), or networked shell operations (git clone, "
@@ -128,13 +146,14 @@ class KnowledgeSkillGuard(Guard):
                 "'no better/other method exists' is an unverified knowledge gap — "
                 "web_fetch the standard technique for the problem class first; you cannot "
                 "prove 'no other method exists' with 'I do not know another method'. "
-                "To override, do NOT merely assert 'I know this domain' or 'I have prior "
-                "experience' — that bare claim is the self-exemption this gate targets. "
+                "If you do decide to proceed without research, do NOT merely assert "
+                "'I know this domain' or 'I have prior experience' — that bare claim is "
+                "the self-exemption this gate targets. "
                 "Instead make the exemption FALSIFIABLE: name the PROBLEM CLASS in one "
                 "phrase AND the STANDARD METHOD you apply (the concrete algorithm / API / "
                 "config name, not 'my experience'). If you cannot name BOTH concretely — "
                 "if it comes out as 'some heuristic' or 'I'll tune it' — that vagueness IS "
-                "the knowledge gap; research before overriding.",
+                "the knowledge gap; research before proceeding.",
                 reason=f"no_knowledge_load_{self.BLOCK_THRESHOLD}_calls",
                 category="knowledge_skill",
             )
@@ -182,6 +201,7 @@ class KnowledgeSkillGuard(Guard):
             return
         if name in self._KNOWLEDGE_TOOLS:
             self._calls_since_knowledge = 0
+            self._escalated = False
             return
         if name in self._META_TOOLS:
             return
@@ -275,6 +295,7 @@ class KnowledgeSkillGuard(Guard):
         if not (reason and len(reason.strip()) > 5):
             return False
         self._calls_since_knowledge = 0
+        self._escalated = False
         return True
 
     def reset_turn(self):
@@ -284,3 +305,6 @@ class KnowledgeSkillGuard(Guard):
         # the boundary prevents an indefinite read/edit exemption.
         self._mandated_reverify = False
         self._mandated_path = ""
+        # The escalation latch is per-turn: a fresh turn is a fresh chance to
+        # research, so the heavy mark may land again in the next turn.
+        self._escalated = False

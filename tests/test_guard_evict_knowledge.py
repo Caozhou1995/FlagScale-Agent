@@ -162,21 +162,22 @@ class TestKnowledgeSkillGuard:
         assert "standard method" in low
         assert "falsifiable" in low
 
-    def test_block_after_threshold(self):
+    def test_inject_after_threshold(self):
         guard = KnowledgeSkillGuard()
         # Make BLOCK_THRESHOLD calls
         for i in range(guard.BLOCK_THRESHOLD - 1):
             ctx = _make_ctx(tool_name="shell")
             _advance(guard, ctx)
-        
-        # The BLOCK_THRESHOLD-th call should block
+
+        # The BLOCK_THRESHOLD-th call injects the escalated reminder (no block).
         ctx = _make_ctx(tool_name="shell")
         verdict = guard.check_pre(ctx)
         assert verdict is not None
-        assert verdict.action == "block"
-        assert "override" in verdict.message.lower()
-        # Strengthened: overriding must be FALSIFIABLE — name PROBLEM CLASS +
-        # STANDARD METHOD, not a bare "solid prior experience" self-exemption.
+        assert verdict.action == "inject"
+        assert verdict.reason == "no_knowledge_load_80_calls"
+        assert "exemption" in verdict.message.lower()
+        # Strengthened: proceeding without research must be FALSIFIABLE — name
+        # PROBLEM CLASS + STANDARD METHOD, not a bare "solid prior experience".
         low = verdict.message.lower()
         assert "problem class" in low
         assert "standard method" in low
@@ -290,7 +291,7 @@ class TestKnowledgeSkillGuard:
             _advance(guard, ctx)
         ctx = _make_ctx(tool_name="shell")
         verdict = guard.check_pre(ctx)
-        assert verdict is not None and verdict.action == "block"
+        assert verdict is not None and verdict.action == "inject"
         msg = verdict.message.lower()
         assert "web_fetch" in msg
         assert "no better" in msg or "no other method" in msg
@@ -306,7 +307,7 @@ class TestKnowledgeSkillGuard:
             ctx = _make_ctx(tool_name="shell")
             _advance(guard, ctx)
         verdict = guard.check_pre(_make_ctx(tool_name="shell"))
-        assert verdict is not None and verdict.action == "block"
+        assert verdict is not None and verdict.action == "inject"
         assert "INTERNAL domains" in verdict.message
         assert "EXTERNAL domains" in verdict.message
         assert "FlagScale" not in verdict.message

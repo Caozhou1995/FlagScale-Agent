@@ -344,7 +344,7 @@ class TestMemoryDisciplineE2E:
 
         for _ in range(30):
             v = g.check_pre(ctx)
-        assert v is not None and v.action == "block"
+        assert v is not None and v.action == "inject"
         assert "memory_read(key='pitfall/<domain>/')" in v.message
         assert "memory_list(keyword='...')" in v.message
 
@@ -491,7 +491,7 @@ class TestEscalationChain:
             reg.check_post(post_ctx)
 
     def test_memory_discipline_escalation(self):
-        """MemoryDiscipline guard blocks after 30 calls without memory ops."""
+        """MemoryDiscipline guard injects the heavy mark after 30 calls."""
         from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 
         guard = MemoryDisciplineGuard()
@@ -502,10 +502,12 @@ class TestEscalationChain:
             pre_ctx = _ctx("shell")
             v = reg.check_pre(pre_ctx)
 
-        # The 30th call should have triggered a block
-        # Counter resets after block, so let's verify by doing another 30
+        # The 30th call already crossed the mark (latch set). Re-arm a fresh
+        # cycle the way a memory op would, then verify the escalated inject.
         guard._calls_since_memory = 29
+        guard._escalated = False
         pre_ctx = _ctx("read_file")
         v = reg.check_pre(pre_ctx)
         assert v is not None
-        assert v.action == "block"
+        assert v.action == "inject"
+        assert v.reason == "no_memory_ops_30_calls"

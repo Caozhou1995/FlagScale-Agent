@@ -69,26 +69,32 @@ def make_ctx(tool_name="", tool_args=None, tool_result=""):
         assert result is None
         assert guard._calls_since_memory == 0
 
-    def test_memory_discipline_block_at_30_calls(self):
-        """After 30 non-memory calls, guard blocks (overridable)."""
+    def test_memory_discipline_inject_at_30_calls(self):
+        """After 30 non-memory calls, the guard injects the escalated reminder.
+
+        The gate is call-count driven and ADVISORY: the same 30th call that used
+        to block now returns an inject, so execution is never interrupted while
+        the escalated text still lands exactly once per cycle.
+        """
         guard = MemoryDisciplineGuard()
 
-        # First 29 calls — should get injects at 10, 20 but no block
+        # First 29 calls — ordinary injects at 10, 20; nothing blocks
         for i in range(29):
             ctx = make_ctx("shell", {"command": "ls"})
             result = guard.check_pre(ctx)
             if result:
                 assert result.action == "inject"
 
-        # 30th call → block
+        # 30th call → escalated inject
         ctx = make_ctx("shell", {"command": "ls"})
         result = guard.check_pre(ctx)
         assert result is not None
-        assert result.action == "block"
+        assert result.action == "inject"
+        assert result.reason == "no_memory_ops_30_calls"
         assert "30" in result.message
 
-    def test_memory_discipline_block_overridable(self):
-        """Block at 30 can be overridden with a reason."""
+    def test_memory_discipline_override_still_resets(self):
+        """accept_override still clears the counter (no block to release)."""
         guard = MemoryDisciplineGuard()
 
         ctx = make_ctx("shell", {"command": "ls"})
@@ -96,8 +102,8 @@ def make_ctx(tool_name="", tool_args=None, tool_result=""):
         # Counter should reset
         assert guard._calls_since_memory == 0
 
-    def test_memory_discipline_block_not_overridable_without_reason(self):
-        """Block override rejected if reason is too short."""
+    def test_memory_discipline_override_rejected_without_reason(self):
+        """Override rejected if reason is too short."""
         guard = MemoryDisciplineGuard()
 
         ctx = make_ctx("shell", {"command": "ls"})
