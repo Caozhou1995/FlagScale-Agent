@@ -1786,8 +1786,15 @@ class ShellJobsTool(Tool):
                 finished, killed = self._block_for(job, cap)
                 if killed is not None:
                     return killed
-                job.t_out.join(timeout=0.5)
-                job.t_err.join(timeout=0.5)
+                # The two joins flush the last output chunks, but on a job that
+                # is STILL RUNNING they cost a fixed extra second (both threads
+                # are alive, so each join waits its full timeout). That is worth
+                # paying on the historical path (byte-for-byte unchanged), and
+                # wrong on an early return whose entire point is handing control
+                # back promptly.
+                if finished or early is None:
+                    job.t_out.join(timeout=0.5)
+                    job.t_err.join(timeout=0.5)
                 header = self._fmt_job_line(job)
                 if not finished:
                     if job.health_note:

@@ -181,6 +181,24 @@ class TestReturnEarlyAfter:
         assert time.time() - t0 < 5
         assert _JOB_REGISTRY.get("job1") is not None
 
+    def test_early_return_is_not_inflated_by_stream_joins(self):
+        """An early return must hand control back AT the cap, not cap+1s.
+
+        The two output-stream joins cost a fixed extra second when the job is
+        still running (both reader threads are alive). Paying that on the
+        historical path is fine — that path is byte-for-byte frozen — but on an
+        early return it defeats the purpose: the agent asked to be let go early
+        and would still lose a second per check-in, which over a supervision
+        loop is the same idle tax under a different name.
+        """
+        sh, jobs = ShellTool(), ShellJobsTool()
+        sh.execute(command="sleep 30", background=True)
+        t0 = time.time()
+        jobs.execute(action="wait", job_id="job1", timeout=300,
+                     return_early_after=2)
+        elapsed = time.time() - t0
+        assert elapsed < 2.8, f"early return took {elapsed:.2f}s for a 2s cap"
+
     def test_early_return_still_reports_output_produced_so_far(self):
         sh, jobs = ShellTool(), ShellJobsTool()
         sh.execute(command="echo partial; sleep 20", background=True)
