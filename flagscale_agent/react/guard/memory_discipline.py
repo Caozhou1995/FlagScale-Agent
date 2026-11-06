@@ -55,6 +55,9 @@ class MemoryDisciplineGuard(Guard):
         # until a memory op resets the counter, so the escalated text lands once
         # instead of on every call past the threshold.
         self._escalated = False
+        # True while an escalation latch was consumed building a verdict that a
+        # concurrent block may suppress; block_not_surfaced() hands it back.
+        self._escalation_unreturned = False
 
     _MEMORY_TOOLS = frozenset((
         "memory_write", "memory_read", "memory_list",
@@ -79,6 +82,11 @@ class MemoryDisciplineGuard(Guard):
 
         if self._calls_since_memory >= self.BLOCK_THRESHOLD and not self._escalated:
             self._escalated = True
+            # The escalation latch above is a ONE-SHOT side effect consumed while
+            # building a verdict that a concurrent block may then suppress. Hand
+            # it back via block_not_surfaced() so the heavy mark is not lost for
+            # the rest of the run.
+            self._escalation_unreturned = True
             return GuardVerdict.inject(
                 f"[MemoryDiscipline] {self._calls_since_memory} tool calls without any memory "
                 "operation — this is the heavy mark. Stop and run ONE concrete recall "
@@ -106,6 +114,17 @@ class MemoryDisciplineGuard(Guard):
             )
 
         return None
+
+    def block_not_surfaced(self):
+        """Hand back an escalation latch consumed by a verdict that never surfaced.
+
+        A generic periodic inject is suppressed when a higher-ranked block wins
+        the same resolve. This guard is one-shot at BLOCK_THRESHOLD, so the
+        suppressed escalation is otherwise dead for the rest of the run.
+        """
+        if self._escalation_unreturned:
+            self._escalated = False
+            self._escalation_unreturned = False
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
         """Clear the counter on a substantive reason (>5 chars).

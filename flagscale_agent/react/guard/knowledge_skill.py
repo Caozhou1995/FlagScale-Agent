@@ -86,6 +86,8 @@ class KnowledgeSkillGuard(Guard):
         # would re-fire on every call past the mark. The latch makes the
         # escalated text land exactly once per cycle.
         self._escalated = False
+        # See memory_discipline: one-shot latch consumed but possibly suppressed.
+        self._escalation_unreturned = False
 
     def _re_read_exempt(self, ctx: GuardContext) -> bool:
         """True when ctx is a guard-mandated cold re-read / re-issued edit.
@@ -135,6 +137,7 @@ class KnowledgeSkillGuard(Guard):
 
         if calls_since >= self.BLOCK_THRESHOLD and not self._escalated:
             self._escalated = True
+            self._escalation_unreturned = True
             return GuardVerdict.inject(
                 f"[KnowledgeSkill] {calls_since} tool calls without loading "
                 "domain knowledge, skills, or external references — this is the "
@@ -283,6 +286,12 @@ class KnowledgeSkillGuard(Guard):
                 category="knowledge_skill",
             )
         return None
+
+    def block_not_surfaced(self):
+        """Hand back an escalation latch consumed by a verdict that never surfaced."""
+        if self._escalation_unreturned:
+            self._escalated = False
+            self._escalation_unreturned = False
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
         """Allow override of the call-count block on a substantive reason (>5 chars).
