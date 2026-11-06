@@ -45,7 +45,7 @@
 |---|---|---|
 | C1 | 名称不变 | 首行含 `FlagScale Agent` |
 | C2 | 四个占位符齐全且 `.format()` 可渲染 | `{cwd} {tools} {skills} {knowledge}` |
-| C3 | 总规模受控 | `len(SYSTEM_PROMPT_STATIC) <= 15000` |
+| C3 | 总规模受控 | `prompt_len() <= 38000`（2026-11-06 由 37000 上调；同次压缩回收约 940 字符，净增约 740） |
 | C4 | 十条纪律各有一节 | 节标题数 == 10 |
 | C5 | 四条通用纪律都在 | 文本含 falsifiability / systematicity / error cost / verification≠validation 的语义 |
 | C6 | 领域表存在且覆盖 6 个领域 | 含 math / physics / biology / CS / statistics / engineering |

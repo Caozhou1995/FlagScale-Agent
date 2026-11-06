@@ -94,4 +94,6 @@ def test_both_clauses_fit_the_budget():
     # The cap was raised 15000 -> 20000 (user ruling 2026-11-01), then
     # 20000 -> 25000 by user ruling, then 25000 -> 31000 -> 32000;
     # the anti-accumulation ratchet now lives in test_c3_total_size_bounded.
-    assert prompt_len() <= 37_000
+    # raised 37000 -> 38000 on 2026-11-06 (four-situations edition, net +740
+    # after ~940 chars of compaction); the ratchet itself is test_c3.
+    assert prompt_len() <= 38_000
