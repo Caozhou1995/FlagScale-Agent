@@ -299,9 +299,19 @@ def test_force_tool_stands_down_both_client_caps():
     # Token cap stands down under the flag (but a squeeze override WINS —
     # see test_agent_applies_override_over_force_tool_exemption).
     assert "cap_budget = 0" in src and "force_tool" in src, src[:400]
-    # Silence watchdog stands down under the flag (and the thread start and
-    # the event-level check share the same computed limit).
-    assert "_wd_limit = 0 if force_tool" in src, src[:400]
+    # Silence watchdog: BOUNDED under the flag, never zero (2026-11-07 fix).
+    # The exemption still gives force_tool a wider window than the normal cap
+    # (2x, floor 90s) so the forced tool call is reachable, but reverting it to
+    # 0 re-opens a measured loss: filter-js-from-html (2026-11-06, trial
+    # DBqayX4) burned one saturated 65536-token / 808.4s step (= 44.9% of a
+    # 1799s budget) plus 8 zero-token steps to the wall, because the cap was
+    # stood down for the whole turn. Aborting that filler cannot starve the
+    # forced call: tool_use deltas set tool_calls, which disarms every wall
+    # cap below.
+    assert "_wd_limit = 0 if force_tool" not in src, (
+        "force_tool must not disable the wall cap outright — it gets a real, "
+        "wider limit instead (see the 2026-11-06 filter-js measurement)")
+    assert "if force_tool else self.IN_STREAM_THINKING_WALL_SEC" in src, src[:400]
     assert "if _wd_limit > 0:" in src, "watchdog thread start not gated on _wd_limit"
     assert "and _wd_limit > 0" in src, "event-level wall check not gated on _wd_limit"
 

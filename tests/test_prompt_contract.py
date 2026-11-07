@@ -49,6 +49,11 @@ def test_c3_total_size_bounded(text: str) -> None:
     Raised to 38000 for the 2026-11-06 four-situations edition, which is NOT an
     append: ~940 chars were reclaimed by compressing repeated wording first, so
     the net growth is ~740 and the ratio stays where the ratchet can still bite.
+    Raised to 39000 on 2026-11-07 by USER RULING ("预算上调至39000") so the
+    step_done verdict clause — reverse-engineered from the 19 replay losses where
+    the agent computed the right number and then shipped the other reading — fits
+    without deleting a load-bearing clause. The ratchet is not relaxed: the
+    budget still fails here on any relapse into per-loss clause appending.
     The bound is
     deliberately loose enough to allow refinement and tight enough that a relapse
     into per-loss clause appending fails here rather than silently.
@@ -59,7 +64,7 @@ def test_c3_total_size_bounded(text: str) -> None:
     other.
     """
     n = prompt_len()
-    assert n <= 38_000, f"prompt is {n} chars, budget 38000"
+    assert n <= 39_000, f"prompt is {n} chars, budget 39000"
 
 
 def test_c3b_the_two_readings_of_prompt_size_agree(text: str) -> None:

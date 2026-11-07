@@ -243,3 +243,80 @@ class TestSilentSocketWatchdog:
             f"the call must return shortly after the cap, took {elapsed:.1f}s")
         assert resp["thinking_capped"] is True
         assert resp["reasoning_only"] is True
+
+class TestForceToolKeepsABoundedWallCap:
+    """2026-11-07 fix: force_tool must NOT disable the wall cap outright.
+
+    Measured loss that motivated this (filter-js-from-html, 2026-11-06, trial
+    DBqayX4, reward 0): one saturated step emitted 65536 tokens (===
+    max_output_tokens) in 808.4s = 44.9% of the task's 1799s budget, and the
+    turn then burned 8 more zero-token steps to the wall clock, because
+    `_wd_limit` was 0 for the whole endgame (force_tool armed). The exemption
+    exists for a real reason — a forced call still thinks first, and the 240s
+    cap aborted it before the mandatory tool call was reached (round 5,
+    regex-chess gfpT6ap) — so the fix keeps a REAL limit, just a wider one
+    (2x, floor 90s) instead of infinity.
+
+    Every test here is written so it FAILS on the pre-fix source
+    (`_wd_limit = 0 if force_tool ...`); a guard that stays green on the bug
+    it names is not a guard (verified by reverting the source and re-running).
+    """
+
+    def _force_branch_src(self):
+        """The source text of the force_tool ELSE-branch of the limit derivation.
+
+        Located structurally (from the `else:` that owns the force_tool term to
+        the end of that statement) rather than by a fixed character window: the
+        branch carries a long explanatory comment between `else:` and
+        `_wd_limit =`, so a byte-offset slice would silently miss the code.
+        """
+        import inspect
+        from flagscale_agent.react.agent import WorkerAgent
+        src = inspect.getsource(WorkerAgent._call_llm_stream)
+        i = src.find("if force_tool else self.IN_STREAM_THINKING_WALL_SEC")
+        assert i > 0, "the force_tool limit branch is missing entirely"
+        # Back up to the start of the assignment statement so the derivation
+        # (`max(90, ... * 2)`) is inside the slice, not just its tail.
+        lo = src.rfind("_wd_limit", 0, i)
+        assert lo > 0, "could not locate the start of the _wd_limit statement"
+        return src[lo:i + 200]
+
+    def test_force_tool_branch_yields_a_positive_limit(self):
+        """The branch must compute a POSITIVE limit when force_tool is armed.
+
+        Pre-fix this literal is `_wd_limit = 0 if force_tool ...` -> 0, which
+        the watchdog reads as 'disabled' and returns on immediately.
+        """
+        branch = self._force_branch_src()
+        assert "_wd_limit = 0 if force_tool" not in branch, (
+            "force_tool must not disable the wall cap: 0 makes the watchdog "
+            "return immediately, which is the filter-js 808.4s loss")
+        assert "if force_tool else self.IN_STREAM_THINKING_WALL_SEC" in branch, (
+            "force_tool must fall through to a real computed limit")
+
+    def test_force_tool_limit_scales_with_the_normal_cap(self):
+        """The force_tool limit is derived FROM the normal cap (2x, floor 90).
+
+        Asserting the derivation (not a hardcoded number) keeps this true if
+        IN_STREAM_THINKING_WALL_SEC is retuned, and it fails on the pre-fix
+        source because that source contains no `* 2` derivation at all.
+        """
+        branch = self._force_branch_src()
+        assert "IN_STREAM_THINKING_WALL_SEC * 2" in branch, (
+            "the force_tool limit must be a wider multiple of the normal cap; "
+            "a bare 0 is the bug this test guards")
+        assert "max(90" in branch, (
+            "the force_tool limit needs a floor so a small configured cap does "
+            "not make the exemption narrower than the normal cap")
+
+    def test_watchdog_still_treats_zero_as_disabled(self):
+        """Pins the MECHANISM: 0 means 'off', which is why 0 was fatal."""
+        import inspect
+        from flagscale_agent.react.agent import WorkerAgent
+        src = inspect.getsource(WorkerAgent._call_llm_stream)
+        i = src.find("def _silence_watchdog")
+        assert i > 0
+        body = src[i:i + 400]
+        assert "if limit <= 0:" in body and "return" in body, (
+            "the watchdog returns immediately when the limit is 0 — that is "
+            "the whole reason an unbounded exemption let a turn burn the wall")

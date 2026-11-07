@@ -2588,7 +2588,23 @@ class WorkerAgent:
             _wd_limit = max(90, int(self.IN_STREAM_THINKING_WALL_SEC * _ratio)) \
                 if _ratio > 0 else 90
         else:
-            _wd_limit = 0 if force_tool else self.IN_STREAM_THINKING_WALL_SEC
+            # FORCE_TOOL EXEMPTION, BOUNDED (2026-11-07 fix).
+            # The exemption exists for a measured reason (round 5, regex-chess
+            # gfpT6ap): the endpoint forces thinking ON server-side, so a
+            # forced call still thinks first, and the normal 240s wall cap
+            # aborted that thinking before the mandatory tool call was ever
+            # reached — the enforcement was toothless.
+            # But an UNBOUNDED exemption turned into a bigger loss: measured
+            # on filter-js-from-html (2026-11-06 trial DBqayX4, reward 0), one
+            # saturated step emitted 65536 tokens (== max_output_tokens) in
+            # 808.4s = 44.9% of the task's 1799s budget, and the turn then
+            # burned 8 more zero-token steps to the wall with the cap stood
+            # down. Aborting that filler cannot hurt the forced tool call: the
+            # call is emitted as tool_use deltas, which set tool_calls and
+            # disarm every wall cap below anyway. So force_tool keeps a REAL
+            # limit — the generous ratio-scaled one, not 0.
+            _wd_limit = (max(90, int(self.IN_STREAM_THINKING_WALL_SEC * 2))
+                         if force_tool else self.IN_STREAM_THINKING_WALL_SEC)
 
         def _silence_watchdog():
             limit = _wd_limit

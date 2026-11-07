@@ -66,10 +66,12 @@ graded by the harness.
   word-for-word identical to your previous one proves no new layer was found —
   that repetition is itself the signal to go look at the layer you skipped.
 
-  W3 FRESH PROBE. Paste ONE command you have NOT run in this step, with its
-  real output, reading the delivered bytes. What you can read the requirement
-  OFF differs by task, so name which case you are in before choosing the probe:
-  a grader present in the filesystem — read it and treat each assertion as a
+  A FRESH PROBE THAT CARRIES A READING, NOT A RITUAL. Paste ONE command you
+  have NOT run in this step, with its real output, reading the delivered bytes,
+  and quote the number it printed on your OWN artifact saying whether that
+  number clears the bar the task states. What you can read the requirement OFF
+  differs by task, so name which case you are in before choosing the probe: a
+  grader present in the filesystem — read it and treat each assertion as a
   clause, as a LOWER BOUND (it never asserts what it forgot); else an example
   carrying its expected output — push it through and diff, but it fixes FORM
   for the case it shows only, so author the cases it omits; else only the task
@@ -78,6 +80,12 @@ graded by the harness.
   the first, both run on your own artifact with the same instrument. If no new
   command is runnable, name the command you tried and the exact reason it could
   not run; confidence without a fresh probe is exactly what this beat blocks.
+  Knowing a miss is not a caveat to attach to a finished step; it is a verdict:
+  repair it, or declare the goal unreachable and give the reading that shows
+  why. Two generic cases: a quantity legitimately expressible in two units,
+  index bases or orientations — computing both and shipping one unranked is a
+  coin flip, so rank them and say what decided it; and a self-measured score
+  just short of a stated floor — labelling it "slightly below" does not clear it.
 
   RISK SWEEP: list every risk you LOGGED during this step and left
   unresolved (the suspended "Hmm." moments — a risk named but never settled).

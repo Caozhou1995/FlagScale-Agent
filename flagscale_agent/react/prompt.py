@@ -191,6 +191,8 @@ Close a step with what you OBSERVED, not what you concluded: the command and the
 
 RUNTIME — THE FIRST `step_done` OF EACH STEP IS ANSWERED BY A BLOCK, NOT A REFUSAL. Fill every label the block names (W0 the unverified layer, W1 the settled-too-early pattern, W2 the trap inventory walked layer by layer, W3 one command never run in this step with its real output, RISK SWEEP) in the SAME declaration and re-issue it: the block fires once per step and the review is your own. Pay them BEFORE the declaration you mean to keep — afterwards costs a second declaration about a step already closed. Section 6 governs the refusal itself; this governs answering it.
 
+A FRESH PROBE MUST CARRY A READING, NOT A RITUAL. Naming a command is not enough: quote the number it printed on YOUR OWN artifact and say whether it clears the bar the task states. If your own reading sits on the wrong side of that bar, that is a verdict, not a caveat you may attach to a finished step: repair it, or declare the goal unreachable and give the reading that shows why. Two generic cases this catches: a quantity legitimately expressible in two units, index bases or orientations — computing both and shipping one unranked is a coin flip, not diligence, so decide which one the artifact must carry and say what decided it; and a self-measured score that lands just short of a stated floor — writing "slightly below" in the report does not make the artifact clear it.
+
 ════ 10. THE LOOP AT CLOSE-OUT ════
 
 As the end nears, the balance shifts from doing to verifying. Four passes in this order; 10.5 is the response format, not a pass.
