@@ -40,61 +40,34 @@ from . import Guard, GuardContext, GuardVerdict
 _REMIND_MESSAGE = """
 [Remind] This step-done declaration is blocked ONCE — the beat, not a refusal.
 Re-issue the SAME plan_update WITH the evidence lines below; the re-issue
-passes when it is re-issued — the lines exist to force the review, not to be
-graded by the harness.
+passes when it is re-issued. Answers take the bracketed form — a filled slot,
+not a paragraph.
 
-  W0 UNVERIFIED LAYER. Name the ONE layer of this deliverable you have NOT
-  checked yet — the consumer's own parse/interface contract, the boundary you
-  assumed, the branch you never ran. If your last rounds re-checked layers you
-  already proved green, you spent them in the wrong place: go verify the
-  unproven layer FIRST, then re-issue. Answering "nothing unverified" requires
-  naming every layer and the check that covered it.
+  W0 UNVERIFIED LAYER — <the one layer of this deliverable you have NOT checked,
+  and the read you skipped>; or "all layers covered" plus the check that covered
+  each one.
 
-  W1 FAILURE RECEIPT. This is the moment self-confirmation is strongest and
-  external checking weakest — that asymmetry, not any prediction about you, is
-  why this beat exists. So the failure worth guarding here is less often a
-  wrong answer than a correct check left unrun. Treat your first pass as
-  settled-too-early, not as wrong, until one more probe says otherwise.
+  W1 FAILURE RECEIPT — <the failure this moment invites: a correct check you left
+  unrun>. Treat your first pass as settled-too-early until a probe says
+  otherwise.
 
-  W2 TRAP INVENTORY WALK. Walk the Section-5 TRAP INVENTORY LAYER by LAYER
-  against THIS step's deliverable — ENUMERATE, PARSE-SCHEMA, RANK, RUN-TIME,
-  one line each, not one line per trap you happen to think of. For each layer
-  write: what this layer produced for THIS deliverable, or N/A and why it
-  cannot bite here. PARSE-SCHEMA is its own layer and is asked FIRST: name the
-  prefix / marker / payload / tail a downstream parser slices, and the minimum
-  it asserts that the task text never states. A walk whose list is
-  word-for-word identical to your previous one proves no new layer was found —
-  that repetition is itself the signal to go look at the layer you skipped.
+  W2 TRAP INVENTORY WALK — one line per layer, in this order: ENUMERATE /
+  PARSE-SCHEMA / RANK / RUN-TIME. Each: <what it produced for THIS deliverable,
+  or N/A and why it cannot bite>.
 
-  A FRESH PROBE THAT CARRIES A READING, NOT A RITUAL. Paste ONE command you
-  have NOT run in this step, with its real output, reading the delivered bytes,
-  and quote the number it printed on your OWN artifact saying whether that
-  number clears the bar the task states. What you can read the requirement OFF
-  differs by task, so name which case you are in before choosing the probe: a
-  grader present in the filesystem — read it and treat each assertion as a
-  clause, as a LOWER BOUND (it never asserts what it forgot); else an example
-  carrying its expected output — push it through and diff, but it fixes FORM
-  for the case it shows only, so author the cases it omits; else only the task
-  text (or only a vague goal) — then the probe is the assertion you derived
-  from that text, or a second independent path whose numbers you diff against
-  the first, both run on your own artifact with the same instrument. If no new
-  command is runnable, name the command you tried and the exact reason it could
-  not run; confidence without a fresh probe is exactly what this beat blocks.
-  Knowing a miss is not a caveat to attach to a finished step; it is a verdict:
-  repair it, or declare the goal unreachable and give the reading that shows
-  why. Two generic cases: a quantity legitimately expressible in two units,
-  index bases or orientations — computing both and shipping one unranked is a
-  coin flip, so rank them and say what decided it; and a self-measured score
-  just short of a stated floor — labelling it "slightly below" does not clear it.
+  W3 FRESH PROBE — one command never run in this step, and it must carry a
+  reading, not a ritual:
+  <command> → <its real output: the number it printed on YOUR artifact>;
+  bar=<the limit the task or a grader in the filesystem states>;
+  VERDICT=PASS|FAIL. A number on the wrong side of its bar is a verdict, not a
+  caveat: repair it, or declare the goal unreachable and give the reading that
+  shows why.
 
-  RISK SWEEP: list every risk you LOGGED during this step and left
-  unresolved (the suspended "Hmm." moments — a risk named but never settled).
-  For each, write how it was resolved: the evidence that decided it and which
-  side won. A logged-but-unresolved risk blocks this declaration — settle it
-  now or name the probe you refuse to run and why.
+  RISK SWEEP — per risk logged during this step: <risk> → <the evidence that
+  decided it> → <which side won>. A logged-but-unresolved risk blocks this
+  declaration: settle it now or name the probe you refuse to run and why.
 
-The review is yours; the harness does not grade it. It only guarantees the beat
-happened. Re-issue the same declaration WITH the evidence lines and continue.
+Re-issue the same declaration WITH these lines and continue.
 """
 
 

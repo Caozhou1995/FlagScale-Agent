@@ -138,7 +138,28 @@ def test_silent_on_batch_without_done_rows():
     assert _pre(g, args) is None
 
 
-def test_silent_on_other_tools():
+def test_beat_is_compact_and_machine_checkable():
+    """The beat must stay short enough to be read inside a 900s task's budget,
+    and its W3 slot must ask for the three values a reviewer can check without
+    re-reading prose: the command's real output, the bar, and a verdict.
+
+    Measured motivation (2026-11-07 v75fails19 replay, 19 trials): the beat is
+    paid on EVERY step of EVERY trial, so its length is a per-trial cost; the
+    previous wording (3497 chars, mostly explanatory) produced declarations that
+    satisfied the labels without producing a new reading. The compact form is
+    1480 chars and names the output/bar/verdict triple explicitly.
+    """
+    g = SystemPromptRemindGuard()
+    v = _pre(g, {"action": "step_done", "step_id": 1})
+    msg = v.message
+    assert len(msg) < 2000, f"beat grew back to {len(msg)} chars; keep it under 2000"
+    low = msg.lower()
+    # the W3 slot must demand a machine-checkable triple
+    assert "verdict=pass|fail" in low, "the W3 verdict slot lost its machine-readable form"
+    assert "bar=<" in low, "the W3 slot no longer asks for the bar value"
+    # and the answers must be form-filled, not paragraphs
+    assert "<command>" in low
+
     g = SystemPromptRemindGuard()
     args = {"action": "step_done", "step_id": 1}
     assert _pre(g, args, tool_name="shell") is None
