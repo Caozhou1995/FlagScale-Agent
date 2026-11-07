@@ -63,6 +63,17 @@ not a paragraph.
   caveat: repair it, or declare the goal unreachable and give the reading that
   shows why.
 
+  W4 TRAP SHAPES — five shapes recur across unrelated tasks; a step can be green
+  on W0-W3 and still miss one. For EACH, name YOUR instance on THIS deliverable
+  or write "open bet" and why you cannot exclude it: (1) the check judges your
+  own artifact — a generator agrees with itself; (2) the last format item — one
+  char, one exit token, one header, one exact hash; (3) one clean sample
+  standing in for the population — name the boundary inputs you did NOT run;
+  (4) the fix landed in a scratch copy, memory or plan note, not the DELIVERED
+  bytes — re-read the file, not your intent; (5) the visible example fixes FORM
+  but not scale, offset, unit or index base. A trap never enumerated is a trap
+  you are standing in.
+
   RISK SWEEP — per risk logged during this step: <risk> → <the evidence that
   decided it> → <which side won>. A logged-but-unresolved risk blocks this
   declaration: settle it now or name the probe you refuse to run and why.

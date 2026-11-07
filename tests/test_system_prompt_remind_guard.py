@@ -152,7 +152,12 @@ def test_beat_is_compact_and_machine_checkable():
     g = SystemPromptRemindGuard()
     v = _pre(g, {"action": "step_done", "step_id": 1})
     msg = v.message
-    assert len(msg) < 2000, f"beat grew back to {len(msg)} chars; keep it under 2000"
+    # USER RULING (2026-11-08, final round before the 89-task full run): the
+    # budget was raised and the beat may carry a TEACHING block that taxes the
+    # agent to name its own instance of each recurring trap shape. That block is
+    # pure mechanism (no numbers, no task names), so the guard against answer
+    # leakage still holds; only the hard length bar moves, 2000 -> 2400.
+    assert len(msg) < 2400, f"beat grew back to {len(msg)} chars; keep it under 2400"
     low = msg.lower()
     # the W3 slot must demand a machine-checkable triple
     assert "verdict=pass|fail" in low, "the W3 verdict slot lost its machine-readable form"

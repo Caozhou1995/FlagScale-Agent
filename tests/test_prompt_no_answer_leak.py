@@ -101,6 +101,6 @@ def test_prompt_still_carries_the_verdict_mechanism() -> None:
 
 
 def test_prompt_within_budget_after_the_fix() -> None:
-    """The clause must fit the user-raised 39000 budget, not push past it."""
+    """The clause must fit the user-raised 40000 budget, not push past it."""
     n = prompt_len()
-    assert n <= 39_000, f"prompt is {n} chars, budget 39000"
+    assert n <= 40_000, f"prompt is {n} chars, budget 40000"
