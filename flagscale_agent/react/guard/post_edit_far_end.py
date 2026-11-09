@@ -82,7 +82,7 @@ _RENDER_PROBE = (
     "_spec = _iu.spec_from_file_location('_post_edit_probe', sys.argv[1])\n"
     "_m = _iu.module_from_spec(_spec); _spec.loader.exec_module(_m)\n"
     "try:\n"
-    "    _m.SYSTEM_PROMPT_STATIC.format(cwd='c', tools='t', skills='s', knowledge='k')\n"
+    "    _m.SYSTEM_PROMPT_STATIC.format(cwd='c', src_tree='s', tools='t', skills='s', knowledge='k')\n"
     "    _m.DASHBOARD_TEMPLATE.format(dashboard_content='d')\n"
     "except AttributeError as _e:\n"
     "    print('PROBE-CONST-MISSING', _e); sys.exit(3)\n"

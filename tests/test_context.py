@@ -887,6 +887,7 @@ class TestPromptIntegrity:
         try:
             result = SYSTEM_PROMPT_STATIC.format(
                 cwd="/workspace/test",
+                src_tree="/workspace/test-src",
                 tools="shell, read_file, write_file",
                 skills="train-run, train-config",
                 knowledge="know-megatron-training",

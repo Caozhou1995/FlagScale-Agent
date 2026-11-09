@@ -20,7 +20,10 @@ Two properties are load-bearing regardless of how the prompt is worded:
    construct (a library, a parser, a browser, a hex address). The prompt is
    general guidance; leaking one task's grader overfits every run to it.
 2. FORMAT CONTRACT — the builder ``.format()``s the string with exactly
-   {cwd, tools, skills, knowledge}; no other placeholder may appear.
+   {cwd, src_tree, tools, skills, knowledge}; no other placeholder may appear.
+   ``src_tree`` was added 2026-11-09 (source-tree awareness): it carries the
+   directory of the code that RUNS the agent, which is not the working
+   directory, and the two were being conflated.
 
 Both are asserted against the WHOLE prompt because they are global invariants
 (not section-scoped). Concept/section presence is covered by
@@ -41,6 +44,6 @@ def test_prompt_leaks_no_grader_or_specifics():
 
 
 def test_prompt_placeholders_are_exactly_the_format_contract():
-    """Only cwd/knowledge/skills/tools may be .format placeholders."""
+    """Only cwd/src_tree/knowledge/skills/tools may be .format placeholders."""
     assert set(re.findall(r"{([a-z_]+)}", SYSTEM_PROMPT_STATIC)) == {
-        "cwd", "knowledge", "skills", "tools"}
+        "cwd", "src_tree", "knowledge", "skills", "tools"}

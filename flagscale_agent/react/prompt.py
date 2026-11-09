@@ -43,9 +43,12 @@ SYSTEM_PROMPT_STATIC = """\
 You are FlagScale Agent, an engineer-scientist. You solve hard research and infrastructure tasks the way a working scientist does: describe the problem, state what you expect, run the cheapest experiment that could prove you wrong, read the real output, and revise.
 
 Working directory: {cwd}
+Source tree: {src_tree}
 Tools: {tools}
 Skills: {skills}
 Knowledge: {knowledge}
+
+Your source tree (the code that runs you — a deployment tree may be an installed COPY of it) and this working directory (the task's material) are DIFFERENT THINGS. Never edit your source tree to make a task pass; never store an environment fact there as a rule.
 
 Work in that loop continuously. A thought becomes progress only when it produces an artifact or a reading; an action counts only when it kills or creates a hypothesis.
 
@@ -240,7 +243,32 @@ DASHBOARD_TEMPLATE = "\n---\n[{dashboard_content}]"
 # while the agent measured a rendered assembly — two readings of the same tree
 # 134 chars apart, which silently flipped a "within budget" claim to red.
 # Everything that reports a prompt size must call prompt_len().
-def render_prompt(cwd: str = "<cwd>", tools: str = "<tools>",
+# ── Where your own source lives ──────────────────────────────────────────────
+# The tree that DEFINES this agent is not the tree you are working in, and the
+# two are routinely confused. Resolve it from this package's own location so it
+# is correct wherever the code is deployed, rather than baking a host path in.
+_SRC_TREE_FALLBACK = "<not resolved>"
+
+
+def resolve_src_tree() -> str:
+    """Directory that contains the `flagscale_agent` package this code runs from.
+
+    Derived, never hardcoded: the same file is deployed to more than one tree
+    (the repo, and a deployment copy the container installs from), and a baked
+    path would be silently wrong in the other one — exactly the confusion this
+    line exists to prevent.
+    """
+    try:
+        import os.path as _p
+        here = _p.abspath(__file__)                  # .../flagscale_agent/react/prompt.py
+        pkg = _p.dirname(_p.dirname(here))           # .../flagscale_agent
+        return _p.dirname(pkg)                       # .../  (the source tree root)
+    except Exception:
+        return _SRC_TREE_FALLBACK
+
+
+def render_prompt(cwd: str = "<cwd>", src_tree: str | None = None,
+                  tools: str = "<tools>",
                   skills: str = "<skills>", knowledge: str = "<knowledge>") -> str:
     """Assemble the static block exactly as PromptBuilder does (dashboard excluded).
 
@@ -248,8 +276,10 @@ def render_prompt(cwd: str = "<cwd>", tools: str = "<tools>",
     memory keys), so including it would make the budget untestable. Its size is
     not what the budget constrains — clause accumulation is.
     """
+    if src_tree is None:
+        src_tree = resolve_src_tree()
     return SYSTEM_PROMPT_STATIC.format(
-        cwd=cwd, tools=tools, skills=skills, knowledge=knowledge)
+        cwd=cwd, src_tree=src_tree, tools=tools, skills=skills, knowledge=knowledge)
 
 
 def prompt_len(**kwargs) -> int:

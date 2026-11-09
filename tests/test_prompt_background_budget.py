@@ -24,8 +24,11 @@ from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
 
 
 def test_no_new_placeholders_introduced():
+    # src_tree added 2026-11-09 for source-tree awareness (see
+    # tests/test_prompt_source_tree_awareness.py). Adding a placeholder must
+    # also be wired in prompt_builder.refresh() and render_prompt().
     assert set(re.findall(r"{([a-z_]+)}", SYSTEM_PROMPT_STATIC)) == {
-        "cwd", "tools", "skills", "knowledge",
+        "cwd", "src_tree", "tools", "skills", "knowledge",
     }
 
 

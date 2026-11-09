@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Dict
 from flagscale_agent.react.prompt import (
     SYSTEM_PROMPT_STATIC,
     DASHBOARD_TEMPLATE,
+    resolve_src_tree,
 )
 from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.paths import get_memory_dir
@@ -94,6 +95,7 @@ class PromptBuilder:
         # ── Assemble static block ──
         core = SYSTEM_PROMPT_STATIC.format(
             cwd=os.getcwd(),
+            src_tree=resolve_src_tree(),
             tools=tools_str,
             skills=skills_summary,
             knowledge=knowledge_summary,

@@ -25,7 +25,7 @@ def text() -> str:
 
 @pytest.fixture(scope="module")
 def rendered(text: str) -> str:
-    return text.format(cwd="/x", tools="t", skills="s", knowledge="k")
+    return text.format(cwd="/x", src_tree="/x-src", tools="t", skills="s", knowledge="k")
 
 
 def test_c1_name_unchanged(text: str) -> None:
