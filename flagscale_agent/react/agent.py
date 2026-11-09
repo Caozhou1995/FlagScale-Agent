@@ -459,6 +459,13 @@ class WorkerAgent:
         # guard_registry.register(self._startup_guard)
         from flagscale_agent.react.guard.compile_redirect import CompileRedirectGuard
         guard_registry.register(CompileRedirectGuard())
+        # NetAwarenessGuard: inject-only advisory after any shell command that
+        # acquires over the network (install/clone/pull/download). The agent is
+        # told a network step can fail / be slow / be path-dependent, and that
+        # measuring is bounded and skippable; it decides what to do. No hostname,
+        # no mirror, no memory key, no fixed seconds — see the module docstring.
+        from flagscale_agent.react.guard.net_awareness import NetAwarenessGuard
+        guard_registry.register(NetAwarenessGuard())
         guard_registry.register(ShellSafetyGuard())
         guard_registry.register(KillSafetyGuard())
         # VcsBackupGuard: targeted block on destructive git ops (checkout --,
