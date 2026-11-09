@@ -48,6 +48,16 @@ _ACQUIRE = [
     "curl --output f https://example.invalid/f",
     "/usr/bin/pip install y",
     "cd /app && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 git",
+    # ── measured in a REAL trial (jobs/2026-11-09__13-23-33), verbatim ───────
+    # The first three were all missed by an earlier download-form-only
+    # predicate: every real command is wrapped in `timeout N`, and a bare
+    # `curl -sI` probe is a network step too (it can be slow / refused).
+    "cd /tmp; timeout 30 curl -sI https://example.invalid 2>&1 | head -3",
+    "timeout 60 env -u HTTPS_PROXY -u HTTP_PROXY curl -sL http://example.invalid/x -o f",
+    "timeout -s KILL 60 curl https://example.invalid",
+    # a bare transfer-tool invocation acquires over the network as well
+    "curl https://example.invalid/v1",
+    "rsync -av host:/x /y",
 ]
 
 
@@ -66,12 +76,13 @@ _NOT_ACQUIRE = [
     "cd /app && ls",
     "git status",
     "pip --version",
-    # a bare page fetch is not acquisition — nagging every curl is noise
-    "curl https://example.invalid/v1",
+    # a bare page fetch IS a network step: keep the nag (measured — the real
+    # agent opened with `curl -sI`, and slow/refused is a cost it pays too)
     # MENTIONING a command inside a string is not running it
     "echo 'pip install x'",
     "printf 'apt-get install x'",
     "cat notes.txt",
+    "echo curl https://example.invalid",
 ]
 
 

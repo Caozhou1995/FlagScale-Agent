@@ -122,13 +122,54 @@ def _strip_env_and_prefixes(seg: str) -> str:
             seg = seg[m.end():]
             changed = True
             continue
-        for prefix in ("sudo ", "env ", "time ", "nohup ", "command ",
+        for prefix in ("sudo ", "time ", "nohup ", "command ",
                        "exec ", "stdbuf -oL -eL ", "DEBIAN_FRONTEND=noninteractive "):
             if seg.startswith(prefix):
                 seg = seg[len(prefix):]
                 changed = True
                 break
+        # `timeout 30 curl ...` — the coreutils wrapper takes a DURATION before
+        # the real command. Measured blind spot: every curl in a real trial was
+        # wrapped in `timeout N`, so the head was always 'timeout' and the
+        # download-form check never even looked at `curl`. Strip the numeric
+        # operand too (handles `timeout 30`, `timeout -s KILL 60`, `timeout 1.5h`).
+        m = re.match(r"^timeout\s+(?:-s\s*\S+\s+|-k\s*\S+\s+)*[\d.]+[smhd]?\s+", seg)
+        if m:
+            seg = seg[m.end():]
+            changed = True
+            continue
+        # `env -u HTTPS_PROXY -u HTTP_PROXY curl ...` — env takes FLAGS before
+        # the real command. Measured miss: the agent's own no-proxy probe used
+        # exactly this form, so the head stayed 'env'. Strip env's flags
+        # (-u NAME, -i, -0, --unset=NAME, VAR=val pairs).
+        m = re.match(r"^env\s+(?:(?:-[ui0]|--unset=\S*)\s+\S*\s*|[A-Za-z_]\w*=\S*\s+)*", seg)
+        if m and m.end() > 4:
+            rest = seg[m.end():].strip()
+            if rest:
+                seg = rest
+                changed = True
+                continue
     return seg
+
+
+def _is_transfer_tool(seg_low: str) -> bool:
+    """True when the segment's command IS a network transfer tool.
+
+    Broader than _is_download_form on purpose: a bare `curl -sI <url>` probe
+    still pays the network (it can be slow, it can be refused by a path-sensitive
+    proxy) and the agent should hear that once. What stays excluded is a command
+    that merely MENTIONS the tool inside a string/echo (handled by the head check
+    in is_network_acquire).
+    """
+    toks = seg_low.replace("=", " ").split()
+    if not toks:
+        return False
+    head = toks[0].rsplit("/", 1)[-1]
+    # NB: bare `git` is deliberately NOT here — `git status`/`git diff` are
+    # local. The network forms (clone/fetch/pull/submodule) are covered by
+    # _NET_ACQUIRE_TOKENS instead.
+    return head in ("curl", "wget", "http", "https", "aria2c", "axel",
+                    "ftp", "sftp", "scp", "rsync", "ssh")
 
 
 def is_network_acquire(cmd: str) -> bool:
@@ -137,6 +178,13 @@ def is_network_acquire(cmd: str) -> bool:
     Segment-aware and assignment-aware so compound install commands are caught
     (measured blind spot in the older probe: 'cd x && python -m pip install y'
     and 'VAR=1 apt-get install -y z' were both missed by a line-leading match).
+
+    "Acquires" is read broadly: package installs, clones, artifact pulls AND a
+    plain transfer-tool invocation (curl/wget/scp/rsync/ssh). Measured reality:
+    in a real trial the agent's FIRST network action was `curl -sI <host>` — a
+    probe, not a download — and a download-form-only predicate stayed silent
+    across every such command. The reminder is about the COST of a network step
+    (slow, refused, path-dependent), which a probe pays too.
     """
     if not cmd:
         return False
@@ -150,7 +198,7 @@ def is_network_acquire(cmd: str) -> bool:
         head = low.split()[0].rsplit("/", 1)[-1] if low.split() else ""
         if head in ("echo", "printf", "cat", "tee") and not _is_download_form(low):
             continue
-        if _is_download_form(low):
+        if _is_download_form(low) or _is_transfer_tool(low):
             return True
         if any(tok in low for tok in _NET_ACQUIRE_TOKENS):
             return True
