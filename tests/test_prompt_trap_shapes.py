@@ -137,7 +137,14 @@ def test_prompt_trap_shapes_are_pure_mechanism_never_an_answer():
 def test_prompt_still_fits_the_40000_budget():
     n = prompt_len()
     assert n <= 40_000, f"prompt is {n} chars, budget 40000"
-    assert n == len(render_prompt()), "prompt_len() must measure the rendered prompt"
+    # prompt_len() must measure the RENDERED template, not the raw constant.
+    # It pins the two path placeholders (cwd / src_tree) so the reading is a
+    # property of the prose rather than of this host's path lengths; the
+    # equality therefore holds against a rendering that uses the SAME pinned
+    # placeholders, which is what the original assertion was protecting.
+    assert n == len(render_prompt(cwd="<cwd>", src_tree="<src_tree>")), (
+        "prompt_len() must measure the rendered prompt"
+    )
 
 
 def test_beat_carries_the_w4_slot_and_fits_its_own_bar():

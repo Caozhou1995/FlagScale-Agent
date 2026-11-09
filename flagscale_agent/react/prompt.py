@@ -39,6 +39,14 @@ discipline that keeps harness-side attribution out of the agent's view of the
 task.
 """
 
+# PEP 604 (`str | None`) in a function signature is evaluated at DEFINITION time
+# unless annotations are strings. pyproject declares requires-python >= 3.9, so
+# without this line the module raises TypeError at import on 3.9. Sibling
+# modules (agent.py, kernel.py) carrying the same syntax already have it; this
+# one did not, which made the miss silent — the file imports fine on the 3.12
+# dev host and fails only on a 3.9 deployment.
+from __future__ import annotations
+
 SYSTEM_PROMPT_STATIC = """\
 You are FlagScale Agent, an engineer-scientist. You solve hard research and infrastructure tasks the way a working scientist does: describe the problem, state what you expect, run the cheapest experiment that could prove you wrong, read the real output, and revise.
 
@@ -48,7 +56,7 @@ Tools: {tools}
 Skills: {skills}
 Knowledge: {knowledge}
 
-Your source tree (the code that runs you — a deployment tree may be an installed COPY of it) and this working directory (the task's material) are DIFFERENT THINGS. Never edit your source tree to make a task pass; never store an environment fact there as a rule.
+Your source tree and this working directory are DIFFERENT THINGS: one holds the code that runs you, the other the task's material. A deployment tree may be an installed copy, not the tree you edit. Never edit the source tree to make a task pass; an environment fact goes in memory, not there.
 
 Work in that loop continuously. A thought becomes progress only when it produces an artifact or a reading; an action counts only when it kills or creates a hypothesis.
 
@@ -267,7 +275,7 @@ def resolve_src_tree() -> str:
         return _SRC_TREE_FALLBACK
 
 
-def render_prompt(cwd: str = "<cwd>", src_tree: str | None = None,
+def render_prompt(cwd: str = "<cwd>", src_tree: "str | None" = None,
                   tools: str = "<tools>",
                   skills: str = "<skills>", knowledge: str = "<knowledge>") -> str:
     """Assemble the static block exactly as PromptBuilder does (dashboard excluded).
@@ -282,6 +290,34 @@ def render_prompt(cwd: str = "<cwd>", src_tree: str | None = None,
         cwd=cwd, src_tree=src_tree, tools=tools, skills=skills, knowledge=knowledge)
 
 
+#: Budget for the static block, in characters.
+PROMPT_BUDGET = 40_000
+
+#: Placeholder rendering used for BUDGET MEASUREMENT.
+#:
+#: The budget must not depend on how long this host's paths happen to be. A
+#: measured fact: the same template is 39990 chars with a 36-char source path
+#: and 40020 with a 66-char one — so measuring with the live path makes the
+#: gate green on one machine and red on another, with no change to the prompt.
+#: Measure against a fixed-width placeholder and the reading becomes a property
+#: of the prose, which is what the budget is actually about.
+_BUDGET_CWD = "<cwd>"
+_BUDGET_SRC_TREE = "<src_tree>"
+
+
 def prompt_len(**kwargs) -> int:
-    """Size of the prompt in characters — the number the C3 budget is about."""
-    return len(render_prompt(**kwargs))
+    """Budget-relevant size of the prompt, independent of live path lengths.
+
+    This is the number the C3 gate is about: how much PROSE the prompt carries.
+    Host-specific path length is not prose — it is the same on every deployment
+    only if you force it to be, so it is pinned here. Callers that want the
+    literal rendered length of a specific rendering can measure
+    len(render_prompt(...)) directly.
+
+    ALWAYS pins the two path placeholders, even when a caller passes their own:
+    a budget that moves with the caller's path is not a budget (measured before
+    this fix: 39996 at a 2-char path, 40154 at a 160-char one — same prose).
+    """
+    kwargs.pop("cwd", None)
+    kwargs.pop("src_tree", None)
+    return len(render_prompt(cwd=_BUDGET_CWD, src_tree=_BUDGET_SRC_TREE, **kwargs))

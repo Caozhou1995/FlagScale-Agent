@@ -55,13 +55,60 @@ def test_distinction_clause_states_what_must_not_happen() -> None:
     text = rendered()
     assert "DIFFERENT THINGS" in text
     # Both halves of the actual failure must be named, not implied.
-    assert re.search(r"never edit your source tree to make a task pass", text, re.I)
-    assert re.search(r"never store an environment fact there as a rule", text, re.I)
+    assert re.search(r"never edit the source tree to make a task pass", text, re.I)
+    # WHERE an environment fact belongs must be named, not just forbidden here.
+    # Without this the reader is left asking "then where?" -- and §8 says
+    # "write the moment you learn anything durable", which reads as a licence
+    # to write it into the nearest tree.
+    assert re.search(r"an environment fact goes in memory", text, re.I)
 
 
 def test_deployment_tree_may_be_a_copy() -> None:
     """The specific confusion: an edit in the repo is not an edit in the copy."""
-    assert "installed COPY" in rendered()
+    assert "installed copy" in rendered()
+
+
+def test_prompt_len_is_independent_of_path_length() -> None:
+    """The budget must measure PROSE, not how long this host's paths are.
+
+    Measured before this fix: 39996 at a 2-char source path, 40154 at a
+    160-char one -- same prose, different verdict. A gate that flips with the
+    deployment path is not a gate, it is a property of the machine.
+    """
+    readings = {prompt_len(src_tree=p) for p in ("/a", "/x" * 80,
+                                                "/nfs/caozhou/glm/agent_stage3")}
+    assert len(readings) == 1, f"prompt_len varies with the path: {readings}"
+
+
+def test_prompt_len_pins_placeholders_against_caller_values() -> None:
+    """A caller passing its own cwd must not change the budget reading."""
+    a = prompt_len()
+    b = prompt_len(cwd="/" + "y" * 100)
+    assert a == b, "prompt_len honoured a caller-supplied cwd; it must pin it"
+
+
+def test_annotations_are_not_evaluated_at_definition_time() -> None:
+    """requires-python is >=3.9; PEP 604 in a signature raises TypeError there.
+
+    Guarded two ways on purpose: `from __future__ import annotations` AND the
+    quoted annotation. This asserts the future import is present, because that
+    is the one that protects every OTHER annotation added later to this file.
+    """
+    import flagscale_agent.react.prompt as mod
+    src = open(mod.__file__, encoding="utf-8").read()
+    assert "from __future__ import annotations" in src, (
+        "prompt.py declares requires-python >=3.9 but PEP 604 annotations are "
+        "evaluated at definition time without this import"
+    )
+    # And the annotation really is deferred, not merely accompanied by the line.
+    ann = mod.render_prompt.__annotations__.get("src_tree")
+    assert isinstance(ann, str), f"src_tree annotation was evaluated: {ann!r}"
+
+
+def test_prompt_still_within_budget() -> None:
+    """Guards the C3 budget: the new clause must not push past 40000 chars."""
+    n = prompt_len()
+    assert n <= 40_000, f"prompt is {n} chars, budget 40000"
 
 
 def test_resolve_src_tree_is_derived_not_baked() -> None:
@@ -82,12 +129,6 @@ def test_resolve_src_tree_is_derived_not_baked() -> None:
     assert os.path.abspath(root) == repo_root
 
 
-def test_prompt_still_within_budget() -> None:
-    """Guards the C3 budget: the new clause must not push past 40000 chars."""
-    n = prompt_len()
-    assert n <= 40_000, f"prompt is {n} chars, budget 40000"
-
-
 # ── Mutation gate ────────────────────────────────────────────────────────────
 # Each case removes one half of the clause from the REAL template and asserts
 # the corresponding check above goes red. Written as data so a reader can see
@@ -96,12 +137,12 @@ def test_prompt_still_within_budget() -> None:
 _MUTATIONS = [
     ("source-tree header line", "Source tree: {src_tree}\n", ""),
     ("never-edit half",
-     "Never edit your source tree to make a task pass; ", ""),
+     "Never edit the source tree to make a task pass; ", ""),
     ("environment-fact half",
-     "never store an environment fact there as a rule.", ""),
-    ("deployment-copy parenthetical",
-     " — a deployment tree may be an installed COPY of it", ""),
-    ("the distinction itself", "are DIFFERENT THINGS. ", "are related. "),
+     "an environment fact goes in memory, not there.", ""),
+    ("deployment-copy sentence",
+     "A deployment tree may be an installed copy, not the tree you edit. ", ""),
+    ("the distinction itself", "are DIFFERENT THINGS: ", "are related. "),
 ]
 
 
@@ -121,6 +162,6 @@ def _contract_checks(text: str) -> None:
     assert "Working directory: /work" in text
     assert "Source tree: /src" in text
     assert "DIFFERENT THINGS" in text
-    assert re.search(r"never edit your source tree to make a task pass", text, re.I)
-    assert re.search(r"never store an environment fact there as a rule", text, re.I)
-    assert "installed COPY" in text
+    assert re.search(r"never edit the source tree to make a task pass", text, re.I)
+    assert re.search(r"an environment fact goes in memory", text, re.I)
+    assert "installed copy" in text
