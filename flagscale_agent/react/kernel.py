@@ -431,7 +431,7 @@ class AgentKernel:
                     )
                     if not _release:
                         self._force_tool_next = True
-                        self._thinking_cap_override = 3000
+                        self._thinking_cap_override = 1024
                     else:
                         d.display.warn(
                             "Endgame force_tool RELEASED for this round — a "
@@ -699,6 +699,27 @@ class AgentKernel:
                             # below 95% of max_output_tokens), so the escalation
                             # has to be driven by the cap count itself.
                             self._cap_text_streak = getattr(self, "_cap_text_streak", 0) + 1
+                            # ── ARM THE STRUCTURAL CHANNEL HERE TOO ─────────
+                            # Measured failure (write-compressor, 2026-11-09
+                            # 22:56 batch, trial H8KxFia): this branch ran 7
+                            # times ("cap-retry 1/4/5/7" + idle-retry 2/3/6)
+                            # and EVERY one of them produced ↓0 output tokens:
+                            # the warning alone re-ran a full stream that was
+                            # cut at the same wall, then produced nothing.
+                            # Cause: the escalation that arms force_tool lives
+                            # in the NUDGE chain further down, which this
+                            # early-return branch never reaches — so although
+                            # the model kept being told "forcing convergence",
+                            # `_force_tool_next` was never set and the next
+                            # request stayed a legal prose-only completion.
+                            # Arm it on the FIRST cap of a pure-thinking stream
+                            # (this branch is reached only when assistant_text
+                            # was empty). The squeeze rides the same call kwarg
+                            # as force_tool (see the _squeeze forwarding at the
+                            # call site), so a small floor cuts the next stream
+                            # early enough for the forced call to land.
+                            self._force_tool_next = True
+                            self._thinking_cap_override = 1024
                             d.display.warn(f"Thinking reached runtime cap (cap-retry {self._cap_retries}), forcing convergence...")
                         elif empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
@@ -827,7 +848,7 @@ class AgentKernel:
                                 # by the measured-failure note in the rung-1
                                 # comment itself; arm the structural channel now.
                                 self._force_tool_next = True
-                                self._thinking_cap_override = 3000
+                                self._thinking_cap_override = 1024
                                 if _cap_n >= 2:
                                     # Second (and later) cap in the SAME turn:
                                     # the model has now been told once to land
@@ -857,7 +878,7 @@ class AgentKernel:
                                     # early and the turn actually ends with a
                                     # tool call. Cleared when a write/edit
                                     # produces state on disk (below).
-                                    self._thinking_cap_override = 3000
+                                    self._thinking_cap_override = 1024
                                     nudge = (
                                         "[system: HARD STOP. Your reasoning has now hit the "
                                         f"runtime cap {_cap_n} times in this turn and each time "
@@ -1545,7 +1566,7 @@ class AgentKernel:
             # force_tool and the next stream still burned 240.3s of pure
             # thinking. Without the budget squeeze the structural wording
             # never reaches the model as an enforced constraint.
-            self._thinking_cap_override = 3000
+            self._thinking_cap_override = 1024
         d.display.warn(
             f"Idle think-interval ({_idle_secs:.0f}s with no tool state) — "
             f"forcing convergence (idle-retry {_retries + 1}"
