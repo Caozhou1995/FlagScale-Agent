@@ -61,6 +61,7 @@ from flagscale_agent.react.tools.load_knowledge import LoadKnowledgeTool
 from flagscale_agent.react.tools.load_skill import LoadSkillTool
 from flagscale_agent.react.tools.read_file import ReadFileTool
 from flagscale_agent.react.tools.read_image import ReadImageTool
+from flagscale_agent.react.tools.read_task_statement import TaskStatementReadersTool
 from flagscale_agent.react.tools.shell import ShellTool, ShellJobsTool
 from flagscale_agent.react.tools.write_file import WriteFileTool
 from flagscale_agent.react.tools.web_fetch import WebFetchTool
@@ -686,6 +687,22 @@ class WorkerAgent:
         self.tool_registry.register(EditFileTool())
         # Vision: let the model LOOK at an image instead of inferring it.
         self.tool_registry.register(ReadImageTool())
+        # Ten independent readings of the task statement. Registered as a real
+        # tool so the agent can re-read the statement through a chosen subset of
+        # viewpoints at any point. The statement text is filled in per run (see
+        # _auto_read_task_statement) — at construction time this process does not
+        # yet know what the statement is.
+        #
+        # Registered ONLY when the feature is enabled. The schema entry costs 937
+        # bytes on EVERY request (measured), so an unconditional registration
+        # would change the request body of batches that never opted in and break
+        # the "unset = identical to before" property this feature depends on.
+        self._task_statement_readers = None
+        if self._readers_enabled():
+            self._task_statement_readers = TaskStatementReadersTool(
+                provider=self.provider
+            )
+            self.tool_registry.register(self._task_statement_readers)
         _shell_tool = ShellTool(
             remind_interval=self.config.shell_remind_interval,
             env=self.config.shell_env,
@@ -1816,6 +1833,28 @@ class WorkerAgent:
         # Worker mode: the CLI positional arg is a contract PATH; resolve
         # to the full contract text + role prefix before the loop sees it.
         query = resolve_worker_query(query)
+        # Ten independent readings of the statement, run ONCE before the loop
+        # starts, delivered as their own message. This is a separate channel
+        # from the instruction on purpose: the task text is frozen and nothing
+        # may be appended to it, so the extra readings arrive as a second user
+        # turn instead of inside `query`. Gated by env so a batch that does not
+        # opt in is byte-identical to before.
+        #
+        # ORDER (fixed 2026-11-09): the statement MUST be appended FIRST and the
+        # readings SECOND. Two reasons, both load-bearing:
+        #   1. The agent's first exposure to the task has to be the task. Before
+        #      this fix the readings block was message[1] and the statement
+        #      message[2] — measured in all 86 sessions of batch
+        #      2026-11-08__23-04-35 — so the first thing the model read was a
+        #      DERIVED document, not the source.
+        #   2. _mech_original_task() (this file) defines "the original task" as
+        #      the FIRST user turn, and hard reset re-injects that verbatim as
+        #      "### (1) ORIGINAL TASK". With readings first, a hard reset would
+        #      hand back the readings block and the statement would be lost.
+        # _pin is NOT set on the readings: history.py reserves it for genuine
+        # user turns (losing one drops the operator's instruction). The readings
+        # are harness-authored and derived, so they stay evictable.
+        readings = self._auto_read_task_statement(query)
         # Headless user-task runs (not a resumed worker, not a worker contract)
         # get a one-line nudge appended to the user's own task text: the task
         # should be tackled in multi-agent mode, fanning out concurrent workers
@@ -1825,7 +1864,12 @@ class WorkerAgent:
         # [DISABLED 2026-11-01 per user ruling: single_shot 自动 append 多agent nudge 暂停]
         # query = _run_single_shot_append_nudge(
         #     query, worker=is_worker(), resume=resolve_resume_query() is not None)
+        # STATEMENT FIRST, readings SECOND (see the ORDER note above: the first
+        # user turn must be the task itself, both for the model's first
+        # exposure and because _mech_original_task() reads turn [0]).
         self.history.append({"role": "user", "content": query, "_pin": True})
+        if readings:
+            self.history.append({"role": "user", "content": readings})
         try:
             self._react_loop()
         except Exception:
@@ -2156,6 +2200,51 @@ class WorkerAgent:
         # Plan context is only used for the dashboard line at the end.
         plan_context = self._build_plan_context()
         self._refresh_system_prompt(plan_context=plan_context)
+
+    # ── Task-statement readings (ten viewpoints) ─────────────────────────────
+
+    #: Env switch. Unset/false = feature off and the run is byte-identical to
+    #: the pre-feature behaviour, so a batch that does not opt in is unaffected
+    #: and an A/B is a single env var.
+    _READERS_ENV = "FLAGSCALE_TASK_READERS"
+
+    def _readers_enabled(self) -> bool:
+        raw = (os.environ.get(self._READERS_ENV) or "").strip().lower()
+        return raw not in ("", "0", "false", "off", "no")
+
+    def _auto_read_task_statement(self, query: str) -> str:
+        """Run the ten-viewpoint reader once over `query`; return its rendering.
+
+        Returns "" (feature off, no statement, or the reader failed) so the
+        caller can simply skip inserting a message. A failure here must never
+        break the run: the readings are an extra input, not a precondition.
+
+        The statement is the task's own text. For a worker contract the caller
+        already resolved the contract text into `query`; for a plain headless
+        run `query` IS the statement. Either way we read what the agent is
+        about to be given, so the readings describe the same text the agent
+        sees.
+        """
+        if not self._readers_enabled():
+            return ""
+        text = (query or "").strip()
+        if not text:
+            return ""
+        readers = getattr(self, "_task_statement_readers", None)
+        if readers is None:
+            return ""
+        try:
+            readers._task_text = text
+            body = readers.execute()
+        except Exception as exc:  # never take the run down for an extra input
+            display.warn(
+                f"task statement readers failed ({type(exc).__name__}); "
+                f"continuing without them"
+            )
+            return ""
+        if not body or body.startswith("ERROR"):
+            return ""
+        return body
 
     def _build_plan_context(self) -> str:
         active = self.task_plan.get_active()
