@@ -319,3 +319,62 @@ def test_tool_is_not_registered_when_the_feature_is_off(monkeypatch):
     obj = build("1")
     assert "read_task_statement" in obj.tool_registry._tools
     assert obj._task_statement_readers is not None
+
+
+# ── numeric_conventions: an UNSET axis is a finding ─────────────────────────
+
+
+def _numeric_conventions_instruction() -> str:
+    return dict(VIEWPOINTS)["numeric_conventions"]
+
+
+def test_numeric_conventions_reports_an_unset_axis_as_a_finding():
+    """A quantity whose unit/scale/index base the statement never pins IS the answer.
+
+    Measured motivation (batch 2026-11-08__23-04-35): raman-fitting's statement
+    names the four peak parameters but never says what the x axis unit is. The
+    old instruction said "If the statement states no numbers, answer NOTHING
+    FOUND", so the viewpoint reported nothing — and the trial then fitted peaks
+    in nm where the grader wanted cm^-1 (x0 10440 vs 1580.3). The silence was
+    the single most valuable thing that reading could have said.
+    """
+    low = _numeric_conventions_instruction().lower()
+    assert "unset" in low, (
+        "numeric_conventions must name the UNSET axis as a reportable finding"
+    )
+    assert "is a finding" in low or "as a finding" in low, (
+        "the instruction must state outright that an unset axis is a finding, "
+        "not just mention the word 'unset'"
+    )
+    for axis in ("unit", "precision", "index base"):
+        assert axis in low, f"numeric_conventions must name the {axis!r} axis"
+
+
+def test_numeric_conventions_still_allows_a_true_nothing_found():
+    """The escape must survive: a statement with no quantity at all is still empty."""
+    low = _numeric_conventions_instruction().lower()
+    assert "nothing found for this viewpoint" in low, (
+        "a statement that mentions no quantity at all must still be able to "
+        "answer NOTHING FOUND — the change must not force invented content"
+    )
+
+
+def test_shared_prompt_does_not_collapse_a_silence_into_nothing_found():
+    """HARD RULE 2 must not override the viewpoint: silence != absence.
+
+    Without this, the numeric_conventions change is dead text: the shared rule
+    says "if this viewpoint finds nothing, answer exactly NOTHING FOUND", and a
+    model resolving that against a whole-statement pass will pick the safe
+    answer.
+    """
+    from flagscale_agent.react.tools.read_task_statement import _PROMPT
+
+    low = _PROMPT.lower()
+    assert "it does not mean" in low, (
+        "HARD RULE 2 must distinguish 'no subject for this viewpoint' from "
+        "'the statement left something unstated'"
+    )
+    assert "is a finding" in low or "a finding" in low, (
+        "HARD RULE 2 must say that reporting a silence is a finding, not an "
+        "invention"
+    )

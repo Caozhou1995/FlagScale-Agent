@@ -88,10 +88,16 @@ VIEWPOINTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "numeric_conventions",
-        "Extract ONLY every number, unit, precision, tolerance, magnitude, "
-        "size limit, count and index base stated in the statement. Quote "
-        "verbatim. If the statement states no numbers, answer NOTHING FOUND "
-        "FOR THIS VIEWPOINT.",
+        "Find every QUANTITY the statement mentions, and for each one say "
+        "which of these axes the statement FIXES and which it leaves UNSET: "
+        "unit or scale (e.g. cm^-1 vs nm, seconds vs frames), precision, "
+        "tolerance, index base (0-based vs 1-based), and magnitude. Quote the "
+        "phrase that names the quantity verbatim; for an UNSET axis, name the "
+        "axis that is missing and say why the quote does not pin it. AN UNSET "
+        "AXIS IS A FINDING, NOT AN ABSENCE — report it, because the reader "
+        "will otherwise assume a unit the statement never gave. Only if the "
+        "statement mentions no quantity at all, answer NOTHING FOUND FOR THIS "
+        "VIEWPOINT.",
     ),
     (
         "ambiguous_phrases",
@@ -128,9 +134,16 @@ HARD RULES
    paraphrase the quote, do not elide it, do not explain inside it.
 2. If this viewpoint finds nothing, answer exactly:
    NOTHING FOUND FOR THIS VIEWPOINT
-   Do not invent content to fill the space.
+   Do not invent content to fill the space. "Finds nothing" means the
+   statement contains no subject for this viewpoint at all — it does NOT mean
+   the statement left something unstated. An axis the statement never pins
+   (unit, precision, index base, tolerance) IS a finding: report the quantity
+   and name the axis as UNSET. Reporting a silence is not inventing content.
 3. No advice, no evaluation, no code, no summary of the task.
-4. At most 8 points.
+4. At most 8 points. Name an UNSET axis ONLY where it is genuinely undecided:
+   do not list the same five axes mechanically for every quantity, and do not
+   report an axis that the statement's own words do pin. One line per
+   quantity: the verbatim quote, then only the axes that are actually open.
 
 TASK STATEMENT
 ---
