@@ -115,12 +115,23 @@ def test_ignores_non_shell_tools() -> None:
 
 
 def test_message_carries_all_three_world_states() -> None:
-    """Failure, slowness, and path-dependence are the three things it teaches."""
+    """A transport failure, a slow transfer and a path-level refusal are three
+    different worlds and the message must let the agent TELL THEM APART.
+
+    Strengthened after a real trial: the agent ran `curl --noproxy '*'` once and
+    never drew a conclusion from it, because the message listed three
+    possibilities without a discriminating reading. The test now requires the
+    three fields that actually separate them (dns / conn / http), not just prose.
+    """
     g = NetAwarenessGuard()
     msg = g.check_post(_ctx("shell", "apt-get install -y x")).message
-    assert "CONNECT tunnel failed" in msg, "failure branch missing"
+    assert "time_namelookup" in msg, "no DNS-vs-TCP field to read"
+    assert "time_connect" in msg, "no connect() field to read"
+    assert "http=" in msg, "no status/code field to read"
     assert "time_total" in msg, "timing/slowness branch missing"
-    assert "path-dependent" in msg, "path-dependence branch missing"
+    assert "PATH-level" in msg or "path-dependent" in msg, "path-dependence missing"
+    # the discriminating test itself: same URL, both directions
+    assert "--noproxy" in msg, "no bypass direction named"
 
 
 def test_message_bounds_the_probe_and_allows_giving_up() -> None:
@@ -131,9 +142,11 @@ def test_message_bounds_the_probe_and_allows_giving_up() -> None:
     """
     g = NetAwarenessGuard()
     msg = g.check_post(_ctx("shell", "pip install x")).message
-    assert "-m 5" in msg, "no per-attempt timeout named"
-    assert "15s" in msg, "no total budget named"
-    assert "go on and" in msg or "no answer" in msg, "no permission to give up"
+    assert "-m 10" in msg, "no per-attempt timeout named"
+    assert "bounded" in msg, "no total budget named"
+    assert "go do the real work" in msg or "no answer" in msg, (
+        "no permission to give up"
+    )
 
 
 # ── 4. Generality gate (the mechanical form of "must fit any environment") ───
