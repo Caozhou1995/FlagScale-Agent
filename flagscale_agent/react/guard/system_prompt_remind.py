@@ -35,6 +35,8 @@ behaviour.
 
 from __future__ import annotations
 
+import re
+
 from . import Guard, GuardContext, GuardVerdict
 
 _REMIND_MESSAGE = """
@@ -81,16 +83,117 @@ not a paragraph.
 Re-issue the same declaration WITH these lines and continue.
 """
 
+_REMIND_MESSAGE_MISSING = """
+[Remind] The re-issued declaration still does not carry the review slots: {missing}.
+This is a STRUCTURAL check, not a judgement of your answers — the harness does
+not read whether they are right. It only requires each slot to be addressed in
+this declaration's own `verification` / `notes` text.
+
+Fill them in VERBATIM (the literal labels, in this order):
+  W0 UNVERIFIED LAYER — ...
+  W1 FAILURE RECEIPT — ...
+  W2 TRAP INVENTORY WALK — ...
+  W3 FRESH PROBE — <command> → <its real output>; bar=<...>; VERDICT=PASS|FAIL
+  W4 TRAP SHAPES — ...
+  RISK SWEEP — ...
+
+W3 needs the arrow: a command AND the output it printed on your artifact.
+`_override_reason` does NOT release this gate — only filling the slots does.
+"""
+
+
+class _ReviewCoverage:
+    """Result of the STRUCTURAL review check (never a semantic judgement)."""
+
+    __slots__ = ("missing", "has_w3_two_slots")
+
+    def __init__(self, missing, has_w3_two_slots):
+        self.missing = list(missing)
+        self.has_w3_two_slots = has_w3_two_slots
+
+    def __bool__(self):
+        # Truthy only when every label is present. The W3 two-slot check is
+        # reported separately because it is a FORM requirement on one label,
+        # not a seventh label.
+        return not self.missing
+
+    def __len__(self):
+        return len(self.missing)
+
+
+# The six literal labels the beat's message asks for. Matching is
+# case-insensitive and word-bounded: "w3" inside a word does not count, so a
+# stray "sw3" cannot fake coverage.
+_REVIEW_LABELS = ("W0", "W1", "W2", "W3", "W4", "RISK")
+
+
+def _review_labels_present(args: dict) -> _ReviewCoverage:
+    """Do this declaration's own evidence/notes carry the six review labels?
+
+    STRUCTURE ONLY. This never reads the content of the answers, never scores
+    them, and never decides whether the review was any good — a filled-in wrong
+    answer passes and an empty right one does not. That boundary is deliberate:
+    the guard's job is to make the slots exist, not to grade them.
+
+    Scanned fields: `verification` (the evidence array for step_done) and
+    `notes`. Both are the agent's own text on the declaration being made, so
+    the check is anchored to the same object the block asked the agent to fill.
+    """
+    parts = []
+    ver = args.get("verification")
+    if isinstance(ver, (list, tuple)):
+        parts.extend(str(v) for v in ver)
+    elif isinstance(ver, str):
+        parts.append(ver)
+    notes = args.get("notes")
+    if isinstance(notes, str):
+        parts.append(notes)
+    blob = "\n".join(parts)
+
+    missing = []
+    for label in _REVIEW_LABELS:
+        if not re.search(r"(?<![A-Za-z0-9_])" + label + r"(?![A-Za-z0-9_])", blob, re.I):
+            missing.append(label)
+
+    # W3 has its own FORM requirement: the message asks for
+    # "<command> → <its real output>", i.e. two slots. A W3 label with no
+    # arrow means the agent wrote the heading and skipped the reading. This is
+    # still structural — it checks the separator exists, not what it says.
+    # Scoped to the W3 line ONLY: an arrow in any other slot (RISK SWEEP's
+    # "risk → evidence → side" always has one) must not satisfy W3, or every
+    # review with a filled RISK line would pass W3 by accident.
+    w3_line = ""
+    for line in blob.splitlines():
+        if re.search(r"(?<![A-Za-z0-9_])W3(?![A-Za-z0-9_])", line, re.I):
+            w3_line = line
+            break
+    w3_two_slots = bool(re.search(r"(?:→|->|=>)", w3_line))
+    if "W3" not in missing and not w3_two_slots:
+        missing.append("W3(need '<command> → <output>')")
+
+    return _ReviewCoverage(missing, w3_two_slots)
+
 
 class SystemPromptRemindGuard(Guard):
-    """Block a completion declaration ONCE per step; never block anything else.
+    """Block a completion declaration until the self-review is STRUCTURALLY present.
 
-    First submission of a step_done / complete declaration is blocked with
-    the self-review pointer. The agent does its scientific self-review and
-    re-issues the SAME declaration; the re-issue passes (the review is the
-    agent's own judgment — the harness does not grade it, it only guarantees
-    the beat happened). Every other tool call and every other plan_update is
-    untouched.
+    Two changes over the original "block once, then let anything through" form:
+
+    1. NON-OVERRIDABLE. Measured (job 2026-11-10__00-11-22): of the 72 trials
+       the beat fired on, 72 (100%) carried `OVERRIDE REQUIRED: Add
+       "_override_reason"` and released the block that way — the beat averaged
+       3.2 fires per trial (227 total) while no review was ever produced. An
+       overridable block is an advisory, not a gate.
+
+    2. STRUCTURAL SELF-CHECK, NOT A SEMANTIC ONE. The re-issued declaration is
+       accepted only when its own evidence/notes text carries the six literal
+       labels W0/W1/W2/W3/W4/RISK. The guard does NOT judge whether an answer is
+       good, true, or complete — it only checks that the slots were addressed,
+       exactly as a form checks that fields are non-empty. A wrong-but-filled
+       answer passes; an empty one does not.
+
+    Everything else is untouched: every other tool call and every other
+    plan_update is never blocked by this guard.
     """
 
     name = "system_prompt_remind"
@@ -109,17 +212,39 @@ class SystemPromptRemindGuard(Guard):
         if not _declares_completion(args):
             return None
         sig = _declaration_sig(args)
+        covers = _review_labels_present(args)
         if sig in self._beaten:
-            return None  # already beaten once this step — let it through
+            # Beaten once. It may now pass ONLY if the review slots are filled.
+            # A second empty re-issue is still refused (this is what makes the
+            # beat real instead of a one-shot that any prose clears).
+            if not covers:
+                return GuardVerdict.block(
+                    _REMIND_MESSAGE_MISSING.format(missing=", ".join(covers.missing)),
+                    reason="system_prompt_remind_still_empty",
+                    category="system_prompt_remind",
+                    overridable=False,
+                )
+            return None  # slots addressed — let it through
         self._beaten.add(sig)
         return GuardVerdict.block(
             _REMIND_MESSAGE,
             reason="system_prompt_remind_beat",
             category="system_prompt_remind",
+            overridable=False,
         )
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         return None  # the beat is pre-side; nothing to inject afterwards
+
+    def accept_override(self, reason: str, ctx: GuardContext) -> bool:
+        """Refuse every override: the beat is released by filling the slots.
+
+        A prose reason cannot substitute for the structural review, because the
+        whole failure this guard exists for is an agent that BELIEVES it
+        reviewed. Measured: 72/72 trials supplied a 5+ char `_override_reason`
+        and moved on. So the only release path is `_review_labels_present`.
+        """
+        return False
 
 
 def _declares_completion(args: dict) -> bool:

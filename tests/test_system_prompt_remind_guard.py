@@ -1,12 +1,16 @@
 """SystemPromptRemindGuard: ONE block per completed step, then it passes.
 
-The beat semantics (user-directed 2026-10-31): the FIRST submission of a
-completion declaration is blocked once — forcing a scientific self-review —
-and the re-issued SAME declaration passes untouched. The harness never grades
-the review and never blocks any other agent behaviour. Tests pin both sides:
-every shape that declares a step done gets exactly one beat, and every
-neighbouring shape (other tools, non-declaration plan_updates, re-issues)
-stays silent.
+The beat semantics (revised 2026-11-10): the FIRST submission of a completion
+declaration is blocked once — forcing a scientific self-review — and the
+re-issued SAME declaration passes only when its own evidence/notes carry the
+six STRUCTURAL review labels (W0/W1/W2/W3/W4/RISK). The guard still never
+grades the review: a wrong-but-filled answer passes, an empty one does not.
+Measured motivation for the revision (job 2026-11-10__00-11-22): 72/72 beaten
+trials released the block with a 5+ char `_override_reason` and produced no
+review at all — the old "re-issue passes untouched" form was a no-op gate.
+Tests pin both sides: every shape that declares a step done gets exactly one
+beat, and every neighbouring shape (other tools, non-declaration
+plan_updates) stays silent.
 """
 
 from flagscale_agent.react.guard import GuardContext
@@ -22,6 +26,22 @@ def _ctx(tool_name="plan_update", args=None, result="Plan updated"):
         tool_args=args or {},
         tool_result=result,
     )
+
+
+def _filled(**over):
+    """The six review slots, structurally filled. The CONTENT is deliberately
+    junk: these tests must pass whether or not the answers are any good, which
+    is how the guard's "structure only, no semantics" boundary is pinned."""
+    slots = [
+        "W0 unverified layer: x",
+        "W1 settled-too-early pattern: x",
+        "W2 trap inventory walk: x",
+        "W3 cmd=id -> output=uid=0 verdict=pass bar=<1",
+        "W4 instance: x",
+        "RISK SWEEP: r1 -> e1 -> side",
+    ]
+    slots.extend(over.get("extra", []))
+    return slots
 
 
 def _pre(g, args, tool_name="plan_update"):
@@ -77,28 +97,30 @@ def test_old_seven_question_payload_does_not_return():
         assert dead not in low, f"removed 7-question item came back: {dead}"
 
 
-def test_reissue_of_same_step_passes():
+def test_reissue_passes_only_with_the_six_review_slots():
     g = SystemPromptRemindGuard()
     args = {"action": "step_done", "step_id": 3}
     assert _pre(g, args) is not None  # beat
-    # The agent adds real evidence between the block and the re-issue; the
-    # signature must NOT change (evidence fields are not identity).
-    args2 = {"action": "step_done", "step_id": 3, "notes": "self-review done"}
-    assert _pre(g, args2) is None
+    # A re-issue that adds prose but no slots is STILL refused — this is the
+    # whole point of the revision: the old form let any wording through.
+    assert _pre(g, {"action": "step_done", "step_id": 3, "notes": "self-review done"}) is not None
+    # With the slots present (still junk content) it passes, and the signature
+    # must not change (evidence fields are not identity).
+    assert _pre(g, {"action": "step_done", "step_id": 3, "verification": _filled()}) is None
 
 
 def test_different_step_gets_its_own_beat():
     g = SystemPromptRemindGuard()
     assert _pre(g, {"action": "step_done", "step_id": 1}) is not None
-    assert _pre(g, {"action": "step_done", "step_id": 1}) is None  # beaten
+    assert _pre(g, {"action": "step_done", "step_id": 1, "verification": _filled()}) is None
     assert _pre(g, {"action": "step_done", "step_id": 2}) is not None  # new beat
 
 
 def test_complete_is_one_beat_for_whole_plan():
     g = SystemPromptRemindGuard()
     assert _pre(g, {"action": "complete"}) is not None
-    assert _pre(g, {"action": "complete"}) is None
-    assert _pre(g, {"action": "complete"}) is None
+    assert _pre(g, {"action": "complete", "verification": _filled()}) is None
+    assert _pre(g, {"action": "complete", "verification": _filled()}) is None
 
 
 def test_batch_beat_keys_on_done_row_set():
@@ -111,7 +133,8 @@ def test_batch_beat_keys_on_done_row_set():
         ],
     }
     assert _pre(g, b1) is not None  # beat on {2}
-    assert _pre(g, b1) is None  # same done-set re-issue passes
+    assert _pre(g, b1) is not None  # same done-set, still no slots -> refused
+    assert _pre(g, dict(b1, verification=_filled())) is None  # slots present
     # A batch that declares a NEW done row is a different beat.
     b2 = {
         "action": "batch",
