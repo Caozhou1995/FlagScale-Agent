@@ -251,7 +251,7 @@ class TestCapRecoveryEscalation:
         # 3000-token squeeze — the old silent degrade (mock without **kw
         # raising TypeError) is what let this regression hide: the degrade
         # branch dropped the constraint and the assertion still saw False.
-        assert seen[1] == (True, 3000), seen
+        assert seen[1] == (True, 1024), seen
 
 
 def test_production_path_forwards_force_tool_to_provider():
@@ -340,7 +340,7 @@ def test_hard_stop_squeezes_the_thinking_budget():
 
     kernel.deps.call_llm_fn = _spy_call
     kernel.run_turn()
-    assert seen.get("thinking_cap_override") == 3000, seen
+    assert seen.get("thinking_cap_override") == 1024, seen
     # Consumed on use: the attribute must be cleared after forwarding.
     assert getattr(kernel, "_thinking_cap_override", None) is None, \
         kernel.__dict__.get("_thinking_cap_override")

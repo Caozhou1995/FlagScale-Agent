@@ -670,9 +670,31 @@ class AgentKernel:
                             # empty-output budget. Only a model that degenerates
                             # over and over ends the turn.
                             if intra_retries >= 4:
-                                self._intra_degen_retries = 0
-                                result.stop_reason = "intra_degenerate_max_retries"
-                                break
+                                # A staircase exhausted by pure degeneration must
+                                # still LAND what was already derived. Measured
+                                # (polyglot-c-py, 2026-11-10 job 00-11-22): the
+                                # four recoveries fired 1/4..4/4 inside 8 minutes
+                                # — far under the 900s wall — and the turn ended
+                                # at 3 tool calls with the deliverable never
+                                # written; reward 0 despite a 0.955 historical win
+                                # rate. So the last rung is not "give up": it
+                                # forces ONE write-through round (same mechanism
+                                # the cap branch uses at L721), and only ends the
+                                # turn if that round degenerates too.
+                                if not getattr(self, "_degen_flush_armed", False):
+                                    self._degen_flush_armed = True
+                                    self._intra_degen_retries = 0
+                                    self._force_tool_next = True
+                                    d.display.warn(
+                                        "Degenerate staircase exhausted — forcing "
+                                        "one write-through round before ending the "
+                                        "turn."
+                                    )
+                                else:
+                                    self._degen_flush_armed = False
+                                    self._intra_degen_retries = 0
+                                    result.stop_reason = "intra_degenerate_max_retries"
+                                    break
                             self._intra_degen_retries = intra_retries + 1
                             d.display.warn(
                                 "Degenerate repeat inside the reasoning stream "
@@ -1218,6 +1240,7 @@ class AgentKernel:
                 self._consecutive_saturated = 0  # M5: a real action resets the streak
                 self._recent_assistant_fps = []  # tools ran: not a dead loop
                 self._intra_degen_retries = 0  # tools ran: recovery succeeded
+                self._degen_flush_armed = False  # tools ran: the write-through landed
                 self._consecutive_completion_blocks = 0  # progress made; reset breaker
 
                 # ── Execute tools ──

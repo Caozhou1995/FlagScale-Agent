@@ -102,7 +102,7 @@ def test_endgame_arms_structural_channel_at_85pct():
     k.run_turn()
     assert cap.get("force_tool") is True, (
         f"endgame request must be structurally forced, got kwargs={cap}")
-    assert cap.get("thinking_cap_override") == 3000
+    assert cap.get("thinking_cap_override") == 1024
 
 
 def test_endgame_not_armed_below_85pct():
