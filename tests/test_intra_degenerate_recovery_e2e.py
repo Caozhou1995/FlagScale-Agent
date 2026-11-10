@@ -210,3 +210,46 @@ def test_normal_turn_unaffected_by_the_new_branch():
     result = kernel.run_turn()
     assert result.stop_reason == "explicit_signal"
     assert executed == [["shell"]]
+
+
+# ── direction (c): the FIRST rung must arm the structural channel
+def test_first_degenerate_rung_arms_force_tool():
+    """Measured (2026-11-10 batch 10-44-55): real trajectories stop degenerating
+    at recovery 1/4 and go back to prose (gpt2-codegolf, llm-inference-batching).
+    The 4/4-only arm never fired. A prose nudge is not a structural signal, so
+    the FIRST degenerate trip must set `_force_tool_next` exactly like the cap
+    branch does at its first trip — otherwise the flush channel is dead code."""
+    from flagscale_agent.react.kernel import AgentKernel
+
+    tool_call = [{"id": "t1", "name": "write_file",
+                  "arguments": {"path": "/app/x.txt", "content": "hi"}}]
+    script = [
+        ("", None, FILLER, True),                       # 1st degenerate abort
+        ("", None, FILLER, True),                       # 2nd degenerate abort
+        ("Landing the file.", tool_call, "", False),    # recovery: real tool
+        ("Done. [TASK_COMPLETE]", None, "", False),
+    ]
+    deps, history, display, executed = _make_deps(script)
+    kernel = AgentKernel(deps)
+
+    armed = []
+    orig = getattr(kernel, "_force_tool_next", False)
+
+    import flagscale_agent.react.kernel as K
+    real_warn = display.warn
+
+    def spy(msg, *a, **k):
+        real_warn(msg, *a, **k)
+        if "Degenerate repeat inside the reasoning stream" in str(msg):
+            armed.append(bool(getattr(kernel, "_force_tool_next", False)))
+
+    display.warn = spy
+    result = kernel.run_turn()
+
+    assert armed, "the degenerate branch never ran — test setup is wrong"
+    assert all(armed), (
+        f"force_tool was NOT armed on every degenerate rung; observed {armed}. "
+        "The 1/4 rungs are prose-only nudges, which is why the flush channel "
+        "never fires in real trajectories."
+    )
+    assert executed, "no tool call ran"

@@ -696,6 +696,18 @@ class AgentKernel:
                                     result.stop_reason = "intra_degenerate_max_retries"
                                     break
                             self._intra_degen_retries = intra_retries + 1
+                            # ARM THE STRUCTURAL CHANNEL ON THE FIRST RUNG.
+                            # Measured (2026-11-10 batch 10-44-55): the
+                            # 4/4-only arm below NEVER fired in practice —
+                            # gpt2-codegolf and llm-inference-batching both
+                            # stopped degenerating at recovery 1/4 and went
+                            # back to prose. A prose nudge ("demanding a
+                            # tool call") is not a structural signal: the
+                            # next request stayed a legal prose-only
+                            # completion. Same asymmetry the cap branch
+                            # fixed at L743 — arm on the FIRST trip so the
+                            # next stream is forced to call a tool.
+                            self._force_tool_next = True
                             d.display.warn(
                                 "Degenerate repeat inside the reasoning stream "
                                 f"(recovery {self._intra_degen_retries}/4) — "
