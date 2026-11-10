@@ -256,3 +256,19 @@ RISK SWEEP: none -> none -> side=none"""
         "fully confident. All checks pass and nothing is unverified."
     )
     assert bool(_review_labels_present({"notes": right_but_no_slots})) is False
+
+
+def test_known_limit_duplicate_w3_first_match_only():
+    """KNOWN LIMIT, deliberate: the W3 arrow is looked up on the FIRST line that
+    carries the W3 label. If an agent writes W3 twice and puts the arrow on the
+    second copy, the check refuses it.
+
+    Why leave it: the failure mode is a FALSE REJECT (one extra retry), never a
+    false accept, so it cannot let an unreviewed declaration through. Pinned
+    here so a future "fix" that silently broadens the search (e.g. scanning the
+    whole blob, which would let RISK SWEEP's arrows satisfy W3) turns this red.
+    """
+    dup = "W0 x\nW1 x\nW2 x\nW3 nothing here\nW3 `c` -> o\nW4 x\nRISK r -> e"
+    covers = _review_labels_present({"notes": dup})
+    assert bool(covers) is False
+    assert any("W3" in m for m in covers.missing)
