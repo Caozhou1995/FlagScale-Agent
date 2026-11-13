@@ -18,7 +18,7 @@ def _msg(thr, pct):
 def test_thresholds_include_65():
     assert 65 in TimeBudgetGuard._THRESHOLDS
     # ordering still high->low so the most severe pending threshold wins
-    assert TimeBudgetGuard._THRESHOLDS == (100, 90, 80, 75, 65, 50, 25)
+    assert TimeBudgetGuard._THRESHOLDS == (100, 90, 80, 75, 65, 50, 25, 10)
 
 
 def test_65_message_demands_falsification_before_completion():

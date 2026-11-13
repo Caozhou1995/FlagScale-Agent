@@ -70,9 +70,9 @@ class TestTimeBudgetGuardSilence:
         assert g.check_post(make_ctx(tool_name="")) is None
 
     def test_below_first_threshold_is_silent(self):
-        # First rung is now 25% — below it the guard stays silent.
+        # First rung is now 10% (the method-choice checkpoint) — below it silent.
         s = _Stats()
-        s.pct = 20.0
+        s.pct = 5.0
         g = TimeBudgetGuard(stats_fn=s)
         assert g.check_post(make_ctx()) is None
 
@@ -442,7 +442,7 @@ class TestTimeBudgetGateCopy:
     def test_80_does_not_fire_below_80(self):
         # fully silent below the lowest threshold (nothing crossed)
         s = _Stats()
-        s.pct = 20.0
+        s.pct = 5.0
         g = TimeBudgetGuard(stats_fn=s)
         assert g.check_post(make_ctx()) is None
 

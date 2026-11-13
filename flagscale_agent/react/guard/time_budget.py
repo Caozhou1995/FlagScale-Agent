@@ -31,9 +31,20 @@ Key design decisions:
     injected (standalone / interactive runs). In that case this guard stays
     completely silent — it never invents a deadline, and never nags a session
     that has no real time pressure.
-  • Percentage thresholds, not absolute seconds. The same 25/50/65/75/80/90/100% ladder
+  • Percentage thresholds, not absolute seconds. The same
+    10/25/50/65/75/80/90/100% ladder
     works for a 20-minute wall and a 1-hour wall without any per-task tuning.
   • Two modes on the ladder:
+      - 10%         → check_pre BLOCK (overridable) — the METHOD-CHOICE
+                      checkpoint. Fires once, in the 10–25% window only, and
+                      stops the tool call so the agent must spend one response
+                      answering: does my chosen method satisfy the task's stated
+                      constraints AND finish inside the remaining budget? Any
+                      override_reason releases it; the prose is the forcing
+                      function, not a credential check. Block, not inject:
+                      measured on write-compressor, an inject at this rung is
+                      read as pacing chatter and skipped in the same breath as
+                      the 25% nudge.
       - 25/50/75%   → check_post inject (pacing / health-check advisories).
       - 65%         → check_post inject (pre-completion falsification: prove
                       you are DONE before declaring it; see first_e2e_run.py).
@@ -94,7 +105,7 @@ class TimeBudgetGuard(Guard):
     # dataset download at ~13% budget and gave up at ~40% would never even see a
     # 50% nudge). Firing at 25% puts the pacing guidance where the agent has
     # enough trajectory to gauge its burn rate AND enough budget left to correct.
-    _THRESHOLDS = (100, 90, 80, 75, 65, 50, 25)
+    _THRESHOLDS = (100, 90, 80, 75, 65, 50, 25, 10)
 
     # A turn dies with the budget, not with a percentage: what matters is how
     # many more ACTIONS fit. This is the number of remaining action-rounds the
@@ -186,6 +197,39 @@ class TimeBudgetGuard(Guard):
         budget = float(stats.get("budget", 0.0) or 0.0)
         remaining = float(stats.get("remaining", 0.0) or 0.0)
         rounds = int(stats.get("rounds", 0) or 0)
+
+        # ---- 10% METHOD-CHOICE checkpoint (block, overridable) --------------
+        # Runs BEFORE the 90% critical logic: it is the earliest gate and must
+        # not be starved by it. Fires once per turn, the first time a tool call
+        # arrives after 10% has been consumed. Block, not inject, on purpose:
+        # an inject at this rung is read as pacing chatter and skipped in the
+        # same breath as the 25% nudge (measured on write-compressor: the 25%
+        # advisory and the 10% advisory were consumed back-to-back with no
+        # change in behaviour). A block costs one response, and that response
+        # is exactly the method-choice answer this gate exists to force.
+        #
+        # Any override_reason releases it — the prose is the forcing function,
+        # not a credential check. There is no regex and no bound extraction
+        # here: the model reads its own task text and judges; the prompt only
+        # supplies the criterion (satisfies the stated constraints AND finishes
+        # inside the budget).
+        #
+        # WINDOW: 10 <= pct < 25. Outside it the gate is wrong to fire:
+        #   * pct < 10  — nothing consumed yet, too early to price a method;
+        #   * pct >= 25 — the window this advice exists for has closed (that is
+        #     the whole argument for placing it at 10 rather than 75), and at
+        #     90+ it would collide with the CRITICAL wrap-up gate. A run that
+        #     jumps 9% -> 60% between calls must NOT be handed a "switch
+        #     method-class NOW, it is still cheap" message at 60%.
+        if 10 <= pct < 25 and 10 not in self._fired:
+            self._fired.add(10)
+            return GuardVerdict.block(
+                message=self._message(10, stats),
+                reason="time_budget_10pct_method_choice_block",
+                category="time_budget",
+                overridable=True,
+            )
+
         # When does the turn actually run out of ACTION rounds? A percentage is a
         # proxy that assumes a fixed cost per round; the measured harness varies
         # from 3s to 174s a call, and 10% of an 1800s wall is ~2 rounds — too few
@@ -241,8 +285,25 @@ class TimeBudgetGuard(Guard):
                 f"  1. If you do NOT know the exact delivery path, discover it with "
                 f"ONE shell call (`ls -la <dir>`); shell is a production tool and "
                 f"is not gated.\n"
-                f"  2. Write the crude-but-complete deliverable to that path NOW "
-                f"(write_file). Partial and correct beats complete and unwritten.\n"
+                f"  2. Then make the file AT THAT PATH be one the grader will accept. "
+                f"Which of these two shapes you are in decides the next call — read "
+                f"the measurement off your OWN command's output, do not guess it:\n"
+                f"     a. NOTHING is at that path yet -> write the crude-but-complete "
+                f"deliverable there NOW (write_file). Partial and correct beats "
+                f"complete and unwritten.\n"
+                f"     b. Something IS at that path, but it VIOLATES a limit the task "
+                f"itself states (too big, too slow, wrong format, wrong count) -> the "
+                f"file existing is what makes this the dangerous case: you are one "
+                f"wasted closure away from shipping it. Do NOT restart from scratch "
+                f"and do NOT assume a limit is close enough. Measure it AT THAT PATH, "
+                f"against the number the task names, then shrink or patch THAT file "
+                f"until the measurement passes. If a compliant version already exists "
+                f"somewhere else, copying it onto that path is a single call — do it "
+                f"and re-measure at the path; do not re-derive it.\n"
+                f"     A compliant copy sitting in /tmp, in a scratch directory, or in "
+                f"your working directory is NOT a deliverable. The grader reads only "
+                f"the path the task names. Leaving a good answer one `cp` away scores "
+                f"exactly zero.\n"
                 f"  3. Run it and report what it printed (shell). Its output IS "
                 f"your report — do not re-derive it.\n"
                 f"  4. If a background job of yours is already producing the "
@@ -295,7 +356,12 @@ class TimeBudgetGuard(Guard):
         # Find the most severe threshold that is crossed and not yet announced.
         # _THRESHOLDS is ordered high->low, so the first crossed-and-unfired one
         # is the most severe pending message.
+        # 10 is a check_pre BLOCK (METHOD-CHOICE checkpoint), not an inject: it is
+        # delivered once as a block and must never also arrive as a post-inject,
+        # or the agent gets the same 1500-character lecture twice in a row.
         for thr in self._THRESHOLDS:
+            if thr == 10:
+                continue
             if pct >= thr and thr not in self._fired:
                 # Mark EVERY crossed threshold as spent, not just this one. If pct
                 # jumped straight past several (e.g. 30 -> 95), we emit only the
@@ -339,8 +405,11 @@ class TimeBudgetGuard(Guard):
                 f"not talk yourself past it (\"close enough\", \"within noise\", "
                 f"\"the grader probably rounds\") and do not swap in a limit you chose "
                 f"yourself — a self-invented budget is not the task's budget.\n"
-                f"  2. VERIFY what is banked (`ls`/`cat` the delivery path — verify, "
-                f"do not recompute). NEVER start anything that could overwrite a "
+                f"  2. VERIFY what is banked — `ls`/`cat` the delivery path, and MEASURE "
+                f"it THERE against the limit the task states (verify, do not "
+                f"recompute). A compliant copy in /tmp or a scratch dir is NOT "
+                f"delivered; only the task's own path is graded. NEVER start anything "
+                f"that could overwrite a "
                 f"banked deliverable: a fresh full run writing the delivery file "
                 f"itself is NOT a wrap-up action, even if its 'payoff' looks better.\n"
                 f"  3. If a doubt about the banked value stays unresolved, record it "
@@ -370,7 +439,10 @@ class TimeBudgetGuard(Guard):
                 "only thing to fix. Do not talk yourself past it (\"close enough\", "
                 "\"within noise\", \"the grader probably rounds\") and do not swap in "
                 "a limit you chose yourself — a self-invented budget is not the task's "
-                "budget."
+                "budget. Measure it AT THE DELIVERY PATH, not wherever you last built "
+                "it: a compliant copy in /tmp or a scratch dir is NOT delivered — only "
+                "the task's own path is graded, and leaving a good answer one `cp` away "
+                "scores exactly zero."
             )
         elif thr >= 80:
             # Wrap-up starts BEFORE the wall: the harness hard-stop at <=0 remaining
@@ -390,8 +462,10 @@ class TimeBudgetGuard(Guard):
                 "reinterpret the task's limit or substitute one you picked. Measured: "
                 "the commonest late loss is not a missing result but a result the "
                 "agent already measured as over its stated bound and shipped anyway.\n"
-                "  2. VERIFY what is banked (`ls`/`cat` the delivery path — verify, "
-                "do not recompute). NEVER start anything that could overwrite a "
+                "  2. VERIFY what is banked — `ls`/`cat` the delivery path, and MEASURE "
+                "it there against the limit the task states (verify, do not recompute). "
+                "A compliant copy in /tmp or a scratch dir is NOT delivered; only the "
+                "task's own path is graded. NEVER start anything that could overwrite a "
                 "banked deliverable.\n"
                 "  3. If a doubt about the banked value stays unresolved, record it "
                 "explicitly next to the value — an audited degrade beats a silent "
@@ -402,8 +476,10 @@ class TimeBudgetGuard(Guard):
             tail = (
                 " Most of the budget is spent. If your current approach has not "
                 "produced a passing result yet, it likely will not finish in time — "
-                "switch to a faster method-class NOW rather than turning more knobs on "
-                "the same one. Action checklist, in priority order:\n"
+                "but at 75% a full method switch is no longer affordable. The only "
+                "course-change still worth making is a SMALLER-SCOPE delivery: a "
+                "simpler method that LANDS a valid result now, not a better-scoring "
+                "one that might land later. Action checklist, in priority order:\n"
                 "  1. Write-through the best valid result you already have to the "
                 "delivery path, so a timeout cannot wipe it out.\n"
                 "  2. List the doubts you already hold about that result. From now on "
@@ -446,7 +522,7 @@ class TimeBudgetGuard(Guard):
                 "result, so it can be settled or recorded before it becomes the "
                 "final answer."
             )
-        else:  # 25
+        elif thr >= 25:
             tail = (
                 " You are a quarter of the way in — the RIGHT moment to set your pace, "
                 "while the decision window is still open. Re-check your plan against "
@@ -457,5 +533,46 @@ class TimeBudgetGuard(Guard):
                 "Order independent expensive steps to overlap instead of queueing them "
                 "serially. Getting this pacing right now is far cheaper than "
                 "discovering at 75% that a slow step should have started at 25%."
+            )
+        else:  # 10 — the METHOD-CHOICE checkpoint (also returned by check_pre)
+            # Placed at 10% on purpose: this is the only point where switching
+            # method-class is still cheap. The 75% rung also mentions switching,
+            # but by then the cost of discarding the work already spent usually
+            # exceeds the budget left, so that advice arrives after its window
+            # closed. No regex, no bound extraction — the model reads its own
+            # task text and judges; the prompt only supplies the criterion.
+            #
+            # Delivered as a BLOCK (check_pre), so the message must be complete
+            # on its own and must state how to release it: one line of override
+            # is enough. The block exists to buy exactly that one response.
+            return (
+                f"[TimeBudget] METHOD-CHOICE CHECKPOINT — {pct:.0f}% of your "
+                f"enforced wall-clock budget is gone ({elapsed} used, "
+                f"~{remaining} left before the harness terminates the turn).\n\n"
+                "This call was held for one response, for ONE reason: at this "
+                "moment switching method-class is still cheap, and after it is "
+                "not. Answer these two questions IN ONE LINE EACH, as your "
+                "override_reason (any reasoning releases this gate — it is a "
+                "forcing function, not a credential check):\n\n"
+                "  1. CONSTRAINTS — what is the hardest constraint the task "
+                "itself states, and what number does YOUR chosen method's own "
+                "arithmetic predict it will produce for that constraint? Not "
+                "\"should be fine\" — the number your method implies, even "
+                "roughly. If that number cannot meet the task's own bound, no "
+                "amount of tuning will fix it: the METHOD is wrong.\n"
+                "  2. TIME — priced against the budget left (unit cost x units, "
+                "INCLUDING the time to verify the result), does that method "
+                "actually finish?\n\n"
+                "Why both halves matter — a method that fails EITHER one scores "
+                "ZERO, however well-engineered it is:\n"
+                "  - right answer but too slow to finish → never delivered, scores 0\n"
+                "  - finishes in time but violates a stated bound → rejected, scores 0\n"
+                "So a GOOD method is not the most capable one you can imagine — "
+                "it is the most capable one that still LANDS.\n\n"
+                "If either answer is uncomfortable, switch method-class NOW. The "
+                "cost of switching scales with how much of the old method you "
+                "already wrote, so this is the cheapest moment you will ever "
+                "have. If both answers are comfortable, say so in one line and "
+                "continue exactly as you were."
             )
         return head + tail
