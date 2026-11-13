@@ -14,6 +14,7 @@
 
 """Read file tool with line range support and short-term caching."""
 
+import itertools
 import os
 import time
 
@@ -34,26 +35,47 @@ class FileCache:
     _MAX_ENTRIES = 50
 
     def __init__(self):
-        self._store = {}  # path -> (content_lines, mtime, cached_at)
+        self._store = {}  # normpath -> (content_lines, mtime, cached_at)
+
+    @staticmethod
+    def _key(path: str) -> str:
+        """Canonical cache key for a caller-supplied path.
+
+        The cache is keyed by the path STRING, but callers spell the same file
+        many ways (`sub/k.py`, `./sub/k.py`, an absolute path, a symlinked
+        path). Keying on the raw string made invalidation miss: a write via
+        `./sub/k.py` left the entry cached under `sub/k.py`, so a later read
+        returned the PRE-write content while the file on disk was new
+        (measured: read returned A=1, file held A=777).
+
+        realpath (not just abspath) also collapses symlinks, and it does not
+        require the file to exist, so a read of a not-yet-written path and a
+        later write to it still share one key.
+        """
+        try:
+            return os.path.realpath(path)
+        except (OSError, ValueError):
+            return os.path.abspath(path)
 
     def get(self, path: str):
         """Return cached lines or None if cache miss/stale."""
-        entry = self._store.get(path)
+        key = self._key(path)
+        entry = self._store.get(key)
         if entry is None:
             return None
         content_lines, cached_mtime, cached_at = entry
         # TTL check
         if time.time() - cached_at > self._TTL:
-            del self._store[path]
+            del self._store[key]
             return None
         # mtime check — file may have been modified externally
         try:
             current_mtime = os.path.getmtime(path)
             if current_mtime != cached_mtime:
-                del self._store[path]
+                del self._store[key]
                 return None
         except OSError:
-            del self._store[path]
+            del self._store[key]
             return None
         return content_lines
 
@@ -63,15 +85,21 @@ class FileCache:
             mtime = os.path.getmtime(path)
         except OSError:
             return
+        key = self._key(path)
         # LRU eviction: remove oldest entry if at capacity
-        if len(self._store) >= self._MAX_ENTRIES and path not in self._store:
+        if len(self._store) >= self._MAX_ENTRIES and key not in self._store:
             oldest_key = min(self._store, key=lambda k: self._store[k][2])
             del self._store[oldest_key]
-        self._store[path] = (lines, mtime, time.time())
+        self._store[key] = (lines, mtime, time.time())
 
     def invalidate(self, path: str):
-        """Explicitly invalidate a path (called after write/edit)."""
-        self._store.pop(path, None)
+        """Explicitly invalidate a path (called after write/edit).
+
+        Uses the same canonical key as get/put, so a write spelled differently
+        from the earlier read (`./sub/k.py` vs `sub/k.py`) still drops the
+        entry. Callers that pass several spellings of one path are harmless.
+        """
+        self._store.pop(self._key(path), None)
 
     def invalidate_all(self):
         """Clear entire cache."""
@@ -121,6 +149,34 @@ class ReadFileTool(Tool):
 
     MAX_LINES = 500
 
+    # Only files up to this size are cached at all. The cache stored the WHOLE
+    # line list per path with no byte bound, so a few dozen MB-scale files
+    # (agent logs are routinely that size) pinned hundreds of MB: measured
+    # 8 distinct 20MB paths held 1.84M lines / 308MB RSS, and _MAX_ENTRIES=50
+    # extrapolates to ~1.9GB. Above the cap we simply do not cache.
+    _MAX_CACHE_BYTES = 4 * 1024 * 1024
+
+    @staticmethod
+    def _count_lines(fb) -> int:
+        """Count newline-terminated lines in a binary handle, in fixed-size chunks.
+
+        Streaming so the count costs O(1) memory: the previous code learned the
+        line count only by materialising every line via f.readlines().
+        A trailing partial line counts as one line.
+        """
+        block = 1024 * 1024
+        count = 0
+        last_byte = b""
+        while True:
+            chunk = fb.read(block)
+            if not chunk:
+                break
+            count += chunk.count(b"\n")
+            last_byte = chunk[-1:]
+        if last_byte and last_byte != b"\n":
+            count += 1
+        return count
+
     def execute(self, **kwargs) -> str:
         path = kwargs["path"]
         start = kwargs.get("start_line", 1)
@@ -138,25 +194,54 @@ class ReadFileTool(Tool):
         if is_full_read:
             lines = _file_cache.get(path)
 
-        if lines is None:
+        if lines is not None:
+            total = len(lines)
+            start = max(1, start)
+            if end is None:
+                end = min(start + self.MAX_LINES - 1, total)
+            end = min(end, total)
+            selected = lines[start - 1:end]
+        else:
+            # Cache miss: read ONLY the requested window. f.readlines() used to
+            # pull the entire file into memory no matter how few lines were
+            # asked for (measured: 500 lines out of an 80MB log = 129MB peak).
             try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
+                size = os.path.getsize(path)
+            except OSError as e:
+                return f"ERROR: {e}"
+            try:
+                with open(path, "rb") as fb:
+                    total = self._count_lines(fb)
             except Exception as e:
                 return f"ERROR: {e}"
-            # Cache full file content
-            _file_cache.put(path, lines)
 
-        total = len(lines)
-        start = max(1, start)
-        if end is None:
-            end = min(start + self.MAX_LINES - 1, total)
-        end = min(end, total)
+            start = max(1, start)
+            if end is None:
+                end = min(start + self.MAX_LINES - 1, total)
+            end = min(end, total)
 
-        if start > total:
-            return f"File has {total} lines, requested start_line={start} is past end."
+            if start > total:
+                return f"File has {total} lines, requested start_line={start} is past end."
 
-        selected = lines[start - 1:end]
+            need = end - start + 1
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    selected = list(itertools.islice(f, start - 1, end))
+            except Exception as e:
+                return f"ERROR: {e}"
+
+            # Cache only when the whole file is small enough to bound memory.
+            # A full read is the common repeat case, so populate the cache then;
+            # a ranged read of a small file is cached too (cheap, bounded).
+            if size <= self._MAX_CACHE_BYTES:
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as f:
+                        all_lines = f.readlines()
+                    if len(all_lines) == total:
+                        _file_cache.put(path, all_lines)
+                except Exception:
+                    pass  # cache population is best-effort, never fatal
+
         truncated = end < total and (end - start + 1) >= self.MAX_LINES
 
         if numbered:
