@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC, prompt_len
+from flagscale_agent.react.prompt import PROMPT_BUDGET, SYSTEM_PROMPT_STATIC, prompt_len
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +49,7 @@ def test_c3_total_size_bounded(text: str) -> None:
     Raised to 38000 for the 2026-11-06 four-situations edition, which is NOT an
     append: ~940 chars were reclaimed by compressing repeated wording first, so
     the net growth is ~740 and the ratio stays where the ratchet can still bite.
-    Raised 39000 -> 40000 on 2026-11-08 by USER RULING (final round before the 89-task full run) so the
+    Raised 39000 -> 40000 (2026-11-08) and 40000 -> 41000 (2026-11-13) by USER RULING so the
     step_done verdict clause — reverse-engineered from the 19 replay losses where
     the agent computed the right number and then shipped the other reading — fits
     without deleting a load-bearing clause. The ratchet is not relaxed: the
@@ -64,7 +64,7 @@ def test_c3_total_size_bounded(text: str) -> None:
     other.
     """
     n = prompt_len()
-    assert n <= 40_000, f"prompt is {n} chars, budget 40000"
+    assert n <= PROMPT_BUDGET, f"prompt is {n} chars, budget {PROMPT_BUDGET}"
 
 
 def test_c3b_the_two_readings_of_prompt_size_agree(text: str) -> None:

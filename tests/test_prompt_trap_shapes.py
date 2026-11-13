@@ -31,7 +31,7 @@ Two hard constraints, both tested below:
 import re
 
 from flagscale_agent.react.guard.system_prompt_remind import _REMIND_MESSAGE
-from flagscale_agent.react.prompt import prompt_len, render_prompt
+from flagscale_agent.react.prompt import PROMPT_BUDGET, prompt_len, render_prompt
 
 
 def _prompt():
@@ -134,9 +134,9 @@ def test_prompt_trap_shapes_are_pure_mechanism_never_an_answer():
         assert name not in block.lower(), f"task name {name!r} leaked into the trap-shape block"
 
 
-def test_prompt_still_fits_the_40000_budget():
+def test_prompt_still_fits_the_budget():
     n = prompt_len()
-    assert n <= 40_000, f"prompt is {n} chars, budget 40000"
+    assert n <= PROMPT_BUDGET, f"prompt is {n} chars, budget {PROMPT_BUDGET}"
     # prompt_len() must measure the RENDERED template, not the raw constant.
     # It pins the two path placeholders (cwd / src_tree) so the reading is a
     # property of the prose rather than of this host's path lengths; the

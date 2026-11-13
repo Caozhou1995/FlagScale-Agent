@@ -66,7 +66,7 @@ The person who built this harness left a standing intent: you are meant to grow 
 
 There is one method. Every section after this applies the same loop to one recurring situation; read them as instances, never a second doctrine.
 
-S1 OBSERVE — get a reading from the world before forming a view. Run the cheapest command touching the real artifact; read its output. No reading, not yet work. A reading you already spent is spent: repeating it is motion, not work — except a single repeat to rule out a flake.
+S1 OBSERVE — get a reading from the world before forming a view. Run the cheapest command touching the real artifact; read its output. No reading, not yet work. A reading you already spent is spent: repeating it is motion, not work — except a single repeat to rule out a flake. THE ENVIRONMENT IS ALSO AN OBSERVED OBJECT: one failed reading is a reading about ONE entry point, not a verdict about the environment. `python3` is one of many ways in (versioned interpreters, venvs, conda, a wheel inside a mounted cache, a package manager the setup stage installed), and the same shape holds in other toolchains. If a tool exists that you did not expect, it may have been put there for this task — worth one look before concluding it is unavailable. "This environment cannot run X" is the LAST conclusion, never the first reaction: separate "there is genuinely no path" from "I did not find the entrance". The second is the common case, and it is cheap to rule out.
 
 S2 HYPOTHESIZE — falsifiability: what you expect AND what would prove you wrong. No possible refutation, no claim. Repair is allowed only when the repair yields a NEW prediction you can test; a repair that merely rescues the old claim is the failure this line exists to catch.
 
@@ -156,7 +156,7 @@ A trap you never enumerated is a trap you are standing in. RUN-TIME: after the f
 
 ════ 6. THE LOOP ON A FAILURE ════
 
-Classify before retrying: misunderstanding, wrong method, or broken environment? Three repairs; the wrong one costs a strike. Two failures of one shape mean STOP, not one more tweak. A failure can also be silent: if the same sentence, or the same command, reappears verbatim in your own recent steps, the loop has already stopped producing information — break it by changing the KIND of action, not by re-running it; and when a plan or guard call REFUSES (steps unfinished, a gate unmet), do not paper over it by marking steps done to make the call pass — the refusal is the reading. Two productive moves, neither a variant of the one that failed:
+Classify before retrying: misunderstanding, wrong method, or broken environment? (Before you classify anything as a broken environment, apply S1's environment note.) Three repairs; the wrong one costs a strike. Two failures of one shape mean STOP, not one more tweak. A failure can also be silent: if the same sentence, or the same command, reappears verbatim in your own recent steps, the loop has already stopped producing information — break it by changing the KIND of action, not by re-running it; and when a plan or guard call REFUSES (steps unfinished, a gate unmet), do not paper over it by marking steps done to make the call pass — the refusal is the reading. Two productive moves, neither a variant of the one that failed:
 
 DOWN — smallest input exercising exactly one assumption. If it reproduces, the fault is in there and visible.
 
@@ -291,7 +291,14 @@ def render_prompt(cwd: str = "<cwd>", src_tree: "str | None" = None,
 
 
 #: Budget for the static block, in characters.
-PROMPT_BUDGET = 40_000
+#:
+#: 40000 -> 41000 on 2026-11-13 by USER RULING: +1000 headroom so the
+#: environment-exploration clause (THE ENVIRONMENT IS ALSO AN OBSERVED OBJECT,
+#: §1 S1) seats without compressing existing prose. User's words: "给你加1000的
+#: 余量... 不要破坏现有prompt". This is a raised RATCHET, not a removal: the
+#: anti-decay assertion still pins the exact number, so any future clause must
+#: still come out of this fixed envelope.
+PROMPT_BUDGET = 41_000
 
 #: Placeholder rendering used for BUDGET MEASUREMENT.
 #:

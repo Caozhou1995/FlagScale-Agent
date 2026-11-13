@@ -24,6 +24,7 @@ import re
 import pytest
 
 from flagscale_agent.react.prompt import (
+    PROMPT_BUDGET,
     SYSTEM_PROMPT_STATIC,
     prompt_len,
     render_prompt,
@@ -106,9 +107,9 @@ def test_annotations_are_not_evaluated_at_definition_time() -> None:
 
 
 def test_prompt_still_within_budget() -> None:
-    """Guards the C3 budget: the new clause must not push past 40000 chars."""
+    """Guards the C3 budget: the new clause must not push past PROMPT_BUDGET."""
     n = prompt_len()
-    assert n <= 40_000, f"prompt is {n} chars, budget 40000"
+    assert n <= PROMPT_BUDGET, f"prompt is {n} chars, budget {PROMPT_BUDGET}"
 
 
 def test_resolve_src_tree_is_derived_not_baked() -> None:

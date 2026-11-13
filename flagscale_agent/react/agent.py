@@ -467,6 +467,15 @@ class WorkerAgent:
         # no mirror, no memory key, no fixed seconds — see the module docstring.
         from flagscale_agent.react.guard.net_awareness import NetAwarenessGuard
         guard_registry.register(NetAwarenessGuard())
+        # EnvProbeGuard: inject-only advisory the FIRST time a tool result shows
+        # a missing module (ModuleNotFoundError / No module named). The measured
+        # failure it exists for: an agent probed ONE interpreter, concluded "this
+        # container has no torch", skipped runtime verification, and shipped code
+        # that crashed on a defect one real run would have caught. The trigger is
+        # the real result (kernel passes tool_result), never a guess at the
+        # command's shape. Never blocks; fires once per session.
+        from flagscale_agent.react.guard.env_probe import EnvProbeGuard
+        guard_registry.register(EnvProbeGuard())
         guard_registry.register(ShellSafetyGuard())
         guard_registry.register(KillSafetyGuard())
         # VcsBackupGuard: targeted block on destructive git ops (checkout --,

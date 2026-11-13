@@ -36,7 +36,7 @@ by a future prompt edit.
 
 from __future__ import annotations
 
-from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC, prompt_len
+from flagscale_agent.react.prompt import PROMPT_BUDGET, SYSTEM_PROMPT_STATIC, prompt_len
 
 
 def _text() -> str:
@@ -96,7 +96,7 @@ def test_both_clauses_fit_the_budget():
     # the anti-accumulation ratchet now lives in test_c3_total_size_bounded.
     # raised 37000 -> 38000 on 2026-11-06 (four-situations edition, net +740
     # after ~940 chars of compaction); the ratchet itself is test_c3.
-    # raised 38000 -> 39000 -> 40000 by USER RULING, to seat the step_done
+    # raised 38000 -> 39000 -> 40000 -> 41000 by USER RULING, to seat the step_done
     # verdict clause (from the 19 replay losses: right number computed, wrong
     # reading shipped). Ratchet unchanged — test_c3 still fails on clause piles.
-    assert prompt_len() <= 40_000
+    assert prompt_len() <= PROMPT_BUDGET

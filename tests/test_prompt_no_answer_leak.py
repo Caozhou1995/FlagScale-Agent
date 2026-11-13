@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC, prompt_len
+from flagscale_agent.react.prompt import PROMPT_BUDGET, SYSTEM_PROMPT_STATIC, prompt_len
 
 # Literals observed in the 2026-11-07 leak. Each is an answer or a bar of one
 # specific replay item; none is a mechanism. Extend this list when a new leak is
@@ -101,6 +101,6 @@ def test_prompt_still_carries_the_verdict_mechanism() -> None:
 
 
 def test_prompt_within_budget_after_the_fix() -> None:
-    """The clause must fit the user-raised 40000 budget, not push past it."""
+    """The clause must fit the user-raised PROMPT_BUDGET, not push past it."""
     n = prompt_len()
-    assert n <= 40_000, f"prompt is {n} chars, budget 40000"
+    assert n <= PROMPT_BUDGET, f"prompt is {n} chars, budget {PROMPT_BUDGET}"

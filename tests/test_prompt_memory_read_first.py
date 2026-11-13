@@ -120,7 +120,7 @@ def test_prompt_still_fits_the_budget():
     """The read clause was paid for by compressing §8 prose, never by raising the cap."""
     n = prompt_len()
     assert n <= PROMPT_BUDGET, f"prompt is {n} chars, budget {PROMPT_BUDGET}"
-    assert PROMPT_BUDGET == 40_000, (
+    assert PROMPT_BUDGET == 41_000, (
         "the budget is a user-ruled anti-decay ratchet; a new clause must be paid "
         "for by compressing existing prose, not by raising this number"
     )
