@@ -100,21 +100,9 @@ Fill them in VERBATIM (the literal labels, in this order):
   RISK SWEEP — ...
 
 W3 needs EITHER an arrow (`command → output`) or the output on the NEXT line of
-the same W3 slot (the slot ends at the next line starting with a label). After a
-few re-issues the declaration is released anyway and the gap is recorded, since
-re-issuing the same text again cannot change the outcome.
+the same W3 slot (the slot ends at the next line starting with a label).
 
 `_override_reason` does NOT release this gate — only filling the slots does.
-"""
-
-
-_REMIND_MESSAGE_RELEASED = """
-[Remind] Structural release: this declaration re-issued the review slots {n} times
-without matching the accepted shape — {missing}. It is LET THROUGH now, because
-refusing it again cannot improve the text (the override channel is closed by
-design, so an unshaped re-issue had no way forward). Record the gap in your plan
-note: the step is completed with an INCOMPLETE self-review, and the missing slot
-is what a later reader should treat as unverified.
 """
 
 
@@ -260,6 +248,19 @@ class SystemPromptRemindGuard(Guard):
 
     Everything else is untouched: every other tool call and every other
     plan_update is never blocked by this guard.
+
+    THERE IS NO EXIT VALVE, BY USER RULING (2026-11-13). An earlier revision
+    released the declaration after 3 refusals and recorded the gap as an
+    INCOMPLETE self-review. That was the wrong repair: it makes the gate fail
+    exactly on the runs that most need it — the ones whose author could not
+    produce the slots. The deadlock it was meant to solve was a JUDGEMENT bug,
+    not a missing exit: the W3 checker demanded the arrow on the FIRST W3 line
+    only, so a correct two-line probe ("cmd" then "4 passed in 0.61s") was
+    refused, and the model spent four re-issues guessing a format. That bug is
+    fixed by the SPAN rule (see _review_labels_present); with it, a model that
+    actually ran a probe has a shape that passes. If a declaration still cannot
+    fill the slots, blocking again is the correct response — the step is not
+    ready, and step_skip is a visible, recorded choice rather than a silent pass.
     """
 
     name = "system_prompt_remind"
@@ -270,22 +271,6 @@ class SystemPromptRemindGuard(Guard):
     def __init__(self) -> None:
         # Signatures already beaten once this session: one beat per step.
         self._beaten: set[str] = set()
-        # Per-signature count of REFUSALS delivered (the first beat plus every
-        # rejected re-issue). Measured (job 2026-11-10__10-44-55, 22 trials):
-        # the beat fired 102 times across 16 trials, and 3 trials hit the
-        # "re-issued still empty" path — a model that had filled the slots but
-        # not in the exact shape the checker wants had NO way through: the
-        # override channel is closed by design (72/72 escaped that way before),
-        # so its only remaining move was `step_skip` past the step. A gate with
-        # no exit is not a gate, it is a wall. So: after _MAX_REFUSALS the
-        # declaration is let through and the missing slots are written into the
-        # plan note, i.e. the review is recorded as INCOMPLETE rather than
-        # silently dropped. 3 is deliberately > 1: the first two refusals still
-        # teach (measured shape errors are a 1-2 round fix), and 0/1 would
-        # re-open the 72/72 override escape from the other side.
-        self._refusals: dict[str, int] = {}
-
-    _MAX_REFUSALS = 3
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if ctx.tool_name != "plan_update":
@@ -300,30 +285,14 @@ class SystemPromptRemindGuard(Guard):
             # A second empty re-issue is still refused (this is what makes the
             # beat real instead of a one-shot that any prose clears).
             if not covers:
-                seen = self._refusals.get(sig, 1) + 1
-                self._refusals[sig] = seen
-                if seen <= self._MAX_REFUSALS:
-                    return GuardVerdict.block(
-                        _REMIND_MESSAGE_MISSING.format(missing=", ".join(covers.missing)),
-                        reason="system_prompt_remind_still_empty",
-                        category="system_prompt_remind",
-                        overridable=False,
-                    )
-                # Exit valve: the slot text is still not in the accepted shape,
-                # but blocking again cannot improve it (the agent has already
-                # re-issued this same declaration _MAX_REFUSALS times). Let it
-                # through as an INJECTION so the gap is on the record instead
-                # of being swallowed.
-                return GuardVerdict.inject(
-                    _REMIND_MESSAGE_RELEASED.format(
-                        n=seen - 1, missing=", ".join(covers.missing)
-                    ),
-                    reason="system_prompt_remind_released_incomplete",
+                return GuardVerdict.block(
+                    _REMIND_MESSAGE_MISSING.format(missing=", ".join(covers.missing)),
+                    reason="system_prompt_remind_still_empty",
                     category="system_prompt_remind",
+                    overridable=False,
                 )
             return None  # slots addressed — let it through
         self._beaten.add(sig)
-        self._refusals[sig] = 1
         return GuardVerdict.block(
             _REMIND_MESSAGE,
             reason="system_prompt_remind_beat",

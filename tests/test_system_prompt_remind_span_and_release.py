@@ -130,38 +130,27 @@ def test_span_does_not_swallow_a_later_probe():
     assert bool(_covers(text)) is False
 
 
-# -- (B) bounded release -----------------------------------------------------
-def test_first_and_second_refusals_still_block():
-    """The release must not become a one-shot. Refusals 1 and 2 are BLOCKS -
-    without this the beat is decorative again."""
+# -- (B) a real gate: it never releases itself -------------------------------
+def test_refusals_never_exhaust_into_a_release():
+    """USER RULING 2026-11-13: "这个要的就是真门，不要这种 _MAX_REFUSALS".
+    No refusal budget exists — an unfilled declaration is blocked on EVERY
+    re-issue, however many times it is re-issued. A gate that lets itself out
+    after N tries fails exactly on the runs that most need it."""
     g = SystemPromptRemindGuard()
     assert g.check_pre(_ctx(_step_done())).action == "block"          # beat
-    for i in (1, 2):
+    for i in range(1, 11):
         v = g.check_pre(_ctx(_step_done(notes="still no slots")))
         assert v is not None and v.action == "block", (
-            f"refusal {i} did not block: {getattr(v, 'action', None)}"
+            f"refusal {i} did not block — the gate lost its teeth at attempt {i}"
+        )
+        assert v.overridable is False, (
+            f"refusal {i} became overridable — the override channel must stay shut"
         )
 
 
-def test_release_after_max_refusals_is_an_inject_not_a_block():
-    """After _MAX_REFUSALS the declaration goes through, and the gap is put on
-    the record: the verdict is an INJECT (non-blocking) naming what is missing."""
-    g = SystemPromptRemindGuard()
-    assert g.check_pre(_ctx(_step_done())).action == "block"           # refusal 1
-    assert g.check_pre(_ctx(_step_done(notes="no slots"))).action == "block"  # 2
-    assert g.check_pre(_ctx(_step_done(notes="no slots"))).action == "block"  # 3
-    v = g.check_pre(_ctx(_step_done(notes="no slots")))                # 4th: out
-    assert v is not None and v.action != "block", (
-        "the guard kept blocking after its own refusal budget - a wall, not a gate"
-    )
-    assert "W3" in v.message or "slot" in v.message, (
-        f"the release hid what was missing: {v.message[:200]}"
-    )
-
-
-def test_release_does_not_fire_for_a_conforming_reissue():
-    """A declaration that fills the slots passes on the SECOND try - the release
-    valve is for unshapeable text, not a substitute for the review."""
+def test_a_conforming_reissue_passes_on_the_second_try():
+    """The ONLY exit is filling the slots. One refusal, then a shaped re-issue
+    passes — so the gate is satisfiable without any refusal budget."""
     g = SystemPromptRemindGuard()
     assert g.check_pre(_ctx(_step_done())).action == "block"
     v = g.check_pre(_ctx(_step_done(verification=[
@@ -170,15 +159,15 @@ def test_release_does_not_fire_for_a_conforming_reissue():
     assert v is None, f"a conforming re-issue was still refused: {v.action}"
 
 
-def test_per_signature_budget_is_independent():
-    """Each declaration identity carries its own budget: a second step is not
-    released just because the first one burned its refusals."""
+def test_each_step_is_gated_independently():
+    """Beating step 1 says nothing about step 2: the second declaration gets its
+    own beat, and neither accumulates a release budget."""
     g = SystemPromptRemindGuard()
     for _ in range(4):
         g.check_pre(_ctx(_step_done(step_id=1)))
     v = g.check_pre(_ctx(_step_done(step_id=2)))
     assert v is not None and v.action == "block", (
-        "a fresh step inherited the previous step's exhausted budget"
+        "a fresh step inherited the previous step's state instead of being gated"
     )
 
 
