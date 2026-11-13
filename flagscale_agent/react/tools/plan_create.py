@@ -37,9 +37,15 @@ _REVIEW_STEP_ACCEPTANCE = [
     "timing, counts).",
     "GENERALIZATION. Verify on at least one perturbed or held-out input, not only the "
     "development sample; if there is no generalizable point, say why.",
-    "DELIVERY HYGIENE. The delivery path holds only what the task requires (no .bak / "
-    "scratch / build byproducts); the real artifact is non-empty and well-formed, not a "
-    "placeholder or a truncated file.",
+    "DELIVERY & WORKSPACE HYGIENE. The delivery path holds only what the task requires "
+    "(no .bak / scratch / build byproducts); the real artifact is non-empty and "
+    "well-formed, not a placeholder or a truncated file. This is not only about the "
+    "delivery path: remove the intermediate and temporary files you yourself produced "
+    "anywhere during the work — probe scripts, build trees, dumps, logs, self-test "
+    "outputs, and anything written under scratch or tmp locations — once they are no "
+    "longer needed. Leave the workspace as if the task had been done cleanly the first "
+    "time: a leftover you created can be mistaken for a fresh result, or read as a "
+    "deliverable, by whoever inspects the machine next.",
     "UNSETTLED PREMISES. For any load-bearing premise you described as unverifiable, "
     "either give a probe whose design intent was to falsify it, or state the world-state "
     "in which it is false and why that is a safe bet.",

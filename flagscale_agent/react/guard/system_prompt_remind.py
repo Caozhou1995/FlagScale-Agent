@@ -64,6 +64,8 @@ not a paragraph.
   VERDICT=PASS|FAIL. A number on the wrong side of its bar is a verdict, not a
   caveat: repair it, or declare the goal unreachable and give the reading that
   shows why.
+  PARSING RULE — labels start each slot; W3 runs to the next labelled line.
+  Accepted: `cmd → output` on one line, OR cmd on the W3 line, output next line.
 
   W4 TRAP SHAPES — five shapes recur across unrelated tasks; a step can be green
   on W0-W3 and still miss one. For EACH, name YOUR instance on THIS deliverable
@@ -97,8 +99,22 @@ Fill them in VERBATIM (the literal labels, in this order):
   W4 TRAP SHAPES — ...
   RISK SWEEP — ...
 
-W3 needs the arrow: a command AND the output it printed on your artifact.
+W3 needs EITHER an arrow (`command → output`) or the output on the NEXT line of
+the same W3 slot (the slot ends at the next line starting with a label). After a
+few re-issues the declaration is released anyway and the gap is recorded, since
+re-issuing the same text again cannot change the outcome.
+
 `_override_reason` does NOT release this gate — only filling the slots does.
+"""
+
+
+_REMIND_MESSAGE_RELEASED = """
+[Remind] Structural release: this declaration re-issued the review slots {n} times
+without matching the accepted shape — {missing}. It is LET THROUGH now, because
+refusing it again cannot improve the text (the override channel is closed by
+design, so an unshaped re-issue had no way forward). Record the gap in your plan
+note: the step is completed with an INCOMPLETE self-review, and the missing slot
+is what a later reader should treat as unverified.
 """
 
 
@@ -157,17 +173,67 @@ def _review_labels_present(args: dict) -> _ReviewCoverage:
 
     # W3 has its own FORM requirement: the message asks for
     # "<command> → <its real output>", i.e. two slots. A W3 label with no
-    # arrow means the agent wrote the heading and skipped the reading. This is
-    # still structural — it checks the separator exists, not what it says.
-    # Scoped to the W3 line ONLY: an arrow in any other slot (RISK SWEEP's
-    # "risk → evidence → side" always has one) must not satisfy W3, or every
-    # review with a filled RISK line would pass W3 by accident.
-    w3_line = ""
+    # reading means the agent wrote the heading and skipped the probe. This is
+    # still structural — it checks the two slots EXIST, not what they say.
+    #
+    # SCOPE = the W3 SPAN, not one line. Measured (job 2026-11-10__10-44-55,
+    # 22 trials, 102 beat blocks): the previous form looked for the arrow on
+    # the FIRST line carrying the W3 label only, so the natural two-line write
+    #     W3 FRESH PROBE — python3 -m pytest tests/x.py -q
+    #     4 passed in 0.61s; bar=all green; VERDICT=PASS
+    # was refused (probe: `_review_labels_present` -> False, missing=
+    # ["W3(need ...)"]; the same text joined onto one line -> True). The model
+    # then had to guess the accepted shape — its own words in that batch:
+    # "Maybe the backticks are the issue", "Let me try with plain ASCII arrow",
+    # i.e. four re-issues spent guessing a FORMAT while the reading was already
+    # there. So the span runs from the first W3-bearing line up to the next
+    # line carrying ANY label (W0/W1/W2/W3/W4/RISK).
+    #
+    # BOUNDARY (kept deliberately): the span does NOT extend past the next
+    # label, so RISK SWEEP's "risk → evidence → side" arrows — which every
+    # filled review has — still cannot satisfy W3 by accident, and a duplicated
+    # W3 whose SECOND copy carries the arrow is still refused. Both are pinned
+    # by tests; widening to the whole blob turns them red.
+    span_re = re.compile(
+        r"^[\s>*_#-]*(?:" + "|".join(_REVIEW_LABELS) + r")(?![A-Za-z0-9_])",
+        re.I,
+    )
+    w3_head = re.compile(r"^[\s>*_#-]*W3(?![A-Za-z0-9_])", re.I)
+    w3_span: list[str] = []
     for line in blob.splitlines():
-        if re.search(r"(?<![A-Za-z0-9_])W3(?![A-Za-z0-9_])", line, re.I):
-            w3_line = line
+        if not w3_span:
+            if w3_head.search(line):
+                w3_span.append(line)
+            continue
+        if span_re.search(line):   # next label HEAD line closes the slot
             break
-    w3_two_slots = bool(re.search(r"(?:→|->|=>)", w3_line))
+        w3_span.append(line)
+    if not w3_span:
+        # FALLBACK — no line STARTS with W3, yet a label exists somewhere. The
+        # shape that produces this is a declaration with every slot crammed onto
+        # one line ("W0 ... W1 ... W2 ... W3 cmd -> out ... RISK ..."), where
+        # there is no line boundary to segment on. Then the whole line carrying
+        # W3 IS the slot (the pre-revision behaviour for a one-line write), so
+        # take it verbatim and stop — no continuation is possible.
+        for line in blob.splitlines():
+            if re.search(r"(?<![A-Za-z0-9_])W3(?![A-Za-z0-9_])", line, re.I):
+                w3_span.append(line)
+                break
+
+    span_text = "\n".join(w3_span)
+    # FORM A: the arrow separator the message asks for, anywhere inside the span.
+    has_arrow = bool(re.search(r"(?:→|->|=>)", span_text))
+    # FORM B: the same information split over two LINES with no arrow written —
+    # command on the W3 line, its reading on a following line. This is the form
+    # that actually appeared in the trajectories above. Accepted only when the
+    # span has a second non-empty line carrying a DIGIT (a reading is a number,
+    # per the slot's own wording), so a bare heading, a prose sentence, or a
+    # one-word "n/a" still fails.
+    rest = w3_span[1:]
+    has_reading_line = any(
+        line.strip() and re.search(r"\d", line) for line in rest
+    )
+    w3_two_slots = has_arrow or has_reading_line
     if "W3" not in missing and not w3_two_slots:
         missing.append("W3(need '<command> → <output>')")
 
@@ -204,6 +270,22 @@ class SystemPromptRemindGuard(Guard):
     def __init__(self) -> None:
         # Signatures already beaten once this session: one beat per step.
         self._beaten: set[str] = set()
+        # Per-signature count of REFUSALS delivered (the first beat plus every
+        # rejected re-issue). Measured (job 2026-11-10__10-44-55, 22 trials):
+        # the beat fired 102 times across 16 trials, and 3 trials hit the
+        # "re-issued still empty" path — a model that had filled the slots but
+        # not in the exact shape the checker wants had NO way through: the
+        # override channel is closed by design (72/72 escaped that way before),
+        # so its only remaining move was `step_skip` past the step. A gate with
+        # no exit is not a gate, it is a wall. So: after _MAX_REFUSALS the
+        # declaration is let through and the missing slots are written into the
+        # plan note, i.e. the review is recorded as INCOMPLETE rather than
+        # silently dropped. 3 is deliberately > 1: the first two refusals still
+        # teach (measured shape errors are a 1-2 round fix), and 0/1 would
+        # re-open the 72/72 override escape from the other side.
+        self._refusals: dict[str, int] = {}
+
+    _MAX_REFUSALS = 3
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
         if ctx.tool_name != "plan_update":
@@ -218,14 +300,30 @@ class SystemPromptRemindGuard(Guard):
             # A second empty re-issue is still refused (this is what makes the
             # beat real instead of a one-shot that any prose clears).
             if not covers:
-                return GuardVerdict.block(
-                    _REMIND_MESSAGE_MISSING.format(missing=", ".join(covers.missing)),
-                    reason="system_prompt_remind_still_empty",
+                seen = self._refusals.get(sig, 1) + 1
+                self._refusals[sig] = seen
+                if seen <= self._MAX_REFUSALS:
+                    return GuardVerdict.block(
+                        _REMIND_MESSAGE_MISSING.format(missing=", ".join(covers.missing)),
+                        reason="system_prompt_remind_still_empty",
+                        category="system_prompt_remind",
+                        overridable=False,
+                    )
+                # Exit valve: the slot text is still not in the accepted shape,
+                # but blocking again cannot improve it (the agent has already
+                # re-issued this same declaration _MAX_REFUSALS times). Let it
+                # through as an INJECTION so the gap is on the record instead
+                # of being swallowed.
+                return GuardVerdict.inject(
+                    _REMIND_MESSAGE_RELEASED.format(
+                        n=seen - 1, missing=", ".join(covers.missing)
+                    ),
+                    reason="system_prompt_remind_released_incomplete",
                     category="system_prompt_remind",
-                    overridable=False,
                 )
             return None  # slots addressed — let it through
         self._beaten.add(sig)
+        self._refusals[sig] = 1
         return GuardVerdict.block(
             _REMIND_MESSAGE,
             reason="system_prompt_remind_beat",
