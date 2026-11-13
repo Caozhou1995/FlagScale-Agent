@@ -258,6 +258,25 @@ class AgentKernel:
     IDLE_THINK_INTERVAL_SEC = 90
     # Minimum consecutive no-tool round-trips before the idle gate may fire.
     IDLE_THINK_MIN_ROUNDS = 2
+    # Token floor for the convergence squeeze (was a hard-coded 1024 scattered
+    # across 5 sites). This is the budget for the NEXT thinking stream once a
+    # cap/idle rung has decided the agent must stop reasoning and land work.
+    # SET BACK TO 1024 on 2026-11-12 after a 3-tier A/B on write-compressor
+    # (same task, n4k4, only this constant differing):
+    #   128  -> job 2026-11-12__14-02-25: DEADLOCK. 4/4 trials ended with exactly
+    #           1 tool call, 0 write_file, whole-run generation 94-1010 tokens,
+    #           cap-retry climbing to 38-50. 128 tokens is below the minimum
+    #           "think + emit a tool call" unit, so the model can never reach the
+    #           `if not tool_calls` escape branch and is locked in a truncate loop.
+    #   1024 -> job 2026-11-12__12-42-20: 3W/1L, tools 5-16, gen 2347-10258.
+    #   2048 -> job 2026-11-12__14-15-26: 1W/3L, tools 1-13, gen 162-8427;
+    #           write_file appeared in 3/4 trials (vs 0/4 at 128), but the win rate
+    #           is BELOW the historical baseline for this task (48W/88 = 54.5%).
+    # 1024 was chosen as the "not worse than baseline" setting: 1024 vs 2048 reward
+    # is Fisher p=0.486 (n=4, power 0.37) — i.e. NOT distinguishable, so the higher
+    # token budget is unearned evidence-wise. The hard finding is only that 128 is
+    # broken (0/4 write_file). Re-test all three only with >=15 trials per arm.
+    THINKING_SQUEEZE_TOKENS = 1024
 
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
@@ -431,7 +450,7 @@ class AgentKernel:
                     )
                     if not _release:
                         self._force_tool_next = True
-                        self._thinking_cap_override = 1024
+                        self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
                     else:
                         d.display.warn(
                             "Endgame force_tool RELEASED for this round — a "
@@ -753,7 +772,7 @@ class AgentKernel:
                             # call site), so a small floor cuts the next stream
                             # early enough for the forced call to land.
                             self._force_tool_next = True
-                            self._thinking_cap_override = 1024
+                            self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
                             d.display.warn(f"Thinking reached runtime cap (cap-retry {self._cap_retries}), forcing convergence...")
                         elif empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
@@ -882,7 +901,7 @@ class AgentKernel:
                                 # by the measured-failure note in the rung-1
                                 # comment itself; arm the structural channel now.
                                 self._force_tool_next = True
-                                self._thinking_cap_override = 1024
+                                self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
                                 if _cap_n >= 2:
                                     # Second (and later) cap in the SAME turn:
                                     # the model has now been told once to land
@@ -912,7 +931,7 @@ class AgentKernel:
                                     # early and the turn actually ends with a
                                     # tool call. Cleared when a write/edit
                                     # produces state on disk (below).
-                                    self._thinking_cap_override = 1024
+                                    self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
                                     nudge = (
                                         "[system: HARD STOP. Your reasoning has now hit the "
                                         f"runtime cap {_cap_n} times in this turn and each time "
@@ -1601,7 +1620,7 @@ class AgentKernel:
             # force_tool and the next stream still burned 240.3s of pure
             # thinking. Without the budget squeeze the structural wording
             # never reaches the model as an enforced constraint.
-            self._thinking_cap_override = 1024
+            self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
         d.display.warn(
             f"Idle think-interval ({_idle_secs:.0f}s with no tool state) — "
             f"forcing convergence (idle-retry {_retries + 1}"

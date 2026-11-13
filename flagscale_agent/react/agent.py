@@ -1337,6 +1337,14 @@ class WorkerAgent:
     # this many seconds and no visible output has appeared. 0 disables.
     IN_STREAM_THINKING_WALL_SEC = 240
 
+    # Hard ceiling for the force_tool watchdog exemption (see the _wd_limit
+    # derivation in _call_llm_stream). This used to be an implicit 2× of
+    # IN_STREAM_THINKING_WALL_SEC, which meant raising the normal wall silently
+    # raised the exemption too (240→360 would push it 480→720s, leaving only
+    # 180s of a 900s agent budget). Pinned to its own constant so the two can be
+    # tuned independently: measured bound from filter-js-from-html DBqayX4.
+    FORCE_TOOL_WALL_CEIL_SEC = 480
+
     # Char-collapse floor (see _detect_char_collapse in this module): the
     # measured v28 trial produced ONE line of 119,373 consecutive '0' bytes
     # (145KB log, 122K zeros) — filler WITHOUT newlines, which the line-window
@@ -2526,6 +2534,13 @@ class WorkerAgent:
         stream_truncated = False
         reasoning_only = False
         thinking_capped = False
+        # Which source actually tripped the cap. Three independent sites below
+        # set `capped_now` (token counter, in-stream wall clock, per-event
+        # watchdog); they used to share ONE print message that hard-coded
+        # `cap_budget`. Under force_tool, cap_budget is deliberately 0, so a
+        # wall-clock abort printed the self-contradictory "0 token cap" and sent
+        # every trajectory analysis after the wrong root cause. Carry the reason.
+        _cap_reason = ""
         usage = {}
         self._streaming_in_code_block = False
 
@@ -2708,7 +2723,15 @@ class WorkerAgent:
             # call is emitted as tool_use deltas, which set tool_calls and
             # disarm every wall cap below anyway. So force_tool keeps a REAL
             # limit — the generous ratio-scaled one, not 0.
-            _wd_limit = (max(90, int(self.IN_STREAM_THINKING_WALL_SEC * 2))
+            # Explicit ceiling on the exemption: 480s is the measured bound
+            # (filter-js-from-html DBqayX4: one saturated step ate 808.4s =
+            # 44.9% of a 1799s budget, then 8 more zero-token steps to the
+            # wall). Scaling by 2 off IN_STREAM_THINKING_WALL_SEC would drag
+            # this bound along whenever the normal wall is raised (240→360
+            # would make it 720s, leaving 180s of a 900s budget), so the
+            # exemption is pinned to its own constant instead.
+            _wd_limit = (min(self.FORCE_TOOL_WALL_CEIL_SEC,
+                             max(90, int(self.IN_STREAM_THINKING_WALL_SEC * 2)))
                          if force_tool else self.IN_STREAM_THINKING_WALL_SEC)
 
         def _silence_watchdog():
@@ -2765,6 +2788,8 @@ class WorkerAgent:
                             and _wd_limit > 0
                             and time.time() - _stream_t0 >= _wd_limit):
                         capped_now = True
+                        _cap_reason = (
+                            f"{_wd_limit}s no-output watchdog cap")
                         thinking_capped = True
                         reasoning_only = True
                         if display.thinking_enabled():
@@ -2837,6 +2862,10 @@ class WorkerAgent:
                         if not thinking_capped and not content_parts and not tool_calls:
                             thinking_counter.add(event["content"])
                             capped_now, _capped_at = thinking_counter.state(cap_budget)
+                            if capped_now:
+                                _cap_reason = (f"{cap_budget} token cap"
+                                               if cap_budget > 0 else
+                                               "runtime cap (token budget disabled)")
                             # ── In-stream wall-clock cap (see
                             # IN_STREAM_THINKING_WALL_SEC) ──
                             # Token-based caps cannot fire on slow endpoints
@@ -2850,6 +2879,9 @@ class WorkerAgent:
                                         and time.time() - _stream_t0
                                         >= self.IN_STREAM_THINKING_WALL_SEC):
                                     capped_now = True
+                                    _cap_reason = (
+                                        f"{self.IN_STREAM_THINKING_WALL_SEC}s "
+                                        f"in-stream wall cap")
                             # ── Intra-stream degenerate-repeat breaker ──
                             # Detect an unbounded filler cycle inside ONE
                             # thinking stream, per completed line, and abort it
@@ -2910,7 +2942,7 @@ class WorkerAgent:
                                 if display.thinking_enabled():
                                     display._write(
                                         display.dim(
-                                            f"\n[thinking reached {cap_budget} token cap — forcing convergence]"
+                                            f"\n[thinking reached {_cap_reason or f'{cap_budget} token cap'} — forcing convergence]"
                                         )
                                     )
                                 # Abort the stream. The kernel re-injects the

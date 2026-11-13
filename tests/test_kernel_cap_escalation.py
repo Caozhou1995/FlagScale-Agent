@@ -251,7 +251,7 @@ class TestCapRecoveryEscalation:
         # 3000-token squeeze — the old silent degrade (mock without **kw
         # raising TypeError) is what let this regression hide: the degrade
         # branch dropped the constraint and the assertion still saw False.
-        assert seen[1] == (True, 1024), seen
+        assert seen[1] == (True, AgentKernel.THINKING_SQUEEZE_TOKENS), seen
 
 
 def test_production_path_forwards_force_tool_to_provider():
@@ -340,7 +340,7 @@ def test_hard_stop_squeezes_the_thinking_budget():
 
     kernel.deps.call_llm_fn = _spy_call
     kernel.run_turn()
-    assert seen.get("thinking_cap_override") == 1024, seen
+    assert seen.get("thinking_cap_override") == kernel.THINKING_SQUEEZE_TOKENS, seen
     # Consumed on use: the attribute must be cleared after forwarding.
     assert getattr(kernel, "_thinking_cap_override", None) is None, \
         kernel.__dict__.get("_thinking_cap_override")
@@ -386,3 +386,36 @@ def test_agent_applies_override_over_force_tool_exemption():
     # trial SbvVjVR). The old broken form was `_sq = getattr(self, ...)`.
     assert "getattr(self, '_thinking_cap_override'" not in src, \
         "override must be read from the call kwarg, not the agent instance"
+
+
+def test_squeeze_value_is_pinned_and_actually_small():
+    """The squeeze budget must be pinned to a RE-MEASURED value.
+
+    Why this test exists: the sibling assertions compare the forwarded kwarg
+    against `AgentKernel.THINKING_SQUEEZE_TOKENS` itself, so they stay green
+    for ANY value — mutating the constant to 777 passes them. Measured
+    2026-11-12: that ablation stayed green, i.e. no test pinned the number.
+
+    HISTORY (so the next person re-decides instead of guessing):
+      · This test first pinned 128 and asserted `< 1024`, on the theory that a
+        smaller squeeze lands a deliverable sooner.
+      · That theory was REFUTED by a 4-way A/B on write-compressor: at 128 all
+        4 trials made exactly 1 tool call, 0 write_file, and 94-1010 generated
+        tokens total with cap-retry climbing to 38-50. 128 sits below the
+        minimum "think + emit a tool call" unit, so `if not tool_calls` can
+        never be reached and the run deadlocks. 1024 gave 3W/1L in the same
+        task; 2048 gave 1W/3L (Fisher p=0.486 vs 1024 — indistinguishable).
+      · 1024 was then chosen as the "not worse than the 54.5% historical
+        baseline" setting. Any future change MUST be backed by >=15 trials per
+        arm, which is what it takes to distinguish a 75% from a 25% rate.
+    """
+    assert AgentKernel.THINKING_SQUEEZE_TOKENS == 1024, (
+        "squeeze budget changed; re-measure before accepting a new value "
+        "(>=15 trials per arm; see the history in this docstring)")
+    # Lower bound: below this the model cannot fit "think + emit a tool call"
+    # into one squeezed stream and the cap gate deadlocks (measured at 128).
+    assert AgentKernel.THINKING_SQUEEZE_TOKENS >= 1024, (
+        "squeeze budget is below the measured deadlock floor")
+    # Upper bound: it must still be a squeeze, i.e. well under the full
+    # thinking budget, or it stops forcing convergence at all.
+    assert AgentKernel.THINKING_SQUEEZE_TOKENS < 16384

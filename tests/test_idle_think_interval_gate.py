@@ -191,7 +191,7 @@ class TestIdleThinkIntervalGate:
         Sequence: 2 think round-trips trip the gate (nudge 1, advisory,
         _cap_retries 0->1); re-armed clock + 2 more think round-trips trip it
         again (_retries=1 >= 1) -> nudge 2 is STRUCTURAL -> the NEXT call
-        must carry force_tool=True AND thinking_cap_override=1024."""
+        must carry force_tool=True AND the configured squeeze budget."""
         h = _Harness()
         seen = []
         responses = [_THINK] * 4 + [_DONE]
@@ -209,11 +209,11 @@ class TestIdleThinkIntervalGate:
             result = kernel.run_turn()
         assert result.stop_reason == "explicit_signal"
         # The call AFTER the structural idle nudge must carry force_tool=True
-        # AND the 1024-token squeeze (the round-7 gap: force_tool was set,
+        # AND the configured squeeze budget (the round-7 gap: force_tool was set,
         # squeeze was not, next stream = 240.3s of unconverted thinking).
         assert any(
             kw.get("force_tool") is True
-            and kw.get("thinking_cap_override") == 1024
+            and kw.get("thinking_cap_override") == kernel.THINKING_SQUEEZE_TOKENS
             for kw in seen
         ), seen
 
