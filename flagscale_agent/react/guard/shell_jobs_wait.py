@@ -25,10 +25,13 @@ re-evaluates frequently.
 This guard blocks any `wait` with timeout > 60s and points the agent back at the
 right pattern: a SHORT bounded wait (<=60s) in a loop with real work between
 checks, a non-blocking `poll`, or — for a genuinely long job — the SAME wait
-with `return_early_after` set, which returns control at that cap and KEEPS the
-job handle. It is overridable: when every dependent step is already written and
-staged AND the output contract is confirmed, a single longer join can be
-justified with an _override_reason.
+with `return_early_after` set to a SHORT cap (<=60s), which returns control at
+that cap and KEEPS the job handle. The cap must itself be short: a cap of 300s
+on a 320s timeout is the same idle sitting under a different name, and accepting
+it made this guard a no-op (measured: three such waits blocked 446.4s against
+168.9s of real work). It is overridable: when every dependent step is already
+written and staged AND the output contract is confirmed, a single longer join can
+be justified with an _override_reason.
 
 Only `wait` / `wait_any` are affected. `poll` (non-blocking), `list`, and `kill`
 are never touched.
@@ -112,8 +115,19 @@ class ShellJobsWaitGuard(Guard):
         # the job handle. Only block a long wait that would sit idle the whole
         # time, i.e. one with no early cap (or a cap >= the blocking timeout,
         # which is the same thing under another name).
+        #
+        # The cap must ITSELF be short (<= _MAX_WAIT_SEC). Accepting any
+        # `early < timeout` made this guard a no-op, because the cheapest way to
+        # satisfy it is to make the cap only marginally smaller than the timeout —
+        # `timeout=320, return_early_after=300` passes the old test while blocking
+        # for 300s, which is the same idle sitting this guard exists to stop.
+        # Measured (train-fasttext, 2026-11-12): every wait carried such a cap and
+        # every one of them blocked for ~the full timeout —
+        # `<=120s/early 100s` blocked 102.8s, `<=260s/early 240s` blocked 258.3s,
+        # three waits totalling 446.4s against 168.9s of actual LLM work (72.5% of
+        # the agent's active time spent doing nothing).
         early = _coerce_int(ctx.tool_args.get("return_early_after"))
-        if early is not None and 0 < early < timeout:
+        if early is not None and 0 < early <= _MAX_WAIT_SEC:
             return None
 
         return GuardVerdict.block(
