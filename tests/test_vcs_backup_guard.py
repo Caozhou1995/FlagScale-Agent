@@ -150,12 +150,23 @@ class TestOverride:
         assert g.accept_override("backup exists: stash@{0}", ctx) is True
         assert g.check_pre(_shell("git reset --hard HEAD~1")) is None
 
-    def test_non_backup_reason_rejected(self):
+    def test_any_substantive_reason_releases(self):
+        # Generic release: the harness requires a STATED reason, it does not
+        # inspect the prose. No keyword is demanded.
         g = VcsBackupGuard()
         ctx = _shell("git reset --hard HEAD~1")
         g.check_pre(ctx)
-        assert g.accept_override("just do it please now", ctx) is False
-        assert g.check_pre(_shell("git reset --hard HEAD~1")) is not None
+        assert g.accept_override("just do it please now", ctx) is True
+        assert g.check_pre(_shell("git reset --hard HEAD~1")) is None
+
+    def test_non_backup_wording_also_releases(self):
+        # A reason that names no backup channel at all still releases — the
+        # guard does not judge content.
+        g = VcsBackupGuard()
+        ctx = _shell("git filter-branch --all")
+        g.check_pre(ctx)
+        assert g.accept_override("the tree is already clean", ctx) is True
+        assert g.check_pre(_shell("git filter-branch --all")) is None
 
     def test_too_short_reason_rejected(self):
         g = VcsBackupGuard()

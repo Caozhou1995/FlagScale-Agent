@@ -711,17 +711,13 @@ class VcsBackupGuard(Guard):
         return None
 
     def accept_override(self, reason: str, ctx: GuardContext) -> bool:
-        """Release only when the reason cites a concrete backup channel
-        (deterministic keyword check, style law 4). One matcher per override:
-        a new destructive form requires its own acknowledgment."""
+        """Generic release: any substantive reason (>5 chars), same standard as
+        the Guard base class. Deliberately NO content inspection — the harness
+        does not judge the agent's prose, it only requires the agent to have
+        stated one. One matcher per override: a NEW destructive form still
+        requires its own acknowledgment, so an ack for `reset --hard` never
+        covers a later `filter-branch`."""
         if not reason or len(reason.strip()) <= 5:
-            return False
-        lowered = reason.lower()
-        if not any(
-            kw in lowered
-            for kw in ("stash", "backup", "bak", "patch", "bundle", "branch",
-                       "clean", "regenerat")
-        ):
             return False
         command = str(ctx.tool_args.get("command", "")) if ctx else ""
         for idx, matcher in enumerate(_DESTRUCTIVE_MATCHERS):
