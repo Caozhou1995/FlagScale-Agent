@@ -273,13 +273,15 @@ def test_each_pass_is_rendered_verbatim_under_its_own_header(monkeypatch):
 
 
 def test_the_preamble_forbids_reading_the_passes_as_a_vote(monkeypatch):
-    """The layout is round-by-round, which LOOKS like three ballots.
+    """The layout is round-by-round, which LOOKS like several ballots.
 
     The preamble is the only thing the harness adds, and its load-bearing
-    clauses are (a) not three votes / minority does not lose, (b) disagreement
+    clauses are (a) not N votes / minority does not lose, (b) disagreement
     is a finding not a ballot count, (c) unverified raw material, the statement
-    wins, (d) say where they disagree before building. Each answers a measured
-    failure mode, so each is asserted verbatim here.
+    wins, (d) say where they disagree before building, (e) an UNSET is a
+    decision owed, settled from a DERIVED reading rather than by passing the
+    raw value through. Each answers a measured failure mode, so each is
+    asserted verbatim here.
     """
     monkeypatch.setenv("FLAGSCALE_TASK_READERS", "1")
     from flagscale_agent.react.agent import WorkerAgent
@@ -289,17 +291,57 @@ def test_the_preamble_forbids_reading_the_passes_as_a_vote(monkeypatch):
         provider=_FakeProvider(), task_text=""
     )
     out = obj._auto_read_task_statement(STATEMENT)
+    # The vote clause names the ACTUAL pass count: hard-coding "three" made
+    # this assertion fail the moment _READERS_ROUNDS became 2, and a test that
+    # pins an obsolete default turns a correct render red.
+    rounds = max(1, int(getattr(WorkerAgent, "_READERS_ROUNDS", 1)))
+    _w = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+    word = _w.get(rounds, str(rounds))
+    vote_clause = "NOT a vote" if rounds == 1 else f"NOT {word} votes"
     for clause in (
-        "NOT three votes",
+        vote_clause,
         "minority does not lose",
         "FINDING to investigate",
         "UNVERIFIED RAW MATERIAL",
         "itself is authoritative",
         "where the passes do not agree",
+        # Clause 5 — the UNSET-settlement rule. Load-bearing sub-parts:
+        "UNSET is a DECISION you owe, not a note",
+        "Whatever the statement DOES pin is authoritative",
+        "a reading DERIVED from the material",
+        "is itself a choice",
+        "A convention you merely recall is NOT a derivation",
+        "deliver the DERIVED value",
+        "name it as a bet",
     ):
         assert clause in out, (
             f"the preamble lost a load-bearing clause: {clause!r}"
         )
+
+
+def test_unset_clause_gives_derivation_priority_but_keeps_statement_supreme():
+    """Clause 5 must not become an excuse to override the task's own wording.
+
+    Measured failure (raman-fitting, 2026-11-15): the agent derived
+    x0 = 1e7/6329 = 1580 cm-1 — exactly the graded value — then delivered the
+    raw 6329 nm instead. The fix is a rule that says a DERIVED reading outranks
+    passing the raw value through. The trap on the other side is a rule that
+    says "pick the physically nicer one", which would license overriding what
+    the statement explicitly fixes. Both bounds are asserted here.
+    """
+    from flagscale_agent.react.agent import WorkerAgent
+
+    p = WorkerAgent._READERS_PREAMBLE
+    # (a) must subordinate derivation to what the statement pins, and must come
+    # BEFORE (b) — order carries the precedence, a substring test cannot see it.
+    i_a = p.index("(a) Whatever the statement DOES pin is authoritative")
+    i_b = p.index("(b) Where the statement pins nothing")
+    assert i_a < i_b, "clause (a) must precede (b): statement outranks derivation"
+    # (b) must say the derived reading wins over passing the raw value through.
+    assert "outranks merely passing the raw number through" in p
+    # (c) must deny remembered convention the status of a derivation — the
+    # dominance test admits SOURCED readings, not recalled ones.
+    assert "merely recall is NOT a derivation" in p
 
 
 

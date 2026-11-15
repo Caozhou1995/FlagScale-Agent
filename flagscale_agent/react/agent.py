@@ -1250,6 +1250,28 @@ class WorkerAgent:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 os.replace(tmp, path)
+                # Append-only receipt, deliberately SEPARATE from
+                # conversation.json: any later turn-boundary save or the
+                # SIGTERM handler calls _save_conversation(), which rewrites
+                # conversation.json through session.save_conversation() and
+                # does NOT carry "periodic_checkpoint" -- so in that file the
+                # evidence of a checkpoint is destroyed by the very save that
+                # makes the file readable. Measured (2026-11-15 batch
+                # 16-15-31, 3 trials): every conversation.json ended with
+                # mtime == the final save and no flag, which is
+                # INDISTINGUISHABLE from "the checkpoint never ran". This
+                # one-line receipt survives the overwrite, so one
+                # `wc -l periodic_saves.log` answers the question directly.
+                try:
+                    with open(
+                        os.path.join(session_dir, "periodic_saves.log"),
+                        "a", encoding="utf-8",
+                    ) as _receipt:
+                        _receipt.write(
+                            f"{time.time():.3f}\t{len(payload['messages'])}\n"
+                        )
+                except Exception:
+                    pass
             except Exception:
                 try:
                     os.unlink(tmp)
@@ -2432,6 +2454,28 @@ class WorkerAgent:
         "which viewpoint gave a different answer on different passes, and "
         "which viewpoint returned nothing on some passes and something on "
         "others. Then verify rather than pick.\n"
+        "\n"
+        "5. An UNSET is a DECISION you owe, not a note. These passes write "
+        "UNSET for anything the statement fails to pin — a unit, a scale, an "
+        "axis, an index base, a precision, a tie-break. The moment you deliver "
+        "a value for a key those passes marked UNSET, you have silently chosen "
+        "one reading of it. Settle it explicitly:\n"
+        "   (a) Whatever the statement DOES pin is authoritative — never trade "
+        "a fixed convention for an inferred one.\n"
+        "   (b) Where the statement pins nothing, a reading DERIVED from the "
+        "material (the data, the environment, a reference artifact, an "
+        "identity only one reading satisfies) is a sourced reading, and it "
+        "outranks merely passing the raw number through. Passing the raw "
+        "value through is itself a choice — the choice that the statement's "
+        "silence settles nothing — so when you already hold a derivation that "
+        "says otherwise, delivering the raw value is a bet, not a default.\n"
+        "   (c) A convention you merely recall is NOT a derivation and does "
+        "not qualify under (b).\n"
+        "   (d) So state it: for each UNSET key you deliver, say which reading "
+        "you took and what decided it. If what decided it is a derivation, "
+        "deliver the DERIVED value — not the raw axis point you started from. "
+        "If you deliver the literal one anyway, name it as a bet and say what "
+        "the derived value would have been.\n"
     )
 
     def _readers_enabled(self) -> bool:
