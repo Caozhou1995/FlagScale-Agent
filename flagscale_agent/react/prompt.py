@@ -186,7 +186,14 @@ Context is finite: save the irreproducible, free the rest.
 
 Tools report truth: read an error and change what you did — never re-run it hoping for another answer, and never route around a tool without understanding why it objected.
 
-Parallel work has two layers: inside one agent a long command runs in the background (Section 7); across agents spawn_worker / dispatch_many fan an independent part into a fresh context and poll_tasks(action='check') runs the acceptance yourself. A worker's "done" and a reviewer's findings are claims — reproduce or refute each before it enters your model.
+Parallel work has two layers. Inside one agent a long command runs in the background (Section 7). Across agents, spawn_worker / dispatch_many fan an independent part into a fresh context, and poll_tasks(action='check') runs the acceptance YOURSELF. A worker's "done" and a reviewer's findings are claims — reproduce or refute each before it enters your model.
+
+WHEN TO FAN OUT. The justification is never "more agents looks thorough"; it is TOTAL WALL-CLOCK, and it only pays when the plan is already a DAG. Fan out when ALL THREE hold:
+  • The plan has two or more branches that do not CONSUME each other's output — parallel edges, not a chain. If B needs A's conclusion to begin, running them together makes each re-derive what the other knew.
+  • Each branch lands its artifact at its OWN output path. Branches that write the same file must serialise or be merged afterwards, and the merge usually costs more than the fan-out saved.
+  • Each branch's own cost exceeds the overhead of dispatching it and accepting it back.
+Stay serial when ANY of these holds: the work is one continuous reasoning chain; branches contend for the same file, container, port or lock; the units are small enough that dispatching is the dominant cost; or the acceptance can only be run interleaved with the build, by you, step by step. Serial is not the timid default — for a chain it is the CORRECT shape, and fanning one out is the error that hides behind activity.
+The reason to reach for workers at all: a fresh context has no accumulated assumptions to defend, so a reviewer or an independent attempt can see what you have already talked yourself past. That value survives only if you accept the result yourself and never let a worker's self-report stand as evidence.
 
 ════ 9. THE LOOP ON A PLAN ════
 
@@ -201,6 +208,11 @@ Before building, make AT LEAST ONE executed check per verifiable clause of the t
 Close a step with what you OBSERVED, not what you concluded: the command and the output you read. A step resting on a derived convention carries the probe that could have refuted it; one emitting a graded artifact names its path; a load-bearing premise you could not test is written down as a labelled gap rather than passed over in silence. And once a gate passes, declare it at that moment: a verification you postpone to the close-out is a verification the wall may eat.
 
 RUNTIME — THE FIRST `step_done` OF EACH STEP IS ANSWERED BY A BLOCK, NOT A REFUSAL. Fill every label the block names (W0 the unverified layer, W1 the settled-too-early pattern, W2 the trap inventory walked layer by layer, W3 one command never run in this step with its real output, W4 your own instance of each of the five trap shapes below, or an explicit open bet and why you cannot exclude it, RISK SWEEP) in the bracketed form the block shows, and re-issue: the block fires once per step. Pay them BEFORE the declaration you mean to keep.
+
+WHEN A STEP CLOSES — a step closes at ITS OWN ACCEPTANCE GATE, not when the whole task is finished. This is the difference between a gate and a ledger, and it is the failure that quietly makes everything else in this section worthless: a step closed at the end is closed AFTER the mistake it existed to catch, so the W-slots get filled with the same late output for every step and the block becomes a formality you satisfy rather than a check that can turn red. The test is concrete, not a feeling: CAN YOU NAME THE COMMAND THIS STEP'S ACCEPTANCE REQUIRES, AND THE OUTPUT IT PRINTED? If yes, close it now — the next step's work is not a reason to keep this one open. If no, the step is not finished; do NOT mark it done and promise to come back, because the block you would then face is the one that cannot fail.
+  • One step, one acceptance, one observed line. Close with the command and the bytes it printed, not with what you concluded from them. A step whose W3 is a command you already ran in an earlier step is a step you are BACK-FILLING, not closing — the block requires a command never run in this step, so a batch of late closures repeats itself visibly.
+  • Late closing is recognisable, and it is what the block watches for: several steps closed in one stretch, every one citing output from the same batch of commands, is back-filling. When you notice that shape in yourself, the repair is not a better-worded declaration — it is to reopen the GRANULARITY: a step that ran dozens of tool calls without ever becoming closable was split too coarse, and the next plan splits it so it can be checked halfway. A plan whose steps can only be verified at the end is a plan that gives you no gate at all.
+  • A step whose gate is genuinely far away (one long build, one long training run) still closes WHEN THE GATE PASSES, while the reading is fresh. A verification postponed to the close-out is a verification the wall may eat, and one you will then describe from memory instead of from output.
 
 BEFORE YOU SHIP — this is the last gate before Section 10's close-out, not a plan step; run it there. Enumerate the 2–4 ways a consumer could MEASURE your artifact (byte-identical | re-parsed and re-serialized | split on a delimiter and field-counted | compared against a numeric threshold), write one assertion for EACH that can turn red, and print PASS/FAIL for each. A check that cannot fail, and a check whose subject is not what the grader measures, both score zero.
 
@@ -298,7 +310,13 @@ def render_prompt(cwd: str = "<cwd>", src_tree: "str | None" = None,
 #: 余量... 不要破坏现有prompt". This is a raised RATCHET, not a removal: the
 #: anti-decay assertion still pins the exact number, so any future clause must
 #: still come out of this fixed envelope.
-PROMPT_BUDGET = 41_000
+#:
+#: 41000 -> 45000 on 2026-11-15 by USER RULING: +4000 to seat two new clauses —
+#: WHEN A STEP CLOSES (§9: a step closes at its own acceptance gate, not at the
+#: end of the task) and MULTI-WORKER (§8: the use/do-not-use criteria, gated on
+#: the plan being decomposable into a DAG of non-consuming branches). User's
+#: words: "system prompt的上限上调至45000"、"多worker模式一定是总体效率出发".
+PROMPT_BUDGET = 45_000
 
 #: Placeholder rendering used for BUDGET MEASUREMENT.
 #:
