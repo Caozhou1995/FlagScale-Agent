@@ -63,6 +63,28 @@ _WRITE_FILE_NO_PLAN = (
 )
 
 
+_PLAN_REORDER_MESSAGE = (
+    "[Plan] The plan you just created is NOT the list you wrote back — the harness "
+    "inserted steps into it, and they have a fixed position.\n"
+    "\n"
+    "Re-read the plan (plan_status) before your next action. What changed:\n"
+    "  · ONE step was PREPENDED at position 1: the Frame step. It is the framing "
+    "step for THIS plan (qualifiers/facets, a first cut that lands something "
+    "scorable, the rival explanations to exclude, a premortem). It is not "
+    "paperwork to tick at the end — closing it late means the framing decision "
+    "was made after the work it was supposed to govern.\n"
+    "  · TWO steps were APPENDED at the end: Review (self-check of THIS "
+    "deliverable) and RSI (what the harness should learn).\n"
+    "\n"
+    "So the order you are meant to execute is: Frame FIRST → your own steps → "
+    "Review → RSI. Close each step at ITS OWN acceptance gate as you reach it, "
+    "not in a batch at the finish line. If you batch the closes, the gate has "
+    "already missed the mistake it existed to catch. If a step genuinely cannot "
+    "be closed yet, say so explicitly instead of working ahead and closing it "
+    "later."
+)
+
+
 class PlanGuard(Guard):
     """Nudges (interactive) or requires (single-shot) an active plan.
 
@@ -110,6 +132,14 @@ class PlanGuard(Guard):
         # discharged. Set ONLY by a plan_create whose result shows success —
         # a blocked/errored attempt leaves the obligation live.
         self._plan_ever_created = False
+
+        # One-shot: the harness-inserted-steps notice has already been injected
+        # for the current plan. [per-run]
+        # plan_create runs once in practice; the flag keeps a re-issued
+        # plan_create (or a plan replace) from re-injecting the same notice,
+        # because a notice the agent has already read is context noise, not a
+        # second signal.
+        self._frame_inject_done = False
 
     def set_single_shot(self, enabled: bool = True):
         """Enable single-shot enforcement at runtime (set once run mode known)."""
@@ -206,12 +236,16 @@ class PlanGuard(Guard):
         return None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
-        """Settlement site for the no-plan obligation.
+        """Settlement site for the no-plan obligation, and the plan-order notice.
 
-        Nothing here is surfaced to the LLM: check_post runs AFTER the tool, and
-        its verdicts are advisory-only (this method always returns None). Its job
-        is to SETTLE the no-plan obligation by OBSERVING that the completed
-        plan_create actually produced a plan — never by the appearance of it.
+        The settlement half is never surfaced to the LLM: it OBSERVES that the
+        completed plan_create actually produced a plan — never the appearance of
+        it.
+
+        The notice half DOES surface, exactly once per run: the plan the agent
+        just created is not the plan it wrote (the harness prepends Frame and
+        appends Review + RSI), so the agent is told to re-read the order and work
+        the fixed steps in place instead of back-filling them at the finish line.
         """
         if ctx.tool_name == "plan_create":
             self._calls_without_plan = 0
@@ -224,6 +258,28 @@ class PlanGuard(Guard):
             # historical success semantics.
             if not _tool_result_indicates_failure(ctx.tool_result):
                 self._plan_ever_created = True
+                # A plan that is merely CREATED is not a plan that is WORKED.
+                # The harness prepends a Frame step and appends Review + RSI, so
+                # the plan the agent just read back is NOT the list it wrote:
+                # there are two steps at the head/tail that it did not author.
+                # The observed failure this targets is structural, not careless:
+                # the agent treats plan_create as bookkeeping, works its own
+                # steps, and only discovers the fixed steps at the very end —
+                # Frame gets "closed" long after the framing decision it was
+                # supposed to govern, and Review/RSI get back-filled.
+                #
+                # So: say at the one moment the plan is fresh that the list now
+                # carries two harness steps and must be worked in order. This is
+                # INJECT-only (never a block) and fires ONCE per run
+                # (self._frame_inject_done) — an injection repeated at every
+                # later turn is context noise the agent learns to skip.
+                if not self._frame_inject_done:
+                    self._frame_inject_done = True
+                    return GuardVerdict.inject(
+                        _PLAN_REORDER_MESSAGE,
+                        reason="plan_harness_steps_reordered",
+                        category="plan_harness_steps_reordered",
+                    )
         return None
 
     def reset_turn(self):
