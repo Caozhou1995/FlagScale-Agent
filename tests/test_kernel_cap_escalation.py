@@ -408,8 +408,14 @@ def test_squeeze_value_is_pinned_and_actually_small():
       · 1024 was then chosen as the "not worse than the 54.5% historical
         baseline" setting. Any future change MUST be backed by >=15 trials per
         arm, which is what it takes to distinguish a 75% from a 25% rate.
+      · 2026-11-15 USER DIRECTIVE: 1024 -> 2048 ("达到一次上限后把收敛预算
+        调整成 2048"). This is a directive, NOT a measured win (the only
+        measurement is Fisher p=0.486 at n=4, i.e. indistinguishable). It is
+        still inside the measured-safe band and further above the "think +
+        emit a tool call" unit, which is the failure this constant prevents.
+        The >=15-trials-per-arm rule above still stands for any further change.
     """
-    assert AgentKernel.THINKING_SQUEEZE_TOKENS == 1024, (
+    assert AgentKernel.THINKING_SQUEEZE_TOKENS == 2048, (
         "squeeze budget changed; re-measure before accepting a new value "
         "(>=15 trials per arm; see the history in this docstring)")
     # Lower bound: below this the model cannot fit "think + emit a tool call"

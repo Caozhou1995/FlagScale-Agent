@@ -2512,6 +2512,18 @@ class WorkerAgent:
         "measured against, and destroying them can make every later check "
         "unanswerable rather than merely wrong. Irreversible scope is the "
         "expensive side of a tie — break the tie toward what you can undo.\n"
+        "   (a) WHAT THE NAMED STANDARD REQUIRES IS NOT 'WIDER SCOPE'. If the "
+        "statement names an external standard, kit, protocol, file format or "
+        "vendor spec, the elements that standard REQUIRES of the deliverable "
+        "are part of what the statement asked for — they are not scope creep, "
+        "and the narrow reading does NOT win by being smaller. Judge scope by "
+        "what the deliverable must contain, never by counting how many bytes "
+        "your preferred approach edits. A reading that omits a required "
+        "element is not 'the smaller change'; it is an incomplete answer.\n"
+        "   (b) The narrower reading only wins where the standard is genuinely "
+        "silent — where it constrains nothing on that axis. When the standard "
+        "does constrain the axis, following it IS the literal statement, not "
+        "an extension of it.\n"
     )
 
     def _readers_enabled(self) -> bool:
