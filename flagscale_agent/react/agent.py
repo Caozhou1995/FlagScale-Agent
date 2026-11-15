@@ -411,6 +411,12 @@ class WorkerAgent:
         self._total_iterations: int = 0
         self._original_user_task: str = ""
         self._session_start: float = time.time()
+        # Last periodic (intra-turn) conversation checkpoint. 0 means "not yet",
+        # so the first tool callback after start takes a checkpoint immediately
+        # rather than waiting a full interval.
+        self._last_periodic_save_at: float = 0.0
+        self._periodic_save_thread = None
+        self._periodic_save_payload: dict = {}
         # Wall-clock start of the CURRENT turn. Re-stamped at the top of every
         # _react_loop so task-budget accounting resets per turn (interactive mode
         # runs many turns over a long-lived session; only the current turn's
@@ -1141,6 +1147,118 @@ class WorkerAgent:
         try:
             self._save_conversation(completed=False)
         except Exception:
+            pass
+
+    #: Minimum gap between two periodic (intra-turn) checkpoints. A timeout
+    #: kill gives a ~1s SIGTERM->SIGKILL grace window, so the checkpoint has to
+    #: already be on disk BEFORE the kill arrives; saving only at turn
+    #: boundaries means a kill landing mid-turn loses the entire run.
+    _PERIODIC_SAVE_INTERVAL_SEC = 300.0
+
+    def _maybe_periodic_save(self):
+        """Checkpoint the conversation if _PERIODIC_SAVE_INTERVAL_SEC elapsed.
+
+        Called from the tool-result callback (the only per-action hook the
+        kernel offers), so the interval is measured between tool calls rather
+        than on a wall timer: a run that sits in one very long LLM call still
+        gets its checkpoint from the previous tool boundary, and no extra
+        thread or timer is needed.
+
+        The write is OFF-THREAD: this method must never make the react loop
+        wait on I/O. Order is deliberate --
+          1. snapshot the message list here, on the main thread, because
+             HistoryManager mutates messages in place (eviction rewrites
+             entries); passing the live list to a writer thread would race.
+          2. serialise + atomic-replace inside a daemon thread.
+        If a previous save is still running, skip this one: the next tool call
+        is a better time to save than queueing an unbounded backlog.
+        """
+        try:
+            interval = float(getattr(self, "_PERIODIC_SAVE_INTERVAL_SEC", 0) or 0)
+            if interval <= 0:
+                return
+            now = time.time()
+            last = getattr(self, "_last_periodic_save_at", 0.0)
+            if last and (now - last) < interval:
+                return
+            prev = getattr(self, "_periodic_save_thread", None)
+            if prev is not None and prev.is_alive():
+                return
+            import copy
+            messages = self.history.messages
+            if not messages:
+                return
+            if not any(m.get("role") != "system" for m in messages):
+                return
+            # Copy deeply enough that the writer owns its bytes: a shallow
+            # list() still shares the inner dicts the loop keeps mutating.
+            payload = copy.deepcopy(messages)
+            self._last_periodic_save_at = now
+            self._periodic_save_payload = dict(
+                messages=payload,
+                loaded_skills=list(self._loaded_skills),
+                session_input_tokens=self._session_input_tokens,
+                session_output_tokens=self._session_output_tokens,
+                turn_count=self.turn_count,
+                session_input_history=list(self._session_input_history),
+            )
+            t = threading.Thread(
+                target=self._periodic_save_worker,
+                args=(self._periodic_save_payload,),
+                name="periodic-conversation-save",
+                daemon=True,
+            )
+            self._periodic_save_thread = t
+            t.start()
+        except Exception:
+            # A checkpoint is best-effort: it must never disturb the turn.
+            pass
+
+    def _periodic_save_worker(self, payload: dict) -> None:
+        """Serialise and atomically replace conversation.json (off-thread)."""
+        try:
+            import tempfile
+            session_dir = self._session_dir
+            data = {
+                "session_id": self._session_id,
+                "timestamp": time.time(),
+                "completed": False,
+                "messages": payload["messages"],
+                "loaded_skills": payload["loaded_skills"],
+                "metadata": {},
+                "session_input_tokens": payload["session_input_tokens"],
+                "session_output_tokens": payload["session_output_tokens"],
+                "turn_count": payload["turn_count"],
+                "session_input_history": payload["session_input_history"],
+                "periodic_checkpoint": True,
+            }
+            path = os.path.join(session_dir, "conversation.json")
+            # Preserve an existing summary the same way save_conversation does,
+            # so a checkpoint never erases it.
+            try:
+                if os.path.isfile(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                    if existing.get("session_summary"):
+                        data["session_summary"] = existing["session_summary"]
+            except Exception:
+                pass
+            fd, tmp = tempfile.mkstemp(
+                dir=session_dir, prefix=".tmp_conversation_", suffix=".json"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, path)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except Exception:
+            # Off-thread failures are invisible to the turn by design; nothing
+            # to report and nothing that should crash.
             pass
 
     def _generate_session_summary(self) -> str:
@@ -2248,7 +2366,15 @@ class WorkerAgent:
     #: SERIAL on purpose (user ruling 2026-11-13): the extra wall-clock is
     #: accepted rather than restructuring the executor. Each pass keeps its own
     #: ten-way internal concurrency.
-    _READERS_ROUNDS = 3
+    #:
+    #: 3 -> 2 (user ruling 2026-11-15): measured on batch 2026-11-15__14-35-12,
+    #: the serial passes cost 143s/179s of pure startup wall-clock before the
+    #: first tool call (16-20% of a 900s budget), and two of three tasks went
+    #: from "finished naturally but wrong" to "timed out". A third pass buys
+    #: ~4 points of per-viewpoint recall (95.4 -> 98.1 needs 5 passes; 2 sits
+    #: just below the 3-pass knee) at a cost that turns finished runs into
+    #: timeouts, which is a strictly worse trade on a fixed budget.
+    _READERS_ROUNDS = 2
 
     #: Shown ONCE above the per-round blocks. It is a STATEMENT OF PROVENANCE,
     #: not an interpretation: the harness does not aggregate, vote, intersect,
@@ -2266,10 +2392,15 @@ class WorkerAgent:
     #:     agent that treats them as requirements can build the wrong spec. This
     #:     is a real regression risk of handing over 3x the material, and the
     #:     statement must win.
+    #:
+    #: `{n}`/`{word}`/`{votes}` are filled at render time from the ACTUAL number
+    #: of passes that ran: the preamble is what tells the agent how to read the
+    #: blocks, so a hard-coded "three" would misdescribe a 2-pass run as a
+    #: 3-ballot one — the exact aggregation this text exists to forbid.
     _READERS_PREAMBLE = (
-        "HARNESS NOTE — three independent passes over the task statement.\n"
+        "HARNESS NOTE — {word} independent {pass_word} over the task statement.\n"
         "\n"
-        "Above this note is the task statement. Below it are THREE SEPARATE "
+        "Above this note is the task statement. Below it are {n} SEPARATE "
         "PASSES, each one asking the same ten questions about that statement "
         "again, from scratch, with no knowledge of the other passes. Each pass "
         "is reproduced verbatim. Nothing has been merged, deduplicated, "
@@ -2278,7 +2409,7 @@ class WorkerAgent:
         "\n"
         "How to use these:\n"
         "\n"
-        "1. These are NOT three votes, and the minority does not lose. A point "
+        "1. These are NOT {votes}, and the minority does not lose. A point "
         "raised in only one pass is not noise to be outvoted — it is the "
         "clearest evidence of something you might otherwise never have looked "
         "at. That is the entire purpose of these passes: to catch what a single "
@@ -2368,18 +2499,31 @@ class WorkerAgent:
         if not bodies:
             display.warn("task statement readers produced no usable pass")
             return ""
+        # Fill the preamble from the passes that ACTUALLY produced a reading:
+        # the preamble is what tells the agent how many independent views it has,
+        # so counting configured rounds would overstate the corroboration when a
+        # pass fails, and understate the voting warning when one is all it has.
+        _w = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+        _used = len(bodies)
+        _word = _w.get(_used, str(_used))
+        preamble = self._READERS_PREAMBLE.format(
+            n=_used,
+            word=_word,
+            pass_word=("pass" if _used == 1 else "passes"),
+            votes=(f"{_word} votes" if _used != 1 else "a vote"),
+        )
         if len(bodies) == 1:
             # One surviving pass: still say so, so the agent does not read a
             # single pass as the corroborated view of three.
             header = (
-                f"{self._READERS_PREAMBLE}\n"
+                f"{preamble}\n"
                 f"PASSES: only 1 of {rounds} produced a usable reading; the "
                 f"other(s) failed or returned nothing. Nothing was retried or "
                 f"merged.\n"
             )
         else:
             header = (
-                f"{self._READERS_PREAMBLE}\n"
+                f"{preamble}\n"
                 f"PASSES: {len(bodies)} of {rounds} ran to completion.\n"
             )
         parts = [header]
@@ -2568,6 +2712,16 @@ class WorkerAgent:
 
         self._tool_call_cache = {}
         print()
+        # Periodic durable save. A timeout kill delivers SIGTERM and then
+        # SIGKILL after a ~1s grace window; the SIGTERM handler alone cannot
+        # finish serializing a 300-350KB conversation inside that window
+        # (measured: 49 of 802 timed-out trials since 2026-10 left ZERO
+        # conversation.json — not even a .tmp — and their agent_exec overshot
+        # the budget by only 0.15-0.29s, i.e. they died inside the grace
+        # window). Saving at turn boundaries alone therefore loses the whole
+        # run whenever the kill lands mid-turn, so also checkpoint on a fixed
+        # interval measured from tool callbacks (the only per-action hook).
+        self._maybe_periodic_save()
 
 
 
