@@ -64,6 +64,13 @@ class KernelDeps:
     task_plan: Any = None                  # TaskPlan (optional)
     on_response_fn: Callable | None = None  # (response) -> None, called after LLM response appended
     on_tool_results_fn: Callable | None = None  # (tool_calls, results) -> None, called after tool exec
+    # Reasoning text of the CURRENT LLM iteration, set by the kernel right after
+    # each response is appended. It exists because provider "thinking" is NOT a
+    # history message (format_assistant_message keeps only text/thinking blocks
+    # as content; the reasoning channel is dropped), so a guard that wants to
+    # read what the model just thought has no other route to it. Overwritten
+    # every iteration — a guard must never treat it as a transcript.
+    last_thinking_text: str = ""
     time_budget_stats_fn: Callable | None = None  # () -> {elapsed, budget, remaining, pct} | None
     # Hard wall-clock stop: when the injected budget stats report remaining <= 0,
     # the loop stops BEFORE the next LLM call, prints a timeout notice and sets
@@ -572,6 +579,13 @@ class AgentKernel:
                     break
 
                 d.history.append(d.provider.format_assistant_message(response))
+
+                # Publish THIS iteration's reasoning channel for guards. Set
+                # right after the append (so it always tracks the response that
+                # produced it) and overwritten on every iteration. Empty string
+                # when the provider emits no reasoning — a guard must read that
+                # as "no thinking this turn", never as stale text from before.
+                d.last_thinking_text = response.get("thinking") or ""
 
                 if d.on_response_fn:
                     d.on_response_fn(response)
@@ -1710,6 +1724,7 @@ class AgentKernel:
             judge=d.judge,
             override_reason=override_reason,
             assistant_text=assistant_text,
+            thinking_text=getattr(d, "last_thinking_text", "") or "",
             llm_responded=llm_responded,
             recent_tool_history=list(self._recent_tool_history),
             blocked_tool_calls=list(self._blocked_tool_calls),

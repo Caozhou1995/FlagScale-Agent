@@ -520,6 +520,13 @@ class WorkerAgent:
         # stay legitimate).
         from flagscale_agent.react.guard.sleep_spacing import SleepSpacingGuard
         guard_registry.register(SleepSpacingGuard())
+        # ActuallyRecheckGuard: post-inject when the CURRENT iteration's
+        # REASONING contains "Actually" (a reversal point). Purely literal
+        # detection — the harness does not try to judge whether the reversal
+        # was right; that is the agent's own call. Cost is bounded per LLM
+        # iteration via len(ctx.messages) dedup.
+        from flagscale_agent.react.guard.actually_recheck import ActuallyRecheckGuard
+        guard_registry.register(ActuallyRecheckGuard())
         # FirstArtifactGuard: REMOVED 2026-10-31 (operator directive).
         # Reason: the guard's judgement source is a delivery path it INFERS by
         # parsing the task text, so its block message is wrong whenever the
