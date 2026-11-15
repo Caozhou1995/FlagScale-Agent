@@ -230,7 +230,77 @@ def test_auto_run_is_on_for_truthy_values(monkeypatch, value):
     # statement is not echoed back (the agent already has it). With a fake
     # provider the bodies are placeholders, so this asserts the block exists
     # and is the reader's rendering — not that it repeats the task text.
-    assert "(ok)" in out and out.count("(ok)") == 10
+    #
+    # `_READERS_ROUNDS` passes are run and EVERY pass renders all ten
+    # viewpoints, so the count is rounds x 10, not 10. Read the constant
+    # rather than pinning a literal: the number of passes is a deliberate,
+    # separately-argued design value (see its docstring in agent.py).
+    rounds = obj._READERS_ROUNDS
+    assert "(ok)" in out and out.count("(ok)") == rounds * 10
+
+
+def test_each_pass_is_rendered_verbatim_under_its_own_header(monkeypatch):
+    """Three passes => three separate, unmerged blocks.
+
+    This is the anti-aggregation test. The harness must NOT merge, dedupe,
+    rank or vote on the passes: any of those would bake the harness's
+    judgement in where the agent can no longer correct it. So each pass must
+    appear as its own block, in run order, with its full ten-viewpoint text
+    intact.
+
+    Ablation: aggregating the passes (e.g. emitting only the first, or
+    concatenating the viewpoint bodies without the per-pass headers) turns
+    this red.
+    """
+    monkeypatch.setenv("FLAGSCALE_TASK_READERS", "1")
+    from flagscale_agent.react.agent import WorkerAgent
+
+    obj = object.__new__(WorkerAgent)
+    obj._task_statement_readers = TaskStatementReadersTool(
+        provider=_FakeProvider(), task_text=""
+    )
+    out = obj._auto_read_task_statement(STATEMENT)
+    rounds = obj._READERS_ROUNDS
+    for i in range(1, rounds + 1):
+        assert f"# PASS {i} of {rounds}" in out, (
+            f"pass {i} has no header of its own; the passes were merged or "
+            f"dropped. Got headers: "
+            f"{[ln for ln in out.splitlines() if ln.startswith('# PASS')]}"
+        )
+    # Order must be run order: PASS 1 before PASS 2 before PASS 3.
+    positions = [out.index(f"# PASS {i} of {rounds}") for i in range(1, rounds + 1)]
+    assert positions == sorted(positions), "passes are not in run order"
+
+
+def test_the_preamble_forbids_reading_the_passes_as_a_vote(monkeypatch):
+    """The layout is round-by-round, which LOOKS like three ballots.
+
+    The preamble is the only thing the harness adds, and its load-bearing
+    clauses are (a) not three votes / minority does not lose, (b) disagreement
+    is a finding not a ballot count, (c) unverified raw material, the statement
+    wins, (d) say where they disagree before building. Each answers a measured
+    failure mode, so each is asserted verbatim here.
+    """
+    monkeypatch.setenv("FLAGSCALE_TASK_READERS", "1")
+    from flagscale_agent.react.agent import WorkerAgent
+
+    obj = object.__new__(WorkerAgent)
+    obj._task_statement_readers = TaskStatementReadersTool(
+        provider=_FakeProvider(), task_text=""
+    )
+    out = obj._auto_read_task_statement(STATEMENT)
+    for clause in (
+        "NOT three votes",
+        "minority does not lose",
+        "FINDING to investigate",
+        "UNVERIFIED RAW MATERIAL",
+        "itself is authoritative",
+        "where the passes do not agree",
+    ):
+        assert clause in out, (
+            f"the preamble lost a load-bearing clause: {clause!r}"
+        )
+
 
 
 def test_auto_run_returns_separate_text_so_the_task_text_stays_unmodified(

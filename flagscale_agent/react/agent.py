@@ -2225,16 +2225,116 @@ class WorkerAgent:
     #: and an A/B is a single env var.
     _READERS_ENV = "FLAGSCALE_TASK_READERS"
 
+    #: How many INDEPENDENT full passes over the ten viewpoints to run.
+    #:
+    #: One pass is one sample of "what does this statement say, seen through ten
+    #: questions". Three passes are three samples. Measured 2026-11-13 on a real
+    #: statement (2,731 B, adaptive-rejection-sampler) through the real tool and
+    #: the production provider: all ten viewpoints came back textually DISTINCT
+    #: on 5/5 passes even at temperature 0.0 (the served endpoint is not
+    #: deterministic), so a second pass is a genuinely new draw, not a copy.
+    #:
+    #: Why 3 and not 5. The binding constraint is not "more interpretations" but
+    #: the viewpoints that return nothing. Across the 86-session readers batch,
+    #: 17.3% of all readings were NOTHING FOUND, concentrated in two viewpoints
+    #: (positional_calling 69.8% empty, interface_signature 46.5% empty). With
+    #: independent passes, P(at least one non-empty) goes:
+    #:     positional_calling 30.2% -> 66.0% (3) -> 83.4% (5)
+    #:     interface_signature 53.5% -> 89.9% (3) -> 97.8% (5)
+    #:     10-viewpoint mean   82.7% -> 95.4% (3) -> 98.1% (5)
+    #: Three passes capture 12.7 of the 15.4 points available, i.e. ~82% of the
+    #: total gain, for 3/5 of the context. Five buys 2.7 more points.
+    #:
+    #: SERIAL on purpose (user ruling 2026-11-13): the extra wall-clock is
+    #: accepted rather than restructuring the executor. Each pass keeps its own
+    #: ten-way internal concurrency.
+    _READERS_ROUNDS = 3
+
+    #: Shown ONCE above the per-round blocks. It is a STATEMENT OF PROVENANCE,
+    #: not an interpretation: the harness does not aggregate, vote, intersect,
+    #: rank or prune anything, and this text is the only thing it adds to the
+    #: raw readings. Two clauses are load-bearing and each answers a measured
+    #: failure mode:
+    #:
+    #:   * "not three votes" — the blocks are laid out ROUND BY ROUND, which
+    #:     makes them look like three ballots. Left unsaid, the natural move is
+    #:     to count them, which is exactly the aggregation this design refuses.
+    #:   * "may contradict each other and may be wrong" — readings include
+    #:     transcription of what the statement already says AND assertions about
+    #:     an axis the statement never pins (unit, precision, index base). The
+    #:     latter can be neither confirmed nor refuted from the statement, so an
+    #:     agent that treats them as requirements can build the wrong spec. This
+    #:     is a real regression risk of handing over 3x the material, and the
+    #:     statement must win.
+    _READERS_PREAMBLE = (
+        "HARNESS NOTE — three independent passes over the task statement.\n"
+        "\n"
+        "Above this note is the task statement. Below it are THREE SEPARATE "
+        "PASSES, each one asking the same ten questions about that statement "
+        "again, from scratch, with no knowledge of the other passes. Each pass "
+        "is reproduced verbatim. Nothing has been merged, deduplicated, "
+        "ranked, voted on, or filtered: deciding what any of it means is yours, "
+        "not the harness's.\n"
+        "\n"
+        "How to use these:\n"
+        "\n"
+        "1. These are NOT three votes, and the minority does not lose. A point "
+        "raised in only one pass is not noise to be outvoted — it is the "
+        "clearest evidence of something you might otherwise never have looked "
+        "at. That is the entire purpose of these passes: to catch what a single "
+        "reading of the statement cannot catch, in particular where the "
+        "statement admits more than one reading.\n"
+        "\n"
+        "2. Where the passes disagree with each other, the disagreement is a "
+        "FINDING to investigate, not a dispute to settle by counting. Go back "
+        "to the statement and the environment and decide it there.\n"
+        "\n"
+        "3. These are UNVERIFIED RAW MATERIAL. They can contradict each other, "
+        "and they can be wrong. Some of what they report is a restatement of "
+        "what the statement already says; some is a claim that the statement "
+        "leaves something UNSET, which the statement can neither confirm nor "
+        "deny. Treat them as prompts telling you WHAT TO CHECK. The statement "
+        "itself is authoritative, and your own verification is what decides.\n"
+        "\n"
+        "4. Before you build or decide anything, spend one turn writing down, "
+        "in your own words, where the passes do not agree — most usefully: "
+        "which viewpoint gave a different answer on different passes, and "
+        "which viewpoint returned nothing on some passes and something on "
+        "others. Then verify rather than pick.\n"
+    )
+
     def _readers_enabled(self) -> bool:
         raw = (os.environ.get(self._READERS_ENV) or "").strip().lower()
         return raw not in ("", "0", "false", "off", "no")
 
     def _auto_read_task_statement(self, query: str) -> str:
-        """Run the ten-viewpoint reader once over `query`; return its rendering.
+        """Run the ten-viewpoint reader `_READERS_ROUNDS` times; render verbatim.
 
-        Returns "" (feature off, no statement, or the reader failed) so the
+        Returns "" (feature off, no statement, or every pass failed) so the
         caller can simply skip inserting a message. A failure here must never
         break the run: the readings are an extra input, not a precondition.
+
+        NOTHING IS AGGREGATED. Each pass is reproduced under its own header, in
+        the order it ran, and the passes are never merged, deduplicated, ranked
+        or voted on. The harness's only addition is `_READERS_PREAMBLE` above
+        them, which states provenance and how to read them — it does not decide
+        anything. Deciding is the agent's job, and any summarisation here would
+        bake the harness's judgement in where the agent could not correct it.
+
+        Round by round (not viewpoint by viewpoint) per user ruling 2026-11-13.
+        A side effect is that three parallel blocks LOOK like three ballots,
+        which is why the preamble's first clause says outright that they are
+        not votes.
+
+        The passes are SERIAL on purpose (same ruling): the extra wall-clock is
+        accepted in exchange for not restructuring the executor. Each pass keeps
+        its own ten-way internal concurrency, so a pass costs about one
+        ten-viewpoint read, not ten sequential reads.
+
+        A pass that fails or renders nothing is skipped; the surviving passes
+        are still handed over, and the render says how many ran. If every pass
+        fails the whole block is dropped rather than handing the agent a header
+        with no content.
 
         The statement is the task's own text. For a worker contract the caller
         already resolved the contract text into `query`; for a plain headless
@@ -2250,18 +2350,48 @@ class WorkerAgent:
         readers = getattr(self, "_task_statement_readers", None)
         if readers is None:
             return ""
-        try:
-            readers._task_text = text
-            body = readers.execute()
-        except Exception as exc:  # never take the run down for an extra input
-            display.warn(
-                f"task statement readers failed ({type(exc).__name__}); "
-                f"continuing without them"
+        readers._task_text = text
+
+        rounds = max(1, int(getattr(self, "_READERS_ROUNDS", 1)))
+        bodies: list[str] = []
+        for _ in range(rounds):
+            try:
+                body = readers.execute()
+            except Exception as exc:  # never take the run down for an extra input
+                display.warn(
+                    f"task statement readers failed ({type(exc).__name__}); "
+                    f"continuing without this pass"
+                )
+                continue
+            if body and not body.startswith("ERROR"):
+                bodies.append(body)
+        if not bodies:
+            display.warn("task statement readers produced no usable pass")
+            return ""
+        if len(bodies) == 1:
+            # One surviving pass: still say so, so the agent does not read a
+            # single pass as the corroborated view of three.
+            header = (
+                f"{self._READERS_PREAMBLE}\n"
+                f"PASSES: only 1 of {rounds} produced a usable reading; the "
+                f"other(s) failed or returned nothing. Nothing was retried or "
+                f"merged.\n"
             )
-            return ""
-        if not body or body.startswith("ERROR"):
-            return ""
-        return body
+        else:
+            header = (
+                f"{self._READERS_PREAMBLE}\n"
+                f"PASSES: {len(bodies)} of {rounds} ran to completion.\n"
+            )
+        parts = [header]
+        for i, body in enumerate(bodies, 1):
+            parts.append(
+                f"\n{'#' * 70}\n"
+                f"# PASS {i} of {len(bodies)} — independent, verbatim, "
+                f"unmerged\n"
+                f"{'#' * 70}\n\n"
+                f"{body}"
+            )
+        return "\n".join(parts)
 
     def _build_plan_context(self) -> str:
         active = self.task_plan.get_active()
