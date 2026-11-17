@@ -205,6 +205,69 @@ def is_network_acquire(cmd: str) -> bool:
     return False
 
 
+#: Status codes that mean "this ADDRESS was refused", never "the content does
+#: not exist". Kept as three groups because they are three different worlds and
+#: the agent must not collapse them: a bot-block, a missing slug, and dropped
+#: egress have nothing in common except that they are not a 200.
+_REFUSAL_RE = re.compile(
+    r"\b(?:HTTP[/ ]?[0-9.]*\s*)?(40[13]|404|410|429|000)\b",
+    re.I,
+)
+
+
+def _looks_refused(tool_result: str) -> bool:
+    """True when a transfer attempt's output carries a refusal/lookup verdict.
+
+    Deliberately reuses the codes the DIAGNOSE block already teaches the agent
+    to read (403 bot-block, 404 missing path, 000 no connection, 410/429) — the
+    guard must not invent a second vocabulary for the same three worlds.
+    """
+    if not tool_result:
+        return False
+    return bool(_REFUSAL_RE.search(tool_result))
+
+
+_RETRY_MESSAGE = (
+    "[NetAwareness] That attempt came back REFUSED or UNRESOLVED — the output "
+    "carries a status, not an answer. Read what it distinguishes before you "
+    "change anything:\n"
+    "  A REFUSED ROUTE IS NOT A MISSING FACT. Statuses that get collapsed into "
+    "'unavailable' when they are three different worlds:\n"
+    "    · 403 / 429 / a bot check — this ADDRESS refused THIS CLIENT. The "
+    "content almost certainly exists; you are being turned away at the door. "
+    "A browser-shaped request may not help and is not the only exit.\n"
+    "    · 404 / 410 — this ADDRESS has no such path. The slug is wrong, not "
+    "the fact. A different path, an API form, or a raw/plain serialisation of "
+    "the same document is a different question.\n"
+    "    · 000 / conn==0 — nothing connected. That is egress or a silent "
+    "proxy, and it says nothing whatsoever about the target's contents.\n"
+    "  A REFUSED ROUTE IS NOT A MISSING FACT: none of these three is evidence about a "
+    "REQUIREMENT. They are statements about a ROUTE. Letting one refused route "
+    "become the premise of your whole answer is how a reachable fact gets "
+    "reported as 'I could not check the standard'.\n"
+    "  SO SWITCH AXES BEFORE CONCLUDING — at minimum these, and name which you "
+    "tried:\n"
+    "    · ADDRESS — mirror / regional variant / different slug / raw or plain "
+    "form / API or feed instead of the rendered page.\n"
+    "    · PROVENANCE — search for the FACT, not for the one site you were "
+    "pointed at. The same fact is usually ALSO published by a party that is not "
+    "the original publisher: an open-access full-text index, a preprint or "
+    "archive, a standards-body mirror, a package that vendors the data, a "
+    "reference implementation that encodes the rule in CODE, the tool's own "
+    "bundled documentation. Search in the wording a PRACTITIONER of the field "
+    "would use — not the wording the task used, which may be a paraphrase, and "
+    "not a term that has a different dominant meaning in that field.\n"
+    "    · LOCAL — an installed package's source, a mounted cache, the image, "
+    "or the material you were given may already hold it.\n"
+    "  Bounded: a few genuinely DIFFERENT axes, not the same address retried. "
+    "If every axis is exhausted, THAT is a real finding — then record it as "
+    "UNCONSULTED, carry on under the most conservative reading of what it "
+    "would have told you, and say which parts stayed unverified. An unreadable "
+    "source is a gap to fill conservatively; it is never a reason to drop what "
+    "it was going to tell you, and never a licence to call the requirement "
+    "satisfied.\n"
+)
+
 _MESSAGE = (
     "[NetAwareness] That command acquires something over the network. A network "
     "failure is not one thing — it is at least three, and they are told apart by "
@@ -240,23 +303,31 @@ _MESSAGE = (
     "artifact actually arriving (install completed, file fetched), never by an "
     "HTTP status alone.\n"
     "  IF IT STILL DID NOT ARRIVE — the thing you were acquiring is still "
-    "required. A failed acquisition removes the ROUTE, not the REQUIREMENT, and "
-    "these are the routes you have not tried yet:\n"
-    "    · the client itself may be absent or wrong (a transfer tool that is not "
-    "installed fails with 'not found' and says nothing about the network) — use "
-    "whatever client this environment does have, and install one from a route "
-    "that works.\n"
-    "    · the same content usually exists at MORE THAN ONE address — a mirror or "
-    "regional variant of the host, a different path or slug on the same host, an "
-    "archived or raw form, a package that vendors the same data, a different "
-    "serialisation of the same document. Enumerate several and try them; do not "
-    "generalise from one address refusing you to 'this is unavailable'.\n"
-    "    · the source you were told to consult may be reachable only indirectly — "
-    "through a proxy, without one, over a different scheme or a plain-text "
-    "endpoint. Re-read the DIAGNOSE fields above and invert what they showed.\n"
-    "    · whatever you could not fetch may already be present locally — in the "
-    "image, in a mounted cache, in the vendor's package, or in the material you "
-    "were given. Look before you conclude it cannot be had.\n"
+    "required. A failed acquisition removes the ROUTE, not the REQUIREMENT. "
+    "Before you report it as unavailable, SWITCH AT LEAST THREE AXES — one "
+    "failed address is one data point about one address:\n"
+    "    · ADDRESS — the same content usually lives at more than one address: a "
+    "mirror or regional variant of the host, a different path or slug on the "
+    "same host, an archived or raw form instead of the rendered page, a "
+    "different serialisation (plain text, XML, JSON, feed, API) of the same "
+    "document.\n"
+    "    · PROVENANCE — the same fact is usually ALSO published by a party that "
+    "is not the original publisher: an open-access full-text index, a preprint "
+    "or archive, a standards body's mirror, a package that vendors the data, a "
+    "reference implementation that encodes the rule in code, the tool's own "
+    "bundled docs. Search for the FACT, not for the one site you were pointed "
+    "at — and search in the wording a practitioner would use, not in the "
+    "wording the task used.\n"
+    "    · CLIENT — the client itself may be absent or wrong (a transfer tool "
+    "that is not installed fails with 'not found' and says nothing about the "
+    "network) — use whatever client this environment does have, and install "
+    "one from a route that works.\n"
+    "    · LOCAL — whatever you could not fetch may already be present: in the "
+    "image, in a mounted cache, in an installed package's source, in the "
+    "material you were given. Look before you conclude it cannot be had.\n"
+    "  A REFUSED ROUTE IS NOT A MISSING FACT: a site that refuses a bot, or one path that 404s, "
+    "is not evidence about a REQUIREMENT. Those are statements about a route. "
+    "Do not let one refused route become the premise of your whole answer.\n"
     "  Bound this: a few genuinely DIFFERENT routes, not the same one repeated. "
     "If every route fails, that is a real finding — record it as UNCONSULTED, "
     "carry on under the most conservative reading of what it would have told "
@@ -290,6 +361,24 @@ class NetAwarenessGuard(Guard):
         cmd = str(ctx.tool_args.get("command", ""))
         if not is_network_acquire(cmd):
             return None
+        # TWO TIERS, because the two worlds need different reminders. A first
+        # attempt earns the diagnostic ladder (how to READ the number). An
+        # attempt whose own output already carries a refusal/lookup verdict
+        # earns the ROUTE-ENUMERATION half — the ladder is behind it, and what
+        # it needs to hear is "a refused address is not a missing fact; switch
+        # axes before you call this unavailable".
+        #
+        # Measured motivation: a trial spent all of its lookups on one refused
+        # host and then treated the requirement itself as unreadable, while the
+        # same fact was reachable elsewhere from the same machine. The first
+        # tier's advice had already been given and had already been read; what
+        # was missing was the second tier.
+        if _looks_refused(str(ctx.tool_result or "")):
+            return GuardVerdict.inject(
+                message=_RETRY_MESSAGE,
+                reason="network_refused",
+                category="net_awareness",
+            )
         return GuardVerdict.inject(
             message=_MESSAGE,
             reason="network_acquire",

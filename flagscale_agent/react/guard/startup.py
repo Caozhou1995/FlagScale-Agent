@@ -585,10 +585,16 @@ class StartupGuard(Guard):
 
     def __init__(self, single_shot: bool = False):
         self._single_shot = single_shot
+        # NamedAuthorityPhase lives in its own module so its message and trigger
+        # regex can be tested in isolation; it imports StartupPhase from HERE,
+        # so the import must be deferred to call time to avoid a cycle at module
+        # import.
+        from flagscale_agent.react.guard.named_authority import NamedAuthorityPhase
         self._phases: list[StartupPhase] = [
             BackupPhase(),
             NetworkProbePhase(),
             ResearchPhase(),
+            NamedAuthorityPhase(),
             FirstActionPhase(),
         ]
         self._phases.sort(key=lambda p: p.order)
