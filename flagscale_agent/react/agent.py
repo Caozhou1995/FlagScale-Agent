@@ -2046,6 +2046,43 @@ class WorkerAgent:
         self.history.append({"role": "user", "content": query, "_pin": True})
         if readings:
             self.history.append({"role": "user", "content": readings, "_pin": True})
+            # OPEN THE BLOCK BEFORE DECIDING (user ruling 2026-11-17).
+            # Measured on dna-assembly job 2026-11-17__20-50-10: the 24 reading
+            # blocks (31.9 KB) were delivered and NEVER opened — of the 4,008
+            # eight-word sequences unique to the readings (not present in the
+            # task statement), ZERO appeared anywhere in the 281,965 chars of
+            # assistant output. The agent then re-derived the very axis a
+            # reading had already flagged ("tail composition beyond BsaI/
+            # overhang: UNSET") and got it wrong, while its own self-check went
+            # green. The HARNESS NOTE already asks for this in prose; nothing
+            # made it happen.
+            # This is a NUDGE, not a gate: no guard, no block, no re-issue. One
+            # extra user turn that asks for the block to be acknowledged before
+            # the first decision. It stays a normal message in history, so it
+            # costs one turn and cannot deadlock anything.
+            self.history.append({
+                "role": "user",
+                "content": (
+                    "Before you build or decide anything: you have just been "
+                    "handed the independent readings of the task statement "
+                    "above. Open them.\n"
+                    "\n"
+                    "Reply now, briefly, with: (1) which viewpoints produced a "
+                    "different answer on different passes, or returned nothing "
+                    "on one pass and something on another; (2) every UNSET the "
+                    "readings flag that bears on what you are about to "
+                    "deliver, and how you will settle each one rather than "
+                    "defaulting it.\n"
+                    "\n"
+                    "Then carry those answers with you as you work. This is "
+                    "your own work-up of your own inputs — not a formality, "
+                    "and nothing here is scored. Skip it and you are choosing "
+                    "to work from one unexamined reading of the statement, "
+                    "which is exactly the failure these passes exist to "
+                    "prevent."
+                ),
+                "_pin": True,
+            })
         try:
             self._react_loop()
         except Exception:
