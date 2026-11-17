@@ -94,15 +94,57 @@ def _is_download_form(seg_low: str) -> bool:
     return any(t in _DOWNLOAD_FLAGS for t in toks[1:])
 
 
+def _split_unquoted(cmd: str) -> list[str]:
+    """Split a command line on separators that are NOT inside quotes.
+
+    An operator inside a quoted string is data, not a separator: measured
+    false positive, `grep -oE "(curl|wget)" log` — the `|` inside the search
+    pattern started a phantom segment whose head read as a transfer tool.
+    Written as a scanner rather than a split pattern because the property is
+    "is this byte inside a quoted span", which a scanner states directly.
+    """
+    parts: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    i = 0
+    n = len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and i + 1 < n:
+                buf.append(cmd[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "&" and i + 1 < n and cmd[i + 1] == "&":
+            parts.append("".join(buf)); buf = []; i += 2; continue
+        if ch == "|" and i + 1 < n and cmd[i + 1] == "|":
+            parts.append("".join(buf)); buf = []; i += 2; continue
+        if ch in (";", "\n", "|", "&"):
+            parts.append("".join(buf)); buf = []; i += 1; continue
+        buf.append(ch)
+        i += 1
+    parts.append("".join(buf))
+    return [p.strip() for p in parts if p and p.strip()]
+
+
 def _segments(cmd: str) -> list[str]:
-    """Split on operators that start a new command.
+    """Split on operators that start a new command, ignoring quoted operators.
 
     Coarse but safe: we only use it to find where a new command begins, and
     every real separator does start one. This is what lets the guard see
     'cd repo && pip install x' rather than only line-leading verbs.
     """
-    parts = re.split(r"&&|\|\||[;\n|]", cmd)
-    return [p.strip() for p in parts if p and p.strip()]
+    return _split_unquoted(cmd)
 
 
 def _strip_env_and_prefixes(seg: str) -> str:
@@ -172,6 +214,75 @@ def _is_transfer_tool(seg_low: str) -> bool:
                     "ftp", "sftp", "scp", "rsync", "ssh")
 
 
+#: Commands whose ARGUMENTS are data to be searched, not commands to be run.
+#: A pattern naming a transfer tool says what the user is LOOKING FOR, not
+#: what the shell will DO. Kept as a name list (head-token match) rather than
+#: anything pattern-based, for the same reason the refusal detector scans
+#: whole tokens: the property being tested is identity of the command word.
+_LOCAL_READERS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "ag", "ack", "ack-grep",
+    "sed", "awk", "gawk", "cut", "tr", "sort", "uniq", "head", "tail",
+    "wc", "find", "ls", "file", "md5sum", "sha256sum", "diff", "less", "more",
+})
+
+
+def _strip_quoted(text: str) -> str:
+    """Remove quoted spans, keeping their quotes as a stand-in.
+
+    A quoted span is DATA the command will read, never a command itself. This
+    is the layer that makes 'grep -oE "(curl|wget)" log' safe even when the
+    pattern is split awkwardly: whatever survives segmentation, the words
+    inside quotes never reach the acquire-command test.
+    """
+    out: list[str] = []
+    quote = ""
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                out.append(quote)
+                quote = ""
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _mentions_acquire_command(seg_low: str) -> bool:
+    """True when the segment's TOKENS contain an acquisition command phrase.
+
+    Whole-token matching, not substring: 'pip install' must appear as the
+    words ``pip`` then ``install``, so a search pattern that merely quotes
+    the phrase, a filename like ``my-pip-install-notes``, or a longer word
+    that happens to contain it cannot be mistaken for the command itself.
+
+    A token that is an absolute/relative path is compared by its BASENAME, so
+    '/usr/bin/pip install y' is the same command as 'pip install y'.
+    """
+    toks = []
+    for t in _strip_quoted(seg_low).replace("=", " ").split():
+        toks.append(t.rsplit("/", 1)[-1] if "/" in t else t)
+    for phrase in _NET_ACQUIRE_TOKENS:
+        pt = phrase.split()
+        n = len(pt)
+        if n == 0 or n > len(toks):
+            continue
+        for i in range(len(toks) - n + 1):
+            if toks[i:i + n] == pt:
+                return True
+    return False
+
+
 def is_network_acquire(cmd: str) -> bool:
     """True if any command segment acquires something over the network.
 
@@ -198,9 +309,16 @@ def is_network_acquire(cmd: str) -> bool:
         head = low.split()[0].rsplit("/", 1)[-1] if low.split() else ""
         if head in ("echo", "printf", "cat", "tee") and not _is_download_form(low):
             continue
+        # A filter/reader whose ARGUMENTS include a pattern does not run the
+        # pattern. Measured false positive: `grep -n "pip install" README.md`
+        # and `grep -oE "(curl|wget|pip download)" log` both fired — the
+        # search TERM named a transfer, the command read a local file. Same
+        # family as the echo/printf case above: the words are quoted data.
+        if head in _LOCAL_READERS and not _is_download_form(low):
+            continue
         if _is_download_form(low) or _is_transfer_tool(low):
             return True
-        if any(tok in low for tok in _NET_ACQUIRE_TOKENS):
+        if _mentions_acquire_command(low):
             return True
     return False
 
