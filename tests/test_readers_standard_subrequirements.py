@@ -34,8 +34,10 @@ from flagscale_agent.react.agent import WorkerAgent
 
 
 def _render(n=2, word="two", pass_word="passes", votes="two votes"):
+    from flagscale_agent.react.tools.read_task_statement import VIEWPOINTS
+
     return WorkerAgent._READERS_PREAMBLE.format(
-        n=n, word=word, pass_word=pass_word, votes=votes
+        n=n, nv=len(VIEWPOINTS), word=word, pass_word=pass_word, votes=votes
     )
 
 

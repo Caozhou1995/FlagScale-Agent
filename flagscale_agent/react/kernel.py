@@ -40,6 +40,7 @@ from flagscale_agent.react import display
 # display MODULE for guard_inject/completion_signal routing, and calling them
 # through that mock would break the completion detection itself.
 from flagscale_agent.react.display import has_override_completion, trailing_sentinel
+from flagscale_agent.react.text_tool_call import salvage_tool_calls as salvage_text_tool_calls
 
 
 @dataclass
@@ -577,6 +578,38 @@ class AgentKernel:
 
                 if self._interrupted:
                     break
+
+                # ── Salvage a tool call emitted as TEXT ──
+                # Some models (GLM / Anthropic-compat endpoints) sometimes write
+                # the function-call block into the assistant's TEXT content
+                # instead of streaming it through the tool_use channel, so
+                # response["tool_calls"] is empty and the block lands in
+                # content. Left alone, the kernel treats it as a plain-text turn
+                # and drives a continuation / degenerate-repeat loop — the model
+                # wanted to act but the tool never ran. Re-route it here, BEFORE
+                # format_assistant_message runs: a salvaged call must become a
+                # real tool_use block in history so Anthropic tool_use/tool_result
+                # pairing stays intact. The salvage is trailing-anchored and
+                # gated on known tool names, so a block the model merely QUOTED
+                # (e.g. inside a code fence) is never executed.
+                if not response.get("tool_calls") and response.get("content"):
+                    try:
+                        _schemas_now = d.get_schemas_fn()
+                        _salvaged, _cleaned = salvage_text_tool_calls(
+                            response["content"], _schemas_now)
+                    except Exception:
+                        _salvaged, _cleaned = None, None
+                    if _salvaged:
+                        response["tool_calls"] = _salvaged
+                        response["content"] = _cleaned
+                        try:
+                            d.display.warn(
+                                f"Recovered {len(_salvaged)} tool call(s) emitted "
+                                "as text (wrong channel) and routed them to the "
+                                "tool executor."
+                            )
+                        except Exception:
+                            pass
 
                 d.history.append(d.provider.format_assistant_message(response))
 

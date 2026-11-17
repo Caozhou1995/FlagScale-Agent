@@ -90,20 +90,75 @@ VIEWPOINTS: tuple[tuple[str, str], ...] = (
         "numeric_conventions",
         "Find every QUANTITY the statement mentions, and for each one say "
         "which of these axes the statement FIXES and which it leaves UNSET: "
-        "unit or scale (e.g. cm^-1 vs nm, seconds vs frames), precision, "
-        "tolerance, index base (0-based vs 1-based), and magnitude. Quote the "
+        "unit or scale (e.g. a length vs its reciprocal, a rate vs a period), "
+        "precision, "
+        "tolerance, index base (0-based vs 1-based), magnitude, and "
+        "PARAMETER DEFINITION — which named quantity a parameter measures: "
+        "half-width vs full-width, radius vs diameter, rate vs period, "
+        "peak height vs integrated area, difference vs absolute value. This "
+        "last axis is the one most often forgotten, because the parameter NAME "
+        "looks like it settles the question and does not: a width reported as "
+        "a half-width is exactly HALF the same width reported as a "
+        "full-width, so choosing wrongly is a silent factor-of-two error that "
+        "no amount of extra fitting or precision can repair. Quote the "
         "phrase that names the quantity verbatim; for an UNSET axis, name the "
-        "axis that is missing and say why the quote does not pin it. AN UNSET "
+        "axis that is missing and say why the quote does not pin it, AND name "
+        "the deliverable FIELD whose value that UNSET would have to fill (the "
+        "output key, column, argument or file field it lands in) \u2014 an UNSET "
+        "that names no field reads as trivia, while the same UNSET attached to "
+        "a field is a decision somebody has to make and defend. AN UNSET "
         "AXIS IS A FINDING, NOT AN ABSENCE — report it, because the reader "
-        "will otherwise assume a unit the statement never gave. Only if the "
+        "will otherwise assume a unit the statement never gave. "
+        "A UNIT OR SCALE UNSET IS NOT DISCHARGED BY NAMING IT: when the axis "
+        "could be a different unit of the same physical quantity, you must "
+        "also derive BOTH candidate values as NUMBERS. Write the conversion "
+        "you used as a formula in the abstract form 'x_B = f(x_A)', with f "
+        "spelled out from the definitions of the two units YOU identified — do "
+        "not leave it implicit, and do not borrow a conversion constant from "
+        "anywhere: the relation must follow from the two unit names alone. "
+        "THEN substitute a number and print the two results. If the statement "
+        "fixes no number, that is NOT a reason to stop: the number comes from "
+        "the DATA — this reading cannot see the file, but YOU can, so read one "
+        "row and use it. 'The statement fixes no numeric value, so the two "
+        "candidate numbers cannot be computed' is exactly the unfinished "
+        "answer this paragraph forbids: no statement fixes a number for a "
+        "quantity it does not name in numbers, which is why the data exists. "
+        "An UNSET reported without both numbers and the formula is an "
+        "unfinished answer, not a finding. FINALLY, PICK ONE: for EVERY unset "
+        "axis you reported — unit, precision, tolerance, index base, magnitude, "
+        "and parameter definition alike, not just the unit — state which "
+        "reading the deliverable carries and the ground that decided it, and "
+        "that ground must be an OBJECT THE STATEMENT NAMES or the field's own "
+        "standard value for that object — never 'the raw column is the "
+        "literal reading', never 'the fit naturally lands there', and never "
+        "'the name of the parameter settles it'. Delivering the file's own axis "
+        "units, or taking a width parameter at face value, is a choice rather "
+        "than a neutral fallback: if the statement names a physical object "
+        "whose standard values are known, those values are the authority and "
+        "the reading that reproduces them is the one to ship. Only if the "
         "statement mentions no quantity at all, answer NOTHING FOUND FOR THIS "
         "VIEWPOINT.",
     ),
     (
         "ambiguous_phrases",
         "List ONLY phrases in the statement that admit MORE THAN ONE literal "
-        "reading. For each, quote it verbatim and state the two readings. If "
-        "none, answer NOTHING FOUND FOR THIS VIEWPOINT.",
+        "reading. For each, quote it verbatim, state the two readings, and "
+        "name the deliverable field the difference lands in. If none, answer "
+        "NOTHING FOUND FOR THIS VIEWPOINT. "
+        "A LIST OF ALLOWED ITEMS IS THE HIGHEST-YIELD CASE: when the statement "
+        "enumerates what a deliverable may or must consist of (an allowlist of "
+        "commands, fields, tags, file extensions, flags, words), the SAME list "
+        "admits two readings -- a CEILING ('nothing outside this list may "
+        "appear', so an empty deliverable satisfies it) and a FLOOR ('every "
+        "item in this list must appear', so one missing item fails it). Your "
+        "instinct will favour the ceiling because that is how a human reads a "
+        "permission list; a checker written as a set-membership or "
+        "exact-line test implements the FLOOR. State both readings, name the "
+        "deliverable field, and then settle it by the SELF-TEST each reading "
+        "implies: the ceiling needs a scan for anything off-list, the FLOOR "
+        "needs one exact-match probe per listed item against the DELIVERED "
+        "bytes. Report which items the floor test would find absent -- a list "
+        "item that appears nowhere in the delivered bytes is the finding.",
     ),
     (
         "implicit_premises",
@@ -112,9 +167,51 @@ VIEWPOINTS: tuple[tuple[str, str], ...] = (
         "Do not list generic software advice.",
     ),
     (
+        "world_anchor",
+        "Answer ONLY this: does the statement NAME a real-world object whose "
+        "public, canonical value can serve as a RULER -- a named sample, "
+        "species, standard, protocol, file format, benchmark, dataset, model, "
+        "hardware device, software package, or published document? Quote the "
+        "naming phrase verbatim. For each one named, state (a) which of its "
+        "properties is fixed by an authoritative public standard or spec "
+        "rather than by this statement, (b) what that canonical value IS if "
+        "you can state it, and (c) which UNSET axis or deliverable FIELD that "
+        "value would PIN if it were taken as the ruler (e.g. a quantity's "
+        "unit, a frame size, a gene's sequence, a file's byte layout). The "
+        "statement's own naming is the authority: if the canonical value "
+        "conflicts with a range or default you inferred yourself, the "
+        "canonical value wins. Do NOT list objects the statement merely "
+        "mentions in passing, and do NOT reason from memory alone -- if the "
+        "canonical value is not something you can state as a checkable "
+        "number, sequence, or exact spelling, say which. "
+        "AUTHORITY: the task text outranks any internal consistency of your "
+        "own output. "
+        "If the statement names no such object, answer NOTHING FOUND FOR THIS "
+        "VIEWPOINT.",
+    ),
+    (
         "what_is_compared",
         "Answer ONLY this: what will the grader compare against what? Which "
         "sentence fixes that comparison object? Quote it verbatim.",
+    ),
+    (
+        "consumer_defined_address",
+        "Answer ONLY this: at which ADDRESS does the consumer reach the thing "
+        "you must leave running — a filesystem path, a port number, a socket "
+        "path, a process name or an interface — and does the statement pin that "
+        "address verbatim? Quote the sentence that pins it, or state plainly "
+        "that the statement is SILENT about it. If it is silent, say which "
+        "addresses your own plan would choose instead, and whether anything "
+        "you can observe (a default, a config, a symlink, a convention of the "
+        "named software) indicates the address the consumer will use rather "
+        "than the one you would pick. An address you chose is not evidence of "
+        "the address the consumer reads: if you cannot point to a source, say "
+        "the choice is unpinned and must be covered at every plausible address "
+        "rather than bet on one. Also state what RESIDUE your own testing "
+        "leaves at those addresses (a process, a socket, a file) and whether "
+        "that residue is what the consumer will meet. "
+        "If the statement requires nothing to be left reachable, answer "
+        "NOTHING FOUND FOR THIS VIEWPOINT.",
     ),
     (
         "deliverable_inventory",
@@ -154,16 +251,18 @@ TASK STATEMENT
 
 class TaskStatementReadersTool(Tool):
     name = "read_task_statement"
+    # Derived, never a literal: the description is the model's only map of what
+    # this tool can do, so a stale count or a stale view list would advertise a
+    # different tool than the one that runs (measured drift: the list was
+    # hard-coded at ten names and omitted world_anchor once it shipped).
     description = (
-        "Read the task statement through ten independent viewpoints and return "
-        "all ten readings verbatim. Views: interface_signature, "
-        "positional_calling, deliverable_paths, output_shape, "
-        "mandatory_constraints, numeric_conventions, ambiguous_phrases, "
-        "implicit_premises, what_is_compared, deliverable_inventory. "
-        "This tool DOES NOT DECIDE anything — it returns ten inputs; you judge "
-        "them yourself. Use it once at the start, to see what the statement "
-        "actually fixes versus where it admits more than one reading. Pass "
-        "views=[...] to run a subset."
+        f"Read the task statement through {len(VIEWPOINTS)} independent "
+        f"viewpoints and return all {len(VIEWPOINTS)} readings verbatim. "
+        "Views: " + ", ".join(v[0] for v in VIEWPOINTS) + ". "
+        f"This tool DOES NOT DECIDE anything — it returns {len(VIEWPOINTS)} "
+        "inputs; you judge them yourself. Use it once at the start, to see what "
+        "the statement actually fixes versus where it admits more than one "
+        "reading. Pass views=[...] to run a subset."
     )
     parameters = {
         "type": "object",
@@ -172,7 +271,8 @@ class TaskStatementReadersTool(Tool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Optional subset of viewpoint names. Omit to run all ten."
+                    "Optional subset of viewpoint names. Omit to run all of "
+                    "them."
                 ),
             },
         },
@@ -242,8 +342,8 @@ class TaskStatementReadersTool(Tool):
                  if st == "ok" and b.startswith("NOTHING FOUND")]
         failed = [n for n, st, _ in readings if st != "ok"]
         header = [
-            f"Ten independent readings of the task statement "
-            f"({len(readings)} ran). These are INPUTS, not conclusions: this "
+            f"{len(readings)} independent readings of the task statement. "
+            f"These are INPUTS, not conclusions: this "
             f"tool did not decide which reading is right, and no reading was "
             f"preferred over another. Where two readings disagree, the "
             f"statement admits more than one reading — resolve it yourself "

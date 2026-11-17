@@ -3,7 +3,11 @@
 The beat semantics (revised 2026-11-10): the FIRST submission of a completion
 declaration is blocked once — forcing a scientific self-review — and the
 re-issued SAME declaration passes only when its own evidence/notes carry the
-six STRUCTURAL review labels (W0/W1/W2/W3/W4/RISK). The guard still never
+six STRUCTURAL review labels (W0/W1/W2/W3/W4/RISK) plus three FORM
+sub-slots — W3's two-slot probe, W2's UNSET-FIELDS line, and W2's
+UNIT-FORMULA line (added 2026-11-16 per user ruling: an unset convention must
+be THOUGHT about, not just headed, and a unit mismatch must be CONVERTED, not
+just reported — raman-fitting shipped nm as cm^-1 three runs running). The guard still never
 grades the review: a wrong-but-filled answer passes, an empty one does not.
 Measured motivation for the revision (job 2026-11-10__00-11-22): 72/72 beaten
 trials released the block with a 5+ char `_override_reason` and produced no
@@ -35,7 +39,12 @@ def _filled(**over):
     slots = [
         "W0 unverified layer: x",
         "W1 settled-too-early pattern: x",
-        "W2 trap inventory walk: x",
+        "W2 trap inventory walk: x; UNSET-FIELDS: none - every delivered field "
+        "is fixed by the statement; UNIT-FORMULA: none - no unit conversion "
+        "was in play; LIST-FLOOR: none - no allowlist in the statement; "
+        "READBACK-STATE: none - no shared read-back object; "
+        "ABSENCE-AS-EVIDENCE: none - no inference from silence; "
+        "DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
         "W3 cmd=id -> output=uid=0 verdict=pass bar=<1",
         "W4 instance: x",
         "RISK SWEEP: r1 -> e1 -> side",
@@ -44,8 +53,11 @@ def _filled(**over):
     return slots
 
 
-def _pre(g, args, tool_name="plan_update"):
-    return g.check_pre(_ctx(tool_name, args))
+def _pre(g, args, tool_name="plan_update", llm_responded=None):
+    ctx = _ctx(tool_name, args)
+    if llm_responded is not None:
+        ctx.llm_responded = llm_responded
+    return g.check_pre(ctx)
 
 
 def test_first_step_done_is_blocked_with_beat_message():
@@ -107,6 +119,210 @@ def test_reissue_passes_only_with_the_six_review_slots():
     # With the slots present (still junk content) it passes, and the signature
     # must not change (evidence fields are not identity).
     assert _pre(g, {"action": "step_done", "step_id": 3, "verification": _filled()}) is None
+
+
+def test_readback_state_reaches_private_endpoints():
+    """SIXTH AXIS (2026-11-16): the checker may dial a PRIVATE endpoint the
+    statement never names.
+
+    Measured: one task lost 11 trials; the newest passed 3 of 4 assertions and
+    failed only where the checker connects to an address the statement left
+    unset while the agent listened on a reasonable-looking different one.
+    Reporting "what the checker reads" is not enough when the address itself is
+    unset — the declaration must say either that a working endpoint is exposed
+    at EVERY address the checker could read, or which rival address was left
+    empty and why that is safe. Pinned here so the axis cannot decay into a
+    label that is named and never discharged.
+    """
+    others = ("UNSET-FIELDS: none; UNIT-FORMULA: none; LIST-FLOOR: none; "
+              "ABSENCE-AS-EVIDENCE: none; DEFINING-FIELD: none; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated")
+
+    def shell(w2):
+        return ["W0 unverified layer: x", "W1 settled: x", w2,
+                "W3 cmd=id -> uid=0 verdict=pass bar=<1",
+                "W4 instance: x", "RISK SWEEP: r1 -> e1 -> side"]
+
+    g = SystemPromptRemindGuard()
+    assert _pre(g, {"action": "step_done", "step_id": 7}) is not None  # beat
+
+    # absent sub-slot -> refused, and the message names it
+    v = _pre(g, {"action": "step_done", "step_id": 7,
+                 "verification": shell(f"W2 trap inventory walk: x; {others}")})
+    assert v is not None and v.action == "block", (
+        "a W2 with no READBACK-STATE was accepted — the sub-slot is decoration")
+    assert "READBACK-STATE" in v.message
+
+    # the explicit no-op is legitimate
+    assert _pre(g, {"action": "step_done", "step_id": 7, "verification": shell(
+        f"W2 trap inventory walk: x; {others}; "
+        "READBACK-STATE: none - no shared read-back object; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated")}) is None
+
+    # the coverage declaration discharges the axis
+    assert _pre(g, {"action": "step_done", "step_id": 7, "verification": shell(
+        f"W2 trap inventory walk: x; {others}; "
+        "READBACK-STATE: exposed a working endpoint at every address the "
+        "checker could read")}) is None
+
+    # and so does an explicit leave-empty declaration
+    assert _pre(g, {"action": "step_done", "step_id": 7, "verification": shell(
+        f"W2 trap inventory walk: x; {others}; "
+        "READBACK-STATE: no private address left open; my probe wrote none")}) is None
+
+
+def test_unit_formula_subslot_is_not_decoration():
+    """ABLATION for the W2 UNIT-FORMULA sub-slot (2026-11-16).
+
+    The sub-slot exists because raman-fitting went 3-for-3 the same way: the
+    reading block reported `unit or scale` as UNSET and named the affected
+    field, and the agent still shipped the raw axis value. Reporting an unset
+    convention does not discharge it — the CONVERSION has to be written out.
+
+    This test pins that the label can actually turn the gate red. A
+    five-trap-layer W2 that carries UNSET-FIELDS but no conversion must be
+    REFUSED, so the sub-slot is a structural requirement rather than a word
+    in the reminder text. If this test goes green-by-accident (i.e. the
+    declaration is accepted), the label has become decoration.
+    """
+    g = SystemPromptRemindGuard()
+    no_conv = [
+        "W0 unverified layer: x",
+        "W1 settled-too-early pattern: x",
+        "W2 trap inventory walk: ENUMERATE/PARSE-SCHEMA/RANK/RUN-TIME; "
+        "UNSET-FIELDS: field F -> raw 1.9e4 -> an outside source fixes it -> rival 1.6e3; "
+        "LIST-FLOOR: no allowlist in the statement; READBACK-STATE: no shared read-back object; "
+        "DEFINING-FIELD: no category assignment in this task; ; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+        "ABSENCE-AS-EVIDENCE: none - no inference from silence; "
+        "DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
+        "W3 cmd=id -> output=uid=0",
+        "W4 instance: x",
+        "RISK SWEEP: r1 -> e1 -> side",
+    ]
+    assert _pre(g, {"action": "step_done", "step_id": 9}) is not None  # beat
+    v = _pre(g, {"action": "step_done", "step_id": 9, "verification": no_conv})
+    assert v is not None and v.action == "block", (
+        "a W2 with UNSET-FIELDS but no unit conversion was accepted — "
+        "the UNIT-FORMULA sub-slot is decoration"
+    )
+    assert "UNIT-FORMULA" in v.message
+
+    # The explicit no-op declaration is legitimate and must pass (a task with
+    # no unit in play must not be punished for saying so).
+    with_none = list(no_conv)
+    with_none[2] += "; UNIT-FORMULA: no unit conversion was in play"
+    with_none[2] += "; DEFINING-FIELD: no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+    assert _pre(g, {"action": "step_done", "step_id": 9, "verification": with_none}) is None
+    # So is the literal sub-label carrying an actual conversion.
+    with_conv = list(no_conv)
+    with_conv[2] += "; UNIT-FORMULA: field F -> x_B = f(x_A) -> 1.9e4 in A vs 1.6e3 in B"
+    assert _pre(g, {"action": "step_done", "step_id": 9, "verification": with_conv}) is None
+
+
+def test_list_floor_subslot_is_not_decoration():
+    """ABLATION for the W2 LIST-FLOOR sub-slot (2026-11-16).
+
+    Same shape as the UNIT-FORMULA ablation one task later. The statement
+    enumerated what a deliverable may consist of; the agent read that list as a
+    CEILING (nothing off-list), shipped a deliverable that never contained one
+    of the enumerated items, and its own scan confirmed only the ceiling — so
+    its self-test was green while the checker's set-membership test failed.
+
+    Pins that the label can turn the gate red: a W2 carrying UNSET-FIELDS and
+    UNIT-FORMULA but no per-item probe must be REFUSED. If this goes green by
+    accident, the label is decoration.
+    """
+    g = SystemPromptRemindGuard()
+    no_probe = [
+        "W0 unverified layer: x",
+        "W1 settled-too-early pattern: x",
+        "W2 trap inventory walk: ENUMERATE/PARSE-SCHEMA/RANK/RUN-TIME; "
+        "UNSET-FIELDS: none; UNIT-FORMULA: none - no unit conversion in play; "
+        "DEFINING-FIELD: no category assignment in this task; ; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+        "READBACK-STATE: none - no shared read-back object; "
+        "ABSENCE-AS-EVIDENCE: none - no inference from silence; "
+        "DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
+        "W3 cmd=id -> output=uid=0",
+        "W4 instance: x",
+        "RISK SWEEP: r1 -> e1 -> side",
+    ]
+    assert _pre(g, {"action": "step_done", "step_id": 11}) is not None  # beat
+    v = _pre(g, {"action": "step_done", "step_id": 11, "verification": no_probe})
+    assert v is not None and v.action == "block", (
+        "a W2 with no per-item probe of an enumerated list was accepted — "
+        "the LIST-FLOOR sub-slot is decoration"
+    )
+    assert "LIST-FLOOR" in v.message
+
+    # An explicit no-op is legitimate: a statement that enumerates nothing must
+    # not be punished for saying so.
+    with_none = list(no_probe)
+    with_none[2] += "; LIST-FLOOR: no allowlist in the statement; READBACK-STATE: no shared read-back object"
+    with_none[2] += "; DEFINING-FIELD: no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+    assert _pre(g, {"action": "step_done", "step_id": 11, "verification": with_none}) is None
+    # And so is the literal label carrying a real per-item result.
+    with_probe = list(no_probe)
+    with_probe[2] += ("; LIST-FLOOR: item a -> absent from delivered bytes -> "
+                      "floor reading, fixing")
+    assert _pre(g, {"action": "step_done", "step_id": 11, "verification": with_probe}) is None
+
+
+def test_readback_state_subslot_is_not_decoration():
+    """ABLATION for the W2 READBACK-STATE sub-slot (2026-11-16, third axis).
+
+    Measured on a task whose agent ran the deliverable itself to check it. That
+    probe CREATED the very object the checker waits on, and left it behind. The
+    checker's wait loop is `while not <path>.exists()`, so the residue made it
+    fall through instantly, terminate the process before the expected start-up
+    line was printed, and compare its expected image against a frame produced by
+    a LONG-RUNNING run rather than the start-up screen. One leftover file failed
+    two of three assertions: one on CONTENT, one on TIMING. The agent's own
+    self-test was green the whole time, because it only checked that the object
+    it had produced was well formed.
+
+    This is the third instance of one shape: report an unset convention without
+    discharging it / report an enumeration without probing each item / probe the
+    artifact without asking whether the probe CHANGED what the checker reads.
+
+    Pins that the label can turn the gate red: a W2 carrying the other two
+    sub-slots but no read-back inventory must be REFUSED. If this goes green by
+    accident, the label is decoration.
+    """
+    g = SystemPromptRemindGuard()
+    no_readback = [
+        "W0 unverified layer: x",
+        "W1 settled-too-early pattern: x",
+        "W2 trap inventory walk: ENUMERATE/PARSE-SCHEMA/RANK/RUN-TIME; "
+        "UNSET-FIELDS: none; UNIT-FORMULA: none - no unit conversion in play; "
+        "DEFINING-FIELD: no category assignment in this task; ; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+        "LIST-FLOOR: none - no allowlist in the statement; "
+        "ABSENCE-AS-EVIDENCE: none - no inference from silence; "
+        "DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
+        "W3 cmd=id -> output=uid=0",
+        "W4 instance: x",
+        "RISK SWEEP: r1 -> e1 -> side",
+    ]
+    assert _pre(g, {"action": "step_done", "step_id": 12}) is not None  # beat
+    v = _pre(g, {"action": "step_done", "step_id": 12, "verification": no_readback})
+    assert v is not None and v.action == "block", (
+        "a W2 that never inventoried the state left at the checker's read-back "
+        "path was accepted — the READBACK-STATE sub-slot is decoration"
+    )
+    assert "READBACK-STATE" in v.message
+
+    # An explicit no-op is legitimate: a task whose probes touch no object the
+    # checker later reads must not be punished for saying so.
+    with_none = list(no_readback)
+    with_none[2] += "; READBACK-STATE: no shared read-back object"
+    with_none[2] += "; DEFINING-FIELD: no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+    assert _pre(g, {"action": "step_done", "step_id": 12,
+                    "verification": with_none}) is None
+    # And so is the literal label carrying a real inventory, INCLUDING the case
+    # where the residue was real and had to be cleaned.
+    with_probe = list(no_readback)
+    with_probe[2] += ("; READBACK-STATE: /out/artifact -> my own probe created "
+                      "it -> removed before finishing, because the checker waits "
+                      "on its existence and would have skipped its wait")
+    assert _pre(g, {"action": "step_done", "step_id": 12,
+                    "verification": with_probe}) is None
 
 
 def test_different_step_gets_its_own_beat():
@@ -180,7 +396,19 @@ def test_beat_is_compact_and_machine_checkable():
     # agent to name its own instance of each recurring trap shape. That block is
     # pure mechanism (no numbers, no task names), so the guard against answer
     # leakage still holds; only the hard length bar moves, 2000 -> 2400.
-    assert len(msg) < 2400, f"beat grew back to {len(msg)} chars; keep it under 2400"
+    #
+    # USER RULING (2026-11-16): the bar moves again, 2400 -> 2900, because the
+    # beat grew a THIRD measured enforcement layer (READBACK-STATE) and the
+    # first two each flipped a reward=0 task to reward=1.0 (a unit-conversion
+    # task and an enumerated-list task). The budget was raised on a measured
+    # cost, not on convenience: across the 89-task batch the beat fires 7.32
+    # times per trial on average (549 fires over the 75 trials that hit it,
+    # max 11), so 2697 chars is ~674 tokens per fire and ~4936 tokens per
+    # trial -- 2.5% of a 200k context, paid to enforce three distinct failure
+    # families that each cost a whole task when unenforced. Each further layer
+    # must clear the same bar: a measured failure it prevents, and no task
+    # literals in its text.
+    assert len(msg) < 2900, f"beat grew back to {len(msg)} chars; keep it under 2900"
     low = msg.lower()
     # the W3 slot must demand a machine-checkable triple
     assert "verdict=pass|fail" in low, "the W3 verdict slot lost its machine-readable form"
@@ -207,3 +435,176 @@ def test_declares_completion_ignores_unknown_actions():
     assert not _declares_completion({"action": "add_steps"})
     assert not _declares_completion({})
     assert _declares_completion({"action": "batch", "updates": [{"status": "DONE"}]})
+
+
+def test_absence_as_evidence_subslot_is_not_decoration():
+    """ABLATION for the W2 ABSENCE-AS-EVIDENCE sub-slot (2026-11-16, fourth axis).
+
+    Measured on a retrieval task whose statement names a component whose
+    behaviour ships with the named library: the reference invocation passes a
+    usage-typed argument that selects it. The agent inspected a DIFFERENT
+    artifact, found it silent about that behaviour, and concluded the behaviour
+    did not exist -- while its own note had already recorded that applying it
+    changed the answer. One artifact's silence was treated as a negative
+    observation about another component.
+
+    This is the fourth instance of one shape: report an unset convention
+    without discharging it / report an enumeration without probing each item /
+    probe the artifact without asking what state it left / infer a NEGATIVE
+    from an artifact that merely never mentioned the subject.
+
+    Pins that the label can turn the gate red: a W2 carrying every other
+    sub-slot but no silence-vs-observation line must be REFUSED. If this goes
+    green by accident, the label is decoration.
+    """
+    g = SystemPromptRemindGuard()
+    no_absence = [
+        "W0 unverified layer: x",
+        "W1 settled-too-early pattern: x",
+        "W2 trap inventory walk: ENUMERATE/PARSE-SCHEMA/RANK/RUN-TIME; "
+        "UNSET-FIELDS: none; UNIT-FORMULA: none - no unit conversion in play; "
+        "DEFINING-FIELD: no category assignment in this task; ; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+        "LIST-FLOOR: none - no allowlist in the statement; "
+        "READBACK-STATE: none - no shared read-back object",
+        "W3 cmd=id -> output=uid=0",
+        "W4 instance: x",
+        "RISK SWEEP: r1 -> e1 -> side",
+    ]
+    assert _pre(g, {"action": "step_done", "step_id": 13}) is not None  # beat
+    v = _pre(g, {"action": "step_done", "step_id": 13, "verification": no_absence})
+    assert v is not None and v.action == "block", (
+        "a W2 that weighed a reading without saying whether its support was an "
+        "observation or an artifact's silence was accepted — the "
+        "ABSENCE-AS-EVIDENCE sub-slot is decoration"
+    )
+    assert "ABSENCE-AS-EVIDENCE" in v.message
+
+    # An explicit no-op is legitimate: a task whose readings all rest on
+    # components the agent actually exercised must not be punished.
+    with_none = list(no_absence)
+    with_none[2] += "; ABSENCE-AS-EVIDENCE: no inference from silence"
+    with_none[2] += "; DEFINING-FIELD: no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+    assert _pre(g, {"action": "step_done", "step_id": 13,
+                    "verification": with_none}) is None
+    # So is the literal label carrying a real inventory of the two readings.
+    with_probe = list(no_absence)
+    with_probe[2] += ("; ABSENCE-AS-EVIDENCE: a config file was silent about the "
+                      "behaviour -> I had inferred the component did not do it -> "
+                      "I ran the component itself and observed it does")
+    assert _pre(g, {"action": "step_done", "step_id": 13,
+                    "verification": with_probe}) is None
+
+def test_defining_field_subslot_is_not_decoration():
+    """The DEFINING-FIELD sub-slot must be able to turn the gate RED.
+
+    Same discipline as the other four sub-slot ablation tests: if removing it
+    changes nothing, it is decoration. Pins both directions — a W2 that assigns
+    a category from proxy evidence without naming the DEFINING field is
+    rejected, and an explicit no-op for a task with no category assignment is
+    accepted.
+    """
+    g = SystemPromptRemindGuard()
+    base = [
+        "W0 unverified layer: x",
+        "W1 settled-too-early pattern: x",
+        "W2 trap inventory walk: x; UNSET-FIELDS: none; "
+        "UNIT-FORMULA: no unit conversion in play; "
+        "LIST-FLOOR: no allowlist in the statement; "
+        "READBACK-STATE: no shared read-back object; "
+        "ABSENCE-AS-EVIDENCE: no inference from silence"
+        "; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
+        "W3 cmd=id -> output=uid=0",
+        "W4 instance: x",
+        "RISK SWEEP: r1 -> e1 -> side",
+    ]
+
+    v = _pre(g, {"action": "step_done", "step_id": 14, "verification": base})
+    assert v is not None and v.action == "block", (
+        "a W2 with every other sub-slot but no DEFINING-FIELD was accepted — "
+        "the DEFINING-FIELD sub-slot is decoration"
+    )
+    assert "DEFINING-FIELD" in v.message
+
+    # An explicit no-op is legitimate: a task whose artifact no consumer
+    # classifies must not be punished for saying so.
+    with_none = list(base)
+    with_none[2] += "; DEFINING-FIELD: no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+    assert _pre(g, {"action": "step_done", "step_id": 14,
+                    "verification": with_none}) is None
+
+    # The filled form must pass too, so the sub-slot cannot be satisfied only
+    # by a negation.
+    with_field = list(base)
+    with_field[2] += ("; DEFINING-FIELD: the field that defines the category "
+                      "-> proxy -> +1 on a POSITIVE example, -1 on a NEGATIVE one")
+    with_field[2] += "; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated"
+    assert _pre(g, {"action": "step_done", "step_id": 14,
+                    "verification": with_field}) is None
+
+
+def test_observed_vs_consumed_subslot_is_not_decoration():
+    """The OBSERVED-VS-CONSUMED sub-slot must be able to turn the gate RED.
+
+    The failure it pins: a check can pass on a quantity that is NOT the one the
+    consumer reads (an exit code instead of the pixel delta it stands for), and
+    every earlier layer is silent about that. If removing the sub-slot changes
+    nothing, the layer is decoration.
+    """
+    g = SystemPromptRemindGuard()
+    base = [
+        "W0 unverified layer: x",
+        "W1 settled-too-early pattern: x",
+        "W2 trap inventory walk: x; UNSET-FIELDS: none; "
+        "UNIT-FORMULA: no unit conversion in play; "
+        "LIST-FLOOR: no allowlist in the statement; "
+        "READBACK-STATE: no shared read-back object; "
+        "ABSENCE-AS-EVIDENCE: no inference from silence; "
+        "DEFINING-FIELD: no category assignment in this task; "
+        "STATED-VS-SHIPPED: no constraint I stated",
+        "W3 cmd=id -> output=uid=0",
+        "W4 instance: x",
+        "RISK SWEEP: r1 -> e1 -> side",
+    ]
+
+    v = _pre(g, {"action": "step_done", "step_id": 14, "verification": base})
+    assert v is not None and v.action == "block", (
+        "a W2 with every other sub-slot but no OBSERVED-VS-CONSUMED was "
+        "accepted — the sub-slot is decoration"
+    )
+    assert "OBSERVED-VS-CONSUMED" in v.message
+
+    # An explicit no-op is legitimate: a task whose own check and whose
+    # consumer read the same quantity must not be punished for saying so.
+    with_none = list(base)
+    with_none[2] += (
+        "; OBSERVED-VS-CONSUMED: none - my check and the consumer read the "
+        "same quantity here")
+    assert _pre(g, {"action": "step_done", "step_id": 14,
+                    "verification": with_none}) is None
+
+    # And the filled form must pass too, so a negation alone cannot satisfy it.
+    with_pair = list(base)
+    with_pair[2] += (
+        "; OBSERVED-VS-CONSUMED: my check read an exit code -> the consumer "
+        "reads a rendered delta -> not the same quantity; I tied them with a "
+        "probe that produced the delta directly")
+    assert _pre(g, {"action": "step_done", "step_id": 14,
+                    "verification": with_pair}) is None
+
+def test_a_completion_marker_is_never_blocked_by_this_guard():
+    """The completion sentinel is out of scope for this guard, by design.
+
+    This guard's pressure lives on declarations: it beats a step_done once and
+    demands the review slots on the re-issue. Completion is a different channel
+    — the agent ending its run must not be gated on a review it may have had no
+    opportunity to give, and a gate that can hold completion open is a livelock
+    risk the design rules out. Pinned here so a later "carry the unpaid beat to
+    completion" idea cannot silently re-introduce it.
+    """
+    g = SystemPromptRemindGuard()
+    # Open a beat and never answer it.
+    assert _pre(g, {"action": "step_done", "step_id": 71}) is not None
+    # The completion-path consultation (tool_name="", post-LLM) must pass.
+    assert _pre(g, {}, tool_name="", llm_responded=True) is None
+    # ...and so must the top-of-loop pre-check that also carries tool_name="".
+    assert _pre(g, {}, tool_name="", llm_responded=False) is None

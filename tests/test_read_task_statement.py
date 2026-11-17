@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The ten-viewpoint task-statement reader, and its single-shot auto-run.
+"""The multi-viewpoint task-statement reader, and its single-shot auto-run.
 
 What these tests pin down:
-  * ten viewpoints, each asked a DIFFERENT question (not ten copies of one);
+  * N viewpoints, each asked a DIFFERENT question (not N copies of one);
   * every reading is returned verbatim — the tool does not decide, vote,
     rank, or drop a reading it disagrees with;
-  * one viewpoint failing does not remove the other nine;
+  * one viewpoint failing does not remove the others;
   * a dead/unavailable reading is reported as such, never as "the statement
     says nothing here";
   * the auto-run is OFF by default (byte-identical run when unset), and when
@@ -68,12 +68,16 @@ class _FakeProvider:
 # ── the viewpoint set ────────────────────────────────────────────────────────
 
 
-def test_ten_viewpoints_all_distinct():
-    assert len(VIEWPOINTS) == 10
+def test_viewpoints_all_distinct():
+    # The COUNT is deliberately not pinned here: the set grew from ten to
+    # eleven when world_anchor was added, and pinning a literal turns every
+    # future addition into a test edit that says nothing about correctness.
+    # What must hold is that each viewpoint is a distinct question.
+    assert len(VIEWPOINTS) >= 10
     names = [n for n, _ in VIEWPOINTS]
-    assert len(set(names)) == 10, "viewpoint names must be unique"
+    assert len(set(names)) == len(VIEWPOINTS), "viewpoint names must be unique"
     instrs = [i for _, i in VIEWPOINTS]
-    assert len(set(instrs)) == 10, "two viewpoints share the same instruction"
+    assert len(set(instrs)) == len(VIEWPOINTS), "two viewpoints share the same instruction"
 
 
 def test_expected_viewpoints_present():
@@ -89,14 +93,48 @@ def test_expected_viewpoints_present():
         "implicit_premises",
         "what_is_compared",
         "deliverable_inventory",
+        "world_anchor",
     ):
         assert required in names
+
+
+def test_world_anchor_asks_for_a_canonical_value_and_the_field_it_pins():
+    """world_anchor exists because two failed trials had the statement name a
+    real-world object whose public spec settled the disputed value, and the
+    readings never asked for it:
+
+      * raman-fitting names "some graphene sample" -> the grader expects the
+        graphene G peak at 1580.3 cm^-1, which pins the axis scale; the
+        delivered x0 was off by 1148%.
+      * make-doom-for-mips names doomgeneric -> Doom's native frame is
+        320x200; the delivered frame was 640x400.
+
+    In both readings files the entity appeared ONLY as an ambiguity source
+    ("unspecified sample") and the canonical number appeared ZERO times
+    (measured: 1580 -> 0 hits in a 19785-char readings block; 320/200/
+    resolution -> 0 hits each in a 20852-char block). So the instruction must
+    ask for the value AND for the field it pins -- a viewpoint that returns
+    "graphene" without a number would reproduce the original failure.
+    """
+    names = dict(VIEWPOINTS)
+    assert "world_anchor" in names
+    low = names["world_anchor"].lower()
+    # (a) it must ask what the authoritative value IS
+    assert "canonical" in low, "must ask for the canonical value"
+    # (b) it must bind that value to an UNSET axis or deliverable field
+    assert "pin" in low, "must ask which UNSET axis / deliverable field it pins"
+    # (c) the statement's naming must be declared to outrank a self-inferred
+    #     range -- this is the exact sentence the raman trial overrode by
+    #     rejecting 1580 as "below the minimum 1648".
+    assert "outrank" in low, "must state that the named authority outranks self-inference"
+    # (d) it must not license invention when no canonical value is known
+    assert "say which" in low or "not something you can state" in low
 
 
 def test_every_instruction_demands_a_verbatim_quote():
     # Two ways a viewpoint can demand a quote: "verbatim" or "quote"/"cite".
     # The shared PROMPT's HARD RULES carries the binding requirement for all
-    # ten; this test guards against a viewpoint that asks for nothing anchored.
+    # viewpoints; this test guards against a viewpoint that asks for nothing anchored.
     for name, instruction in VIEWPOINTS:
         low = instruction.lower()
         assert ("verbatim" in low or "quote" in low or "cite" in low), (
@@ -108,11 +146,11 @@ def test_every_instruction_demands_a_verbatim_quote():
 # ── execution ────────────────────────────────────────────────────────────────
 
 
-def test_runs_all_ten_and_returns_every_reading():
+def test_runs_every_viewpoint_and_returns_every_reading():
     prov = _FakeProvider(bodies={n: f"BODY-{n}" for n, _ in VIEWPOINTS})
     tool = TaskStatementReadersTool(provider=prov, task_text=STATEMENT)
     out = tool.execute()
-    assert len(prov.prompts) == 10
+    assert len(prov.prompts) == len(VIEWPOINTS)
     for name, _ in VIEWPOINTS:
         assert f"BODY-{name}" in out, f"reading for {name} missing from output"
 
@@ -135,8 +173,8 @@ def test_one_failing_viewpoint_does_not_remove_the_others():
     out = TaskStatementReadersTool(provider=prov, task_text=STATEMENT).execute()
     assert "FAILED: numeric_conventions" in out
     assert "do not read a failure as 'the statement says nothing here'" in out
-    # the other nine still reported ok
-    assert out.count("(ok)") == 9
+    # every other viewpoint still reported ok
+    assert out.count("(ok)") == len(VIEWPOINTS) - 1
 
 
 def test_empty_response_is_reported_as_an_answer_not_a_failure():
@@ -159,7 +197,7 @@ def test_header_states_the_tool_did_not_decide():
 def test_statement_is_passed_into_every_prompt():
     prov = _FakeProvider()
     TaskStatementReadersTool(provider=prov, task_text=STATEMENT).execute()
-    assert len(prov.prompts) == 10
+    assert len(prov.prompts) == len(VIEWPOINTS)
     for p in prov.prompts:
         assert "at most 2500 bytes" in p, "the statement must reach every view"
 
@@ -231,12 +269,12 @@ def test_auto_run_is_on_for_truthy_values(monkeypatch, value):
     # provider the bodies are placeholders, so this asserts the block exists
     # and is the reader's rendering — not that it repeats the task text.
     #
-    # `_READERS_ROUNDS` passes are run and EVERY pass renders all ten
-    # viewpoints, so the count is rounds x 10, not 10. Read the constant
+    # `_READERS_ROUNDS` passes are run and EVERY pass renders all
+    # viewpoints, so the count is rounds x len(VIEWPOINTS). Read the constant
     # rather than pinning a literal: the number of passes is a deliberate,
     # separately-argued design value (see its docstring in agent.py).
     rounds = obj._READERS_ROUNDS
-    assert "(ok)" in out and out.count("(ok)") == rounds * 10
+    assert "(ok)" in out and out.count("(ok)") == rounds * len(VIEWPOINTS)
 
 
 def test_each_pass_is_rendered_verbatim_under_its_own_header(monkeypatch):
@@ -490,3 +528,35 @@ def test_shared_prompt_does_not_collapse_a_silence_into_nothing_found():
         "HARD RULE 2 must say that reporting a silence is a finding, not an "
         "invention"
     )
+
+
+def test_tool_description_and_render_speak_for_the_SHIPPED_viewpoints():
+    """Every sentence that describes the tool must match what it ships.
+
+    Measured drift (2026-11-16): after `world_anchor` was added (10 -> 11), three
+    separate descriptions still said "ten" and the tool's own `description`
+    listed the ten old names and omitted `world_anchor`. The description is the
+    model's only map of the tool, so a stale list advertises a capability the
+    run does not have -- and hides the one it just gained.
+    """
+    from flagscale_agent.react.tools.read_task_statement import (
+        VIEWPOINTS,
+        TaskStatementReadersTool,
+    )
+
+    n = len(VIEWPOINTS)
+    ids = [v[0] for v in VIEWPOINTS]
+
+    d = TaskStatementReadersTool.description
+    assert f"{n} independent viewpoints" in d
+    assert f"all {n} readings" in d
+    # EVERY shipped viewpoint must be advertised, by name
+    for vid in ids:
+        assert vid in d, f"tool description omits shipped viewpoint {vid!r}"
+    assert "ten independent" not in d
+
+    # the render header must not claim a stale count either
+    tool = TaskStatementReadersTool(provider=None, task_text="")
+    rendered = tool._render([(v, "ok", "body") for v in ids], [])
+    assert f"{n} independent readings" in rendered
+    assert "Ten independent" not in rendered

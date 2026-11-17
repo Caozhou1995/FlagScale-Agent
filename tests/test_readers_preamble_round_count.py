@@ -53,7 +53,10 @@ def test_preamble_matches_actual_round_count(rounds, expected_word, expected_dig
     assert f"These are NOT {expected_word} votes" in out
     # the hard-coded literal must never survive into the rendered text
     assert "three independent passes" not in out or rounds == 3
-    assert "{n}" not in out and "{word}" not in out and "{votes}" not in out
+    assert (
+        "{n}" not in out and "{word}" not in out and "{votes}" not in out
+        and "{nv}" not in out and "{pass_word}" not in out
+    )
 
 
 def test_preamble_counts_PASSES_THAT_RAN_not_rounds_configured():
@@ -77,3 +80,24 @@ def test_preamble_counts_PASSES_THAT_RAN_not_rounds_configured():
 def test_readers_rounds_is_two():
     """The value the batch was lowered to; catches an accidental revert to 3."""
     assert WorkerAgent._READERS_ROUNDS == 2
+
+
+def test_preamble_counts_the_viewpoints_that_SHIPPED_not_a_remembered_ten():
+    """The preamble must name the real number of viewpoints.
+
+    Same defect class as the pass count above, one layer down: the sentence
+    "asking the same ten questions" was a literal while VIEWPOINTS grew from
+    10 to 11. It is the ONLY place the agent is told how many questions it was
+    asked, so a stale literal misdescribes the harness that produced the block.
+    """
+    from flagscale_agent.react.tools.read_task_statement import VIEWPOINTS
+
+    n = len(VIEWPOINTS)
+    a = _agent(2, ["body"] * 2)
+    out = a._auto_read_task_statement("do the thing")
+    assert f"asking the same {n} questions" in out, (
+        f"preamble must state {n} questions, got: "
+        + next((l for l in out.splitlines() if "questions" in l), "<none>")
+    )
+    # the old literal must never come back
+    assert "same ten questions" not in out

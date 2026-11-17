@@ -269,7 +269,10 @@ def test_c16_literal_versus_format_name(text: str) -> None:
     """
     low = text.lower()
     assert "must appear character-for-character" in low
-    assert "`wq` is not `:wq`" in low
+    # The clause must stay ABSTRACT: name the delimiter/prefix rule, never a
+    # concrete token lifted from a benchmark task (that would be the answer).
+    assert "including any delimiter or prefix the task itself writes" in low
+    assert "a form that differs by even one such character" in low
     assert "not a literal to reproduce" in low
     assert "format's rules" in low or "format's own rules" in low
     assert "after any derived conversion" in low

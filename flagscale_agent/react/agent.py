@@ -765,6 +765,13 @@ class WorkerAgent:
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
         self.tool_registry.register(RecallSearchTool(self._session_dir))
+        # User directives (Do / Do NOT block on the dashboard). Registered next
+        # to the memory tools because the agent must choose between them: a
+        # user ORDER goes here (rendered every turn, not overrulable), while the
+        # agent's own finding goes to memory (retrieved on demand).
+        from flagscale_agent.react.tools.directive import DirectiveTool
+        # Pass a callable, not a snapshot: resume rebinds self._session_dir.
+        self.tool_registry.register(DirectiveTool(lambda: self._session_dir))
         
         # Web and infrastructure tools
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
@@ -2015,9 +2022,14 @@ class WorkerAgent:
         #      the FIRST user turn, and hard reset re-injects that verbatim as
         #      "### (1) ORIGINAL TASK". With readings first, a hard reset would
         #      hand back the readings block and the statement would be lost.
-        # _pin is NOT set on the readings: history.py reserves it for genuine
-        # user turns (losing one drops the operator's instruction). The readings
-        # are harness-authored and derived, so they stay evictable.
+        # _pin IS set on the readings (2026-11-16 user ruling): the readings
+        # block is the only place the harness hands the model the statement's
+        # UNSET axes and their deliverable fields. Measured on batch
+        # 2026-11-16__00-08-27: raman-fitting read "UNSET: gamma definition
+        # (FWHM/HWHM)" at turn 1 and still shipped the wrong convention after
+        # the block was evicted under context pressure. A derived document the
+        # model must ACT on has the same survival requirement as the operator's
+        # own words, so it is pinned alongside the statement.
         readings = self._auto_read_task_statement(query)
         # Headless user-task runs (not a resumed worker, not a worker contract)
         # get a one-line nudge appended to the user's own task text: the task
@@ -2033,7 +2045,7 @@ class WorkerAgent:
         # exposure and because _mech_original_task() reads turn [0]).
         self.history.append({"role": "user", "content": query, "_pin": True})
         if readings:
-            self.history.append({"role": "user", "content": readings})
+            self.history.append({"role": "user", "content": readings, "_pin": True})
         try:
             self._react_loop()
         except Exception:
@@ -2372,6 +2384,17 @@ class WorkerAgent:
     #: and an A/B is a single env var.
     _READERS_ENV = "FLAGSCALE_TASK_READERS"
 
+    @staticmethod
+    def _n_viewpoints() -> int:
+        """Number of viewpoints actually shipped by the readers tool.
+
+        Derived, never hardcoded: the preamble tells the agent how many
+        questions it was asked, and a stale literal there would describe a
+        different harness than the one that produced the block.
+        """
+        from flagscale_agent.react.tools.read_task_statement import VIEWPOINTS
+        return len(VIEWPOINTS)
+
     #: How many INDEPENDENT full passes over the ten viewpoints to run.
     #:
     #: One pass is one sample of "what does this statement say, seen through ten
@@ -2430,7 +2453,7 @@ class WorkerAgent:
         "HARNESS NOTE — {word} independent {pass_word} over the task statement.\n"
         "\n"
         "Above this note is the task statement. Below it are {n} SEPARATE "
-        "PASSES, each one asking the same ten questions about that statement "
+        "PASSES, each one asking the same {nv} questions about that statement "
         "again, from scratch, with no knowledge of the other passes. Each pass "
         "is reproduced verbatim. Nothing has been merged, deduplicated, "
         "ranked, voted on, or filtered: deciding what any of it means is yours, "
@@ -2483,6 +2506,23 @@ class WorkerAgent:
         "deliver the DERIVED value — not the raw axis point you started from. "
         "If you deliver the literal one anyway, name it as a bet and say what "
         "the derived value would have been.\n"
+        "   (e) Ask this BEFORE the first value for an UNSET key is written, "
+        "not at the end: under each candidate reading, what number does this "
+        "deliverable take, and how far apart are those numbers on the scale "
+        "the result is judged on? Write the two numbers and their gap. If you "
+        "can compute that gap, you own a TEST - run it and let it decide. If "
+        "you CANNOT compute it from anything you hold, then nothing you do to "
+        "your own artifact can settle it: your output is self-consistent by "
+        "construction, and self-consistency is not evidence about a convention "
+        "you picked. That is the moment NOT to pick the reading that feels "
+        "right and then confirm it against your own output - a value checked "
+        "only against itself reports agreement, not correctness. Go and get an "
+        "object OUTSIDE your artifact - the statement's own phrasing read "
+        "again, a file in the environment, a reference implementation, a "
+        "worked example, the definition in the standard the statement names - "
+        "and let that decide. If no such object is reachable, say so plainly "
+        "and deliver the MOST CONSERVATIVE reading, naming the gap and the "
+        "value each candidate would have produced.\n"
         "\n"
         "6. When the UNSET is a SCALE, UNIT, AXIS OR INDEX BASE, do not just "
         "notice it — ENUMERATE the candidate conventions and TRY them. A scale "
@@ -2631,6 +2671,7 @@ class WorkerAgent:
         _word = _w.get(_used, str(_used))
         preamble = self._READERS_PREAMBLE.format(
             n=_used,
+            nv=self._n_viewpoints(),
             word=_word,
             pass_word=("pass" if _used == 1 else "passes"),
             votes=(f"{_word} votes" if _used != 1 else "a vote"),

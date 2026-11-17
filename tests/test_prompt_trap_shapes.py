@@ -156,7 +156,10 @@ def test_beat_carries_the_w4_slot_and_fits_its_own_bar():
     """
     msg = _REMIND_MESSAGE
     low = msg.lower()
-    assert len(msg) < 2400, f"beat is {len(msg)} chars; bar is 2400"
+    # Same USER RULING as tests/test_system_prompt_remind_guard.py: the bar
+    # moved 2400 -> 2900 (2026-11-16) when the beat grew the measured W2
+    # sub-slots. Two copies of one threshold drift; keep them equal.
+    assert len(msg) < 2900, f"beat is {len(msg)} chars; bar is 2900"
     assert "w4 trap shapes" in low, "the beat lost its W4 slot"
     assert "open bet" in low, (
         "the beat must offer an explicit 'open bet' escape, or an agent that "

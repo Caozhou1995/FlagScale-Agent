@@ -292,6 +292,28 @@ class TestPinnedUserInstructionNeverEvicted:
         pinned = [m for m in hm.messages if m.get("content") == "DO-NOT-LOSE-ME"][0]
         assert pinned["_ext_idx"] not in evictable
 
+    def test_pinned_readings_block_not_evictable(self):
+        """The 10-view readings block is pinned alongside the statement.
+
+        2026-11-16 ruling: the block is the only place the harness hands the
+        model the statement's UNSET axes and the deliverable field each one
+        lands in. Measured on batch 2026-11-16__00-08-27, raman-fitting read
+        "UNSET: gamma definition (FWHM/HWHM)" on turn 1 yet shipped the wrong
+        convention after context pressure evicted the block. A derived
+        document the model must ACT on needs the same survival as the
+        operator's own words.
+        """
+        hm = HistoryManager()
+        hm.set_system_prompt("sys")
+        hm.append({"role": "user", "content": "THE-STATEMENT", "_pin": True})
+        hm.append({"role": "user", "content": "THE-READINGS-BLOCK", "_pin": True})
+        for i in range(30):
+            hm.append({"role": "assistant", "content": "turn-%d" % i})
+        evictable = set(hm.get_evictable_indexes())
+        pinned = [m for m in hm.messages
+                  if m.get("content") == "THE-READINGS-BLOCK"][0]
+        assert pinned["_ext_idx"] not in evictable
+
     def test_unpinned_user_messages_stay_evictable(self):
         """Harness-authored user-role messages (nudges, guard blocks, tool
         results) must stay evictable -- otherwise context can never compress."""

@@ -296,21 +296,40 @@ class PromptBuilder:
             if len(jobs) > 4:
                 parts[-1] += f" (+{len(jobs) - 4} more)"
 
-        # Hypothesized problem model, rendered as its own multi-line section BELOW
-        # the metric line — a single "|"-joined line cannot hold it untruncated.
-        # Permanently resident; falsifying/updating it is the agent's own action
-        # (plan_update set_thinking), not a guard.
+        # ── Tail sections, rendered BELOW the one-line metric bar ──
+        # Ordered by authority, not by recency: the USER's direct orders first,
+        # then the agent's own prohibitions, then the agent's own model. A
+        # single "|"-joined line cannot hold any of them untruncated.
+        #
+        # WHY THE DIRECTIVE BLOCK IS NOT IN MEMORY: memory is retrieved on
+        # demand, so a rule nobody thinks to look up never applies. Measured
+        # failure of exactly that shape — the "edit the source tree, not the
+        # deploy tree" order was violated repeatedly while a memory entry
+        # stating it existed. Knowledge competes with judgement at decision
+        # time; an order does not. So it rides the prompt, every turn.
+        sections = []
+        try:
+            from flagscale_agent.react.directives import render_directives_block
+            directives_block = render_directives_block(session_dir)
+        except Exception:
+            # Best-effort: a directive-rendering hiccup must never break a run.
+            directives_block = ""
+        if directives_block:
+            sections.append(directives_block)
         if forbidden_block:
-            return (
-                " | ".join(parts)
-                + f"\n\nForbidden list (what NOT to do — every turn, self-authored):\n{forbidden_block}"
-                + (f"\n\nHypothesis (current problem model):\n{hypothesis}" if hypothesis else "")
+            sections.append(
+                "Forbidden list (what NOT to do — every turn, self-authored):\n"
+                f"{forbidden_block}"
+            )
+        if hypothesis:
+            sections.append(
+                f"Hypothesis (current problem model):\n{hypothesis}"
             )
 
-        if hypothesis:
-            return " | ".join(parts) + f"\n\nHypothesis (current problem model):\n{hypothesis}"
-
-        return " | ".join(parts)
+        head = " | ".join(parts)
+        if not sections:
+            return head
+        return head + "\n\n" + "\n\n".join(sections)
 
     def _build_memory_keys_summary(self) -> str:
         """Return a domain-level summary of memory keys.

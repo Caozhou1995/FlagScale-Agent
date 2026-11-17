@@ -40,49 +40,52 @@ import re
 from . import Guard, GuardContext, GuardVerdict
 
 _REMIND_MESSAGE = """
-[Remind] This step-done declaration is blocked ONCE — the beat, not a refusal.
-Re-issue the SAME plan_update WITH the evidence lines below; the re-issue
-passes when it is re-issued. Answers take the bracketed form — a filled slot,
-not a paragraph.
+[Remind] Blocked ONCE — a beat, not a refusal. Re-issue the SAME plan_update
+WITH the lines below; it passes when re-issued. Answers: a slot, not prose.
 
-  W0 UNVERIFIED LAYER — <the one layer of this deliverable you have NOT checked,
-  and the read you skipped>; or "all layers covered" plus the check that covered
-  each one.
+  W0 UNVERIFIED LAYER — <layer NOT checked + skipped read>, or all covered.
 
-  W1 FAILURE RECEIPT — <the failure this moment invites: a correct check you left
-  unrun>. Treat your first pass as settled-too-early until a probe says
-  otherwise.
+  W1 FAILURE RECEIPT — <failure this moment invites: a check left unrun>; a first
+  pass is settled only by a probe.
 
-  W2 TRAP INVENTORY WALK — one line per layer, in this order: ENUMERATE /
-  PARSE-SCHEMA / RANK / RUN-TIME. Each: <what it produced for THIS deliverable,
-  or N/A and why it cannot bite>.
+  W2 TRAP INVENTORY WALK — one line per layer: ENUMERATE / PARSE-SCHEMA / RANK /
+  RUN-TIME / UNSET-FIELDS / UNIT-FORMULA / LIST-FLOOR / READBACK-STATE /
+  ABSENCE-AS-EVIDENCE / DEFINING-FIELD / OBSERVED-VS-CONSUMED / STATED-VS-SHIPPED.
+  Each: <what it gave, or N/A why>.
+  UNIT-FORMULA: <field> -> <conversion used, x_B = f(x_A)> -> <both readings' nums>.
+  LIST-FLOOR: <each enumerated item> -> <did an EXACT-MATCH probe of the DELIVERED
+  bytes find it> -> <floor or ceiling, why>.
+  READBACK-STATE: <path/port/process the checker reads, INCLUDING a private one
+  the statement never names -> a working endpoint at every one> -> <my ACTUAL
+  read-back command -> its real output, now> -> <residue I leave; would a checker
+  whose READY signal is 'the artifact exists' consume it, stale or early>. Prose
+  'I cleaned it' is no receipt.
+  ABSENCE-AS-EVIDENCE: <artifact SILENT about a behaviour> -> <component whose
+  behaviour I inferred> -> <an observation of its OWN behaviour, or NONE —
+  silence is not one>.
+  DEFINING-FIELD: <field DEFINING the category a consumer assigns> -> <proxy used>
+  -> <that field on a POSITIVE and NEGATIVE example>.
+  OBSERVED-VS-CONSUMED: <quantity that made me call my check PASSED> -> <quantity
+  the consumer reads off the same object> -> <same or not; if not, the tying probe>.
+  STATED-VS-SHIPPED: <EVERY constraint I stated — a stated one left off =
+  unfilled> -> <DELIVERED bytes, measured> -> <agree, or the edit now>.
 
-  W3 FRESH PROBE — one command never run in this step, and it must carry a
-  reading, not a ritual:
-  <command> → <its real output: the number it printed on YOUR artifact>;
-  bar=<the limit the task or a grader in the filesystem states>;
-  VERDICT=PASS|FAIL. A number on the wrong side of its bar is a verdict, not a
-  caveat: repair it, or declare the goal unreachable and give the reading that
-  shows why.
-  PARSING RULE — labels start each slot; W3 runs to the next labelled line.
-  Accepted: `cmd → output` on one line, OR cmd on the W3 line, output next line.
+  W3 FRESH PROBE — one command not run in this step:
+  <command> → <its real output: the number printed on YOUR artifact>;
+  bar=<the limit the task states>; VERDICT=PASS|FAIL.
+  Wrong side of its bar: repair, or declare unreachable.
+  PARSING RULE — labels start slots; W3 ends at next label; `cmd → output` on
+  one line, or output on the next.
 
-  W4 TRAP SHAPES — five shapes recur across unrelated tasks; a step can be green
-  on W0-W3 and still miss one. For EACH, name YOUR instance on THIS deliverable
-  or write "open bet" and why you cannot exclude it: (1) the check judges your
-  own artifact — a generator agrees with itself; (2) the last format item — one
-  char, one exit token, one header, one exact hash; (3) one clean sample
-  standing in for the population — name the boundary inputs you did NOT run;
-  (4) the fix landed in a scratch copy, memory or plan note, not the DELIVERED
-  bytes — re-read the file, not your intent; (5) the visible example fixes FORM
-  but not scale, offset, unit or index base. A trap never enumerated is a trap
-  you are standing in.
+  W4 TRAP SHAPES — five recur; a green on W0-W3 can still miss one. Name YOUR
+  instance, or open bet why: (1) the check judges your own artifact — a
+  generator agrees with itself; (2) the last format item — one char, exit token, header, hash; (3) one clean sample for the whole population — name boundary inputs you did NOT run; (4) the fix landed in a scratch copy, not the DELIVERED bytes; (5) the
+  visible example fixes FORM, not scale, offset, unit or index base. A trap never enumerated is one you stand in.
 
-  RISK SWEEP — per risk logged during this step: <risk> → <the evidence that
-  decided it> → <which side won>. A logged-but-unresolved risk blocks this
-  declaration: settle it now or name the probe you refuse to run and why.
+  RISK SWEEP — per logged risk: <risk> → <evidence deciding it> → <side that won>.
+  Unresolved risk blocks this declaration: settle it now, or name the probe.
 
-Re-issue the same declaration WITH these lines and continue.
+Re-issue it WITH these lines and continue.
 """
 
 _REMIND_MESSAGE_MISSING = """
@@ -106,20 +109,96 @@ the same W3 slot (the slot ends at the next line starting with a label).
 """
 
 
+def _missing_labels(covers) -> list:
+    """Human-readable list of what the re-issue still lacks (form-level too)."""
+    out = list(covers.missing)
+    if not covers.has_unset_subslot:
+        out.append("W2(need UNSET-FIELDS: <field> -> <shipped> -> <object outside "
+                   "your artifact that decided it> -> <rival reading's number>)")
+    if not covers.has_unit_formula_subslot:
+        out.append("W2(need UNIT-FORMULA: <field> -> <the conversion you actually "
+                   "used, written as x_B = f(x_A)> -> <both readings' numbers>, or "
+                   "an explicit 'no unit conversion' when no unit was in play)")
+    if not covers.has_list_floor_subslot:
+        out.append("W2(need LIST-FLOOR: <each item the statement enumerates> -> "
+                   "<whether an exact-match probe of the DELIVERED bytes found it> "
+                   "-> <the reading you are shipping, floor or ceiling>, or an "
+                   "explicit 'no allowlist in the statement' when none was given)")
+    if not covers.has_readback_state_subslot:
+        out.append("W2(need READBACK-STATE: <each path/port/process the checker "
+                   "will read> -> <whether MY OWN probe wrote it> -> <the state "
+                   "you leave it in, and whether that residue can change what the "
+                   "checker observes, in content or in timing>, or an explicit "
+                   "'no shared read-back object' when your probes touch none)")
+    if not covers.has_absence_evidence_subslot:
+        out.append("W2(need ABSENCE-AS-EVIDENCE: <the artifact that was SILENT "
+                   "about the behaviour> -> <the component whose behaviour you "
+                   "inferred from that silence> -> <an observation of that "
+                   "component's OWN behaviour>, or an explicit 'no inference from "
+                   "silence' when every reading you weighed rests on a component "
+                   "you actually exercised)")
+    if not covers.has_defining_field_subslot:
+        out.append("W2(need DEFINING-FIELD: <the field that DEFINES the category "
+                   "a consumer assigns to my artifact> -> <the proxy evidence I "
+                   "based the assignment on> -> <that field's value on a POSITIVE "
+                   "example AND on a NEGATIVE one>, or an explicit 'no category "
+                   "assignment in this task' when no consumer classifies it)")
+    if not covers.has_stated_shipped_subslot:
+        out.append("W2(need STATED-VS-SHIPPED: <EVERY constraint YOU STATED this "
+                   "task, one line each; a stated one left off leaves this "
+                   "unfilled> -> <what the DELIVERED bytes carry for each, "
+                   "measured on the file> -> <agree, or the edit you make now>), "
+                   "or an explicit 'no constraint I stated' when you stated none")
+    if not covers.has_observed_consumed_subslot:
+        out.append("W2(need OBSERVED-VS-CONSUMED: <the quantity I used to call my "
+                   "own check PASSED> -> <the quantity the consumer reads off the "
+                   "same object> -> <whether they are the same quantity, and if "
+                   "not, the probe that tied them together>, or an explicit 'my "
+                   "check and the consumer read the same quantity' when they do)")
+    return out
+
+
 class _ReviewCoverage:
     """Result of the STRUCTURAL review check (never a semantic judgement)."""
 
-    __slots__ = ("missing", "has_w3_two_slots")
+    __slots__ = ("missing", "has_w3_two_slots", "has_unset_subslot",
+                 "has_unit_formula_subslot", "has_list_floor_subslot",
+                 "has_readback_state_subslot", "has_absence_evidence_subslot",
+                 "has_defining_field_subslot",
+                 "has_observed_consumed_subslot",
+                 "has_stated_shipped_subslot")
 
-    def __init__(self, missing, has_w3_two_slots):
+    def __init__(self, missing, has_w3_two_slots, has_unset_subslot=True,
+                 has_unit_formula_subslot=True, has_list_floor_subslot=True,
+                 has_readback_state_subslot=True,
+                 has_absence_evidence_subslot=True,
+                 has_defining_field_subslot=True,
+                 has_observed_consumed_subslot=True,
+                 has_stated_shipped_subslot=True):
         self.missing = list(missing)
         self.has_w3_two_slots = has_w3_two_slots
+        self.has_unset_subslot = has_unset_subslot
+        self.has_unit_formula_subslot = has_unit_formula_subslot
+        self.has_list_floor_subslot = has_list_floor_subslot
+        self.has_readback_state_subslot = has_readback_state_subslot
+        self.has_absence_evidence_subslot = has_absence_evidence_subslot
+        self.has_defining_field_subslot = has_defining_field_subslot
+        self.has_observed_consumed_subslot = has_observed_consumed_subslot
+        self.has_stated_shipped_subslot = has_stated_shipped_subslot
 
     def __bool__(self):
-        # Truthy only when every label is present. The W3 two-slot check is
-        # reported separately because it is a FORM requirement on one label,
-        # not a seventh label.
-        return not self.missing
+        # Truthy only when every label is present AND the FORM sub-slots
+        # are addressed. The W3 two-slot, W2 UNSET-FIELDS, W2 UNIT-FORMULA,
+        # W2 LIST-FLOOR, W2 READBACK-STATE and W2 ABSENCE-AS-EVIDENCE checks
+        # are form requirements on an existing label, not extra labels.
+        return (not self.missing and self.has_w3_two_slots
+                and self.has_unset_subslot and self.has_unit_formula_subslot
+                and self.has_list_floor_subslot
+                and self.has_readback_state_subslot
+                and self.has_absence_evidence_subslot
+                and self.has_defining_field_subslot
+                and self.has_observed_consumed_subslot
+                and self.has_stated_shipped_subslot)
 
     def __len__(self):
         return len(self.missing)
@@ -225,7 +304,195 @@ def _review_labels_present(args: dict) -> _ReviewCoverage:
     if "W3" not in missing and not w3_two_slots:
         missing.append("W3(need '<command> → <output>')")
 
-    return _ReviewCoverage(missing, w3_two_slots)
+    # UNSET-FIELDS sub-slot (2026-11-16 user ruling: the beat must force the
+    # agent to THINK about an unset convention, not merely carry a W2 heading).
+    # STRUCTURAL, same boundary as W3: it asks whether the sub-label is
+    # addressed inside the W2 span, never whether the answer is any good.
+    # Two accepted forms, because "every field was pinned" is a legitimate
+    # answer and must not be punished:
+    #   (a) the literal sub-label `UNSET-FIELDS`, or
+    #   (b) an explicit none-declaration: "no unset" / "UNSET: none" / ...
+    # A W2 that walks ENUMERATE/PARSE-SCHEMA/RANK/RUN-TIME and stops is
+    # refused, which is exactly the failure this exists to catch.
+    has_unset = bool(
+        re.search(r"(?<![A-Za-z0-9_])UNSET[- _]?FIELDS(?![A-Za-z0-9_])", blob, re.I)
+        or re.search(r"\bunset\b[^\n]{0,40}\bnone\b", blob, re.I)
+    )
+
+    # UNIT-FORMULA sub-slot (2026-11-16 user ruling, after raman-fitting went
+    # 3-for-3 wrong the same way). The reading block had already reported
+    # `unit or scale` as UNSET and listed the affected field — and the agent
+    # still shipped the raw axis value. Reporting an unset convention does not
+    # discharge it; the ARITHMETIC is what has to exist. So the same way
+    # UNSET-FIELDS forces the field to be named, UNIT-FORMULA forces the
+    # conversion to be written out with both readings' numbers.
+    # STRUCTURAL, same boundary as W3/UNSET-FIELDS: it asks whether the
+    # sub-label was addressed, never whether the conversion was the right one.
+    # A no-op declaration is legitimate and must not be punished, so three
+    # accepted forms: the literal sub-label, or an explicit none-declaration
+    # ("no unit conversion" / "unit: none").
+    has_unit_formula = bool(
+        re.search(r"(?<![A-Za-z0-9_])UNIT[- _]?FORMULA(?![A-Za-z0-9_])", blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bunit\b[^\n]{0,40}\bconversion", blob, re.I)
+        or re.search(r"\bunit\b[^\n]{0,20}\bnone\b", blob, re.I)
+    )
+
+    # LIST-FLOOR sub-slot (2026-11-16, same shape as UNIT-FORMULA one task later).
+    # Measured on `large-scale-text-editing`: the statement enumerates exactly
+    # which commands a deliverable may contain; the agent read that enumeration
+    # as a CEILING ("nothing off-list"), shipped a file that never contained one
+    # of the listed items, and then ran a scan that *confirmed only the
+    # ceiling* -- so its self-test was green while the checker's set-membership
+    # test failed. This is raman's "reported the UNSET, did not discharge it"
+    # one level over: it reported the list and never probed each item against
+    # the delivered bytes. UNIT-FORMULA forces the arithmetic; LIST-FLOOR forces
+    # the per-item exact-match probe.
+    # STRUCTURAL, same boundary: it asks whether the sub-label was addressed,
+    # never whether the chosen reading was right. "no allowlist in the
+    # statement" is a legitimate no-op and must not be punished.
+    has_list_floor = bool(
+        re.search(r"(?<![A-Za-z0-9_])LIST[- _]?FLOOR(?![A-Za-z0-9_])", blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,30}\ballow[- ]?list", blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\benumerat", blob, re.I)
+    )
+
+    # READBACK-STATE sub-slot (2026-11-16, third axis, after make-doom-for-mips
+    # shipped a frame object its OWN probe had created).
+    # Measured: the agent ran the deliverable itself to check it, which wrote the
+    # very file the checker waits on. The checker's wait loop is
+    # `while not <path>.exists()`, so a residue makes it fall through instantly,
+    # kill the process before the expected line is printed, and then compare the
+    # checker's expected image against a frame produced by a LONG-RUNNING demo
+    # rather than the start-up screen. One leftover file failed two of three
+    # assertions: one on content, one on TIMING. The agent's own self-test was
+    # green because it only checked that the file was valid.
+    # This is the third instance of the same shape: raman reported an unset
+    # convention without discharging it; the list task reported an enumeration
+    # without probing each item; this one probed the artifact without asking
+    # whether the probe had CHANGED the object the checker later reads.
+    # STRUCTURAL, same boundary: it asks whether the sub-label was addressed,
+    # never whether the answer is right. "no shared read-back object" is a
+    # legitimate no-op and must not be punished.
+    has_readback_state = bool(
+        re.search(r"(?<![A-Za-z0-9_])READBACK[- _]?STATE(?![A-Za-z0-9_])",
+                  blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bread[- ]?back\b", blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bprobe\b[^\n]{0,30}\bwrote\b", blob, re.I)
+        # the exact no-op phrase the slot's own instructions offer, which the
+        # first alternative above would otherwise miss ("read-back" vs
+        # "readback" is already covered, but "shared ... object" is not).
+        or re.search(r"\bno\b[^\n]{0,40}\bshared\b[^\n]{0,30}\bobject\b",
+                     blob, re.I)
+        # 2026-11-16 (sixth axis): the checker may reach a PRIVATE endpoint the
+        # statement never names. Measured: 11 losses on one task, the newest
+        # trial passing 3 of 4 assertions and failing only where the checker
+        # dials an address the statement left unset. This alternative accepts
+        # the explicit COVERAGE declaration ("every address it could read") or
+        # the explicit leave-empty declaration, so the axis can be discharged
+        # rather than merely named.
+        or re.search(r"\bevery\b[^\n]{0,40}\baddress\b", blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\b(private|rival|other)\b[^\n]{0,30}\baddress",
+                     blob, re.I)
+    )
+
+    # ABSENCE-AS-EVIDENCE sub-slot (2026-11-16, fourth axis, after mteb-retrieve
+    # shipped the wrong document while its own note had already computed the
+    # rival reading).
+    # Measured: the statement names a component whose behaviour is supplied by a
+    # registry shipped with the named library -- the reference invocation passes
+    # a usage-typed argument that selects it. The agent inspected a DIFFERENT
+    # artifact (the model repo's own config), found it silent about that
+    # behaviour, and concluded the behaviour did not exist -- even though its own
+    # note recorded that applying it changed the answer. One file's silence was
+    # used as a negative observation about another component.
+    # This is the fourth instance of the same shape: raman reported an unset
+    # convention without discharging it; the list task read an enumeration
+    # without probing each item; the frame task probed the artifact without
+    # asking what state it left; this one INFERRED A NEGATIVE from an artifact
+    # that merely did not mention the subject.
+    # STRUCTURAL, same boundary: it asks whether the sub-label was addressed,
+    # never whether the inference was right. "no inference from silence" is a
+    # legitimate no-op and must not be punished.
+    has_absence_evidence = bool(
+        re.search(r"(?<![A-Za-z0-9_])ABSENCE[- _]?AS[- _]?EVIDENCE(?![A-Za-z0-9_])",
+                  blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\binference\b[^\n]{0,30}\bsilence\b",
+                     blob, re.I)
+        or re.search(r"\bsilence\b[^\n]{0,40}\bnot\b[^\n]{0,20}\bobservation\b",
+                     blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\babsent\b[^\n]{0,20}\bevidence\b",
+                     blob, re.I)
+    )
+
+    # DEFINING-FIELD sub-slot (2026-11-16, fifth axis, after a document-routing
+    # task filed one document under the wrong category).
+    # Measured: the consumer assigns each document a category by comparing it
+    # against a label set. The agent instead classified by a PROXY that correlates
+    # with the category on most inputs -- the document carried a monetary total
+    # and its line items summed to that total -- and that proxy happened to fire
+    # on a decoy the label set calls the OTHER category. Nothing in the artifact
+    # was mis-extracted; one boundary was decided from the wrong field, and the
+    # error cascaded into three more assertions (a set difference, a second set
+    # difference, and a row count).
+    # This is the fifth instance of the same shape: raman reported an unset
+    # convention without discharging it; the list task read an enumeration
+    # without probing each item; the frame task probed the artifact without
+    # asking what state it left; the retrieval task inferred a negative from
+    # silence; this one assigned a consumer-visible CATEGORY from a proxy that
+    # agrees on the easy majority and fails exactly at the boundary.
+    # STRUCTURAL, same boundary: it asks whether the sub-label was addressed,
+    # never whether the field chosen was the right one.
+    has_defining_field = bool(
+        re.search(r"(?<![A-Za-z0-9_])DEFINING[- _]?FIELD(?![A-Za-z0-9_])",
+                  blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bcategory\b[^\n]{0,30}\bassignment\b",
+                     blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bclassif\w*[^\n]{0,30}\bconsumer\b",
+                     blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bdefin\w*[^\n]{0,20}\bfield\b",
+                     blob, re.I)
+    )
+
+    # The failure this sub-slot exists for: the agent's own check reported on
+    # one quantity (a command was accepted, a process was alive, a file was
+    # written) while the consumer reads a DIFFERENT quantity off the same
+    # object (whether the observable STATE actually changed). Both can be true
+    # at once and the check still scores zero -- so the slot asks which
+    # quantity the consumer reads, not whether the agent's own check was green.
+    # STRUCTURAL, same boundary as its siblings: it asks whether the two
+    # quantities were named and compared, never whether that naming was right.
+    has_observed_consumed = bool(
+        re.search(r"(?<![A-Za-z0-9_])OBSERVED[- _]?VS[- _]?CONSUMED(?![A-Za-z0-9_])",
+                  blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,50}\bmy check\b[^\n]{0,40}\bsame quantity\b",
+                     blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,50}\bobserved\b[^\n]{0,40}\bconsumed\b",
+                     blob, re.I)
+    )
+
+    # STATED-VS-SHIPPED sub-slot (eighth axis). Measured on a task that went 0
+    # the same way across five generations of prompt clauses: the agent's own
+    # log STATED the missing constraint verbatim AND named that its own
+    # deliverable violated it -- then shipped the violating bytes anyway.
+    # Nothing in the review asked for that constraint's value ON THE DELIVERED
+    # FILE, and its self-check measured quantities the statement never
+    # constrained, so it went green while the deliverable was wrong.
+    # STRUCTURAL, same boundary as its siblings: it asks whether the statement
+    # and the shipped value were both named and compared, never whether the
+    # comparison was right. "no constraint I stated" is a legitimate no-op.
+    has_stated_shipped = bool(
+        re.search(r"(?<![A-Za-z0-9_])STATED[- _]?VS[- _]?SHIPPED(?![A-Za-z0-9_])",
+                  blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bconstraint\b[^\n]{0,40}\bstate",
+                     blob, re.I)
+        or re.search(r"\bno\b[^\n]{0,40}\bstated\b[^\n]{0,30}\bshipped\b",
+                     blob, re.I)
+    )
+
+    return _ReviewCoverage(missing, w3_two_slots, has_unset, has_unit_formula,
+                           has_list_floor, has_readback_state,
+                           has_absence_evidence, has_defining_field,
+                           has_observed_consumed, has_stated_shipped)
 
 
 class SystemPromptRemindGuard(Guard):
@@ -241,7 +508,12 @@ class SystemPromptRemindGuard(Guard):
 
     2. STRUCTURAL SELF-CHECK, NOT A SEMANTIC ONE. The re-issued declaration is
        accepted only when its own evidence/notes text carries the six literal
-       labels W0/W1/W2/W3/W4/RISK. The guard does NOT judge whether an answer is
+       labels W0/W1/W2/W3/W4/RISK, PLUS three FORM sub-slots that ride on labels
+       already in that list (they are not extra labels): the W3 two-slot form
+       (`<command> → <output>`, or the reading on the next line), the W2
+       UNSET-FIELDS sub-label, and the W2 UNIT-FORMULA sub-label (the
+       conversion actually used, `x_B = f(x_A)`, with both readings' numbers).
+       The guard does NOT judge whether an answer is
        good, true, or complete — it only checks that the slots were addressed,
        exactly as a form checks that fields are non-empty. A wrong-but-filled
        answer passes; an empty one does not.
@@ -273,32 +545,33 @@ class SystemPromptRemindGuard(Guard):
         self._beaten: set[str] = set()
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
-        if ctx.tool_name != "plan_update":
-            return None
-        args = ctx.tool_args or {}
-        if not _declares_completion(args):
-            return None
-        sig = _declaration_sig(args)
-        covers = _review_labels_present(args)
-        if sig in self._beaten:
-            # Beaten once. It may now pass ONLY if the review slots are filled.
-            # A second empty re-issue is still refused (this is what makes the
-            # beat real instead of a one-shot that any prose clears).
-            if not covers:
-                return GuardVerdict.block(
-                    _REMIND_MESSAGE_MISSING.format(missing=", ".join(covers.missing)),
-                    reason="system_prompt_remind_still_empty",
-                    category="system_prompt_remind",
-                    overridable=False,
-                )
-            return None  # slots addressed — let it through
-        self._beaten.add(sig)
-        return GuardVerdict.block(
-            _REMIND_MESSAGE,
-            reason="system_prompt_remind_beat",
-            category="system_prompt_remind",
-            overridable=False,
-        )
+        if ctx.tool_name == "plan_update":
+            args = ctx.tool_args or {}
+            if not _declares_completion(args):
+                return None
+            sig = _declaration_sig(args)
+            covers = _review_labels_present(args)
+            if sig in self._beaten:
+                # Beaten once. It may now pass ONLY if the review slots are
+                # filled. A second empty re-issue is still refused (this is
+                # what makes the beat real instead of a one-shot any prose
+                # clears).
+                if not covers:
+                    return GuardVerdict.block(
+                        _REMIND_MESSAGE_MISSING.format(
+                            missing=", ".join(_missing_labels(covers))),
+                        reason="system_prompt_remind_still_empty",
+                        category="system_prompt_remind",
+                        overridable=False,
+                    )
+                return None  # slots addressed — let it through
+            self._beaten.add(sig)
+            return GuardVerdict.block(
+                _REMIND_MESSAGE,
+                reason="system_prompt_remind_beat",
+                category="system_prompt_remind",
+                overridable=False,
+            )
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
         return None  # the beat is pre-side; nothing to inject afterwards

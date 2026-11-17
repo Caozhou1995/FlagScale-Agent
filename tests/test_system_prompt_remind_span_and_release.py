@@ -37,7 +37,7 @@ def _filled(w3: str) -> str:
     return (
         "W0 UNVERIFIED LAYER - x\n"
         "W1 FAILURE RECEIPT - x\n"
-        "W2 TRAP INVENTORY WALK - x\n"
+        "W2 TRAP INVENTORY WALK - x; " "UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated" "\n"
         f"{w3}\n"
         "W4 TRAP SHAPES - x\n"
         "RISK SWEEP - r1 " + ARROW + " e1 " + ARROW + " side"
@@ -196,7 +196,7 @@ def test_w3_mentioned_midline_in_w2_does_not_hijack_the_span():
         "W0 UNVERIFIED LAYER - x\n"
         "W1 FAILURE RECEIPT - x\n"
         "W2 TRAP INVENTORY WALK - BOUNDARY: a duplicated W3 whose SECOND copy "
-        "carries the arrow is still refused; also RISK arrows do not count\n"
+        "carries the arrow is still refused; also RISK arrows do not count; " "UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated" "\n"
         "W3 FRESH PROBE - `grep -c x f` " + ARROW + " 3; bar=>=3; VERDICT=PASS\n"
         "W4 TRAP SHAPES - x\n"
         "RISK SWEEP - r1 " + ARROW + " e1 " + ARROW + " side"
@@ -208,6 +208,6 @@ def test_w3_mentioned_midline_in_w2_does_not_hijack_the_span():
 def test_all_slots_on_one_line_still_accepted():
     """The compact one-line form (every slot crammed onto one line, no line
     boundary to segment on) must not be lost by head-anchoring the labels."""
-    one = ("W0 x W1 x W2 x W3 cmd=" + ARROW + " out verdict=pass bar=<1 "
+    one = ("W0 x W1 x W2 x " "UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated" " W3 cmd=" + ARROW + " out verdict=pass bar=<1 "
            "W4 x RISK SWEEP r1 " + ARROW + " e1 " + ARROW + " side")
     assert bool(_covers(one)) is True, "the compact one-line review was refused"

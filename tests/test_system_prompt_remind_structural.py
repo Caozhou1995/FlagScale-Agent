@@ -26,13 +26,14 @@ import pytest
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.system_prompt_remind import (
     SystemPromptRemindGuard,
+    _missing_labels,
     _review_labels_present,
 )
 
 FILLED = [
     "W0 UNVERIFIED LAYER: did not read the grader for task B; skipped that read",
     "W1 FAILURE RECEIPT: the check I left unrun is the empty-input path",
-    "W2 TRAP INVENTORY WALK: ENUMERATE=boundary; PARSE-SCHEMA=n/a; RANK=order; RUN-TIME=n/a",
+    "W2 TRAP INVENTORY WALK: ENUMERATE=boundary; PARSE-SCHEMA=n/a; RANK=order; RUN-TIME=n/a; UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
     "W3 FRESH PROBE: python3 /tmp/probe.py → 42 rows",
     "W4 TRAP SHAPES: (1) self-check (2) trailing newline (3) one sample (4) notes-only (5) unit",
     "RISK SWEEP: risk=r1 → evidence=e1 → side=fixed",
@@ -43,7 +44,7 @@ FILLED = [
 FILLED_BUT_WRONG = [
     "W0 UNVERIFIED LAYER: nothing at all, everything verified (a lie)",
     "W1 FAILURE RECEIPT: no failure possible here (a lie)",
-    "W2 TRAP INVENTORY WALK: none of the four layers can bite (a lie)",
+    "W2 TRAP INVENTORY WALK: none of the four layers can bite (a lie); UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
     "W3 FRESH PROBE: echo hello → this is not a real probe (a lie)",
     "W4 TRAP SHAPES: none apply (a lie)",
     "RISK SWEEP: no risks (a lie)",
@@ -195,7 +196,7 @@ def test_override_cannot_release_the_beat():
             tool_args={"action": "step_done", "step_id": 1, "verification": [
                 "W0 unverified layer: x",
                 "W1 settled-too-early pattern: x",
-                "W2 trap inventory walk: x",
+                "W2 trap inventory walk: x; UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated",
                 "W3 cmd=id -> output=uid=0 verdict=pass bar=<1",
                 "W4 instance: x",
                 "RISK SWEEP: r1 -> e1 -> side",
@@ -212,7 +213,7 @@ def test_override_cannot_release_the_beat():
 # rejects real submissions is worse than no check (it burns a retry per step).
 _REAL_FORM = """W0 unverified layer: 部署树是否污染 — 未验证
 W1 settled-too-early: 我三次凭记忆写数字 — 已改
-W2 trap inventory walk: four layers walked
+W2 trap inventory walk: four layers walked; UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated
 W3 `python3 -m pytest tests/x.py -q` → 24 passed
 W4 instance: closure over own artifact
 RISK SWEEP: 误伤 → 用消融 → side=safe"""
@@ -246,6 +247,7 @@ def test_guard_never_judges_content_only_form():
     wrong_but_filled = """W0 unverified layer: nothing at all (this is a lie)
 W1 settled-too-early: never happened (lie)
 W2 trap inventory walk: (lie)
+UNSET-FIELDS: none - every delivered field is pinned by the statement; UNIT-FORMULA: none - no unit conversion was in play; LIST-FLOOR: none - no allowlist in the statement; READBACK-STATE: none - no shared read-back object; ABSENCE-AS-EVIDENCE: none - no inference from silence; DEFINING-FIELD: none - no category assignment in this task; OBSERVED-VS-CONSUMED: none - consumer reads the same quantity here; STATED-VS-SHIPPED: no constraint I stated
 W3 cmd=true -> output=(nothing) verdict=pass bar=<0
 W4 instance: (lie)
 RISK SWEEP: none -> none -> side=none"""
@@ -272,3 +274,23 @@ def test_known_limit_duplicate_w3_first_match_only():
     covers = _review_labels_present({"notes": dup})
     assert bool(covers) is False
     assert any("W3" in m for m in covers.missing)
+
+
+def test_stated_shipped_subslot_ablation():
+    """The eighth sub-slot must be load-bearing, not decoration.
+
+    Removing ONLY its line while every other slot stays filled must turn the
+    gate red and name it. This is the same ablation every earlier sub-slot
+    carries; without it the slot could be silently dropped by a future edit.
+    """
+    filled = list(FILLED)
+    dropped = [ln for ln in filled if "STATED-VS-SHIPPED" not in ln]
+    assert len(dropped) == len(filled) - 1, "fixture must carry exactly one line"
+
+    covers = _review_labels_present({"verification": dropped, "notes": ""})
+    assert bool(covers) is False
+    assert covers.has_stated_shipped_subslot is False
+    assert any("STATED-VS-SHIPPED" in m for m in _missing_labels(covers))
+
+    # ... and the same text WITH it present releases again (positive control).
+    assert bool(_review_labels_present({"verification": filled, "notes": ""})) is True

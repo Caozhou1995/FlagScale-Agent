@@ -131,7 +131,12 @@ def test_statement_is_appended_before_the_readings(monkeypatch):
         "the FIRST user turn must be the task statement verbatim; got: "
         f"{str(first['content'])[:120]!r}"
     )
-    assert "Ten independent readings" in second["content"], (
+    # Derive the count instead of pinning a literal: the readings block names
+    # how many viewpoints shipped (10 -> 11 on 2026-11-16), and a literal here
+    # fails on a real capability change rather than on a real defect.
+    from flagscale_agent.react.tools.read_task_statement import VIEWPOINTS
+
+    assert f"{len(VIEWPOINTS)} independent readings" in second["content"], (
         "the SECOND user turn must be the readings block; got: "
         f"{str(second['content'])[:120]!r}"
     )
@@ -139,8 +144,21 @@ def test_statement_is_appended_before_the_readings(monkeypatch):
     assert "Fit the G and 2D Peak" in first["content"]
 
 
-def test_readings_are_not_pinned_but_the_statement_is(monkeypatch):
-    """_pin belongs to genuine user turns; the readings are harness-authored."""
+def test_readings_and_statement_are_both_pinned(monkeypatch):
+    """Both turns are pinned: statement AND readings (2026-11-16 user ruling).
+
+    Reversal of the earlier rule on measured evidence. The readings block is the
+    only place the harness hands the model the statement's UNSET axes together
+    with the deliverable field each one lands in, so it is not decoration — it
+    is the input the model must ACT on. On batch 2026-11-16__00-08-27,
+    raman-fitting read "UNSET: gamma definition (FWHM/HWHM) and unit" on turn 1
+    and still shipped the opposite convention; a derived document that has been
+    evicted cannot be acted on.
+
+    Cost, measured on that same 89-trial batch (not the older 86-session
+    figure): readings block median 21712 chars, min 13813, max 30932, ~7k
+    tokens, i.e. ~3.5% of a 200k-token window. Paid once per trial.
+    """
     agent = _make_agent(monkeypatch, readers_on=True)
     agent._run_single_shot(STATEMENT)
 
@@ -149,10 +167,9 @@ def test_readings_are_not_pinned_but_the_statement_is(monkeypatch):
     assert first.get("_pin") is True, (
         "the task statement is a genuine user turn and must never be evicted"
     )
-    assert not second.get("_pin"), (
-        "the readings block is harness-authored and derived; pinning it makes it "
-        "unevictable and it then competes with real content for context "
-        "(measured: median 5084 B per trial, 446 KB across the 86-session batch)"
+    assert second.get("_pin") is True, (
+        "the readings block carries the statement's UNSET axes and their "
+        "deliverable fields; evicting it removes the only copy of that input"
     )
 
 

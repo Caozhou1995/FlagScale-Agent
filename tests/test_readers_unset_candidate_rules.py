@@ -29,8 +29,15 @@ from flagscale_agent.react.agent import WorkerAgent
 
 
 def _render(n=2, word="two", pass_word="passes", votes="two votes"):
+    # `nv` was added to the template when the preamble's hardcoded "ten" was
+    # replaced by a derived count. Derive it here too, from the same source the
+    # production call site uses, so this fixture cannot drift from it again.
     return WorkerAgent._READERS_PREAMBLE.format(
-        n=n, word=word, pass_word=pass_word, votes=votes
+        n=n,
+        nv=WorkerAgent._n_viewpoints(),
+        word=word,
+        pass_word=pass_word,
+        votes=votes,
     )
 
 
