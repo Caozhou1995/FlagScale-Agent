@@ -609,7 +609,8 @@ class WorkerAgent:
         # you did. Pointer-only, never a paraphrase of the doctrine.
         # Never blocks anything except the first submission of a declaration.
         # [RE-ENABLED 2026-11-01 per user ruling: 三部分科学自省 beat 开启]
-        guard_registry.register(SystemPromptRemindGuard())
+        # [DISABLED 2026-11-18 per user ruling: 目前看纯是负担 — 保留原码，一行即可恢复]
+        # guard_registry.register(SystemPromptRemindGuard())
         # PollSpacingGuard (always active, inject-only): after consecutive
         # poll_tasks/dispatch_many rounds that return not-ready with nothing in
         # between, nudge toward real work between looks (or one bounded sleep)
