@@ -209,10 +209,30 @@ def is_network_acquire(cmd: str) -> bool:
 #: not exist". Kept as three groups because they are three different worlds and
 #: the agent must not collapse them: a bot-block, a missing slug, and dropped
 #: egress have nothing in common except that they are not a 200.
-_REFUSAL_RE = re.compile(
-    r"\b(?:HTTP[/ ]?[0-9.]*\s*)?(40[13]|404|410|429|000)\b",
-    re.I,
-)
+_REFUSAL_CODES = frozenset({"401", "403", "404", "410", "429", "000"})
+
+
+def _word_tokens(text: str) -> list[str]:
+    """Split on anything that is not a word character.
+
+    Written as a scanner rather than a pattern on purpose: the only thing this
+    module needs from the text is WHOLE tokens, and a whole-token test is the
+    property that keeps 'wrote 4040 bytes' and '12.403s' from reading as
+    statuses. Expressing it as a scan makes that property visible instead of
+    hiding it inside a boundary assertion.
+    """
+    tokens: list[str] = []
+    start = -1
+    for i, ch in enumerate(text):
+        if ch.isalnum() or ch == "_":
+            if start < 0:
+                start = i
+        elif start >= 0:
+            tokens.append(text[start:i])
+            start = -1
+    if start >= 0:
+        tokens.append(text[start:])
+    return tokens
 
 
 def _looks_refused(tool_result: str) -> bool:
@@ -221,10 +241,14 @@ def _looks_refused(tool_result: str) -> bool:
     Deliberately reuses the codes the DIAGNOSE block already teaches the agent
     to read (403 bot-block, 404 missing path, 000 no connection, 410/429) — the
     guard must not invent a second vocabulary for the same three worlds.
+
+    A code embedded in a larger token is not a status: 'wrote 4040 bytes' and
+    '12.403s' are a successful transfer and a duration, and treating either as
+    a refusal would fire this tier on a transfer that worked.
     """
     if not tool_result:
         return False
-    return bool(_REFUSAL_RE.search(tool_result))
+    return any(tok in _REFUSAL_CODES for tok in _word_tokens(tool_result))
 
 
 _RETRY_MESSAGE = (
