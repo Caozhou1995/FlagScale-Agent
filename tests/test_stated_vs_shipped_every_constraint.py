@@ -50,7 +50,10 @@ def _pre(g, args):
 def test_beat_asks_for_every_stated_constraint():
     low = _REMIND_MESSAGE.lower()
     assert "stated-vs-shipped" in low, "the beat lost the sub-slot"
-    assert "every constraint i stated" in low, (
+    # "EVERY constraint" is the load-bearing clause, whatever the person:
+    # '<a constraint I stated>' lets the agent reconcile a self-chosen subset
+    # and go green. Checked on the noun phrase, not on the pronoun.
+    assert "every constraint" in low, (
         "the beat must invoice EVERY stated constraint; '<a constraint I stated>' "
         "lets the agent reconcile a self-chosen subset and go green"
     )

@@ -21,15 +21,17 @@ from flagscale_agent.react.guard.system_prompt_remind import _review_labels_pres
 
 
 # ── 1. The instruction demands a quotation from the artifact ─────────────────
-def test_remind_message_requires_quoting_shipped_characters() -> None:
-    assert "QUOTED off the SHIPPED file" in m._REMIND_MESSAGE
-
-
-def test_remind_message_names_the_omission_mechanic_in_the_abstract() -> None:
-    """The mechanic must be teachable without this task's vocabulary."""
+def test_remind_message_names_the_shipped_characters_failure() -> None:
+    """The slot must teach the failure, not demand a particular form."""
     low = m._REMIND_MESSAGE.lower()
-    assert "a+b+c designs ship as a+c by one omission" in low
-    assert "no chars embodying it" in low
+    assert "a+b+c ships as a+c by one omission" in low
+    assert "not in characters you can point at" in low
+
+def test_remind_message_forbids_reconciling_a_self_chosen_subset() -> None:
+    """"every constraint you stated" is the load-bearing clause."""
+    low = m._REMIND_MESSAGE.lower()
+    assert "every constraint you" in low
+    assert "self-chosen subset" in low
 
 
 def test_instruction_carries_no_task_vocabulary() -> None:

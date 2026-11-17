@@ -48,29 +48,30 @@ WITH the lines below; it passes when re-issued. Answers: a slot, not prose.
   W1 FAILURE RECEIPT — <failure this moment invites: a check left unrun>; a first
   pass is settled only by a probe.
 
-  W2 TRAP INVENTORY WALK — one line per layer: ENUMERATE / PARSE-SCHEMA / RANK /
-  RUN-TIME / UNSET-FIELDS / UNIT-FORMULA / LIST-FLOOR / READBACK-STATE /
-  ABSENCE-AS-EVIDENCE / DEFINING-FIELD / OBSERVED-VS-CONSUMED / STATED-VS-SHIPPED.
-  Each: <what it gave, or N/A why>.
-  UNIT-FORMULA: <field> -> <conversion used, x_B = f(x_A)> -> <both readings' nums>.
-  LIST-FLOOR: <each enumerated item> -> <did an EXACT-MATCH probe of the DELIVERED
-  bytes find it> -> <floor or ceiling, why>.
-  READBACK-STATE: <path/port/process the checker reads, INCLUDING a private one
-  the statement never names -> a working endpoint at every one> -> <my ACTUAL
-  read-back command -> its real output, now> -> <residue I leave; would a checker
-  whose READY signal is 'the artifact exists' consume it, stale or early>. Prose
-  'I cleaned it' is no receipt.
-  ABSENCE-AS-EVIDENCE: <artifact SILENT about a behaviour> -> <component whose
-  behaviour I inferred> -> <an observation of its OWN behaviour, or NONE —
-  silence is not one>.
-  DEFINING-FIELD: <field DEFINING the category a consumer assigns> -> <proxy used>
-  -> <that field on a POSITIVE and NEGATIVE example>.
-  OBSERVED-VS-CONSUMED: <quantity that made me call my check PASSED> -> <quantity
-  the consumer reads off the same object> -> <same or not; if not, the tying probe>.
-  STATED-VS-SHIPPED: <EVERY constraint I stated — a stated one left off =
-  unfilled> -> <chars QUOTED off the SHIPPED file, not the intent> ->
-  <agree, or the edit now>. A+B+C designs ship as A+C by one omission; a
-  true-sounding sentence hides it. No chars embodying it = unfilled.
+  W2 TRAP INVENTORY WALK — where this kind of work goes wrong. Read each
+  against what you actually did; name the live one, or say N/A why. This is a
+  list of FAILURE MODES, not a form to fill:
+  ENUMERATE / PARSE-SCHEMA / RANK / RUN-TIME / UNSET-FIELDS / UNIT-FORMULA /
+  LIST-FLOOR / READBACK-STATE / ABSENCE-AS-EVIDENCE / DEFINING-FIELD /
+  OBSERVED-VS-CONSUMED / STATED-VS-SHIPPED.
+  UNIT-FORMULA: a value that reads right in one unit and wrong in another —
+  the conversion is where the error hides, not the arithmetic.
+  LIST-FLOOR: a stated enumeration read as a ceiling. Having none of the
+  forbidden items is not the same as having each required one.
+  READBACK-STATE: your own probe wrote the thing the checker later reads, so
+  it passes on residue or on a stale copy. Prose 'I cleaned it' is no receipt.
+  ABSENCE-AS-EVIDENCE: the artifact is silent about a behaviour and you
+  inferred the behaviour anyway. Silence is not an observation.
+  DEFINING-FIELD: the field that DEFINES a category is not the one you
+  proxied for it; check that field on a positive and a negative example.
+  OBSERVED-VS-CONSUMED: the quantity that made your check go green is often
+  not the quantity the consumer reads off the same object.
+  STATED-VS-SHIPPED: the failure this list exists for. EVERY constraint you
+  stated counts; one left off leaves this slot unfilled, so never reconcile a
+  self-chosen subset. Everything you said can be TRUE while the bytes are
+  wrong: a design written A+B+C ships as A+C by one omission, and a
+  true-sounding sentence hides exactly that. A constraint living only in your
+  description, not in characters you can point at, is not shipped.
 
   W3 FRESH PROBE — one command not run in this step:
   <command> → <its real output: the number printed on YOUR artifact>;
