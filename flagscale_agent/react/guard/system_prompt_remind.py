@@ -68,7 +68,9 @@ WITH the lines below; it passes when re-issued. Answers: a slot, not prose.
   OBSERVED-VS-CONSUMED: <quantity that made me call my check PASSED> -> <quantity
   the consumer reads off the same object> -> <same or not; if not, the tying probe>.
   STATED-VS-SHIPPED: <EVERY constraint I stated — a stated one left off =
-  unfilled> -> <DELIVERED bytes, measured> -> <agree, or the edit now>.
+  unfilled> -> <chars QUOTED off the SHIPPED file, not the intent> ->
+  <agree, or the edit now>. A+B+C designs ship as A+C by one omission; a
+  true-sounding sentence hides it. No chars embodying it = unfilled.
 
   W3 FRESH PROBE — one command not run in this step:
   <command> → <its real output: the number printed on YOUR artifact>;
@@ -77,11 +79,10 @@ WITH the lines below; it passes when re-issued. Answers: a slot, not prose.
   PARSING RULE — labels start slots; W3 ends at next label; `cmd → output` on
   one line, or output on the next.
 
-  W4 TRAP SHAPES — five recur; a green on W0-W3 can still miss one. Name YOUR
+  W4 TRAP SHAPES — five recur; green on W0-W3 can still miss one. Name YOUR
   instance, or open bet why: (1) the check judges your own artifact — a
   generator agrees with itself; (2) the last format item — one char, exit token, header, hash; (3) one clean sample for the whole population — name boundary inputs you did NOT run; (4) the fix landed in a scratch copy, not the DELIVERED bytes; (5) the
   visible example fixes FORM, not scale, offset, unit or index base. A trap never enumerated is one you stand in.
-
   RISK SWEEP — per logged risk: <risk> → <evidence deciding it> → <side that won>.
   Unresolved risk blocks this declaration: settle it now, or name the probe.
 
@@ -147,7 +148,11 @@ def _missing_labels(covers) -> list:
         out.append("W2(need STATED-VS-SHIPPED: <EVERY constraint YOU STATED this "
                    "task, one line each; a stated one left off leaves this "
                    "unfilled> -> <what the DELIVERED bytes carry for each, "
-                   "measured on the file> -> <agree, or the edit you make now>), "
+                   "measured on the file> -> <agree, or the edit you make now>. "
+                   "QUOTE the characters you read off the SHIPPED artifact for "
+                   "each one — a design written A+B+C ships as A+C by one "
+                   "omission, and a true-sounding sentence hides it; no "
+                   "characters in the file embodying a constraint = unfilled), "
                    "or an explicit 'no constraint I stated' when you stated none")
     if not covers.has_observed_consumed_subslot:
         out.append("W2(need OBSERVED-VS-CONSUMED: <the quantity I used to call my "

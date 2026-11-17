@@ -408,7 +408,16 @@ def test_beat_is_compact_and_machine_checkable():
     # families that each cost a whole task when unenforced. Each further layer
     # must clear the same bar: a measured failure it prevents, and no task
     # literals in its text.
-    assert len(msg) < 2900, f"beat grew back to {len(msg)} chars; keep it under 2900"
+    #
+    # 2900 -> 3100 (same bar, cleared the same way). STATED-VS-SHIPPED stopped
+    # being enough as a description: measured over three independent trials of
+    # one task, the agent's review line asserted the constraint was satisfied in
+    # words while the delivered artifact omitted the very element it described.
+    # The slot now demands the characters QUOTED off the shipped file, so a
+    # true-sounding sentence cannot fill it. The added text names no task, no
+    # number and no domain term (leak gate: 0 hits), and it prevents a failure
+    # that has now cost three whole trials.
+    assert len(msg) < 3100, f"beat grew back to {len(msg)} chars; keep it under 3100"
     low = msg.lower()
     # the W3 slot must demand a machine-checkable triple
     assert "verdict=pass|fail" in low, "the W3 verdict slot lost its machine-readable form"
