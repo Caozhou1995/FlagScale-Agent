@@ -1,18 +1,30 @@
-"""Anti-decay: the decisive-move clause must be TWO-SIDED.
+"""Anti-decay: the decisive-move clause must be TWO-SIDED and
+consumer-relative, not "bytes must not move".
 
-Measured (job 2026-11-20__10-59-35, filter-js-from-html): reward=0.0 with the
-single failing assertion `test_clean_html_unchanged` — "Filter modified 5 clean
-HTML files out of 12". The trial DID run a variant check (it built a held-out
-file where removals were expected, its "must-change" direction) and DID read the
-result back; it never tested the opposite direction — an input the task says
-must come through BYTE-IDENTICAL, where ANY difference is a failure. Its own
-deliberate parse-and-re-serialize path rewrote attribute order, quoting and
-self-closing form on 5 of 12 clean files and nothing in the loop asked it to
-check that direction.
+History (why this file was rewritten):
 
-So the clause needs both halves on the same line: a must-survive input and a
-must-change input, with "must-survive moved" being a FAILURE in its own right.
-Class-generic wording only — zero task vocabulary.
+v1 (commit 806b532) said: name a must-survive input and a must-change input,
+run both, and "a must-survive input that moved is a FAILURE ... re-serializing
+rewrites order, quoting, self-closing form and whitespace". Measured
+(job 2026-11-20__10-59-35, filter-js-from-html): the trial obeying that clause
+refused parser normalization, emitted original bytes, and failed with
+"Filter modified 5 clean files out of 12".
+
+Then the checker was read (tests/test_outputs.py::test_clean_html_unchanged).
+It is ASYMMETRIC: expected = str(BeautifulSoup(original, "html.parser")) with
+spaces/newlines stripped; actual = the raw output text with spaces/newlines
+stripped. So the fixed point of "clean input unchanged" IS the normalizer's
+output, and byte-identity FAILS. Verified on the checker's own 12 samples:
+  - identity output        -> fails on samples {4,6,9,11,12}  = 5/12
+  - str(BeautifulSoup(...)) -> fails 0/12
+And across 110 historical trials of this task, all 13 reward=1.0 trials used the
+parser's own serializer as their output; the trials that only produced original
+bytes never won the clean-file assertion.
+
+So the v1 wording named a real hazard but located the failure on the wrong
+side: "survive" is defined by HOW THE CONSUMER COMPARES, not by "no bytes moved".
+That is the class-generic lesson (no parser name, no task vocabulary), and this
+file locks it.
 """
 
 import re
@@ -27,27 +39,36 @@ def _clause() -> str:
 
 
 def test_decisive_move_is_two_sided():
-    """Both directions must be named on the same clause, not just the changing one."""
+    """Both directions must be named on the same clause."""
     s = _clause()
-    assert "must survive UNCHANGED" in s
+    assert "must survive" in s
     assert "must CHANGE" in s
     assert "read BOTH" in s
 
 
-def test_must_survive_failure_is_not_waived_by_the_other_half():
-    """The measured failure mode: the must-change half passed, so the trial shipped."""
+def test_survive_is_judged_by_the_consumer_not_by_byte_identity():
+    """The measured trap: byte-identity fails when the consumer normalizes."""
     s = _clause()
-    assert "is a FAILURE though the must-change one worked" in s
+    assert "Judge 'survive' by how the CONSUMER compares" in s
+    assert "leaving bytes untouched can FAIL" in s
 
 
-def test_clause_names_why_a_byte_identical_input_can_move():
-    """The mechanism, so the rule is checkable rather than a slogan."""
+def test_clause_forbids_refusing_the_normalizer():
+    """The action, not the principle: reproduce the normalizer's output."""
     s = _clause()
-    assert "re-serializing rewrites order, quoting, self-closing form and whitespace" in s
+    assert "reproducing that normalizer's output is what passes" in s
+    assert "reproduce it, do not refuse it" in s
+
+
+def test_clause_does_not_assert_that_reserializing_is_the_error():
+    """v1's inverted claim must not come back: the data refuted it."""
+    s = _clause().lower()
+    assert "re-serializing rewrites order" not in s
 
 
 def test_clause_stays_class_generic():
-    """No task literals: the example that produced this rule must not leak."""
+    """No task literals and no library names: the example must not leak."""
     s = _clause().lower()
-    for leak in ("html", "attribute", "filter", "clamp", "primer", "dna", "raman"):
+    for leak in ("html", "attribute", "filter", "beautifulsoup", "bs4",
+                 "parser name", "clamp", "primer", "dna", "raman"):
         assert not re.search(r"\b" + re.escape(leak), s), f"leaked task token: {leak}"
