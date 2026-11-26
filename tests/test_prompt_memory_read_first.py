@@ -64,7 +64,10 @@ def test_read_trigger_names_both_the_start_and_the_boundary():
     s = _section8()
     assert "before the first substantive action" in s
     assert "wherever the kind of work changes" in s
-    assert "first deploy" in s and "first launch" in s
+    # Retired 2026-11-26: the concrete trigger examples ("first deploy,
+    # first launch, ...") were compressed into "the KIND of work changes"
+    # by an earlier pass. The abstraction is the live text now, so the
+    # example pins would assert text the code no longer carries.
 
 
 def test_query_is_built_from_the_task_s_own_nouns():

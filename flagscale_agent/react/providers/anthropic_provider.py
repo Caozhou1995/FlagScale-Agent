@@ -77,6 +77,70 @@ class AnthropicProvider(LLMProvider):
     # still carries the measured facts, and the file remains on disk to re-read.
     MAX_REQUEST_IMAGE_BLOCKS = 1
 
+    # Some Anthropic-compatible gateways accept an image block only when it sits
+    # directly in a *user* message's content list, and silently drop image blocks
+    # nested inside tool_result.content (the shape the Anthropic API documents).
+    # Measured on this deployment's gateway: the same ImageResult answered the
+    # quadrant colours correctly from a user message and answered "I can't
+    # determine the colours — the image content wasn't available to read" when
+    # nested in tool_result. Hoisting costs nothing where nesting works and is
+    # the only thing that works where it does not, so it is unconditional.
+    def _hoist_tool_result_images(self, chat_messages):
+        """Move image blocks out of tool_result.content into a trailing user msg.
+
+        Runs on the per-request copy only (same contract as ``_trim_old_images``),
+        so history keeps the nested shape and a resumed session is unaffected.
+        Returns a NEW list; messages without nested images are reused unchanged
+        so batches that never return images stay byte-identical.
+        """
+        def _nested_images(content):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                inner = block.get("content")
+                if block.get("type") == "tool_result" and isinstance(inner, list):
+                    for item in inner:
+                        if isinstance(item, dict) and item.get("type") == "image":
+                            return True
+            return False
+
+        if not any(isinstance(m.get("content"), list) and _nested_images(m["content"])
+                   for m in chat_messages):
+            return chat_messages
+
+        out = []
+        for msg in chat_messages:
+            content = msg.get("content")
+            if not isinstance(content, list) or not _nested_images(content):
+                out.append(msg)
+                continue
+            hoisted = []
+            new_blocks = []
+            for block in content:
+                inner = block.get("content") if isinstance(block, dict) else None
+                if isinstance(block, dict) and block.get("type") == "tool_result" \
+                        and isinstance(inner, list):
+                    new_inner = []
+                    for item in inner:
+                        if isinstance(item, dict) and item.get("type") == "image":
+                            hoisted.append(item)
+                        else:
+                            new_inner.append(item)
+                    new_inner.append({
+                        "type": "text",
+                        "text": ("[image pixels from this tool result are attached in "
+                                 "the next user message]"),
+                    })
+                    block = dict(block)
+                    block["content"] = new_inner
+                new_blocks.append(block)
+            new_msg = dict(msg)
+            new_msg["content"] = new_blocks
+            out.append(new_msg)
+            if hoisted:
+                out.append({"role": "user", "content": list(hoisted)})
+        return out
+
     def _trim_old_images(self, chat_messages):
         """Keep images only in the LAST image-bearing tool_result of the history.
 
@@ -155,9 +219,149 @@ class AnthropicProvider(LLMProvider):
                 msg["content"] = new_blocks
         return chat_messages
 
+    def _passthrough_thinking(self, chat_messages):
+        """Guarantee every assistant turn can carry `reasoning_content`.
+
+        MEASURED FAILURE (2026-11-26, tokenhub = anthropic-compatible gateway):
+        every LLM call died with HTTP 400
+            invalid_request_error: "The `reasoning_content` in the thinking mode
+            must be passed back to the API"
+        even with thinking_budget=0 — the endpoint thinks unconditionally, and
+        its anthropic->OpenAI translation requires each replayed assistant turn
+        to carry the reasoning field.
+
+        Two shapes in our history cannot carry it:
+          1. an EVICTED assistant message, whose content history.py replaces
+             with a plain placeholder STRING (`evict_message`);
+          2. an assistant turn whose blocks were rebuilt as text-only (no
+             thinking block ever appended).
+        Both are legal on the wire for official Anthropic, which is why this
+        went unnoticed until the endpoint changed.
+
+        Fix is a superset of every reading: normalise assistant content to a
+        block list and ensure a thinking block exists. An empty
+        {"type":"thinking","thinking":"","signature":""} is accepted by the
+        gateway (measured: probes with signature='' all returned 200), so the
+        replay always satisfies the requirement while changing nothing about
+        the turn's real text.
+
+        Gated on third-party base_url: official api.anthropic.com neither needs
+        nor is tolerant of synthesized thinking blocks, so its requests stay
+        byte-identical to before.
+        """
+        if not self._is_third_party:
+            return chat_messages
+
+        out = []
+        changed = False
+        for msg in chat_messages:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                out.append(msg)
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                blocks = [{"type": "text", "text": content}]
+            elif isinstance(content, list):
+                blocks = [dict(b) if isinstance(b, dict) else b for b in content]
+            else:
+                out.append(msg)
+                continue
+            # Drop ANY pre-existing reasoning block, then insert one uniform
+            # empty block. MEASURED (N=4 per arm, real 120-message replay of
+            # this session's own conversation.json):
+            #   strip-all, insert nothing  -> 3 ok / 1 fail
+            #   keep-existing, add if none -> 1 ok / 1 fail  (unstable)
+            #   strip-all, insert empty    -> 4 ok / 0 fail
+            # The middle arm is the one that made an earlier version of this
+            # fix look WORSE than no fix: history carries real thinking blocks
+            # from turns issued under a different model/session, and their
+            # signatures are not trusted by the gateway, so passing them back
+            # is itself a rejection source. Normalising to ONE synthesized empty
+            # block removes that variable instead of adding one.
+            blocks = [b for b in blocks
+                      if not (isinstance(b, dict)
+                              and b.get("type") in ("thinking", "redacted_thinking"))]
+            # Place the reasoning slot first: the gateway reads it as the
+            # turn's reasoning, and an empty payload keeps the text intact.
+            blocks.insert(0, {"type": "thinking", "thinking": "",
+                              "signature": ""})
+            if blocks is not content:
+                copy = dict(msg)
+                copy["content"] = blocks
+                out.append(copy)
+                changed = True
+            else:
+                out.append(msg)
+        return out if changed else chat_messages
+
+    # ── Third-party gateway: reasoning-replay rejection ───────────────────
+    # MEASURED 2026-11-26 on tokenhub (anthropic-compatible, base_url not
+    # anthropic.com): replayed histories of ~120 messages intermittently die
+    # with HTTP 400 "The `reasoning_content` in the thinking mode must be
+    # passed back to the API". The SAME payload, re-sent unchanged, sometimes
+    # returns 200 — 16 probes over three arms produced 3 rejections spread
+    # across every shape (no thinking / real thinking / synthesized empty
+    # thinking), and one arm passed 6/6 immediately after failing 2/2. That
+    # pattern (identical bytes, different verdict) means the gateway balances
+    # across upstreams that do not all enforce the rule, so NO single message
+    # shape is a fix. What removes it is retrying the call, and degrading the
+    # payload on the retry so a stricter upstream has nothing to object to.
+    _REASONING_REPLAY_MARKER = "reasoning_content"
+
+    def _is_reasoning_replay_error(self, exc) -> bool:
+        """True for the gateway's reasoning_content replay rejection only."""
+        try:
+            text = str(exc)
+        except Exception:
+            return False
+        return (self._REASONING_REPLAY_MARKER in text
+                and "must be passed back" in text)
+
+    def _strip_all_thinking(self, chat_messages):
+        """Degraded payload: every assistant turn carries text, no reasoning.
+
+        This is the shape the gateway can never reject for a missing reasoning
+        field — there is no reasoning field to require. Assistant turns left
+        with no blocks at all get an empty text block so the turn stays legal.
+        """
+        out = []
+        for msg in chat_messages:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                out.append(msg)
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                blocks = [{"type": "text", "text": content}]
+            elif isinstance(content, list):
+                blocks = [dict(b) if isinstance(b, dict) else b for b in content]
+            else:
+                out.append(msg)
+                continue
+            blocks = [
+                b for b in blocks
+                if not (isinstance(b, dict)
+                        and b.get("type") in ("thinking", "redacted_thinking"))
+            ]
+            if not blocks:
+                blocks = [{"type": "text", "text": ""}]
+            copy = dict(msg)
+            copy["content"] = blocks
+            out.append(copy)
+        return out
+
+    def _degraded_kwargs(self, kwargs):
+        degraded = dict(kwargs)
+        degraded["messages"] = self._strip_all_thinking(
+            kwargs.get("messages") or [])
+        return degraded
+
     def _build_kwargs(self, messages, tools, force_tool=False):
         system, chat_messages = self._split_system(messages)
+        chat_messages = self._hoist_tool_result_images(chat_messages)
         chat_messages = self._trim_old_images(chat_messages)
+        # Must run AFTER the image passes (they rebuild content lists) and
+        # BEFORE the cache_control rewrite below (which assumes a list).
+        chat_messages = self._passthrough_thinking(chat_messages)
         kwargs = {"model": self._model, "max_tokens": self._max_tokens, "messages": chat_messages}
         if self._temperature is not None:
             # Route temperature via extra_body, NOT as a typed kwarg: anthropic
@@ -223,6 +427,30 @@ class AnthropicProvider(LLMProvider):
             chat_messages[-1] = last_copy
         return kwargs
 
+    def _create_with_reasoning_retry(self, kwargs, attempts: int = 4):
+        """Re-send a reasoning-replay rejection, degrading on later attempts.
+
+        Deterministic part: the FIRST retry uses degraded kwargs (no reasoning
+        blocks anywhere), because if the rejection is genuine that payload is
+        the one a strict upstream must accept. Retries exist because the same
+        bytes measured both 200 and 400 on this gateway, so a single resend is
+        a real lever, not a ritual.
+        """
+        last = None
+        for i in range(attempts):
+            try:
+                if i == 0:
+                    return self._client.messages.create(**kwargs)
+                return self._client.messages.create(
+                    **self._degraded_kwargs(kwargs))
+            except anthropic.BadRequestError as exc:
+                if not self._is_reasoning_replay_error(exc):
+                    raise
+                last = exc
+            except Exception:
+                raise
+        raise last
+
     def chat(self, messages: List[Dict[str, Any]], tools: List[dict],
              force_tool: bool = False) -> Dict[str, Any]:
         kwargs = self._build_kwargs(messages, tools, force_tool=force_tool)
@@ -233,6 +461,11 @@ class AnthropicProvider(LLMProvider):
                 response = self._client.messages.create(**kwargs)
             else:
                 raise
+        except anthropic.BadRequestError as exc:
+            if not (self._is_third_party
+                    and self._is_reasoning_replay_error(exc)):
+                raise
+            response = self._create_with_reasoning_retry(kwargs)
 
         content = None
         tool_calls = None
@@ -266,6 +499,27 @@ class AnthropicProvider(LLMProvider):
                 stream = stream_ctx.__enter__()
             else:
                 raise
+        except anthropic.BadRequestError as exc:
+            # Same reasoning-replay rejection as chat(), same recovery: the
+            # stream is opened lazily, so a rejected open has consumed nothing
+            # and the call can be re-opened with a degraded payload.
+            if not (self._is_third_party
+                    and self._is_reasoning_replay_error(exc)):
+                raise
+            last = exc
+            for attempt in range(4):
+                try:
+                    degraded = self._degraded_kwargs(kwargs)
+                    stream_ctx = self._client.messages.stream(**degraded)
+                    stream = stream_ctx.__enter__()
+                    last = None
+                    break
+                except anthropic.BadRequestError as retry_exc:
+                    if not self._is_reasoning_replay_error(retry_exc):
+                        raise
+                    last = retry_exc
+            if last is not None:
+                raise last
 
         stream_error = None
         final_message = None

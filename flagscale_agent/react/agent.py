@@ -721,6 +721,14 @@ class WorkerAgent:
         # would change the request body of batches that never opted in and break
         # the "unset = identical to before" property this feature depends on.
         self._task_statement_readers = None
+        # Blind-spot region injected into the system prompt (slim reader mode).
+        # Empty string = feature off or no blind spot found, so the region never
+        # renders and a run that did not opt in is byte-identical to before.
+        self._blindspot_block = ""
+        # Background blind-spot read state (non-blocking spawn, adopted at the
+        # next turn boundary — see _auto_read_blindspots(background=True)).
+        self._blindspot_thread_result = None
+        self._blindspot_thread_done = False
         if self._readers_enabled():
             self._task_statement_readers = TaskStatementReadersTool(
                 provider=self.provider
@@ -870,6 +878,7 @@ class WorkerAgent:
             plan_context=plan_context,
             tool_names=tool_names,
             session_dir=self._session_dir,
+            blindspot_block=getattr(self, "_blindspot_block", ""),
             bump_turn=bump_turn,
         )
 
@@ -2005,33 +2014,32 @@ class WorkerAgent:
         # Worker mode: the CLI positional arg is a contract PATH; resolve
         # to the full contract text + role prefix before the loop sees it.
         query = resolve_worker_query(query)
-        # Ten independent readings of the statement, run ONCE before the loop
-        # starts, delivered as their own message. This is a separate channel
-        # from the instruction on purpose: the task text is frozen and nothing
-        # may be appended to it, so the extra readings arrive as a second user
-        # turn instead of inside `query`. Gated by env so a batch that does not
-        # opt in is byte-identical to before.
+        # Blind-spot region (slim reader mode, user ruling 2026-11-24). The
+        # statement is read `_BLINDSPOT_ROUNDS` times, each pass asking ONLY
+        # where the statement leaves an outcome-bearing point undetermined; the
+        # union of those lines becomes a RESIDENT REGION of the system prompt
+        # (see PromptBuilder), not a user turn. Gated by env so a batch that did
+        # not opt in is byte-identical to before: when the feature is off this
+        # returns "" and the region never renders.
         #
-        # ORDER (fixed 2026-11-09): the statement MUST be appended FIRST and the
-        # readings SECOND. Two reasons, both load-bearing:
-        #   1. The agent's first exposure to the task has to be the task. Before
-        #      this fix the readings block was message[1] and the statement
-        #      message[2] — measured in all 86 sessions of batch
-        #      2026-11-08__23-04-35 — so the first thing the model read was a
-        #      DERIVED document, not the source.
-        #   2. _mech_original_task() (this file) defines "the original task" as
-        #      the FIRST user turn, and hard reset re-injects that verbatim as
-        #      "### (1) ORIGINAL TASK". With readings first, a hard reset would
-        #      hand back the readings block and the statement would be lost.
-        # _pin IS set on the readings (2026-11-16 user ruling): the readings
-        # block is the only place the harness hands the model the statement's
-        # UNSET axes and their deliverable fields. Measured on batch
-        # 2026-11-16__00-08-27: raman-fitting read "UNSET: gamma definition
-        # (FWHM/HWHM)" at turn 1 and still shipped the wrong convention after
-        # the block was evicted under context pressure. A derived document the
-        # model must ACT on has the same survival requirement as the operator's
-        # own words, so it is pinned alongside the statement.
-        readings = self._auto_read_task_statement(query)
+        # WHY THE SYSTEM PROMPT AND NOT A USER TURN. The old design injected the
+        # twelve-viewpoint readings as pinned user turns. Measured on
+        # dna-assembly job 2026-11-17__20-50-10, those blocks were delivered and
+        # NEVER opened — zero of the 4,008 reading-unique eight-word sequences
+        # appeared anywhere in the assistant output. A user turn early in a long
+        # run scrolls out of attention; the system prompt is in front of the
+        # model on every turn. The slim region is small enough to ride there.
+        #
+        # The task statement itself is still appended FIRST as the first user
+        # turn — unchanged — so _mech_original_task() (and hard-reset's "### (1)
+        # ORIGINAL TASK") still reads the task text at turn [0].
+        # NON-BLOCKING (measured 2026-11-24): this read is a forced-thinking LLM
+        # call whose latency is heavy-tailed (254.8s one run, >510s another on
+        # the same prompt). Blocking here loses the region whenever the tail is
+        # long — observed twice in production as `timed_out=1 lines=0`. Spawn it
+        # in the background and adopt it at the next turn boundary; the region
+        # still reaches the system prompt, just not before turn 1.
+        self._blindspot_block = self._auto_read_blindspots(query, background=True)
         # Headless user-task runs (not a resumed worker, not a worker contract)
         # get a one-line nudge appended to the user's own task text: the task
         # should be tackled in multi-agent mode, fanning out concurrent workers
@@ -2041,49 +2049,17 @@ class WorkerAgent:
         # [DISABLED 2026-11-01 per user ruling: single_shot 自动 append 多agent nudge 暂停]
         # query = _run_single_shot_append_nudge(
         #     query, worker=is_worker(), resume=resolve_resume_query() is not None)
-        # STATEMENT FIRST, readings SECOND (see the ORDER note above: the first
-        # user turn must be the task itself, both for the model's first
-        # exposure and because _mech_original_task() reads turn [0]).
+        # The task statement is the first user turn (see note above).
         self.history.append({"role": "user", "content": query, "_pin": True})
-        if readings:
-            self.history.append({"role": "user", "content": readings, "_pin": True})
-            # OPEN THE BLOCK BEFORE DECIDING (user ruling 2026-11-17).
-            # Measured on dna-assembly job 2026-11-17__20-50-10: the 24 reading
-            # blocks (31.9 KB) were delivered and NEVER opened — of the 4,008
-            # eight-word sequences unique to the readings (not present in the
-            # task statement), ZERO appeared anywhere in the 281,965 chars of
-            # assistant output. The agent then re-derived the very axis a
-            # reading had already flagged ("tail composition beyond BsaI/
-            # overhang: UNSET") and got it wrong, while its own self-check went
-            # green. The HARNESS NOTE already asks for this in prose; nothing
-            # made it happen.
-            # This is a NUDGE, not a gate: no guard, no block, no re-issue. One
-            # extra user turn that asks for the block to be acknowledged before
-            # the first decision. It stays a normal message in history, so it
-            # costs one turn and cannot deadlock anything.
-            self.history.append({
-                "role": "user",
-                "content": (
-                    "Before you build or decide anything: you have just been "
-                    "handed the independent readings of the task statement "
-                    "above. Open them.\n"
-                    "\n"
-                    "Reply now, briefly, with: (1) which viewpoints produced a "
-                    "different answer on different passes, or returned nothing "
-                    "on one pass and something on another; (2) every UNSET the "
-                    "readings flag that bears on what you are about to "
-                    "deliver, and how you will settle each one rather than "
-                    "defaulting it.\n"
-                    "\n"
-                    "Then carry those answers with you as you work. This is "
-                    "your own work-up of your own inputs — not a formality, "
-                    "and nothing here is scored. Skip it and you are choosing "
-                    "to work from one unexamined reading of the statement, "
-                    "which is exactly the failure these passes exist to "
-                    "prevent."
-                ),
-                "_pin": True,
-            })
+        # Rebuild the system prompt NOW so the blind-spot region is present from
+        # the model's very first turn (the region is read from
+        # self._blindspot_block by PromptBuilder on every refresh).
+        if self._blindspot_block:
+            try:
+                self._refresh_system_prompt(
+                    plan_context=self._build_plan_context(), bump_turn=False)
+            except Exception:
+                pass  # a region-render hiccup must never break the run
         try:
             self._react_loop()
         except Exception:
@@ -2739,6 +2715,198 @@ class WorkerAgent:
             )
         return "\n".join(parts)
 
+    #: How many independent blind-spot passes to run (slim reader mode).
+    #:
+    #: Five, not two. The slim pass asks ONE question (where does the statement
+    #: leave an outcome-bearing point undetermined) instead of twelve, so one
+    #: pass is far cheaper than a twelve-viewpoint pass. The binding constraint
+    #: here is RECALL of the rare blind spot, not wall-clock: a blind spot that
+    #: only one pass happens to surface is exactly the one a single reading would
+    #: miss, and the union over five passes catches more of them than two. The
+    #: passes run concurrently (the slim tool fans them out), so five passes cost
+    #: about one pass of wall-clock, which is why the 2026-11-15 budget argument
+    #: that cut the heavy reader from 3 to 2 serial passes does not apply.
+    #: User-directed 2026-11-24: 1 round, to get the mechanism verified first.
+    #: History: 5 -> 3 -> 1. The endpoint force-enables thinking server-side and
+    #: a single pass over a long statement is expensive, so one pass is the
+    #: cheapest unit that can still prove the region renders end-to-end. Each
+    #: pass asks ONLY where the statement leaves an outcome-bearing point
+    #: undetermined; the union over passes is kept, so raising this later only
+    #: adds coverage, it does not change the mechanism.
+    _BLINDSPOT_ROUNDS = 1
+
+    def _auto_read_blindspots(self, query: str, background: bool = False) -> str:
+        """Compute the blind-spot region for the system prompt, or "".
+
+        Runs the slim blind-spot reader `_BLINDSPOT_ROUNDS` times and unions the
+        lines. Returns a rendered region string ready to drop into the system
+        prompt, or "" when the feature is off, there is no statement, or no pass
+        found a genuine blind spot. Never raises: an extra input must not take
+        the run down.
+
+        This REPLACES the old behaviour of injecting the twelve-viewpoint
+        readings as pinned user turns. The blind spots live in the system prompt
+        instead (a resident region the agent cannot skip past), which is the
+        point of the slim mode: the readings were measured to arrive and never
+        be opened, so the signal now rides the one channel that is in front of
+        the model on every turn.
+
+        NON-BLOCKING BY DEFAULT (measured 2026-11-24). This read costs one
+        forced-thinking LLM call whose latency is HEAVY-TAILED: the same prompt
+        on the same endpoint measured 254.8s once and >510s on a second run.
+        Blocking the run's start on it therefore loses the whole blind-spot
+        region whenever the tail is long — measured twice in production as
+        `timed_out=1 lines=0`, with the region silently absent. Pass
+        `background=True` (the production path) to spawn the read on a daemon
+        thread and return "" immediately; `_poll_blindspot_ready()` adopts the
+        result at the next turn boundary, so the region still lands in the
+        system prompt — just not before the first turn.
+        """
+        if not self._readers_enabled():
+            return ""
+        text = (query or "").strip()
+        if not text:
+            return ""
+        readers = getattr(self, "_task_statement_readers", None)
+        if readers is None:
+            return ""
+        readers._task_text = text
+        rounds = max(1, int(getattr(self, "_BLINDSPOT_ROUNDS", 1)))
+
+        if background:
+            # HEAVY-TAILED READ (measured 254.8s once, >510s another run on the
+            # same prompt/endpoint): never block the run's start on it. Spawn on
+            # a daemon thread; _poll_blindspot_ready() adopts the result at the
+            # next turn boundary. The thread owns its own exceptions.
+            self._blindspot_thread_result = None
+            self._blindspot_thread_done = False
+
+            def _worker():
+                try:
+                    self._blindspot_thread_result = self._auto_read_blindspots(
+                        text, background=False)
+                except Exception:  # never propagate out of a daemon thread
+                    self._blindspot_thread_result = ""
+                finally:
+                    self._blindspot_thread_done = True
+
+            t = threading.Thread(target=_worker, daemon=True,
+                                 name="blindspot-reader")
+            t.start()
+            display.warn(
+                "[blind-spot reader] started in background (non-blocking); "
+                "region is adopted at the next turn boundary")
+            return ""
+
+        try:
+            lines = readers.read_blindspots(rounds=rounds)
+        except Exception as exc:  # never take the run down for an extra input
+            display.warn(
+                f"[blind-spot reader] failed ({type(exc).__name__}); "
+                f"continuing without the blind-spot region"
+            )
+            return ""
+        # ALWAYS emit one diagnostic line, even when the region is empty. An
+        # empty union has three distinct causes (every pass found nothing /
+        # every pass timed out / every pass errored) that are byte-identical in
+        # the rendered prompt; without this line an empty region is silent and
+        # indistinguishable from "the mechanism never ran". Counts only — never
+        # the task text — so nothing from the statement leaks into the log.
+        stats = getattr(readers, "_last_blindspot_stats", None) or {}
+        display.warn(
+            "[blind-spot reader] "
+            f"rounds={stats.get('rounds', rounds)} "
+            f"contributed={stats.get('contributed', 0)} "
+            f"empty={stats.get('empty', 0)} "
+            f"errored={stats.get('errored', 0)} "
+            f"timed_out={stats.get('timed_out', 0)} "
+            f"lines={stats.get('lines', len(lines))}"
+        )
+        if not lines:
+            return ""
+        return self._render_blindspot_region(lines, rounds)
+
+    @staticmethod
+    def _render_blindspot_region(lines: list[str], rounds: int) -> str:
+        """Render the blind-spot lines as a system-prompt region.
+
+        The region states its own provenance (how it was produced, that it is
+        unverified raw material, and that the statement is authoritative) so the
+        agent does not read it as a settled spec. It is a union of independent
+        passes, not a vote — a point raised once stays.
+        """
+        body = "\n".join(f"  • {ln}" for ln in lines)
+        return (
+            "BLIND SPOTS IN THIS TASK (resident reminder — read before you "
+            "decide anything).\n"
+            f"The task statement was read {rounds} times, independently, each "
+            "pass asked ONLY where the statement leaves a point that (a) the "
+            "text does not pin and (b) changes the delivered bytes depending on "
+            "how it is settled. The lines below are the UNION of what those "
+            "passes found — not a vote, so a point raised by one pass stays. "
+            "They are UNVERIFIED raw material: the statement itself is "
+            "authoritative, and your own verification decides. Each line is a "
+            "point you must settle DELIBERATELY before the bytes are written, "
+            "not a fact to copy. The deliverable field each one lands in is "
+            "named so you can check it against your actual output.\n"
+            f"{body}"
+        )
+
+    def _poll_blindspot_ready(self) -> bool:
+        """Adopt a finished background blind-spot read into the system prompt.
+
+        Called at turn boundaries. Returns True when this call adopted a
+        non-empty region (the caller may then refresh the system prompt); False
+        when the read is still running, already adopted, or produced nothing.
+
+        COMPATIBILITY: a run that did not opt into the readers never spawns the
+        background read, so neither state attribute is ever set; every access
+        here is getattr-guarded and the reader gate is re-checked, so the
+        method is a cheap no-op (returns False) for such a run and its bytes are
+        unchanged.
+
+        Idempotent: once adopted, `_blindspot_thread_result` is cleared so a
+        later turn cannot re-render the same region.
+        """
+        if not self._readers_enabled():
+            return False
+        if not getattr(self, "_blindspot_thread_done", False):
+            return False
+        region = getattr(self, "_blindspot_thread_result", None) or ""
+        # Consume exactly once, whether or not it produced a region.
+        self._blindspot_thread_done = False
+        self._blindspot_thread_result = None
+        if not region or region == self._blindspot_block:
+            return False
+        self._blindspot_block = region
+        # ALSO announce it in the conversation, not only in the system prompt.
+        # A resident system-prompt region is easy to scroll past: the measured
+        # failure mode of the previous design was exactly this — the readings
+        # were delivered and NEVER opened (0 of 4008 reading-unique 8-grams in
+        # the assistant output). A one-line user turn at the moment the region
+        # becomes available tells the model, in its own stream, that the reading
+        # exists and what it is for. Kept short and non-authoritative so it does
+        # not compete with the task text; the region itself stays the content.
+        try:
+            self.history.append({
+                "role": "user",
+                "content": (
+                    "[blind-spot reader] A background read of the task "
+                    "statement has finished. Its findings are now in a "
+                    "resident region of your system prompt titled "
+                    "'BLIND SPOTS IN THIS TASK'. Read it before you settle "
+                    "any detail it names: each line is a point the statement "
+                    "leaves undetermined that CHANGES the delivered bytes "
+                    "depending on how you settle it. It is unverified raw "
+                    "material — the task statement is authoritative, and your "
+                    "own verification decides."
+                ),
+                "_pin": True,
+            })
+        except Exception:
+            pass  # announcing must never break the adoption
+        return True
+
     def _build_plan_context(self) -> str:
         active = self.task_plan.get_active()
         if not active:
@@ -2857,6 +3025,16 @@ class WorkerAgent:
 
     def _react_loop(self):
         """Kernel-based react loop."""
+        # Turn boundary: adopt a finished background blind-spot read so the
+        # region lands in the system prompt from this turn onward.
+        try:
+            if self._poll_blindspot_ready():
+                display.warn(
+                    "[blind-spot reader] region adopted into the system prompt")
+                self._refresh_system_prompt(
+                    plan_context=self._build_plan_context(), bump_turn=False)
+        except Exception:
+            pass  # adopting the region must never break a turn
         self.turn_count += 1
         self._turn_start = time.time()
         self._interrupted = False
@@ -2902,6 +3080,21 @@ class WorkerAgent:
         # (observed: cache_read collapsing to the static section alone).
         # Degrade silently on failure: a dashboard hiccup must never crash
         # the turn.
+        # Also adopt a finished background blind-spot read HERE, at the tool
+        # boundary, not only at the turn boundary in _react_loop. A single-shot
+        # run executes MANY tool iterations inside ONE turn, so the turn boundary
+        # can arrive after the run is already over (measured: the background read
+        # finished with `contributed=1 lines=5` but `region adopted` never
+        # logged, because the whole turn never returned). The tool boundary fires
+        # inside the turn, which is exactly when the region must land.
+        try:
+            if self._poll_blindspot_ready():
+                display.warn(
+                    "[blind-spot reader] region adopted into the system prompt")
+                self._refresh_system_prompt(
+                    plan_context=self._build_plan_context(), bump_turn=False)
+        except Exception:
+            pass  # adopting the region must never break a turn
         try:
             if any(tc["name"] in ("plan_create", "plan_update", "plan_status")
                    for tc in tool_calls):

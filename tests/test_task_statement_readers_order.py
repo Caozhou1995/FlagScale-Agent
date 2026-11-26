@@ -115,61 +115,48 @@ def _make_agent(monkeypatch, *, readers_on: bool):
     return agent
 
 
-def test_statement_is_appended_before_the_readings(monkeypatch):
-    """THE regression test: turn[0] of the run must be the task statement."""
+def test_statement_is_the_only_user_turn_in_slim_reader_mode(monkeypatch):
+    """THE regression test (slim-reader redesign, 2026-11-24 user ruling).
+
+    The twelve-viewpoint readings used to arrive as a SECOND pinned user turn.
+    Measured on dna-assembly job 2026-11-17__20-50-10 that block was delivered
+    and NEVER opened (zero of its unique eight-word sequences appeared in the
+    assistant output). The slim mode removes that user turn: the blind-spot
+    signal now rides the SYSTEM PROMPT (a resident region), and the only
+    start-up user turn is the task statement itself at turn[0].
+    """
     agent = _make_agent(monkeypatch, readers_on=True)
+    agent._blindspot_block = ""
     agent._run_single_shot(STATEMENT)
 
     user_appends = [m for m in agent.history.appends if m.get("role") == "user"]
-    assert len(user_appends) == 2, (
-        f"expected statement + readings as two separate user turns, got "
-        f"{len(user_appends)}"
+    assert len(user_appends) == 1, (
+        "slim-reader mode appends exactly ONE user turn (the statement); the "
+        f"readings are no longer a user turn. got {len(user_appends)}"
     )
-    first, second = user_appends
-
+    first = user_appends[0]
     assert first["content"] == STATEMENT, (
-        "the FIRST user turn must be the task statement verbatim; got: "
+        "the ONLY user turn must be the task statement verbatim; got: "
         f"{str(first['content'])[:120]!r}"
-    )
-    # Derive the count instead of pinning a literal: the readings block names
-    # how many viewpoints shipped (10 -> 11 on 2026-11-16), and a literal here
-    # fails on a real capability change rather than on a real defect.
-    from flagscale_agent.react.tools.read_task_statement import VIEWPOINTS
-
-    assert f"{len(VIEWPOINTS)} independent readings" in second["content"], (
-        "the SECOND user turn must be the readings block; got: "
-        f"{str(second['content'])[:120]!r}"
     )
     # The statement must not have been rewritten on its way in.
     assert "Fit the G and 2D Peak" in first["content"]
 
 
-def test_readings_and_statement_are_both_pinned(monkeypatch):
-    """Both turns are pinned: statement AND readings (2026-11-16 user ruling).
+def test_statement_turn_is_pinned(monkeypatch):
+    """The single statement user turn is pinned so it is never evicted.
 
-    Reversal of the earlier rule on measured evidence. The readings block is the
-    only place the harness hands the model the statement's UNSET axes together
-    with the deliverable field each one lands in, so it is not decoration — it
-    is the input the model must ACT on. On batch 2026-11-16__00-08-27,
-    raman-fitting read "UNSET: gamma definition (FWHM/HWHM) and unit" on turn 1
-    and still shipped the opposite convention; a derived document that has been
-    evicted cannot be acted on.
-
-    Cost, measured on that same 89-trial batch (not the older 86-session
-    figure): readings block median 21712 chars, min 13813, max 30932, ~7k
-    tokens, i.e. ~3.5% of a 200k-token window. Paid once per trial.
+    In slim-reader mode there is no second readings turn to pin; the blind-spot
+    region lives in the system prompt (rebuilt every turn), not the history.
     """
     agent = _make_agent(monkeypatch, readers_on=True)
+    agent._blindspot_block = ""
     agent._run_single_shot(STATEMENT)
 
     user_appends = [m for m in agent.history.appends if m.get("role") == "user"]
-    first, second = user_appends
-    assert first.get("_pin") is True, (
+    assert len(user_appends) == 1
+    assert user_appends[0].get("_pin") is True, (
         "the task statement is a genuine user turn and must never be evicted"
-    )
-    assert second.get("_pin") is True, (
-        "the readings block carries the statement's UNSET axes and their "
-        "deliverable fields; evicting it removes the only copy of that input"
     )
 
 

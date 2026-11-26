@@ -383,6 +383,111 @@ class TestKnowledgeSkillGuardInfoGainInject:
         assert v3 is not None
         assert v3.action == "inject"
 
+    def test_fetch_failures_route_to_switch_source_branch(self):
+        """Every `[WEB_FETCH_*]` marker that means NO page was retrieved must
+        take the failure branch — not only NETWORK_ERROR. A proxy refusal is the
+        commonest failure on a filtered egress and used to be classified as a
+        successful fetch (so the agent was told to 'classify what you now have'
+        with nothing in hand, and answered from memory)."""
+        guard = KnowledgeSkillGuard()
+        failures = [
+            "[WEB_FETCH_PROXY_REFUSED] Could not retrieve https://www.neb.com/x",
+            "[WEB_FETCH_NETWORK_ERROR] ConnectionError",
+            "[WEB_FETCH_UPSTREAM_502] bad gateway",
+            "[WEB_FETCH_HTTP_403] forbidden",
+            "[WEB_FETCH_BLOCKED] Blocked host: localhost",
+        ]
+        for result in failures:
+            verdict = guard.check_post(
+                _make_ctx(tool_name="web_fetch", tool_result=result))
+            assert verdict is not None, result
+            assert verdict.reason == "web_fetch_failure_switch_source", result
+            msg = verdict.message
+            # The three ordered escapes must be present, and memory-as-answer
+            # must be explicitly refused.
+            assert "SWITCH SOURCE" in msg
+            assert "BYPASS THE HOP" in msg
+            assert "OFFLINE SOURCE" in msg
+            assert "NOT VERIFIED does NOT satisfy this" in msg
+
+    def test_degraded_but_acquired_fetches_stay_on_success_branch(self):
+        """SIZE_EXCEEDED / LOW_CONTENT / UNSUPPORTED mean the body WAS
+        retrieved — routing them to 'switch source' would push the agent to
+        re-fetch content it already holds."""
+        guard = KnowledgeSkillGuard()
+        for result in ("[WEB_FETCH_SIZE_EXCEEDED] truncated ...",
+                       "[WEB_FETCH_LOW_CONTENT] only nav",
+                       "[WEB_FETCH_UNSUPPORTED] content-type application/pdf"):
+            verdict = guard.check_post(
+                _make_ctx(tool_name="web_fetch", tool_result=result))
+            assert verdict is not None, result
+            assert verdict.reason == "knowledge_info_gain_three_state", result
+
+    def test_success_branch_no_longer_licenses_memory_substitution(self):
+        """The success branch must not invite 'keep climbing on your best proxy
+        and record which proxy you chose' — that was a written licence to answer
+        from memory, contradicting SPEC-LOYALTY in the same message."""
+        guard = KnowledgeSkillGuard()
+        verdict = guard.check_post(_make_ctx(
+            tool_name="web_fetch",
+            tool_result="Golden Gate assembly uses BsaI-HF v2 ..."))
+        assert verdict is not None
+        assert "keep climbing on your best proxy" not in verdict.message
+
+    def test_fetched_body_mentioning_a_marker_is_not_a_failure(self):
+        """A successfully fetched page may quote a marker mid-text; only the
+        START of the result decides, so that page must stay on the success
+        branch."""
+        guard = KnowledgeSkillGuard()
+        body = ("Golden Gate assembly notes\n"
+                "[WEB_FETCH_NETWORK_ERROR] is a marker this tool emits.\n"
+                "BsaI-HF v2 requires GGTCTC(1/5).")
+        verdict = guard.check_post(
+            _make_ctx(tool_name="web_fetch", tool_result=body))
+        assert verdict is not None
+        assert verdict.reason == "knowledge_info_gain_three_state"
+
+    def test_every_marker_web_fetch_emits_is_classified(self):
+        """Guard against the original defect class: a guard that knows only ONE
+        of the markers a tool actually emits. Enumerate the marker family from
+        web_fetch.py's own source and require a classification for each, so a
+        marker added later cannot silently fall into the success branch.
+
+        Plain string scanning, not a regex — marker detection must never depend
+        on pattern matching in this codebase.
+        """
+        import inspect
+        from flagscale_agent.react.tools import web_fetch as _wf
+
+        src = inspect.getsource(_wf)
+        emitted = set()
+        rest = src
+        prefix = "[WEB_FETCH_"
+        while prefix in rest:
+            _, rest = rest.split(prefix, 1)
+            name = ""
+            for ch in rest:
+                if ch.isalpha() or ch == "_":
+                    name += ch
+                else:
+                    break
+            if name:
+                emitted.add(prefix + name)
+        # the two template markers carry an HTTP status suffix
+        emitted = {("[WEB_FETCH_HTTP_403" if m == "[WEB_FETCH_HTTP_"
+                    else "[WEB_FETCH_UPSTREAM_502" if m == "[WEB_FETCH_UPSTREAM_"
+                    else m) for m in emitted}
+        assert len(emitted) >= 8, emitted  # the family really was enumerated
+        acquired = ("[WEB_FETCH_SIZE_EXCEEDED", "[WEB_FETCH_LOW_CONTENT",
+                    "[WEB_FETCH_UNSUPPORTED")
+        for marker in sorted(emitted):
+            verdict = KnowledgeSkillGuard().check_post(
+                _make_ctx(tool_name="web_fetch", tool_result=f"{marker}] x"))
+            assert verdict is not None, marker
+            expected = ("knowledge_info_gain_three_state" if marker in acquired
+                        else "web_fetch_failure_switch_source")
+            assert verdict.reason == expected, (marker, verdict.reason)
+
     def test_no_inject_for_non_knowledge_tools(self):
         """Info-gain inject only fires for knowledge tools, not shell/etc."""
         guard = KnowledgeSkillGuard()

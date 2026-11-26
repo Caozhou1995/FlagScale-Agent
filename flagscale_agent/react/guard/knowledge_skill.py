@@ -51,6 +51,35 @@ from __future__ import annotations
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
 
 
+# web_fetch reports its outcome with a `[WEB_FETCH_*]` marker family (see
+# react/tools/web_fetch.py). Exactly three of those markers mean the page body
+# WAS retrieved and only its delivery was degraded — truncated, short, or
+# non-extractable. Every other `[WEB_FETCH_*]` marker means the fetch failed
+# before any content came back, so it must NOT take the "you fetched
+# knowledge" branch. A single-marker test (`... == NETWORK_ERROR`) silently
+# classified proxy refusals — the commonest failure on a filtered egress — as
+# success. Match on the marker family's string prefix; never on a regex.
+_SUCCESS_FETCH_MARKERS = (
+    "[WEB_FETCH_SIZE_EXCEEDED",
+    "[WEB_FETCH_LOW_CONTENT",
+    "[WEB_FETCH_UNSUPPORTED",
+)
+
+
+def _is_fetch_failure(result_str: str) -> bool:
+    """True iff a tool result is a web_fetch that returned NO page content.
+
+    Anchored at the START of the result: every one of web_fetch's own returns
+    is either the bare page text or a result that BEGINS with its marker, so a
+    fetched page whose body merely mentions a marker mid-text must not be read
+    as a failure.
+    """
+    upper = str(result_str).lstrip().upper()
+    if any(marker in upper for marker in _SUCCESS_FETCH_MARKERS):
+        return False
+    return upper.startswith("[WEB_FETCH_")
+
+
 class KnowledgeSkillGuard(Guard):
     """Remind agent to load knowledge/skills if it hasn't done so recently."""
 
@@ -246,15 +275,36 @@ class KnowledgeSkillGuard(Guard):
         # the agent did not already know. Advisory (inject), not a block.
         if ctx.tool_name in self._KNOWLEDGE_TOOLS and ctx.tool_result:
             result_str = str(ctx.tool_result)
-            is_error = "[WEB_FETCH_NETWORK_ERROR]" in result_str.upper()
-            if is_error:
+            # A fetch that returned NO page must not take the success branch —
+            # otherwise the agent is told to "classify what you now have" when
+            # it has nothing, and answers from memory instead of switching
+            # source. Match the marker FAMILY (see _is_fetch_failure), not one
+            # marker: PROXY_REFUSED / UPSTREAM_5xx / HTTP_4xx / BLOCKED are all
+            # failures, while SIZE_EXCEEDED / LOW_CONTENT / UNSUPPORTED are
+            # degraded-but-acquired.
+            if ctx.tool_name == "web_fetch" and _is_fetch_failure(result_str):
                 return GuardVerdict.inject(
-                    "[KnowledgeSkill] Your last web_fetch hit a network error. "
-                    "Did this attempt teach you something you didn't already know? "
-                    "If not, you are stalled — try a different fallback: proxy unset, "
-                    "mirror source, case-flipped URL, alternative endpoint, or offline "
-                    "cache. Information gain is the exit, not a retry of the same path.",
-                    reason="web_fetch_network_info_gain",
+                    "[KnowledgeSkill] Your last web_fetch did NOT return the page — "
+                    "the fetch failed before any content was retrieved, so you gained "
+                    "NOTHING from it. The source is still the authority: a failed fetch "
+                    "is NOT a licence to answer from memory. Do these IN ORDER:\n"
+                    "  (1) SWITCH SOURCE — fetch the same fact from a MIRROR, an "
+                    "alternate host/page for the same vendor or standard, or an archive "
+                    "snapshot (e.g. web.archive.org). A different source that answers "
+                    "the gap fully substitutes for the blocked one.\n"
+                    "  (2) BYPASS THE HOP — if the failure names a proxy or upstream, "
+                    "retry with the proxy unset (requests.get(url, proxies={}), or "
+                    "urllib with an empty ProxyHandler + build_opener), and probe a "
+                    "known-good domain to separate a per-host block from a network-wide "
+                    "one.\n"
+                    "  (3) OFFLINE SOURCE — installed package docs, load_knowledge, or a "
+                    "local copy of the spec.\n"
+                    "Re-anchoring the axis on your own remembered convention and marking "
+                    "it NOT VERIFIED does NOT satisfy this: if the task text NAMED the "
+                    "standard, what that standard requires is part of the task, and "
+                    "'I could not fetch it' is a gap to close, not an excuse. "
+                    "Information gain is the exit, not a retry of the same path.",
+                    reason="web_fetch_failure_switch_source",
                     category="knowledge_skill",
                 )
             # Success — classify the info-gain into one of three states so the
@@ -278,8 +328,8 @@ class KnowledgeSkillGuard(Guard):
                 "smuggling, not gain: re-anchor that axis on the task text and the "
                 "provided artifacts (minimal-uncertainty default), and keep the fetched "
                 "method only for the parts the spec actually names. If the spec genuinely "
-                "constrains nothing on the axis, keep climbing on your best proxy and "
-                "record which proxy you chose.\n"
+                "constrains nothing on the axis, say so explicitly and say why the axis "
+                "is silent — do not substitute an external preference for the text's.\n"
                 "  EXEMPTION — NOT SILENT IS NOT SMUGGLING. If the task text NAMES the "
                 "standard (a kit, vendor, protocol, file format, or spec by name), then "
                 "whatever that standard REQUIRES of the deliverable is part of what the "

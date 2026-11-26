@@ -100,7 +100,7 @@ def test_tolerance_is_sourced_not_chosen():
 def test_values_are_read_off_the_target_not_computed_locally():
     """The specific substitution this rule forbids: reading a value out of your
     own derivation instead of off the delivered bytes."""
-    assert "read every shared value off the target by alignment, never compute it locally" in FLAT
+    assert "read every shared value off the target by alignment, not locally" in FLAT
     assert "per-component correctness is the seductive error" in FLAT
 
 
@@ -135,8 +135,8 @@ def test_reading_anchors_on_the_task_verb_not_consumer_habit():
     The permission/requirement distinction survives as the superset rule: take
     the reading satisfying EVERY constraint in play, never the convenient one.
     """
-    assert "take the one the task's own verb and nouns pin, not the convenient one" in FLAT
-    assert "prefer the form satisfying every constraint in play (the superset)" in FLAT
+    assert "take the one the task's verb and nouns pin, not the convenient one" in FLAT
+    assert "take the one satisfying the most (the e2 superset rule)" in FLAT
     assert "an element no stated rule forbids and one reading demands is free" in FLAT
 
 

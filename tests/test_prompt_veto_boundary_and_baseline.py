@@ -100,3 +100,30 @@ def test_both_clauses_fit_the_budget():
     # verdict clause (from the 19 replay losses: right number computed, wrong
     # reading shipped). Ratchet unchanged — test_c3 still fails on clause piles.
     assert prompt_len() <= PROMPT_BUDGET
+
+
+# --- veto-action anchor: a remembered convention must not be used to VETO a stricter reading ---
+def test_remembered_convention_cannot_veto_stricter_reading():
+    """Measured gap (2026-11-24 trial Hb7vnvU): the agent wrote NEB recommends
+    'no additional bases 5' of GGTCTC', then vetoed it with a remembered
+    convention ('the site at the very 5' end is standard'), delivering clamp=0
+    on 8/8 primers. The rule must name the VETO action, not only the choice."""
+    from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC as S
+    i = S.find("A remembered convention is NOT defensible")
+    assert i != -1, "the remembered-convention rule is absent"
+    window = S[i:i + 220]
+    assert "never grounds to veto" in window, (
+        "rule must forbid using a remembered convention AS GROUNDS TO VETO "
+        f"a stricter reading; got: {window!r}")
+    assert "sourced reading" in window, "must keep the sourced-vs-remembered ranking"
+
+
+def test_veto_anchor_ablation_turns_red():
+    """Ablation: softening the veto clause must make the anchor check fail."""
+    from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC as S
+    i = S.find("A remembered convention is NOT defensible")
+    assert i != -1
+    window = S[i:i + 220]
+    softened = window.replace("never grounds to veto", "may be weighed against")
+    assert "never grounds to veto" not in softened, "ablation did not take"
+    assert "never grounds to veto" not in softened

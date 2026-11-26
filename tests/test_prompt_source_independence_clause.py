@@ -74,7 +74,7 @@ def test_membership_is_verbatim_and_on_disk(clause):
 
 def test_symmetry_names_the_asymmetry_itself_as_the_flag(clause):
     # a discrepancy you can argue away is a discrepancy you never tested
-    assert "A deviation you can argue away is a deviation you never tested" in clause
+    assert "A deviation you can argue away went untested" in clause
     assert "the DELIVERABLE being wrong" in clause
 
 
@@ -88,7 +88,7 @@ def test_timing_binds_to_contradiction_or_closeout(clause):
 def test_economics_links_fast_independent_feedback_to_less_enforcement(clause):
     # the density claim, kept falsifiable: error cost sets verification strength
     assert "Error cost sets verification strength" in clause
-    assert "cheap and visible mistakes get one check" in clause
+    assert "cheap visible mistakes get one check" in clause
 
 
 def test_no_task_specific_leak():

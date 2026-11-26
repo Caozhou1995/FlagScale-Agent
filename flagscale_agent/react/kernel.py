@@ -285,6 +285,39 @@ class AgentKernel:
     # above that unit while staying inside the measured-safe band.
     # Re-test all three only with >=15 trials per arm.
     THINKING_SQUEEZE_TOKENS = 2048
+    # Half-life ladder (user directive, 2026-11-22): the escalation used to jump
+    # STRAIGHT to the 2048 floor the first time it armed, so a model that needed
+    # only a nudge lost 8x of its configured budget in one step. Instead walk
+    # DOWN from the configured thinking_budget — b/2, b/4, b/8 ... — and stop at
+    # THINKING_SQUEEZE_TOKENS. Steps are counted per turn and reset when a
+    # write/edit produces state on disk, so the ladder restarts from the top
+    # only after real progress (never after mere visible text).
+    #   configured 16384 -> 8192 -> 4096 -> 2048 (floor, stays there)
+    THINKING_SQUEEZE_START_FROM_CONFIG = True
+
+    def _next_squeeze_budget(self) -> int:
+        """Squeeze budget for the NEXT stream: walk down by half from the
+        configured thinking budget, floored at THINKING_SQUEEZE_TOKENS.
+
+        Rationale (measured, write-compressor 2026-11-22__19-19-50): the old
+        code armed THINKING_SQUEEZE_TOKENS directly, so every arm asked for the
+        same 2048 floor and the model was cut at 2048 on all 17 caps without
+        ever reaching its forced tool call. Halving keeps the first retry
+        generous (half the normal budget) and only reaches the floor after
+        log2(base/floor) arms — the escalation stays proportional to how much
+        the model has failed to converge.
+        """
+        base = 0
+        if self.THINKING_SQUEEZE_START_FROM_CONFIG:
+            try:
+                base = int(getattr(self.deps.config, "thinking_budget", 0) or 0)
+            except Exception:
+                base = 0
+        step = getattr(self, "_squeeze_steps", 0)
+        self._squeeze_steps = step + 1
+        if base <= self.THINKING_SQUEEZE_TOKENS:
+            return self.THINKING_SQUEEZE_TOKENS
+        return max(self.THINKING_SQUEEZE_TOKENS, base >> (step + 1))
 
     def run_turn(self) -> KernelResult:
         """Run one ReAct turn (one user message → completion).
@@ -332,6 +365,9 @@ class AgentKernel:
         # produces state on disk (progress evidence) — that restores the
         # normal budget.
         self._thinking_cap_override = None
+        # Ladder position for _next_squeeze_budget (see THINKING_SQUEEZE_TOKENS).
+        # Per-turn: reset here and again on a successful write/edit below.
+        self._squeeze_steps = 0
         self._turn_start_ts = time.time()
         self.iterations_live = 0
         d.judge.reset_turn()
@@ -458,7 +494,7 @@ class AgentKernel:
                     )
                     if not _release:
                         self._force_tool_next = True
-                        self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
+                        self._thinking_cap_override = self._next_squeeze_budget()
                     else:
                         d.display.warn(
                             "Endgame force_tool RELEASED for this round — a "
@@ -819,7 +855,7 @@ class AgentKernel:
                             # call site), so a small floor cuts the next stream
                             # early enough for the forced call to land.
                             self._force_tool_next = True
-                            self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
+                            self._thinking_cap_override = self._next_squeeze_budget()
                             d.display.warn(f"Thinking reached runtime cap (cap-retry {self._cap_retries}), forcing convergence...")
                         elif empty_retries < 3:
                             self._empty_output_retries = empty_retries + 1
@@ -948,7 +984,7 @@ class AgentKernel:
                                 # by the measured-failure note in the rung-1
                                 # comment itself; arm the structural channel now.
                                 self._force_tool_next = True
-                                self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
+                                self._thinking_cap_override = self._next_squeeze_budget()
                                 if _cap_n >= 2:
                                     # Second (and later) cap in the SAME turn:
                                     # the model has now been told once to land
@@ -978,7 +1014,7 @@ class AgentKernel:
                                     # early and the turn actually ends with a
                                     # tool call. Cleared when a write/edit
                                     # produces state on disk (below).
-                                    self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
+                                    self._thinking_cap_override = self._next_squeeze_budget()
                                     nudge = (
                                         "[system: HARD STOP. Your reasoning has now hit the "
                                         f"runtime cap {_cap_n} times in this turn and each time "
@@ -1443,6 +1479,7 @@ class AgentKernel:
                             # normal thinking budget so later reasoning is not
                             # artificially starved.
                             self._thinking_cap_override = None
+                            self._squeeze_steps = 0
                     if (self._edit_churn_streak >= self.FORBIDDEN_STOP_AFTER
                             and self._forbidden_stop_fires
                             < self.FORBIDDEN_STOP_MAX_FIRES):
@@ -1667,7 +1704,7 @@ class AgentKernel:
             # force_tool and the next stream still burned 240.3s of pure
             # thinking. Without the budget squeeze the structural wording
             # never reaches the model as an enforced constraint.
-            self._thinking_cap_override = self.THINKING_SQUEEZE_TOKENS
+            self._thinking_cap_override = self._next_squeeze_budget()
         d.display.warn(
             f"Idle think-interval ({_idle_secs:.0f}s with no tool state) — "
             f"forcing convergence (idle-retry {_retries + 1}"

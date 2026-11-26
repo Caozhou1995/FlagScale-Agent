@@ -67,7 +67,7 @@ def test_conservation_invariant_pin_in_2_4():
     assert "THE DELIVERABLE IS THE ONLY SOURCE OF TRUTH" in s
     assert "default to the DELIVERABLE being wrong" in s
     assert "the target's own bytes" in s
-    assert "never compute it locally" in s
+    assert "by alignment, not locally" in s
 
 
 def test_quantity_is_a_family_not_two_readings():

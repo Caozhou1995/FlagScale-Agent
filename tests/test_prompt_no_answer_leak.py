@@ -213,7 +213,9 @@ def test_w2_beat_names_the_subslot_without_a_domain_example():
     from flagscale_agent.react.guard.system_prompt_remind import _REMIND_MESSAGE
 
     assert "UNIT-FORMULA" in _REMIND_MESSAGE
-    assert "x_B = f(x_A)" in _REMIND_MESSAGE
+    # The slot names the requirement abstractly; the formula illustration was
+    # removed from the beat (an illustration sits one step from an answer).
+    assert "the conversion is where the error hides" in _REMIND_MESSAGE
     assert scan([(0, _REMIND_MESSAGE)]) == [], (
         "the step_done beat leaks a benchmark answer into every step's reminder"
     )

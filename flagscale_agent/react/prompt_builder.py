@@ -58,6 +58,10 @@ class PromptBuilder:
         memory_context: str = "",
         plan_context: str = "",
         session_dir: str = "",
+        # Blind-spot region (slim reader mode). Empty string = no region, so a
+        # run with the feature off or no blind spot found is byte-identical to
+        # before. Rendered as a resident section below the dashboard metric bar.
+        blindspot_block: str = "",
         # Deprecated — accepted but ignored
         shared_storage_paths: list[str] | None = None,
         # Dashboard rebuilds (e.g. per-tool-round refreshes) must NOT advance
@@ -102,7 +106,9 @@ class PromptBuilder:
         )
 
         # ── Append dashboard at the very end ──
-        dashboard = self._build_dashboard(plan_context, session_dir, history=history)
+        dashboard = self._build_dashboard(
+            plan_context, session_dir, history=history,
+            blindspot_block=blindspot_block)
         if dashboard:
             core += DASHBOARD_TEMPLATE.format(dashboard_content=dashboard)
 
@@ -137,7 +143,7 @@ class PromptBuilder:
             return "(knowledge not available)"
 
     def _build_dashboard(self, plan_context: str, session_dir: str = "",
-                         history=None) -> str:
+                         history=None, blindspot_block: str = "") -> str:
         """Build the dashboard line for the end of the prompt.
 
         Extracts plan title/step from plan_context if available.
@@ -321,6 +327,13 @@ class PromptBuilder:
                 "Forbidden list (what NOT to do — every turn, self-authored):\n"
                 f"{forbidden_block}"
             )
+        # Blind-spot region (slim reader mode). A resident reminder of the
+        # points the task statement leaves undetermined that change the
+        # delivered bytes. Rendered only when non-empty (feature off or no blind
+        # spot found -> nothing here, byte-identical to before). It carries its
+        # own header and provenance, so it is appended verbatim.
+        if blindspot_block:
+            sections.append(blindspot_block)
         if hypothesis:
             sections.append(
                 f"Hypothesis (current problem model):\n{hypothesis}"

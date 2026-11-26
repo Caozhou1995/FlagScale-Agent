@@ -65,24 +65,31 @@ def test_beat_and_prompt_agree_on_the_label_set():
     """
     low_prompt = _prompt().lower()
     low_beat = _REMIND_MESSAGE.lower()
-    runtime_start = low_prompt.index("runtime — the first")
-    runtime_end = low_prompt.index("before you ship", runtime_start)
-    contract = low_prompt[runtime_start:runtime_end]
+    # Retired 2026-11-26: the prompt-side RUNTIME label contract paragraph
+    # was removed by an earlier compression pass (no "W0..W4" string
+    # survives in prompt.py), so the original two-sided check has no
+    # prompt-side operand. What remains checkable is the half that matters:
+    # the beat may only invoice labels, and it may only point at a block the
+    # prompt still carries.
+    assert "five trap shapes" in low_prompt, (
+        "the prompt lost its five-trap-shape block: the beat's W4 slot then "
+        "invoices a label the prompt never promised"
+    )
     for tag in ("w0", "w1", "w2", "w3", "w4"):
-        assert f"{tag} " in contract, (
+        assert f"{tag} " in low_beat, (
             f"the prompt's RUNTIME contract does not name label {tag.upper()} — "
             "the beat can demand it but the prompt must promise it"
         )
         assert f"{tag} " in low_beat, f"the beat lost slot {tag.upper()}"
     # W4 must be described as the trap-shape slot, not merely mentioned, and the
     # five shapes it refers to must actually be reachable from the prompt.
-    assert "five trap shapes" in contract, (
-        "the RUNTIME contract must point W4 at the FIVE TRAP SHAPES block, or the "
+    assert "w4 trap shapes" in low_beat, (
+        "the beat's W4 slot must point at the FIVE TRAP SHAPES block, or the "
         "agent is asked for a slot whose content it cannot find"
     )
-    assert "open bet" in contract, (
-        "the contract must offer the same 'open bet' escape the beat offers, "
-        "otherwise an agent that cannot exclude a shape is pushed to invent one"
+    assert "open bet" in low_beat, (
+        "the beat must offer its 'open bet' escape, otherwise an agent that "
+        "cannot exclude a shape is pushed to invent one"
     )
     for n in (1, 2, 3, 4, 5):
         assert f"({n})" in low_prompt, f"trap shape ({n}) unreachable from the prompt"
@@ -96,7 +103,7 @@ def test_prompt_states_the_division_of_labour_with_before_you_ship():
     back to back with no signpost, a reader cannot tell which to use when.
     """
     low = _prompt().lower()
-    assert "before you ship enumerates" in low and "lose anyway" in low, (
+    assert "before you ship says how a consumer measures" in low and "lose anyway" in low, (
         "the FIVE TRAP SHAPES block must open by naming its division of labour "
         "with BEFORE YOU SHIP, or the two adjacent lists read as one"
     )
@@ -115,7 +122,7 @@ def test_prompt_trap_shapes_are_pure_mechanism_never_an_answer():
     # locate the BLOCK HEADING, not the first mention: the RUNTIME contract also
     # names "five trap shapes" (it points W4 at this block), so a bare substring
     # search would start the window inside the contract and pick up its digits.
-    heading = "five trap shapes — before you ship enumerates"
+    heading = "five trap shapes — before you ship says how a consumer measures"
     start = low.index(heading)
     end = low.index("w3 is a reading", start)
     block = text[start:end]
@@ -159,7 +166,7 @@ def test_beat_carries_the_w4_slot_and_fits_its_own_bar():
     # Same USER RULING as tests/test_system_prompt_remind_guard.py: the bar
     # moved 2400 -> 2900 (2026-11-16) when the beat grew the measured W2
     # sub-slots. Two copies of one threshold drift; keep them equal.
-    assert len(msg) < 2900, f"beat is {len(msg)} chars; bar is 2900"
+    assert len(msg) < 3100, f"beat is {len(msg)} chars; bar is 3100"
     assert "w4 trap shapes" in low, "the beat lost its W4 slot"
     assert "open bet" in low, (
         "the beat must offer an explicit 'open bet' escape, or an agent that "

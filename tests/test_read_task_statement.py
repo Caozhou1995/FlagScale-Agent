@@ -560,3 +560,118 @@ def test_tool_description_and_render_speak_for_the_SHIPPED_viewpoints():
     rendered = tool._render([(v, "ok", "body") for v in ids], [])
     assert f"{n} independent readings" in rendered
     assert "Ten independent" not in rendered
+
+
+# ── blind-spot reader: deadline, non-blocking shutdown, outcome stats ─────────
+#
+# These lock the 2026-11-24 fix for the two defects measured on a real dna run
+# (job 2026-11-24__12-11-41): per-pass failures were swallowed silently (empty
+# union was byte-identical to "no blind spot"), and the pool's shutdown(wait=
+# True) blocked the pre-loop step on the slowest straggler. The reader must now
+# (a) record per-call outcome counts, and (b) not block past its wall-clock
+# deadline when a pass hangs.
+
+import threading
+import time
+
+from flagscale_agent.react.tools.read_task_statement import (
+    _BLINDSPOT_SENTINEL,
+)
+
+
+class _BlindspotProvider:
+    """Provider whose chat() can return a body, the sentinel, raise, or hang.
+
+    mode is chosen per-call-index from `sequence` (cycled). 'hang' blocks on an
+    Event that the test never sets, simulating a straggler the deadline must cut.
+    """
+
+    def __init__(self, sequence, body="- a blind spot line"):
+        self._sequence = list(sequence)
+        self._body = body
+        self._i = 0
+        self._lock = threading.Lock()
+        self._gate = threading.Event()  # never set -> 'hang' blocks forever
+
+    def chat(self, messages, tools=None, force_tool=False):
+        with self._lock:
+            mode = self._sequence[self._i % len(self._sequence)]
+            self._i += 1
+        if mode == "body":
+            return {"content": self._body}
+        if mode == "sentinel":
+            return {"content": _BLINDSPOT_SENTINEL}
+        if mode == "empty":
+            return {"content": ""}
+        if mode == "raise":
+            raise RuntimeError("boom")
+        if mode == "hang":
+            # Long enough that the reader's deadline cuts first, short enough
+            # that the lingering worker thread does not slow process teardown
+            # (concurrent.futures joins non-daemon workers at interpreter exit).
+            self._gate.wait(timeout=3)
+            return {"content": self._body}
+        raise AssertionError(f"unknown mode {mode!r}")
+
+
+def test_blindspot_stats_recorded_on_normal_pass():
+    prov = _BlindspotProvider(sequence=["body", "sentinel", "body"])
+    tool = TaskStatementReadersTool(provider=prov, task_text=STATEMENT)
+    lines = tool.read_blindspots(rounds=3)
+    s = tool._last_blindspot_stats
+    assert s["rounds"] == 3
+    assert s["contributed"] == 2       # two 'body' passes
+    assert s["empty"] == 1             # the sentinel pass contributes no line
+    assert s["errored"] == 0
+    assert s["timed_out"] == 0
+    assert s["lines"] == len(lines) == 1  # both bodies identical -> union de-dups
+
+
+def test_blindspot_errored_passes_are_counted_not_silent():
+    prov = _BlindspotProvider(sequence=["raise", "body", "raise"])
+    tool = TaskStatementReadersTool(provider=prov, task_text=STATEMENT)
+    lines = tool.read_blindspots(rounds=3)
+    s = tool._last_blindspot_stats
+    assert s["errored"] == 2
+    assert s["contributed"] == 1
+    assert len(lines) == 1
+
+
+def test_blindspot_all_sentinel_is_distinguishable_from_all_errored():
+    all_sentinel = _BlindspotProvider(sequence=["sentinel"])
+    t1 = TaskStatementReadersTool(provider=all_sentinel, task_text=STATEMENT)
+    assert t1.read_blindspots(rounds=3) == []
+    assert t1._last_blindspot_stats["empty"] == 3
+    assert t1._last_blindspot_stats["errored"] == 0
+
+    all_err = _BlindspotProvider(sequence=["raise"])
+    t2 = TaskStatementReadersTool(provider=all_err, task_text=STATEMENT)
+    assert t2.read_blindspots(rounds=3) == []
+    assert t2._last_blindspot_stats["errored"] == 3
+    assert t2._last_blindspot_stats["empty"] == 0
+    # same empty result, different stats -> the caller can tell them apart
+
+
+def test_blindspot_deadline_does_not_block_on_a_straggler():
+    # One pass hangs; with a tiny deadline the call must return promptly and
+    # count the hung pass as timed_out rather than waiting on it.
+    prov = _BlindspotProvider(sequence=["body", "hang", "body"])
+    tool = TaskStatementReadersTool(provider=prov, task_text=STATEMENT)
+    tool._blindspot_deadline_s = 0.5
+    start = time.monotonic()
+    lines = tool.read_blindspots(rounds=3)
+    elapsed = time.monotonic() - start
+    assert elapsed < 10.0, f"reader blocked on straggler: {elapsed:.1f}s"
+    s = tool._last_blindspot_stats
+    assert s["timed_out"] >= 1
+    assert s["contributed"] >= 1
+    assert len(lines) >= 1
+
+
+def test_blindspot_no_task_text_leaves_defined_stats():
+    tool = TaskStatementReadersTool(provider=_BlindspotProvider(["body"]),
+                                    task_text="")
+    assert tool.read_blindspots(rounds=3) == []
+    s = tool._last_blindspot_stats
+    assert s == {"rounds": 0, "contributed": 0, "empty": 0,
+                 "errored": 0, "timed_out": 0, "lines": 0}
