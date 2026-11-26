@@ -112,14 +112,15 @@ def test_a_compliance_derived_conclusion_cannot_be_vetoed_by_silence():
 
     Adding what every reading demands is justified by compliance alone; removing
     it is justified only by evidence. So a conclusion already backed by the
-    ordering rule or the strictest-standard rule must not be repealed by
-    imagining a consumer that dislikes it -- the imagined side carries no bytes.
+    ordering rule or the strictest-standard rule is overturned only by a task
+    sentence, a measurement or observed bytes.
     """
     body = _clause()
-    assert "repeal a conclusion already backed by" in body, (
-        "clause must name the asymmetric repeal case"
+    assert "a conclusion already backed by" in body, (
+        "clause must name the asymmetric case: what compliance alone justified"
     )
-    assert "overturn it only with a task sentence, a measurement or observed bytes" in body, (
+    assert ("is overturned only by a task sentence, a measurement or observed bytes"
+            in body), (
         "clause must state the evidence floor for overturning"
     )
     # The repeal rule must NOT be phrased as an absolute ban -- evidence still wins.

@@ -427,22 +427,61 @@ class AnthropicProvider(LLMProvider):
             chat_messages[-1] = last_copy
         return kwargs
 
-    def _create_with_reasoning_retry(self, kwargs, attempts: int = 4):
-        """Re-send a reasoning-replay rejection, degrading on later attempts.
+    # A rejection is a per-request coin flip, not a verdict on our bytes: the
+    # gateway fronts several upstreams and only some enforce the replay rule.
+    # Four back-to-back resends therefore sample too few upstreams -- measured
+    # 2026-11-26, five consecutive user-visible failures each exhausted the old
+    # four attempts. So retries are (a) numerous, (b) spread in TIME so the
+    # balancer lands on another upstream, and (c) alternate the two shapes we
+    # have (all-thinking-stripped / all-thinking-present), so no single
+    # upstream's preference can reject every attempt.
+    _MAX_REASONING_RETRIES = 50
 
-        Deterministic part: the FIRST retry uses degraded kwargs (no reasoning
-        blocks anywhere), because if the rejection is genuine that payload is
-        the one a strict upstream must accept. Retries exist because the same
-        bytes measured both 200 and 400 on this gateway, so a single resend is
-        a real lever, not a ritual.
+    @staticmethod
+    def _retry_backoff(i: int) -> None:
+        """Short jittered wait before retry `i` (1-based); total stays bounded.
+
+        Sleep defeats per-node stickiness: a burst of immediate resends can be
+        routed to the same upstream, while a spaced retry is re-balanced.
+        Worst case over 50 attempts is ~50s of waiting, which is far cheaper
+        than a dead turn.
         """
+        import random
+        import time as _time
+        _time.sleep(min(0.15 * i, 1.0) + random.uniform(0.0, 0.10))
+
+    def _retry_kwargs(self, kwargs, i: int):
+        """Payload shape for retry `i` (1-based): alternate the two shapes."""
+        if i % 2 == 1:
+            return self._degraded_kwargs(kwargs)
+        return kwargs
+
+    def _note_retry(self, i: int, attempts: int) -> None:
+        """Leave a trace: an invisible retry cannot be diagnosed afterwards."""
+        import sys as _sys
+        shape = "stripped" if i % 2 == 1 else "normalised"
+        _sys.stderr.write(
+            "[llm-retry] reasoning-replay 400; attempt "
+            f"{i}/{attempts - 1} shape={shape}\n")
+        _sys.stderr.flush()
+
+    def _create_with_reasoning_retry(self, kwargs, attempts: int = None):
+        """Re-send a reasoning-replay rejection until an upstream accepts it.
+
+        Attempt 0 sends the caller's bytes untouched, so a healthy gateway sees
+        byte-identical traffic to before this patch. Every later attempt is
+        time-spaced and alternates shape (see _MAX_REASONING_RETRIES).
+        """
+        attempts = attempts or self._MAX_REASONING_RETRIES
         last = None
         for i in range(attempts):
+            if i:
+                self._note_retry(i, attempts)
+                self._retry_backoff(i)
             try:
                 if i == 0:
                     return self._client.messages.create(**kwargs)
-                return self._client.messages.create(
-                    **self._degraded_kwargs(kwargs))
+                return self._client.messages.create(**self._retry_kwargs(kwargs, i))
             except anthropic.BadRequestError as exc:
                 if not self._is_reasoning_replay_error(exc):
                     raise
@@ -507,10 +546,13 @@ class AnthropicProvider(LLMProvider):
                     and self._is_reasoning_replay_error(exc)):
                 raise
             last = exc
-            for attempt in range(4):
+            attempts = self._MAX_REASONING_RETRIES
+            for attempt in range(1, attempts):
+                self._note_retry(attempt, attempts)
+                self._retry_backoff(attempt)
                 try:
-                    degraded = self._degraded_kwargs(kwargs)
-                    stream_ctx = self._client.messages.stream(**degraded)
+                    retry_kwargs = self._retry_kwargs(kwargs, attempt)
+                    stream_ctx = self._client.messages.stream(**retry_kwargs)
                     stream = stream_ctx.__enter__()
                     last = None
                     break
@@ -518,6 +560,8 @@ class AnthropicProvider(LLMProvider):
                     if not self._is_reasoning_replay_error(retry_exc):
                         raise
                     last = retry_exc
+                except Exception:
+                    raise
             if last is not None:
                 raise last
 

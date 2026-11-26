@@ -120,11 +120,20 @@ def test_protocol_is_referenced_as_the_core_of_the_section():
 
 def test_evidence_sources_are_ranked():
     """The loop ranks evidence instead of averaging it: task text > recorded
-    death > own checker, and an imagined grader weighs zero."""
+    death > own checker.
+
+    Retired 2026-11-26 by user ruling: the prompt no longer names a hypothetical
+    grader at all. Teaching "an imagined grader weighs zero" still puts the
+    entity in the model's vocabulary, and measured trials showed it then both
+    appeased and dismissed that same imagined grader. The rank itself is what
+    carries the rule, so the assertion below pins the rank, not the entity.
+    """
     for tag in ("e1 the task text's own named authority", "e2 the task text's own wording",
                 "e3 a recorded death on this same task class", "e4 your own constructed checker"):
         assert tag in FLAT, f"missing evidence rank: {tag}"
-    assert "an imagined grader weighs zero" in FLAT
+    assert "imagined grader" not in FLAT, (
+        "a hypothetical grader was re-introduced into the prompt vocabulary"
+    )
     # the fix that makes the rank actionable: named authority -> runnable check
     assert "turn every such pointer into a runnable check" in FLAT
 
