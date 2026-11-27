@@ -9,7 +9,7 @@ clause (spacer between site and overhang) to cancel the graded clause (extra
 bases 5' of the site). The delivered primers then had 8/8 site_at = 0.
 So the clause to guard is the ACTION (cancelling a sibling clause), not a word.
 """
-from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC
+from flagscale_agent.react.prompt import PROMPT_BUDGET, SYSTEM_PROMPT_STATIC
 
 
 def test_cancel_clause_is_present():
@@ -27,4 +27,4 @@ def test_cancel_clause_still_accompanies_never_optional():
 
 
 def test_prompt_stays_within_budget():
-    assert len(SYSTEM_PROMPT_STATIC) <= 50000
+    assert len(SYSTEM_PROMPT_STATIC) <= PROMPT_BUDGET

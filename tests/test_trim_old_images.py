@@ -17,8 +17,17 @@
 Measured failure (video-processing trial, 2026-10-24): the transcript carried
 every historical read_image result, so a few images pushed each request body
 over the gateway's 10MB limit -> HTTP 413 killed the session mid-run. The fix
-keeps only the most recent image-bearing message and replaces older image
-blocks with text placeholders.
+replaces older image blocks with text placeholders once the base64 payload of
+the kept images exceeds a byte ceiling.
+
+The ceiling is counted in BYTES, not blocks. A count-of-blocks budget was the
+original implementation and it was measurably wrong: it priced a 5 KB cropped
+`region` view the same as a 3.5 MB photo. gcode-to-text (2026-11-27) then died
+holding only one half of an image at a time — 49 read_image calls, each crop a
+few KB, every earlier crop placeholder-dropped — and oscillated 68 times
+between the two wrong readings of the same glyph before guessing wrong. These
+tests pin the byte semantics in both directions: cheap images must SURVIVE, and
+oversized ones must still be DROPPED (the 413 defence).
 """
 
 import base64
@@ -33,6 +42,17 @@ def _provider():
 
 def _img(ch: str) -> str:
     return base64.standard_b64encode(bytes([ord(ch)] * 100)).decode()
+
+
+def _img_b64(nbytes: int) -> str:
+    """An image payload whose base64 length is exactly ``nbytes`` chars.
+
+    Used by the byte-budget tests: the ceiling is metered in base64 characters,
+    so a fixture must be able to state a payload size directly instead of
+    indirectly via a raw byte count (base64 is 4/3 of raw, which makes the
+    arithmetic in a test opaque).
+    """
+    return "A" * nbytes
 
 
 def _tr(tid: str, text: str, img: str) -> dict:
@@ -89,20 +109,67 @@ def _count_placeholders(messages):
     return n
 
 
-def test_keeps_only_last_image():
+def test_keeps_only_within_byte_budget():
+    """Oversized images are dropped once the byte budget is exhausted.
+
+    This replaces the old `test_keeps_only_last_image`, which asserted a
+    count-of-blocks invariant ("exactly 1 image survives"). That invariant was
+    the bug: it forced the model to hold a single image no matter how small.
+    The object under assertion is now the BYTE payload, not the block count.
+    """
+    # 3 images whose combined payload (~12M chars) exceeds the 6M ceiling.
     msgs = [
         {"role": "user", "content": "look"},
         {"role": "assistant", "content": [
             {"type": "tool_use", "id": "t1", "name": "read_image", "input": {}}]},
-        _tr("t1", "Image: x.png", _img("A")),
-        _tr("t2", "Image: y.png", _img("B")),
-        _tr("t3", "Image: z.png", _img("C")),
+        _tr("t1", "Image: x.png", _img_b64(4_000_000)),
+        _tr("t2", "Image: y.png", _img_b64(4_000_000)),
+        _tr("t3", "Image: z.png", _img_b64(4_000_000)),
     ]
     p = _provider()
     _, chat = p._split_system(msgs)
     out = p._trim_old_images(chat)
-    assert _collect_images(out) == [_img("C")]
+    # Newest survives unconditionally; the other two exceed the ceiling.
+    assert len(_collect_images(out)) == 1
     assert _count_placeholders(out) == 2
+
+
+def test_small_crops_all_survive():
+    """A few-KB crop must not cost a whole image slot (the gcode failure).
+
+    Measured 2026-11-27: gcode-to-text made 49 read_image calls on ~5 KB crops
+    and every earlier crop was dropped, so it could never hold "left half" and
+    "right half" at once. Counting bytes lets all of them coexist — 32 x 5 KB
+    is 0.16 MB, three orders of magnitude under the ceiling.
+    """
+    msgs = [{"role": "user", "content": "go"}]
+    for i in range(32):
+        msgs.append(_tr(f"t{i}", f"Image: crop{i}.png", _img_b64(5_000)))
+    p = _provider()
+    _, chat = p._split_system(msgs)
+    out = p._trim_old_images(chat)
+    assert len(_collect_images(out)) == 32, "cheap crops must not be dropped"
+    assert _count_placeholders(out) == 0
+
+
+def test_budget_is_bytes_not_blocks():
+    """One big image plus several small ones: all fit, by arithmetic.
+
+    4M chars (big) + 5 x 5 K chars (small) = ~4.03 M < 6 M ceiling, so nothing
+    is dropped. Under the old count-of-blocks rule every small image after the
+    big one was discarded regardless of its size.
+    """
+    msgs = [
+        {"role": "user", "content": "go"},
+        _tr("big", "Image: photo.png", _img_b64(3_000_000)),
+    ]
+    for i in range(5):
+        msgs.append(_tr(f"s{i}", f"Image: crop{i}.png", _img_b64(5_000)))
+    p = _provider()
+    _, chat = p._split_system(msgs)
+    out = p._trim_old_images(chat)
+    assert len(_collect_images(out)) == 6
+    assert _count_placeholders(out) == 0
 
 
 def test_no_image_history_untouched():
@@ -121,27 +188,31 @@ def test_no_image_history_untouched():
 
 def test_top_level_image_block_also_trimmed():
     # Non-nested image (e.g. a future tool attaching at message top level).
+    # Both payloads are oversized so the byte ceiling (not the block count)
+    # decides which one survives — the newest.
+    big = 4_000_000
     msgs = [
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [
                 {"type": "text", "text": "Image: a.png"},
                 {"type": "image", "source": {
-                    "type": "base64", "media_type": "image/png", "data": _img("A")}},
+                    "type": "base64", "media_type": "image/png", "data": _img_b64(big)}},
             ]}]},
         {"role": "user", "content": [
             {"type": "image", "source": {
-                "type": "base64", "media_type": "image/png", "data": _img("B")}}]},
+                "type": "base64", "media_type": "image/png", "data": _img_b64(big)}}]},
     ]
     p = _provider()
     _, chat = p._split_system(msgs)
     out = p._trim_old_images(chat)
-    assert _collect_images(out) == [_img("B")]
+    assert _collect_images(out) == [_img_b64(big)]
     assert _count_placeholders(out) == 1
 
 
 def test_placeholder_tells_model_how_to_recover():
-    msgs = [_tr("t1", "Image: old.png", _img("A")),
-            _tr("t2", "Image: new.png", _img("B"))]
+    big = 4_000_000   # each alone exceeds the ceiling -> the older one drops
+    msgs = [_tr("t1", "Image: old.png", _img_b64(big)),
+            _tr("t2", "Image: new.png", _img_b64(big))]
     p = _provider()
     _, chat = p._split_system(msgs)
     out = p._trim_old_images(chat)

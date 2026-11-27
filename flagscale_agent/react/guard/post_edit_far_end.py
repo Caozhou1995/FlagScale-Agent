@@ -201,6 +201,190 @@ _RUN_TIMEOUT_SECONDS = 10
 _STDERR_TAIL_CHARS = 400
 
 
+# ── Shell write-target parsing (the SECOND half of effect detection) ───────
+# WHY this exists ALONGSIDE the workspace delta: the delta walks os.getcwd()
+# only. That is right for a deliverable in the task workspace, and wrong for
+# the shape an agent actually uses while it ITERATES — writing a generator
+# script to /tmp and running it. Measured: a task that spent 16 minutes
+# writing /tmp/*.py received ZERO post-edit reminders, and its first reminder
+# arrived only when the final deliverable was written with write_file. The
+# decision that was lost (a required field dropped from the generator) was
+# made during exactly that unwatched stretch.
+#
+# We deliberately do NOT add /tmp as another walk root: /tmp is shared and
+# full of other sessions' leftovers, so a recursive walk there would cost more
+# per tool call than the guard is worth. Instead we read the shell command
+# TEXT, extract the exact file paths it writes, and stat only those (O(1)
+# per path). Same principle as the delta — observe the effect, not the
+# write-shape — just scoped by what the command names.
+#
+# LIMIT, stated rather than papered over: this catches a command that writes
+# a file ITSELF (`cat > /tmp/x.py`, `tee`, `cp`, `mv`, a bare `> file`). It
+# does NOT catch a command that runs a program which writes a file internally
+# (`python /tmp/gen.py` where gen.py does open(...,'w')) — the shell never
+# names that target. Covering that would need syscall-level tracing, which is
+# a different mechanism and out of scope here.
+_WRITE_TARGET_MAX = 8          # cap per command; a bulk copy must stay cheap
+_SHELL_OPERATORS = frozenset({
+    "&&", "||", ";", "|", "&", "(", ")", "{", "}", ";;", "\n",
+})
+# A redirect target that is a device/fd is not a file we can stat or should
+# remind about. `2>&1`, `>&2`, `&>`, `/dev/null` are the common shapes.
+_NOT_A_FILE_PREFIXES = ("/dev/", "/proc/", "/sys/")
+
+
+def _parse_shell_write_targets(command: str) -> list[str]:
+    """Absolute paths a shell command writes directly, best-effort.
+
+    Handles: `cmd > f`, `cmd >> f`, `cmd 2> f`, `cat > f <<EOF`, `tee f`,
+    `tee -a f`, `cp src dst`, `mv src dst`, `install src dst`, and a leading
+    redirect (`> f cmd`). Returns absolute paths only (a relative target is
+    resolved against the guard's cwd, which is the task workspace).
+
+    Never raises: a malformed command yields an empty list.
+    """
+    if not command or not isinstance(command, str):
+        return []
+    try:
+        return _parse_shell_write_targets_inner(command)
+    except Exception:
+        return []
+
+
+def _parse_shell_write_targets_inner(command: str) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str | None) -> None:
+        if not raw or len(targets) >= _WRITE_TARGET_MAX:
+            return
+        t = raw.strip().strip("'\"")
+        if not t:
+            return
+        # fd duplication (`>&2`, `2>&1`) and devices are not files.
+        if t and (t[0].isdigit() or t[0] == "&"):
+            return
+        if t.startswith(_NOT_A_FILE_PREFIXES):
+            return
+        # `$(...)`, backticks, variables: we cannot resolve them here, and a
+        # wrong guess is worse than a miss (it would stat an unrelated path).
+        if any(c in t for c in "$`") or "=" in t.split("/")[0]:
+            return
+        ab = t if os.path.isabs(t) else os.path.join(os.getcwd(), t)
+        ab = os.path.normpath(ab)
+        if ab in seen:
+            return
+        seen.add(ab)
+        targets.append(ab)
+
+    # Pass 1 — redirection operators (`>`, `>>`, `2>`, `&>`) anywhere in the
+    # command. A quoted string can contain `>`; we accept that imprecision
+    # because a false target only costs one extra stat.
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if ch == ">":
+            # `>&2` / `>&-`: fd form, no file.
+            j = i + 1
+            if j < n and command[j] == ">":
+                j += 1
+            if j < n and command[j] == "&":
+                i = j + 1
+                continue
+            # `> f` / `>> f`
+            while j < n and command[j] in " \t":
+                j += 1
+            if j < n and command[j] in "\"'":
+                q = command[j]
+                k = command.find(q, j + 1)
+                if k > j:
+                    _add(command[j + 1:k])
+                    i = k + 1
+                    continue
+            k = j
+            while k < n and command[k] not in " \t\n;&|)":
+                k += 1
+            _add(command[j:k])
+            i = k
+            continue
+        i += 1
+
+    # Pass 2 — commands that take the target as a positional argument.
+    # Split into simple commands on shell operators, then look at argv[0].
+    buf: list[str] = []
+    segments: list[list[str]] = []
+    i, n = 0, len(command)
+    while i < n:
+        if command[i] in "\"'":
+            q = command[i]
+            k = command.find(q, i + 1)
+            if k == -1:
+                buf.append(command[i:])
+                break
+            buf.append(command[i:k + 1])
+            i = k + 1
+            continue
+        two = command[i:i + 2]
+        if two in ("&&", "||", ";;"):
+            segments.append("".join(buf).split())
+            buf = []
+            i += 2
+            continue
+        if command[i] in ";&|()\n{}":
+            segments.append("".join(buf).split())
+            buf = []
+            i += 1
+            continue
+        buf.append(command[i])
+        i += 1
+    segments.append("".join(buf).split())
+
+    for argv in segments:
+        argv = [a for a in argv if a and not a.startswith("#")]
+        if not argv:
+            continue
+        # Skip env assignments and leading keywords.
+        k = 0
+        while k < len(argv) and ("=" in argv[k] and not argv[k].startswith("-")
+                                 and "/" not in argv[k].split("=")[0]):
+            k += 1
+        if k >= len(argv):
+            continue
+        head = os.path.basename(argv[k]).lstrip("\\")
+        rest = argv[k + 1:]
+
+        if head in ("tee",):
+            for a in rest:
+                if not a.startswith("-"):
+                    _add(a)
+        elif head in ("cp", "mv", "install", "ln", "rsync"):
+            # Last non-flag arg is the destination.
+            pos = [a for a in rest if not a.startswith("-")]
+            if len(pos) >= 2:
+                _add(pos[-1])
+        elif head in ("dd",):
+            for a in rest:
+                if a.startswith("of="):
+                    _add(a[3:])
+
+    return targets
+
+
+def _sig(path: str):
+    """(mtime_ns, size) for a definitely-named path, or None if absent.
+
+    Used for the parsed shell targets, which are stat'd individually rather
+    than walked — so an unrelated huge directory can never slow the guard.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if not os.path.isfile(path):
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
 # ── Effect-based detection (shape-independent) ────────────────────────────
 # WHY: a program artifact can be written by ANY tool — write_file, edit_file,
 # a shell heredoc (`cat > x.py <<EOF`), a redirect (`> x.py`), `cp`, `tee`,
@@ -300,10 +484,15 @@ class PostEditFarEndGuard(Guard):
         # effect branch in check_post. None => no effect check available (the
         # rich path branch decides on its own).
         self._snap_before = None
+        # Signatures of the exact file paths the shell command NAMES as its
+        # write targets, captured in check_pre. The workspace walk cannot see
+        # a target outside cwd (/tmp scripts), so these are stat'd directly.
+        self._targets_before = None
         self._fired_paths = set()
 
     def reset_turn(self):
         self._snap_before = None
+        self._targets_before = None
         self._fired_paths = set()
 
     # Signals that a Python source touches a PROCESS BOUNDARY — subprocess launch
@@ -330,6 +519,17 @@ class PostEditFarEndGuard(Guard):
                 self._snap_before = _snapshot_roots()
             except Exception:
                 self._snap_before = None
+            # ALSO capture the exact paths a shell command names as write
+            # targets: the workspace walk above is blind to anything outside
+            # cwd, and iterating in /tmp is the normal shape of this work.
+            self._targets_before = {}
+            if ctx.tool_name == "shell":
+                try:
+                    cmd = (ctx.tool_args or {}).get("command", "")
+                    for t in _parse_shell_write_targets(cmd):
+                        self._targets_before[t] = _sig(t)
+                except Exception:
+                    self._targets_before = {}
         return None  # Inject-only: never blocks or escalates
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
@@ -349,18 +549,34 @@ class PostEditFarEndGuard(Guard):
     def _post_by_effect(self, ctx: GuardContext) -> GuardVerdict | None:
         before = self._snap_before
         self._snap_before = None  # consume: one effect check per pre-snapshot
-        if before is None:
+        targets_before = self._targets_before
+        self._targets_before = None  # consume alongside the snapshot
+        if before is None and targets_before is None:
             return None
         # A failed/blocked tool wrote nothing to verify.
         result = (ctx.tool_result or "")
         if not result or result.lstrip().startswith(
                 ("[BLOCKED BY GUARD]", "ERROR", "Error executing tool")):
             return None
-        try:
-            after = _snapshot_roots()
-        except Exception:
-            return None
-        changed = _changed_deliverables(before, after)
+        changed: list[str] = []
+        if before is not None:
+            try:
+                after = _snapshot_roots()
+                changed = _changed_deliverables(before, after)
+            except Exception:
+                changed = []
+        # Named shell targets outside cwd (/tmp scripts and the like). Each was
+        # stat'd by exact path in check_pre, so this costs O(#targets) — no
+        # walk, and an unrelated huge directory can never slow the guard.
+        named: list[str] = []
+        for t, sig_before in (targets_before or {}).items():
+            now = _sig(t)
+            if now is not None and now != sig_before:
+                named.append(t)
+        # Workspace-delta hits keep their program-first ordering; the named
+        # targets this walk could not see are appended so they are never lost.
+        seen = set(changed)
+        changed = changed + [t for t in named if t not in seen]
         fresh = [p for p in changed if p not in self._fired_paths]
         if not fresh:
             return None
@@ -464,6 +680,20 @@ class PostEditFarEndGuard(Guard):
         fire 0 times when the deliverable was assembled via a shell heredoc.
         """
         return [
+            "  · THINKING↔BYTES DIFF — MANDATORY, not optional. Before this "
+            "edit you had already decided WHAT it must contain: the constraints, "
+            "the required slots, the fields, the prohibition you wrote down. "
+            "Re-read the reasoning behind THIS write and list every decision it "
+            "made. Then diff that list against the bytes now on disk, item by "
+            "item. A decision that is present in your thinking but ABSENT from "
+            "the artifact is a DROPPED decision — and it is the failure mode "
+            "that looks most like success: your reasoning reads correct, so any "
+            "self-check that inherits the same omission still reads GREEN. That "
+            "green is your own assumption wearing a check's clothes. Do not "
+            "file it as a style nit, do not defer it, do not 'come back later'. "
+            "Put the missing item into the file NOW. If you cannot name the "
+            "exact line that satisfies each decision your thinking made, you "
+            "have NOT verified this write and it is not done.",
             "  · will the consumer actually read it at this exact path?",
             "  · FORM contract — form drift (format/units/naming/structure/source) "
             "fails SILENTLY while functional tests stay green: your paraphrase of "

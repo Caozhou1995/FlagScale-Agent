@@ -59,7 +59,17 @@ BOUND_WORD_PAT = re.compile(
     r"(value|bound|maximum|minimum|limit|margin|threshold|ceiling|cap)",
     re.IGNORECASE,
 )
-BARE_NUMBER_PAIR_PAT = re.compile(r"(?<![\w.])(\d{1,6})(?![\w.])")
+# BARE_NUMBER_PAIR_PAT excludes parenthesised ordinals — "(1)", "(2)", "(3)".
+# These are ladder/enumeration labels, not measured quantities, and they appear
+# on ANY line that walks a numbered procedure. Including them made the detector
+# fire on the prompt's own "stopping at the first rung that answers: (1) an
+# implementation already in the container ... (2) A library default or the
+# standard's worked example ..." — a ranked procedure, not a value replay.
+# The leak is a bare number pair, so an ordinal in brackets is excluded while a
+# bare "62.2" or "45000" is still counted.
+BARE_NUMBER_PAIR_PAT = re.compile(
+    r"(?<![\w.(])(\d{1,6})(?![\w.)])"
+)
 
 # Files whose strings are rendered into an agent message.
 AGENT_FACING = [

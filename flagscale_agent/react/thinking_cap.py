@@ -14,11 +14,24 @@
 
 """Runtime thinking-length cap.
 
-GLM's Anthropic-compat endpoint ignores the request-side ``thinking_budget``
-(served thinking runs to ``max_output_tokens``), so a single monolithic
-thinking block can burn ~20 minutes producing zero visible output. The fix is
-client-side: count thinking tokens as the stream is consumed, and abort the
-stream once the accumulated reasoning reaches ``config.thinking_budget``.
+The Anthropic-compat endpoint takes its served thinking budget from
+``max_tokens`` (measured: ``budget_tokens`` does not cap it), so a single
+monolithic thinking block can burn ~20 minutes producing zero visible output.
+The fix is client-side: count thinking tokens as the stream is consumed, and
+abort the stream once the accumulated reasoning reaches
+``config.thinking_budget``.
+
+Note the two DIFFERENT meanings of ``thinking_budget``, which is why this cap
+cannot be replaced by a request-side switch:
+  * request-side ``thinking:{"type":"disabled"}`` DOES stop the endpoint from
+    thinking at all (measured 2026-11-26: 3/3 text-only replies, and it
+    coexists with ``tool_choice`` — see
+    AnthropicProvider._degrade_for_toolchoice). That is the off switch, used
+    only as a last-resort degrade.
+  * ``config.thinking_budget`` here is NOT that switch: it is the CLIENT-side
+    abort threshold for a stream that is already thinking, i.e. "let it think
+    up to N tokens, then cut and converge". 0 disables the cap, so the model
+    still thinks (bounded by max_tokens).
 
 The kernel treats an aborted ("capped") reasoning-only response like any other
 reasoning-only response — it re-injects the full thinking text as a user

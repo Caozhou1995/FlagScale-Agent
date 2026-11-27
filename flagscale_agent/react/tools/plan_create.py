@@ -105,6 +105,30 @@ _RSI_STEP_ACCEPTANCE = [
 # separate guard, no chatty inject. Worked FIRST, before the agent's own steps.
 _FRAME_STEP_TITLE = "Frame (FlagScale-Agent Plan fixed template)"
 
+# The subset of _FRAME_STEP_ACCEPTANCE that must keep rendering AFTER the Frame
+# step closes. Frame is worked first and closed during planning, so anything
+# written only into its `acceptance` is gone by the time the agent acts — while
+# the agent's own forbidden list re-renders every turn. The forbidden-bound
+# clause below is precisely the rule that must outlive Frame: it is the thing
+# that keeps a self-authored prohibition subordinate to the task's authority.
+# Everything else stays cost-free at close (that slimming was deliberate).
+#
+# Matched by identity, not index: the list above is edited often, and an index
+# would silently start marking the wrong clause after the next insertion.
+_FRAME_STANDING_MARKERS = (
+    "A forbidden entry binds only what YOU control.",
+)
+
+
+def _frame_standing_acceptance() -> list:
+    """The Frame clauses that must survive the step's close (see markers above)."""
+    return [
+        item
+        for item in _FRAME_STEP_ACCEPTANCE
+        if any(item.startswith(m) for m in _FRAME_STANDING_MARKERS)
+    ]
+
+
 _FRAME_STEP_ACCEPTANCE = [
     "Negative constraints (forbidden list): write 2-5 entries {action, why, instead} "
     "in the SAME plan_create call. The harness re-renders them at the top of your plan "
@@ -113,9 +137,23 @@ _FRAME_STEP_ACCEPTANCE = [
     "specific to this task ('do not re-run the same command with a bigger timeout — read "
     "the partial output and change the approach'), not virtues ('be careful'). Append "
     "more later with plan_update(action='add_forbidden').",
+    "A forbidden entry binds only what YOU control. It is a note to yourself, subordinate "
+    "to the task text and to every named authority: it can never make an element the "
+    "authority requires 'forbidden', and never converts YOUR OWN unverified guess into a "
+    "prohibition ('do not add X until I can verify a parser tolerates X' forbids the wrong "
+    "thing — what is unverified is the parser, not X). Any entry whose `why` is your own "
+    "uncertainty must read 'do not ship X *unlabelled*', never 'do not ship X'. When a "
+    "forbidden entry and a requirement collide, the requirement wins and the entry is "
+    "rewritten now — a self-authored list that silently overrides the task is the failure "
+    "this rule prevents.",
     "FRAMING. State in one line: (a) the problem CLASS and its standard method — naming "
     "the class hands you the method AND its failure modes at once, and reaching for a "
-    "sweep or brute-force enumeration is the tell that the class was never identified; "
+    "sweep or brute-force enumeration is the tell that the class was never identified. "
+    "If you can name the GAP but not the METHOD, that reading is the next action, not a "
+    "plan line: fetch the method NOW (web_fetch the standard, vendor or reference source; "
+    "load_knowledge; read a reference implementation) — 'I would look it up' is a bet you "
+    "can collect in one call, and a diagnosed gap filed as a note is the delivery you did "
+    "not make; "
     "(b) what observation would prove your answer wrong; (c) which rival explanations you "
     "must exclude; (d) how expensive being wrong is here, which sets verification "
     "strength. Then put 2-3 genuinely DIFFERENT framings of the task on the table — a "
@@ -373,6 +411,11 @@ class PlanCreateTool(Tool):
         normalized.insert(0, {
             "title": _FRAME_STEP_TITLE,
             "acceptance": list(_FRAME_STEP_ACCEPTANCE),
+            # The subset that must outlive this step's close — Frame is worked
+            # first, so rules here would otherwise be retired before the agent
+            # acts on them. Rendering cost stays proportional to this subset,
+            # not to all seven clauses.
+            "standing_acceptance": _frame_standing_acceptance(),
         })
         normalized.append({
             "title": _REVIEW_STEP_TITLE,

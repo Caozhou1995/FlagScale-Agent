@@ -62,6 +62,95 @@ class OpenAIProvider(LLMProvider):
                 kwargs["tool_choice"] = "required"
         return kwargs
 
+    # ── Recovery for thinking-vs-tool_choice rejections ──
+    # Some gateways (measured: tokenhub.baai.ac.cn, 2026-11-26) answer a
+    # thinking+tool_choice combination with 400 "Thinking mode does not support
+    # this tool_choice", and reject the STRING form with 500 "invalid Claude
+    # tool_choice: cannot unmarshal string into Go value of type map" — i.e.
+    # they only accept the Anthropic dict form. Either way the request is
+    # refused and, before this, the whole turn died with it.
+    _MAX_TOOLCHOICE_RETRIES = 3
+
+    def _is_toolchoice_rejection(self, exc) -> bool:
+        try:
+            text = str(exc).lower()
+        except Exception:
+            return False
+        if "tool_choice" not in text:
+            return False
+        return ("does not support" in text or "not support" in text
+                or "unsupported" in text or "not allowed" in text
+                or "invalid" in text)
+
+    def _is_generic_retryable_rejection(self, exc) -> bool:
+        """An unattributable 4xx from this gateway.
+
+        Same measured family as the Anthropic side (2026-11-26): a body naming no
+        field at all ("rejected by an internal MaaS component ... <code>
+        400001</code>") arrives for payloads the gateway accepts moments later,
+        so it describes the UPSTREAM the balancer picked, not our bytes. The
+        OpenAI SDK exposes no BadRequestError subclass here, so classify by
+        status + text. Context-limit stays excluded: it needs eviction.
+        """
+        from flagscale_agent.react.retry import (
+            _extract_status, _is_context_limit_error)
+        status = _extract_status(exc)
+        try:
+            text = str(exc).lower()
+        except Exception:
+            return False
+        if status not in (400, 422) and "error code: 400" not in text:
+            return False
+        if _is_context_limit_error(exc):
+            return False
+        if "tool_use" in text and "tool_result" in text:
+            return False
+        return True
+
+    def _degrade_generic(self, kwargs, stage):
+        """Strip one decorative feature per stage; the conversation survives."""
+        degraded = dict(kwargs)
+        if stage >= 1:
+            degraded.pop("stream_options", None)
+        if stage >= 2:
+            degraded.pop("temperature", None)
+            degraded.pop("tool_choice", None)
+        if stage >= 3:
+            degraded.pop("tools", None)
+        return degraded
+
+    def _create_with_generic_recovery(self, kwargs):
+        last = None
+        for attempt in range(1, self._MAX_TOOLCHOICE_RETRIES + 1):
+            import sys as _sys
+            _sys.stderr.write(
+                "[llm-degrade] gateway rejected the request with an "
+                f"unattributable 4xx; retry {attempt} with a plainer body\n")
+            _sys.stderr.flush()
+            try:
+                return self._client.chat.completions.create(
+                    **self._degrade_generic(kwargs, attempt))
+            except Exception as exc:
+                if self._is_generic_retryable_rejection(exc):
+                    last = exc
+                    continue
+                raise
+        raise last
+
+    def _drop_tool_choice(self, kwargs):
+        degraded = dict(kwargs)
+        degraded.pop("tool_choice", None)
+        return degraded
+
+    def _note_toolchoice_degrade(self, attempt: int) -> None:
+        """This provider has only the one degrade available: there is no
+        extended-thinking kwarg to disable here, so the constraint goes."""
+        import sys as _sys
+        _sys.stderr.write(
+            "[llm-degrade] gateway rejected tool_choice; retry "
+            f"{attempt} without it — channel enforcement is OFF for this call\n")
+        _sys.stderr.flush()
+
     def chat(self, messages: List[Dict[str, Any]], tools: List[dict],
              force_tool: bool = False) -> Dict[str, Any]:
         kwargs = self._build_kwargs(messages, tools, force_tool=force_tool)
@@ -69,7 +158,12 @@ class OpenAIProvider(LLMProvider):
         try:
             response = self._client.chat.completions.create(**kwargs)
         except Exception as e:
-            return {"content": f"[PROVIDER_ERROR] {type(e).__name__}: {e}", "tool_calls": None}
+            if self._is_toolchoice_rejection(e):
+                response = self._create_with_toolchoice_recovery(kwargs)
+            elif self._is_generic_retryable_rejection(e):
+                response = self._create_with_generic_recovery(kwargs)
+            else:
+                return {"content": f"[PROVIDER_ERROR] {type(e).__name__}: {e}", "tool_calls": None}
 
         choice = response.choices[0]
         message = choice.message
@@ -86,11 +180,39 @@ class OpenAIProvider(LLMProvider):
 
         return {"content": message.content, "tool_calls": tool_calls}
 
+    def _create_with_toolchoice_recovery(self, kwargs):
+        """Re-issue after a tool_choice rejection, that field removed.
+
+        The first retry already carries the shape no gateway can reject for
+        tool_choice (there is no tool_choice to object to), so this is a
+        degradation, not a coin-flip resample.
+        """
+        last = None
+        for attempt in range(1, self._MAX_TOOLCHOICE_RETRIES + 1):
+            self._note_toolchoice_degrade(attempt)
+            try:
+                return self._client.chat.completions.create(
+                    **self._drop_tool_choice(kwargs))
+            except Exception as exc:
+                if self._is_toolchoice_rejection(exc):
+                    last = exc
+                    continue
+                raise
+        raise last
+
     def chat_stream(self, messages: List[Dict[str, Any]], tools: List[dict],
                     force_tool: bool = False) -> Iterator[Dict[str, Any]]:
         kwargs = self._build_kwargs(messages, tools, stream=True, force_tool=force_tool)
 
-        stream = self._client.chat.completions.create(**kwargs)
+        try:
+            stream = self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if self._is_toolchoice_rejection(exc):
+                stream = self._create_with_toolchoice_recovery(kwargs)
+            elif self._is_generic_retryable_rejection(exc):
+                stream = self._create_with_generic_recovery(kwargs)
+            else:
+                raise
         seen_tool_ids = set()
         had_reasoning = False
         for chunk in stream:

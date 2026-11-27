@@ -2958,6 +2958,18 @@ class WorkerAgent:
                     line += f"  Evidence: ✓ {first}"
                     if len(ev) > 1:
                         line += f" (+{len(ev) - 1} more)"
+                # Standing rules must outlive the step that installed them: the
+                # Frame step closes during planning, Review/RSI at the end, and a
+                # rule written into their acceptance used to vanish at that
+                # moment while the agent's self-authored forbidden list kept
+                # re-rendering every turn — the self-authored ban then outlived
+                # the constraint meant to bound it. Mirrors plan.py's
+                # _closed_step_line; both sites are pinned by
+                # tests/test_standing_acceptance_survives_close.py.
+                from flagscale_agent.react.plan import _norm_standing
+
+                for item in _norm_standing(s.get("standing_acceptance")):
+                    line += f"\n      ⊹ {item}"
             else:
                 line = f"  [{icon}] Step {s.get('id', '?')}: {title}"
                 if notes:
@@ -3678,10 +3690,29 @@ class WorkerAgent:
                     wait = 2 ** _stream_attempt
                     display.warn(f"Stream interrupted, retrying in {wait}s...")
                     time.sleep(wait)
-                    stream = retry_with_backoff(
-                        lambda: self.provider.chat_stream(messages, schemas),
-                        max_retries=3,
-                    )
+                    # Rebuild with the SAME call shape. Dropping force_tool here
+                    # silently removed the channel constraint on every retried
+                    # stream -- the same measured failure family as the 2-arg
+                    # lambda in kernel.py (flag set, request still prose-only).
+                    # A 2-arg test double still degrades rather than crashing.
+                    if force_tool:
+                        try:
+                            stream = retry_with_backoff(
+                                lambda: self.provider.chat_stream(
+                                    messages, schemas, force_tool=True),
+                                max_retries=3,
+                            )
+                        except TypeError:
+                            stream = retry_with_backoff(
+                                lambda: self.provider.chat_stream(
+                                    messages, schemas),
+                                max_retries=3,
+                            )
+                    else:
+                        stream = retry_with_backoff(
+                            lambda: self.provider.chat_stream(messages, schemas),
+                            max_retries=3,
+                        )
                     continue
                 raise
 

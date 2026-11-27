@@ -74,6 +74,6 @@ def test_clause_carries_no_task_literal():
 def test_prompt_stays_within_budget():
     # Bound to the ratchet symbol, not a copied literal: two copies of one
     # threshold drift (measured 2026-11-23: this literal still said 45000 after
-    # the user raised PROMPT_BUDGET to 50000, reddening a green budget).
+    # the user raised PROMPT_BUDGET (50000, then 51000 for E9), reddening a green budget).
     from flagscale_agent.react.prompt import prompt_len, PROMPT_BUDGET
     assert prompt_len() <= PROMPT_BUDGET, f"{prompt_len()} chars vs budget {PROMPT_BUDGET}"

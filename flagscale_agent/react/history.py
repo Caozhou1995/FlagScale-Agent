@@ -113,14 +113,88 @@ def _has_tool_use(msg: Dict[str, Any]) -> bool:
     return False
 
 
+#: Injected as the tool_result content when an assistant tool_use never received
+#: one. MEASURED (2026-11-27, official api.deepseek.com/anthropic): a tool_use
+#: whose immediately-following message is not a tool_result makes EVERY later
+#: request fail with HTTP 400
+#:   "messages.N: `tool_use` ids were found without `tool_result` blocks
+#:    immediately after: call_XX. Each `tool_use` block must have a
+#:    corresponding `tool_result` block in the next message."
+#: and it never self-heals, because the orphan is replayed with the history.
+#: Reproduction is a user interruption mid-tool: the turn is abandoned before the
+#: result is appended, leaving a bare tool_use. Anthropic's API documents the
+#: remedy as supplying the missing result, NOT deleting the block (the block's
+#: message also carries the turn's real text and thinking).
+_ORPHAN_TOOL_USE_RESULT = (
+    "Tool execution was interrupted before it returned a result "
+    "(the user interjected, or the turn was abandoned). No output was produced; "
+    "re-run the tool if you still need this result."
+)
+
+
+def _tool_use_ids(msg: Dict[str, Any]) -> List[str]:
+    """IDs of tool_use blocks in an assistant message (Anthropic shape only)."""
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return []
+    return [b.get("id") for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")]
+
+
+def _synthesize_missing_tool_results(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Give every tool_use lacking an adjacent tool_result a synthesized one.
+
+    Anthropic requires each ``tool_use`` to be answered in the IMMEDIATELY next
+    message. ``_validate_tool_pairs`` historically only pruned the reverse
+    orphan (a tool_result with no tool_use); the forward orphan — created when a
+    turn is interrupted before the result is appended — was left in place and
+    poisoned every subsequent request. This repairs that direction.
+
+    Insertion, not deletion: the assistant message keeps its text and thinking,
+    and each unanswered id gets its own result block (the whole missing set is
+    folded into one user message so role alternation still holds).
+    """
+    out: List[Dict[str, Any]] = []
+    for idx, msg in enumerate(messages):
+        out.append(msg)
+        if msg.get("role") != "assistant":
+            continue
+        pending = _tool_use_ids(msg)
+        if not pending:
+            continue
+        # Which ids are already answered by the message that follows this one?
+        answered = set()
+        if idx + 1 < len(messages):
+            nxt_msg = messages[idx + 1]
+            if nxt_msg.get("role") == "user" and isinstance(nxt_msg.get("content"), list):
+                for b in nxt_msg["content"]:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        answered.add(b.get("tool_use_id"))
+        missing = [tid for tid in pending if tid not in answered]
+        if not missing:
+            continue
+        out.append({
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tid,
+                         "content": _ORPHAN_TOOL_USE_RESULT}
+                        for tid in missing],
+        })
+    return out
+
+
 def _validate_tool_pairs(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Ensure valid conversation structure:
+    0. Every tool_use with no adjacent tool_result gets a synthesized result
+       (official Anthropic endpoints 400 on the forward orphan)
     1. Every tool_result has a preceding tool_use (remove orphaned ones)
     2. Merge consecutive user messages (required by Anthropic API)
     """
+    # Step 0: Repair forward orphans (tool_use without a tool_result).
+    repaired = _synthesize_missing_tool_results(messages)
+
     # Step 1: Remove orphaned tool results
     result = []
-    for i, msg in enumerate(messages):
+    for i, msg in enumerate(repaired):
         if _is_tool_result(msg):
             # Check if there's a matching tool_call_id in history
             tool_call_id = msg.get("tool_call_id", "")

@@ -88,7 +88,10 @@ def test_message_states_a_failed_acquisition_removes_route_not_requirement():
     m = _MESSAGE
     assert "a failed acquisition removes the ROUTE, not the REQUIREMENT".lower() \
         in m.lower() or "removes the ROUTE, not the REQUIREMENT" in m
-    assert "the routes you have not tried yet" in m.lower()
+    # Anchor retargeted 2026-11-27: the message still REQUIRES switching to
+    # untried routes; its current bytes say "a few genuinely DIFFERENT routes,
+    # not the same one repeated" (bound) + "SWITCH AT LEAST THREE AXES".
+    assert "a few genuinely different routes" in m.lower()
 
 
 def test_message_covers_the_four_generic_routes():
@@ -97,12 +100,16 @@ def test_message_covers_the_four_generic_routes():
     assert "the client itself may be absent or wrong" in m
     assert "says nothing about the network" in m
     # (b) same content at more than one address
-    assert "MORE THAN ONE address" in m
-    assert "do not generalise from one address refusing you" in m
+    # Anchor retargeted 2026-11-27: same claim, current bytes.
+    assert "the same content usually lives at more than one address" in m
+    # Anchor retargeted 2026-11-27: same claim, current bytes.
+    assert "Do not let one refused route become the premise" in m
     # (c) the source may be reachable only indirectly
-    assert "reachable only indirectly" in m
+    # Anchor retargeted 2026-11-27: same claim (provenance route).
+    assert "usually ALSO published by a party that is not the original publisher" in m
     # (d) it may already be present locally
-    assert "may already be present locally" in m
+    # Anchor retargeted 2026-11-27: same claim (local route).
+    assert "may already be present: in the image, in a mounted cache" in m
 
 
 def test_message_forbids_dropping_the_requirement_after_all_routes_fail():
@@ -155,9 +162,10 @@ def test_new_clauses_name_no_task_or_benchmark_value():
 # ── 4. The content assertions must be able to go red ────────────────────────
 def test_content_check_can_go_red():
     m = _MESSAGE
-    stripped = m.replace("the routes you have not tried yet", "")
-    assert "the routes you have not tried yet" in m
-    assert "the routes you have not tried yet" not in stripped
+    probe = "a few genuinely different routes"
+    assert probe in m.lower()
+    stripped = m.lower().replace(probe, "")
+    assert probe not in stripped
 
     stripped2 = m.replace("record it as UNCONSULTED", "")
     assert "record it as UNCONSULTED" in m

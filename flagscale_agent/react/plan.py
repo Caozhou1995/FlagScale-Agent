@@ -124,6 +124,36 @@ def _id_list(ids) -> str:
 _MAX_FORBIDDEN = 8
 
 
+def _norm_standing(value) -> List[str]:
+    """Coerce `standing_acceptance` to a list of non-empty strings.
+
+    Whose shape: the subset of a step's acceptance that must keep rendering
+    AFTER the step closes. Distinct from `acceptance` (which still drops at
+    close) so the per-turn cost stays proportional to what must stay live
+    rather than to everything ever written.
+
+    Never raises: this key round-trips through YAML and arrives from an LLM's
+    tool call, so junk must degrade to "nothing standing" (the old behaviour)
+    rather than break plan creation. Bare strings are accepted as one entry so
+    a caller that writes the key as a scalar is not silently ignored.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: List[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+
 def _normalize_forbidden(items) -> List[dict]:
     """Normalise the plan's negative constraints to ``[{action, why, instead}]``.
 
@@ -604,6 +634,19 @@ class TaskPlan:
                             [i - 1] if i > 1 else [],
                         ),
                         "acceptance": step_input.get("acceptance", []),
+                        # STANDING acceptance: the subset of `acceptance` that must
+                        # keep rendering AFTER the step closes. A step's acceptance
+                        # is dropped at close (that is what keeps a live plan small),
+                        # which silently retires any rule a fixed step installs for
+                        # the REST of the run — the Frame step closes during
+                        # planning, so a rule written there was gone by the time the
+                        # agent acted on it. Entries listed here survive the close;
+                        # everything else still drops. Explicit whitelist below means
+                        # a key omitted here is silently discarded, so this must stay
+                        # in sync with the renderers.
+                        "standing_acceptance": _norm_standing(
+                            step_input.get("standing_acceptance")
+                        ),
                         "verification": [],
                     }
                 else:
@@ -1550,6 +1593,14 @@ class TaskPlan:
             lines.append("")
             return lines
         lines.append("Forbidden list — written by me for THIS task, re-rendered every turn:")
+        lines.append(
+            "   BOUND: this list is a note to MYSELF, subordinate to the task text and "
+            "to every named authority. It can never make an element the authority "
+            "requires 'forbidden', and it never turns MY OWN unverified guess into a "
+            "prohibition — when an entry and a requirement collide, the requirement "
+            "wins and I rewrite the entry. An entry resting on my own uncertainty must "
+            "read 'do not ship X unlabelled', never 'do not ship X'."
+        )
         for i, e in enumerate(items, 1):
             seg = f"   {i}. ✗ {e.get('action', '')}"
             if e.get("why"):
@@ -1635,6 +1686,14 @@ class TaskPlan:
         disk via plan_status(step_id=...); reprinting it every turn is what
         made a 32-step plan cost 199KB per turn. Evidence is NOT droppable:
         it is the only record of what was checked before the close.
+
+        STANDING acceptance is the one exception, and it is a different thing
+        from the dropped `acceptance`: an entry the author explicitly marked
+        standing is a rule that must outlive this step, so it renders (one
+        compact `⊹` line each) even here. Without it, a constraint installed by
+        a fixed step — Frame closes during planning, Review/RSI at the end —
+        disappears the moment the step does, which is how a self-authored
+        prohibition ends up outliving the rule that was supposed to bound it.
         """
         icon = STATUS_ICONS.get(s["status"], " ")
         line = f"  {s['id']}. [{icon}] {s['title']}"
@@ -1660,6 +1719,14 @@ class TaskPlan:
             line += f"  Evidence: ✓ {first}"
             if len(verification) > 1:
                 line += f" (+{len(verification) - 1} more)"
+        # Standing rules ride this string. NOTE: agent.py's per-turn
+        # _build_plan_context keeps its OWN inline copy of the closed-step line
+        # (it does not call this function), so the same append exists there too
+        # — one edit here would leave the live per-turn surface unfixed, which
+        # is precisely how the original bug survived. Both sites are pinned by
+        # tests/test_standing_acceptance_survives_close.py.
+        for item in _norm_standing(s.get("standing_acceptance")):
+            line += f"\n     ⊹ {item}"
         return line
 
     def _format_plan(self, plan: dict, compact: bool = True) -> str:

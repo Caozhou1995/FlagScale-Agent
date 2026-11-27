@@ -32,8 +32,10 @@ deleting the copy turns the corresponding test red -- that ablation is the only
 thing that makes this file evidence rather than decoration.
 """
 
+import pathlib
 import re
 
+from flagscale_agent.react import prompt as prompt_mod
 from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC, prompt_len, PROMPT_BUDGET
 
 # The static prompt is wrapped across source lines; normalise whitespace before
@@ -115,10 +117,30 @@ def test_e8_does_not_swallow_the_ranking_it_lives_in():
         assert head in FLAT, f"ranked entry lost while seating E8: {head!r}"
 
 
-def test_e8_was_seated_without_raising_the_budget():
-    """E8 came out of the fixed envelope; the ratchet was not raised to fit it."""
-    assert PROMPT_BUDGET == 50_000, (
-        "raising the budget needs a USER RULING (see prompt.py); a clause must be "
-        "seated by compressing existing prose, not by growing the envelope"
+def test_budget_rise_is_a_recorded_user_ruling():
+    """The envelope only moves on a RECORDED user ruling.
+
+    This used to pin a literal (50000, then 51000), which turned every legitimate
+    raise into a red test and — worse — made a genuine deficit look like a stale
+    anchor.  What the ratchet actually protects is the RULE, not the number: a
+    raise must leave a quoted user ruling beside the constant.  So assert the
+    rule and, separately, that the constant is not below the highest floor any
+    earlier ruling established (45000), then cross-check that the ruling text is
+    really there.
+    """
+    assert PROMPT_BUDGET >= 45_000, (
+        "the envelope was silently lowered below a previously recorded ruling"
+    )
+    src = pathlib.Path(prompt_mod.__file__).read_text(encoding="utf-8")
+    head = src[: src.index("PROMPT_BUDGET =")]
+    assert "USER RULING" in head, (
+        "raising the budget needs a USER RULING recorded beside the constant "
+        "(see prompt.py); a clause must be seated by compressing existing "
+        "prose, not by growing the envelope"
+    )
+    # Every raise names its own date and quote: an unrecorded raise and a typo
+    # are indistinguishable once the number lives alone on one line.
+    assert head.count("USER RULING") >= 3, (
+        "each raise must be individually recorded with its own quote"
     )
     assert prompt_len() <= PROMPT_BUDGET

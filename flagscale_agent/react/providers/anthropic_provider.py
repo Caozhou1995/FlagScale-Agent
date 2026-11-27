@@ -23,6 +23,45 @@ import anthropic
 from flagscale_agent.react.providers.base import LLMProvider
 
 
+def _reply_has_tool_use(reply) -> bool:
+    """True when a Messages API reply carries at least one `tool_use` block.
+
+    The degraded shape (stage 1) drops `tool_choice`, so the model is no longer
+    forced to call a tool. Measured on api.deepseek.com/anthropic it still does
+    when a tool schema is present — but the caller's channel constraint must
+    not depend on that holding, so the recovery path checks instead of trusting
+    it. Tolerant by design: a test double or an unexpected reply shape reads as
+    "no tool_use", which sends the path to the shape that restores forcing.
+    """
+    try:
+        blocks = getattr(reply, "content", None) or []
+        return any(getattr(b, "type", None) == "tool_use" for b in blocks)
+    except Exception:
+        return False
+
+
+def _image_b64_len(block) -> int:
+    """Base64 payload length of an Anthropic image block; 0 when unreadable.
+
+    The transcript budget is metered in these characters because that is what
+    the request actually carries — a cropped `region` view is a few KB while a
+    full-size photo is a few MB, so a count-of-blocks budget prices them
+    identically and drops the cheap ones for no size benefit. Tolerant by
+    design: an unexpected shape reads as 0 bytes, which can only ever KEEP an
+    image (never drop one we could have afforded).
+    """
+    try:
+        if not isinstance(block, dict):
+            return 0
+        src = block.get("source")
+        if isinstance(src, dict):
+            data = src.get("data")
+            if isinstance(data, str):
+                return len(data)
+        return 0
+    except Exception:
+        return 0
+
 
 class AnthropicProvider(LLMProvider):
     schema_format = "anthropic"
@@ -72,10 +111,22 @@ class AnthropicProvider(LLMProvider):
     # so N historical read_image results re-ship N images each call. Two 3MB
     # base64 images (~4MB encoded each) alone approach the gateway's 10MB
     # request limit and kill the session mid-run (measured: video-processing
-    # trial died with HTTP 413 "request body too large" at turn 1). The model
-    # needs the most recent image; older ones are replaceable — the tool text
-    # still carries the measured facts, and the file remains on disk to re-read.
-    MAX_REQUEST_IMAGE_BLOCKS = 1
+    # trial died with HTTP 413 "request body too large" at turn 1).
+    #
+    # MEASURED BUG — the budget must count BYTES, not blocks (2026-11-27):
+    # this was `MAX_REQUEST_IMAGE_BLOCKS = 1`, i.e. it silently priced a 5 KB
+    # crop the same as a 3.5 MB photo. read_image caps raw at 3.5 MB
+    # (~4.67M base64 chars), but a cropped `region` view is typically a few KB.
+    # gcode-to-text died on exactly this: 49 read_image calls, each crop ~5 KB,
+    # and every earlier crop was replaced by a placeholder — so the model could
+    # never hold "left half" and "right half" at once, and it oscillated 68
+    # times between the two wrong readings of the same glyph ('0'/'o') before
+    # guessing wrong. Its own trace names the mechanism: "the earlier images get
+    # dropped … I claimed readings without seeing". Counting bytes keeps the
+    # 413 defence intact (one maxed-out image still exhausts the budget: 4.67M
+    # chars > 6M/2) while letting any number of small crops coexist (32 × 5 KB
+    # = 0.16 MB, three orders of magnitude under the ceiling).
+    MAX_REQUEST_IMAGE_BYTES = 6_000_000   # base64 chars of image data per request
 
     # Some Anthropic-compatible gateways accept an image block only when it sits
     # directly in a *user* message's content list, and silently drop image blocks
@@ -168,8 +219,11 @@ class AnthropicProvider(LLMProvider):
                 break
         if last_img_msg is None:
             return chat_messages
-        kept = 0
-        budget = self.MAX_REQUEST_IMAGE_BLOCKS
+        # Byte-metered budget, newest image first. `remaining` starts at the
+        # ceiling and is charged the base64 length of every image we KEEP, so a
+        # few-KB crop costs a few KB rather than a whole slot.
+        remaining = self.MAX_REQUEST_IMAGE_BYTES
+        seen_image = False
         for msg in reversed(chat_messages):
             content = msg.get("content")
             if not isinstance(content, list):
@@ -182,38 +236,48 @@ class AnthropicProvider(LLMProvider):
                     new_inner = []
                     for inner in block["content"]:
                         is_img = isinstance(inner, dict) and inner.get("type") == "image"
-                        if is_img and (msg is not last_img_msg or kept >= budget):
-                            new_inner.append({
-                                "type": "text",
-                                "text": ("[image from an earlier read_image dropped to "
-                                         "stay under the request size limit; the tool "
-                                         "text above still carries what it showed — "
-                                         "re-run read_image on the same path to view "
-                                         "it again]"),
-                            })
-                            changed = True
-                        else:
-                            if is_img:
-                                kept += 1
-                            new_inner.append(inner)
+                        if is_img:
+                            size = _image_b64_len(inner)
+                            # The newest image is kept unconditionally: a
+                            # maxed-out photo must never leave the model with
+                            # zero pixels to reason about.
+                            fits = (not seen_image) or size <= remaining
+                            seen_image = True
+                            if not fits:
+                                new_inner.append({
+                                    "type": "text",
+                                    "text": ("[image from an earlier read_image dropped to "
+                                             "stay under the request size limit; the tool "
+                                             "text above still carries what it showed — "
+                                             "re-run read_image on the same path to view "
+                                             "it again]"),
+                                })
+                                changed = True
+                                continue
+                            remaining -= size
+                        new_inner.append(inner)
                     if changed:
                         block = dict(block)
                         block["content"] = new_inner
                     new_blocks.append(block)
-                elif isinstance(block, dict) and block.get("type") == "image" \
-                        and (msg is not last_img_msg or kept >= budget):
-                    new_blocks.append({
-                        "type": "text",
-                        "text": ("[image from an earlier read_image dropped to "
-                                 "stay under the request size limit; the tool "
-                                 "text above still carries what it showed — "
-                                 "re-run read_image on the same path to view "
-                                 "it again]"),
-                    })
-                    changed = True
+                elif isinstance(block, dict) and block.get("type") == "image":
+                    size = _image_b64_len(block)
+                    fits = (not seen_image) or size <= remaining
+                    seen_image = True
+                    if not fits:
+                        new_blocks.append({
+                            "type": "text",
+                            "text": ("[image from an earlier read_image dropped to "
+                                     "stay under the request size limit; the tool "
+                                     "text above still carries what it showed — "
+                                     "re-run read_image on the same path to view "
+                                     "it again]"),
+                        })
+                        changed = True
+                        continue
+                    remaining -= size
+                    new_blocks.append(block)
                 else:
-                    if isinstance(block, dict) and block.get("type") == "image":
-                        kept += 1
                     new_blocks.append(block)
             if changed:
                 msg["content"] = new_blocks
@@ -317,6 +381,102 @@ class AnthropicProvider(LLMProvider):
         return (self._REASONING_REPLAY_MARKER in text
                 and "must be passed back" in text)
 
+    # ── "Thinking mode does not support this tool_choice" ──
+    # Measured 2026-11-26 (write-compressor__F6LwKJb): the kernel's endgame
+    # window armed force_tool, so the request carried tool_choice={"type":"any"};
+    # the gateway answered HTTP 400 "'Thinking mode does not support this
+    # tool_choice'" and the turn DIED — 660.7s of work, ~4min of budget left,
+    # reward 0. The rejection is not about our bytes being malformed: 44 probes
+    # of the identical shape (thinking on, tool_choice any, stream, temp 0,
+    # thinking-bearing history) all returned 200 against the same gateway. Only
+    # SOME upstreams behind the balancer are reasoner deployments that forbid
+    # the combination — the same per-request coin flip already documented for
+    # the reasoning_replay rejection above. So no "probe first, then decide"
+    # scheme can help (a probe lands on a healthy upstream and proves nothing);
+    # the only routing-independent recovery is to DEGRADE THIS CALL and retry.
+    #
+    # What the degradation must be: drop tool_choice, keep everything else.
+    # Dropping thinking is not available — the endpoint forces thinking on
+    # server-side and the provider already omits that kwarg under force_tool,
+    # which is exactly why this fired with no `thinking` field in the request.
+    _TOOLCHOICE_THINKING_MARKER = "tool_choice"
+
+    def _is_toolchoice_thinking_error(self, exc) -> bool:
+        """True for the gateway's thinking-vs-tool_choice rejection only."""
+        try:
+            text = str(exc).lower()
+        except Exception:
+            return False
+        if self._TOOLCHOICE_THINKING_MARKER not in text:
+            return False
+        mentions_thinking = "thinking" in text or "reasoning" in text
+        rejects = ("does not support" in text or "not support" in text
+                   or "unsupported" in text or "not allowed" in text)
+        return mentions_thinking and rejects
+
+    def _is_generic_retryable_400(self, exc) -> bool:
+        """A 400 we cannot attribute from its text — still worth one reshaping.
+
+        Measured 2026-11-26, two DIFFERENT opaque bodies from the same gateway
+        on otherwise-accepted payloads, each of which killed a turn outright:
+
+            {'error': {'type': '400001', 'message': 'The request is invalid: the
+             request was rejected by an internal MaaS component. Please check
+             the request body, required fields, and request format. ...'}}
+
+        That message names no field. 22 probes over the payload features our
+        provider actually adds (max_tokens 1k..200k, cache_control on system /
+        messages, synthesized empty thinking blocks, text-only assistant turns,
+        inline temperature) all returned 200, so the rejection is a property of
+        the UPSTREAM the balancer picked, not of a specific field — the same
+        conclusion already measured for the reasoning_content replay rule.
+
+        A 400 that arrives from an unattributable upstream is therefore NOT a
+        verdict on our bytes, and treating it as permanent (which is what
+        raised "LLM call failed" and ended the turn with minutes left on the
+        clock) is the defect this predicate exists to close. Context-limit
+        errors are excluded: those need eviction, not a resend.
+        """
+        from flagscale_agent.react.retry import _extract_status
+        if _extract_status(exc) != 400:
+            # Some SDK/proxy paths only put the code in the message text.
+            try:
+                text = str(exc)
+            except Exception:
+                return False
+            if "error code: 400" not in text.lower():
+                return False
+        try:
+            text_l = str(exc).lower()
+        except Exception:
+            return False
+        from flagscale_agent.react.retry import _is_context_limit_error
+        if _is_context_limit_error(exc):
+            return False
+        # A malformed-tool-pairing 400 is deterministic and reshapeless: the
+        # history itself is wrong, and resending cannot repair it.
+        if "tool_use" in text_l and "tool_result" in text_l:
+            return False
+        # NOT every 400 is unattributable. A 400 that names a cause we cannot
+        # fix by reshaping the body is a verdict, and resending it just burns
+        # the turn's remaining wall clock (4 identical retries = 4 round trips
+        # of latency-for-nothing). Measured 2026-11-26 with a held-out vector
+        # set: "invalid api key", "insufficient balance" and "jinja template
+        # error" were all classified retryable by the version of this predicate
+        # that returned True for every non-context-limit 400. These markers are
+        # the credential / account / template / hard-limit classes: reshapeless
+        # by construction, because none of them is a property of the payload
+        # features the degrade stages strip (cache_control, temperature,
+        # thinking, tool_choice).
+        for fatal in ("invalid api key", "invalid x-api-key", "api key",
+                      "authentication", "unauthorized", "permission",
+                      "insufficient", "balance", "quota", "billing",
+                      "not found", "does not exist", "unknown model",
+                      "template", "jinja"):
+            if fatal in text_l:
+                return False
+        return True
+
     def _strip_all_thinking(self, chat_messages):
         """Degraded payload: every assistant turn carries text, no reasoning.
 
@@ -372,15 +532,15 @@ class AnthropicProvider(LLMProvider):
             # `anthropic>=0.39.0` range the container resolves.
             kwargs.setdefault("extra_body", {})["temperature"] = self._temperature
         if self._thinking_budget and self._thinking_budget > 0:
-            # NOTE (user flag, 2026-10-30): the serving endpoint FORCES
-            # thinking on regardless of this kwarg, so omitting it under
-            # force_tool would not stop the model from thinking. The real
-            # lever is client-side: when force_tool is armed, agent.py
-            # stands down the token cap and the in-stream wall-clock cap so
-            # the mandatory tool call can actually be reached (the thinking
-            # is then bounded by the server-side max_tokens). This kwarg is
-            # still omitted under force_tool to avoid requesting a budget
-            # the enforced call will not honor.
+            # The endpoint thinks by DEFAULT when the request carries no
+            # `thinking` field, so omitting the kwarg does not stop it. It DOES
+            # honour an explicit {"type":"disabled"} (measured 2026-11-26:
+            # 3/3 text-only replies, and 3/3 tool_use when combined with
+            # tool_choice=any) — that shape is the stage-1 degrade in
+            # _degrade_for_toolchoice. Under force_tool the kwarg is still
+            # simply omitted rather than sent as disabled: the mandatory tool
+            # call is reached with thinking allowed, and the client-side caps
+            # are stood down so it can complete.
             if force_tool:
                 kwargs["max_tokens"] = self._max_tokens
             else:
@@ -465,6 +625,87 @@ class AnthropicProvider(LLMProvider):
             f"{i}/{attempts - 1} shape={shape}\n")
         _sys.stderr.flush()
 
+    # ── Recovery for the thinking-vs-tool_choice rejection ──
+    # Three attempts is enough: unlike the reasoning-replay coin flip (which
+    # needs ~50 samplings because most upstreams enforce that rule), here the
+    # rejection is a property of one deployment class, and the FIRST retry
+    # already carries the shape no deployment can reject — the same request
+    # with tool_choice removed. Further attempts exist only to survive a
+    # transient upstream error, not to re-roll the shape.
+    _MAX_TOOLCHOICE_RETRIES = 3
+
+    # Budget for an UNATTRIBUTABLE 400 (see _is_generic_retryable_400). Kept
+    # small on purpose: each stage strips one more decorative feature, and the
+    # point is to survive a bad upstream, not to brute-force a genuinely
+    # malformed request.
+    _MAX_GENERIC_400_RETRIES = 3
+
+    def _drop_tool_choice(self, kwargs):
+        """Stage 2 degrade: the identical request minus `tool_choice`."""
+        degraded = dict(kwargs)
+        degraded.pop("tool_choice", None)
+        return degraded
+
+    def _degrade_for_toolchoice(self, kwargs, stage):
+        """Degrade a thinking-vs-tool_choice rejection, reasoning first.
+
+        ORDERING RULE: this rejection means the gateway refuses `tool_choice`
+        *while thinking is on*. The cheap, reversible lever is therefore the
+        FORCING (`tool_choice`), not the REASONING. Two ladders were measured
+        on api.deepseek.com/anthropic + deepseek-flash (2026-11-27):
+
+            no thinking field + tool_choice:any -> 400 (the endpoint turns
+              thinking ON by default, so this is really ON + FORCED)
+            thinking:disabled + tool_choice:any -> 200, blocks=['tool_use']
+            thinking:disabled + no tool_choice  -> 200, blocks=['tool_use']
+            thinking:enabled  + no tool_choice  -> 200, blocks=['thinking',
+                                                            'tool_use']
+
+        The last row is the one that matters: with an explicit tool schema in
+        the request the model emits `tool_use` WITHOUT being forced. So
+        dropping `tool_choice` costs far less than dropping thinking — the
+        channel constraint is a safety rail, while thinking is the reasoning
+        that decides what to write. The first version of this method had it
+        backwards (disable thinking, keep tool_choice); measured on the trial
+        logs that ordering wrote artifacts on a reasoning-disabled call, and
+        the single historical PASS for that task ran with ZERO such degrades.
+
+        STAGE 1 therefore drops `tool_choice` and KEEPS thinking. STAGE 2 —
+        only for an upstream that still refuses, or for a stage-1 reply that
+        came back without the `tool_use` the caller asked for — RESTORES the
+        caller's forcing and disables thinking. One of the two levers has to
+        go on an endpoint that refuses the pair; when the reasoning-preserving
+        shape fails to produce a tool call, the caller's channel constraint is
+        the one that must survive.
+        """
+        degraded = dict(kwargs)
+        if stage >= 2:
+            degraded["thinking"] = {"type": "disabled"}
+        else:
+            degraded.pop("tool_choice", None)
+        return degraded
+
+    def _note_toolchoice_degrade(self, attempt: int) -> None:
+        """Trace the degradation: the transcript must explain what was lost.
+
+        stderr is captured by the harness into the agent transcript, so this
+        line is what makes "the endgame force_tool stopped forcing" diagnosable
+        after the fact instead of looking like the mechanism never fired. It
+        states WHICH lever went, because stage 1 keeps the REASONING and
+        stage 2 does not — a single wording would misreport one of them.
+        """
+        import sys as _sys
+        if attempt < 2:
+            what = ("tool_choice DROPPED, thinking KEPT "
+                    "(reasoning intact; forcing off for this call)")
+        else:
+            what = ("tool_choice DROPPED, thinking DISABLED "
+                    "(no forcing AND no reasoning for this call)")
+        _sys.stderr.write(
+            f"[llm-degrade] gateway rejected thinking+tool_choice "
+            f"({self._TOOLCHOICE_THINKING_MARKER}); retry {attempt} with {what}\n")
+        _sys.stderr.flush()
+
     def _create_with_reasoning_retry(self, kwargs, attempts: int = None):
         """Re-send a reasoning-replay rejection until an upstream accepts it.
 
@@ -490,6 +731,130 @@ class AnthropicProvider(LLMProvider):
                 raise
         raise last
 
+    def _create_with_toolchoice_recovery(self, kwargs):
+        """Re-issue after the thinking-vs-tool_choice rejection, escalating
+        from the LEAST destructive degrade (see _degrade_for_toolchoice).
+
+        Stage 1 keeps the REASONING and drops the forcing. That is only a win
+        if the caller still gets its tool call, so this method checks the
+        response instead of assuming: when the caller sent `tool_choice` and
+        the degraded reply came back without `tool_use`, the forcing is
+        restored and the reasoning is what gives way (stage 2). Without that
+        check, trading forcing for reasoning could silently turn a forced tool
+        call into prose.
+
+        It re-issues until the gateway accepts, and raises the last rejection
+        only if even the fully degraded shape is refused — which would mean
+        tool_choice was not the objection after all.
+        """
+        require_tool = bool(kwargs.get("tool_choice"))
+        unforced_without_tool = False
+        last = None
+        for attempt in range(1, self._MAX_TOOLCHOICE_RETRIES + 1):
+            # A stage-1 reply that arrived without `tool_use` means the
+            # unforced model chose prose; go straight to the shape that keeps
+            # the forcing instead of repeating stage 1.
+            stage = attempt + 1 if unforced_without_tool else attempt
+            self._note_toolchoice_degrade(stage)
+            self._retry_backoff(attempt)
+            degraded = self._degrade_for_toolchoice(kwargs, stage)
+            try:
+                reply = self._client.messages.create(**degraded)
+            except anthropic.BadRequestError as exc:
+                if self._is_toolchoice_thinking_error(exc):
+                    last = exc
+                    continue
+                if self._is_third_party and self._is_reasoning_replay_error(exc):
+                    # Two rejections on one call: hand the already-degraded
+                    # payload to the replay retry rather than losing the turn.
+                    return self._create_with_reasoning_retry(degraded)
+                raise
+            except Exception:
+                raise
+            if require_tool and not _reply_has_tool_use(reply):
+                # The unforced reply lost the tool call: reasoning must give
+                # way instead of the caller's channel constraint.
+                unforced_without_tool = True
+                last = last or RuntimeError(
+                    "stage-1 degrade returned no tool_use; restoring forcing")
+                continue
+            return reply
+        raise last
+
+    def _degrade_for_generic_400(self, kwargs, stage):
+        """Reshape a request the gateway refused for an unattributable reason.
+
+        Each stage removes one decorative feature that the endpoint does not
+        need but a strict upstream may object to. Everything that carries the
+        CONVERSATION and the CHANNEL CONSTRAINT survives to the last stage, so a
+        degraded call is still a usable call.
+        """
+        degraded = dict(kwargs)
+        if stage >= 1:
+            # Prompt-cache breakpoints are pure decoration on our side.
+            system = degraded.get("system")
+            if isinstance(system, list):
+                degraded["system"] = [
+                    {"type": "text", "text": b.get("text", "")}
+                    if isinstance(b, dict) else b for b in system]
+            msgs = degraded.get("messages") or []
+            stripped = []
+            for m in msgs:
+                c = m.get("content") if isinstance(m, dict) else None
+                if isinstance(c, list):
+                    m = dict(m)
+                    m["content"] = [
+                        {k: v for k, v in b.items() if k != "cache_control"}
+                        if isinstance(b, dict) else b for b in c]
+                stripped.append(m)
+            degraded["messages"] = stripped
+        if stage >= 2:
+            # temperature rides in extra_body; some upstreams reject the body.
+            eb = dict(degraded.get("extra_body") or {})
+            eb.pop("temperature", None)
+            if eb:
+                degraded["extra_body"] = eb
+            else:
+                degraded.pop("extra_body", None)
+        if stage >= 3:
+            degraded = self._degrade_for_toolchoice(degraded, 2)
+        return degraded
+
+    def _create_with_generic_recovery(self, kwargs):
+        """Resend an unattributable 400 with progressively plainer bodies.
+
+        Bounded and honest: if the plainest shape is refused too, the rejection
+        is about the conversation itself and it is raised, so the caller still
+        sees the real error rather than a fabricated empty reply.
+        """
+        last = None
+        for attempt in range(1, self._MAX_GENERIC_400_RETRIES + 1):
+            self._note_generic_degrade(attempt)
+            self._retry_backoff(attempt)
+            degraded = self._degrade_for_generic_400(kwargs, attempt)
+            try:
+                return self._client.messages.create(**degraded)
+            except anthropic.BadRequestError as exc:
+                if self._is_generic_retryable_400(exc):
+                    last = exc
+                    continue
+                raise
+            except Exception:
+                raise
+        raise last
+
+    def _note_generic_degrade(self, attempt: int) -> None:
+        import sys as _sys
+        shapes = {
+            1: "cache_control breakpoints removed",
+            2: "extra_body.temperature removed",
+            3: "thinking disabled, tool_choice dropped",
+        }
+        _sys.stderr.write(
+            f"[llm-degrade] gateway rejected the request with an unattributable "
+            f"400; retry {attempt} with {shapes.get(attempt, 'plainer body')}\n")
+        _sys.stderr.flush()
+
     def chat(self, messages: List[Dict[str, Any]], tools: List[dict],
              force_tool: bool = False) -> Dict[str, Any]:
         kwargs = self._build_kwargs(messages, tools, force_tool=force_tool)
@@ -501,10 +866,23 @@ class AnthropicProvider(LLMProvider):
             else:
                 raise
         except anthropic.BadRequestError as exc:
-            if not (self._is_third_party
-                    and self._is_reasoning_replay_error(exc)):
+            if self._is_toolchoice_thinking_error(exc):
+                # This rejection is a per-upstream policy, not a malformed
+                # request: degrade rather than ending the turn (measured
+                # 2026-11-26, write-compressor F6LwKJb — one 400 cost the
+                # whole turn and the reward).
+                response = self._create_with_toolchoice_recovery(kwargs)
+            elif self._is_third_party and self._is_reasoning_replay_error(exc):
+                response = self._create_with_reasoning_retry(kwargs)
+            elif self._is_generic_retryable_400(exc):
+                # Opaque 400 the gateway will not explain (e.g. the 400001
+                # "rejected by an internal MaaS component" body). Measured
+                # 2026-11-26: such a body can arrive for a payload the same
+                # gateway accepts moments later, and treating it as permanent
+                # killed a turn with minutes still on the clock.
+                response = self._create_with_generic_recovery(kwargs)
+            else:
                 raise
-            response = self._create_with_reasoning_retry(kwargs)
 
         content = None
         tool_calls = None
@@ -539,31 +917,81 @@ class AnthropicProvider(LLMProvider):
             else:
                 raise
         except anthropic.BadRequestError as exc:
+            if self._is_toolchoice_thinking_error(exc):
+                # The rejection this trial died on (2026-11-26, write-compressor
+                # F6LwKJb): `messages.stream()` opens lazily, so a rejected open
+                # has consumed nothing and NOTHING was written to the caller —
+                # re-opening with the degraded shape is safe here.
+                last = exc
+                for attempt in range(1, self._MAX_TOOLCHOICE_RETRIES + 1):
+                    self._note_toolchoice_degrade(attempt)
+                    self._retry_backoff(attempt)
+                    try:
+                        stream_ctx = self._client.messages.stream(
+                            **self._degrade_for_toolchoice(kwargs, attempt))
+                        stream = stream_ctx.__enter__()
+                        last = None
+                        break
+                    except anthropic.BadRequestError as retry_exc:
+                        if self._is_toolchoice_thinking_error(retry_exc):
+                            last = retry_exc
+                            continue
+                        raise
+                    except Exception:
+                        raise
+                if last is not None:
+                    raise last
             # Same reasoning-replay rejection as chat(), same recovery: the
             # stream is opened lazily, so a rejected open has consumed nothing
             # and the call can be re-opened with a degraded payload.
-            if not (self._is_third_party
-                    and self._is_reasoning_replay_error(exc)):
-                raise
-            last = exc
-            attempts = self._MAX_REASONING_RETRIES
-            for attempt in range(1, attempts):
-                self._note_retry(attempt, attempts)
-                self._retry_backoff(attempt)
-                try:
-                    retry_kwargs = self._retry_kwargs(kwargs, attempt)
-                    stream_ctx = self._client.messages.stream(**retry_kwargs)
-                    stream = stream_ctx.__enter__()
-                    last = None
-                    break
-                except anthropic.BadRequestError as retry_exc:
-                    if not self._is_reasoning_replay_error(retry_exc):
+            elif self._is_generic_retryable_400(exc):
+                # Opaque 400 (see _is_generic_retryable_400). The stream is
+                # opened lazily, so nothing was consumed and nothing was
+                # written to the caller — re-opening a plainer body is safe and
+                # keeps the turn alive instead of ending it with
+                # "LLM call failed".
+                last = exc
+                for attempt in range(1, self._MAX_GENERIC_400_RETRIES + 1):
+                    self._note_generic_degrade(attempt)
+                    self._retry_backoff(attempt)
+                    try:
+                        stream_ctx = self._client.messages.stream(
+                            **self._degrade_for_generic_400(kwargs, attempt))
+                        stream = stream_ctx.__enter__()
+                        last = None
+                        break
+                    except anthropic.BadRequestError as retry_exc:
+                        if self._is_generic_retryable_400(retry_exc):
+                            last = retry_exc
+                            continue
                         raise
-                    last = retry_exc
-                except Exception:
-                    raise
-            if last is not None:
-                raise last
+                    except Exception:
+                        raise
+                if last is not None:
+                    raise last
+            elif not (self._is_third_party
+                      and self._is_reasoning_replay_error(exc)):
+                raise
+            else:
+                last = exc
+                attempts = self._MAX_REASONING_RETRIES
+                for attempt in range(1, attempts):
+                    self._note_retry(attempt, attempts)
+                    self._retry_backoff(attempt)
+                    try:
+                        retry_kwargs = self._retry_kwargs(kwargs, attempt)
+                        stream_ctx = self._client.messages.stream(**retry_kwargs)
+                        stream = stream_ctx.__enter__()
+                        last = None
+                        break
+                    except anthropic.BadRequestError as retry_exc:
+                        if not self._is_reasoning_replay_error(retry_exc):
+                            raise
+                        last = retry_exc
+                    except Exception:
+                        raise
+                if last is not None:
+                    raise last
 
         stream_error = None
         final_message = None

@@ -145,18 +145,52 @@ def test_squeeze_budget_stays_above_the_deadlock_floor():
 
 
 def test_every_squeeze_site_uses_the_constant_not_a_literal():
-    """No site may hard-code its own floor — that is how 1024 got scattered."""
+    """No site may hard-code its own floor — that is how 1024 got scattered.
+
+    A site is compliant if the value it assigns is the constant itself OR a
+    helper whose returns are all floored at that constant. The rule is about the
+    FLOOR, not about the syntax of the assignment, so the ladder helper
+    (_next_squeeze_budget) counts as compliant: it returns
+    `max(THINKING_SQUEEZE_TOKENS, ...)` / the constant directly, and its own
+    test asserts the floor holds for every arm.
+    """
     import inspect
 
     from flagscale_agent.react import kernel as k
 
     src = inspect.getsource(k)
-    # Assignments to the override must come from the constant.
+    # Assignments to the override must come from the constant or a floored helper.
     assigns = [
         ln.strip()
         for ln in src.splitlines()
         if "_thinking_cap_override = " in ln and "None" not in ln
     ]
     assert assigns, "expected at least one squeeze assignment"
+
+    helper = "_next_squeeze_budget"
+    # The helper must itself be floored at the constant, or the exemption is a
+    # hole: a helper that returned an arbitrary int would let a literal in.
+    # Behavioural, not syntactic — a source grep for the constant name still
+    # passes when only ONE of several returns is floored, which is exactly the
+    # hole this guard exists to close.
+    from types import SimpleNamespace
+
+    floor = k.AgentKernel.THINKING_SQUEEZE_TOKENS
+    fn = k.AgentKernel._next_squeeze_budget
+    for base in (0, 1024, 4096, 65536):
+        stub = SimpleNamespace(
+            THINKING_SQUEEZE_TOKENS=floor,
+            THINKING_SQUEEZE_START_FROM_CONFIG=True,
+            _squeeze_steps=0,
+            deps=SimpleNamespace(config=SimpleNamespace(thinking_budget=base)),
+        )
+        for arm in range(8):
+            v = fn(stub)
+            assert v >= floor, (
+                f"arm {arm} with base={base} returned {v}, below the "
+                f"{helper} floor {floor} — the helper is not floored at the "
+                f"constant")
+
     for ln in assigns:
-        assert "THINKING_SQUEEZE_TOKENS" in ln, f"literal squeeze floor: {ln}"
+        assert ("THINKING_SQUEEZE_TOKENS" in ln) or (helper in ln), \
+            f"literal squeeze floor: {ln}"
