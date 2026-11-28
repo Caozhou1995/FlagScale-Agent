@@ -96,10 +96,12 @@ class TestBudget:
         assert n <= b, f"prompt over budget: {n} > {b}"
 
     def test_budget_is_the_authorized_value(self):
-        # The user authorized exactly +200 over the previous 51_500. Pinning the
-        # number keeps a later edit from quietly raising it again.
-        assert p.PROMPT_BUDGET == 51_700, (
-            f"budget changed to {p.PROMPT_BUDGET}; the authorized value is 51_700")
+        # The user has authorized two increments, each exactly +200:
+        #   51_500 -> 51_700 (E10)  -> 51_900 (the "cannot go RED" criterion).
+        # Pinning the number keeps a later edit from quietly raising it again;
+        # every future raise must be re-authorized and this line updated with it.
+        assert p.PROMPT_BUDGET == 51_900, (
+            f"budget changed to {p.PROMPT_BUDGET}; the authorized value is 51_900")
 
     def test_e10_cost_is_bounded(self):
         """E10 itself must stay inside the authorized slack (~214 chars). A
