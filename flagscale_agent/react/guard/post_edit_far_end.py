@@ -52,17 +52,19 @@ from . import Guard, GuardContext, GuardVerdict
 # the session dir, and the inject points at that exact path. The agent then does
 # a bounded `read_file` instead of an impossible archaeology.
 #
-# BOUNDS (deliberate — see the plan's forbidden list):
-#   · total bytes are capped (head-kept per entry, entry count capped), so a
-#     pathological session cannot grow this without limit;
-#   · a per-entry head cap keeps the EARLIEST decision visible, because the
-#     far-end demand is about the EARLY decisions, not the latest thought;
+#   · NO truncation (user directive 2026-11-28): every entry is written in FULL
+#     and every entry is kept. Storage is cheap, and a head-only slice silently
+#     destroys exactly what this file exists for — long reasoning states its
+#     CONCLUSION at the END (measured on real sessions: the decision line
+#     "Approach: parse G1 moves ... let's write a script" sits past char 1200),
+#     so a head cap turns the recall back into a guess. The earlier
+#     "decisions are stated up front" assumption is disproved, not assumed away.
+#   · The file can therefore grow large. That is what thinking_search exists
+#     for: it locates entries by keyword and returns ONE entry's full text, so
+#     the reader never has to slurp a multi-MB file into context.
 #   · ANY failure here is swallowed and the ordinary inject is still emitted —
 #     the dump is an enhancement, never a gate.
 THINKING_DUMP_FILENAME = "thinking_log.md"
-THINKING_DUMP_MAX_ENTRIES = 120          # kept entries (BOTH ends, see below)
-THINKING_DUMP_ENTRY_HEAD_CHARS = 1200    # head of each entry (decisions come first)
-THINKING_DUMP_MAX_BYTES = 512 * 1024     # hard ceiling on the whole file
 
 
 def _iter_history_thinking(messages) -> list[str]:
@@ -113,23 +115,6 @@ def _write_thinking_dump(session_dir: str, ctx: GuardContext,
         if not entries:
             return None
 
-        # Keep the EARLIEST entries plus the most recent one. The far-end
-        # demand is about decisions made EARLY ("go back further"), so a
-        # newest-N window would discard exactly what the reminder asks for —
-        # measured on this session's own history: 986 reasoning blocks exist and
-        # a newest-120 window dropped the first 866, i.e. it dropped the design.
-        # The newest entry is kept because the edit just made may itself be the
-        # decision being persisted.
-        trimmed = len(entries) > THINKING_DUMP_MAX_ENTRIES
-        keep_first = THINKING_DUMP_MAX_ENTRIES - 1
-        omitted = ""
-        if trimmed:
-            omitted = (
-                f"- OMITTED: {len(entries) - THINKING_DUMP_MAX_ENTRIES} reasoning "
-                f"blocks in the MIDDLE (kept the first {keep_first} — where the "
-                "design decisions live — plus the most recent one)")
-            entries = entries[:keep_first] + entries[-1:]
-
         parts: list[str] = [
             "# Session reasoning log (auto-written by the harness)",
             "",
@@ -139,25 +124,20 @@ def _write_thinking_dump(session_dir: str, ctx: GuardContext,
             "so the recall is a read instead of a guess.",
             "",
             f"- entries: {len(entries)}",
-            *([omitted] if omitted else []),
-            f"- each entry keeps its first {THINKING_DUMP_ENTRY_HEAD_CHARS} chars "
-            "(decisions are stated up front)",
+            "- every entry is written IN FULL — nothing is truncated, and no",
+            "  entry is dropped, so a decision stated at the END of a long",
+            "  reasoning block is present verbatim",
+            "- the file may be large: locate an entry by keyword with",
+            "  thinking_search(query='...') and read ONE entry at a time,",
+            "  instead of reading the whole file",
             f"- written because this file was just edited: {trigger_path}",
             "",
         ]
         for i, text in enumerate(entries, 1):
-            head = text[:THINKING_DUMP_ENTRY_HEAD_CHARS]
-            cut = len(text) > THINKING_DUMP_ENTRY_HEAD_CHARS
-            parts.append(f"## reasoning {i}" + (" (truncated)" if cut else ""))
-            parts.append(head + ("\n…[truncated]" if cut else ""))
+            parts.append(f"## reasoning {i}")
+            parts.append(text)
             parts.append("")
         blob = "\n".join(parts)
-
-        # Hard ceiling: keep the head of the document (header + earliest
-        # entries = the decisions the far-end check is about), drop the tail.
-        if len(blob) > THINKING_DUMP_MAX_BYTES:
-            blob = blob[:THINKING_DUMP_MAX_BYTES] + (
-                "\n\n…[file truncated at the harness byte ceiling]\n")
 
         os.makedirs(session_dir, exist_ok=True)
         path = os.path.join(session_dir, THINKING_DUMP_FILENAME)
@@ -829,12 +809,14 @@ class PostEditFarEndGuard(Guard):
             return []
         return [
             f"  · YOUR REASONING, ON DISK — this session's thinking has just been "
-            f"written to {dump_path} (entries in order, each keeping its head; "
-            "bounded in size by the harness). The instruction above asks you to "
-            "point at the EARLIER turn where each decision was made: read that "
-            "file instead of trying to recall. It is the actual reasoning, "
-            "captured as it was produced — not a summary, and not something you "
-            "can reconstruct from the conversation you can see.",
+            f"written to {dump_path} (every entry in FULL, nothing truncated or "
+            "dropped). The instruction above asks you to point at the EARLIER "
+            "turn where each decision was made: read that file instead of trying "
+            "to recall. It is the actual reasoning, captured as it was produced — "
+            "not a summary, and not something you can reconstruct from the "
+            "conversation you can see. The file can be large, so do not read it "
+            "whole: call thinking_search(query='...') to locate the entries that "
+            "mention your decision, then read only those entries.",
         ]
 
     @classmethod

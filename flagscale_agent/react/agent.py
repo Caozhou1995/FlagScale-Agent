@@ -774,6 +774,7 @@ class WorkerAgent:
         from flagscale_agent.react.tools.plan_update import PlanUpdateTool
         from flagscale_agent.react.tools.plan_status import PlanStatusTool
         from flagscale_agent.react.tools.recall_search import RecallSearchTool
+        from flagscale_agent.react.tools.thinking_search import ThinkingSearchTool
         self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(MemoryReadTool(self.memory))
         self.tool_registry.register(MemoryListTool(self.memory))
@@ -782,6 +783,10 @@ class WorkerAgent:
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
         self.tool_registry.register(RecallSearchTool(self._session_dir))
+        # Reasoning-log search. Pass a callable for the same reason as
+        # DirectiveTool below: resume rebinds self._session_dir, and the log
+        # lives in whichever dir is current.
+        self.tool_registry.register(ThinkingSearchTool(lambda: self._session_dir))
         # User directives (Do / Do NOT block on the dashboard). Registered next
         # to the memory tools because the agent must choose between them: a
         # user ORDER goes here (rendered every turn, not overrulable), while the

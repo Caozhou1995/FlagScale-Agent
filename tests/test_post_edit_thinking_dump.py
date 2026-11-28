@@ -34,9 +34,7 @@ import pytest
 
 from flagscale_agent.react.guard import GuardContext
 from flagscale_agent.react.guard.post_edit_far_end import (
-    THINKING_DUMP_ENTRY_HEAD_CHARS,
     THINKING_DUMP_FILENAME,
-    THINKING_DUMP_MAX_ENTRIES,
     PostEditFarEndGuard,
     _iter_history_thinking,
     _write_thinking_dump,
@@ -106,30 +104,52 @@ class TestDumpFileContents:
         ctx = _ctx("a.py", messages=[_thinking_msg("A")])
         assert _write_thinking_dump("", ctx, "a.py") is None
 
-    def test_earliest_entries_kept_and_middle_omitted(self, tmp_path):
-        # The far-end demand is about decisions made EARLY, so a newest-N
-        # window would discard exactly what it asks for. Measured on this
-        # session's own history: 986 reasoning blocks vs a 120-entry window.
-        n = THINKING_DUMP_MAX_ENTRIES + 5
+    def test_every_entry_is_kept(self, tmp_path):
+        # No entry is dropped. A newest-N or "first N + last" window discards
+        # exactly the class of block the far-end reminder asks about.
+        n = 200
         msgs = [_thinking_msg(f"R{i}") for i in range(n)]
         path = _write_thinking_dump(str(tmp_path / "s"), _ctx("a.py", messages=msgs), "a.py")
         body = open(path, encoding="utf-8").read()
-        assert "R0\n" in body                                  # EARLIEST kept
-        assert f"R{n - 1}" in body                             # newest kept
-        assert "OMITTED:" in body                              # says what was dropped
-        assert f"first {THINKING_DUMP_MAX_ENTRIES - 1}" in body
-        # a MIDDLE entry is the one that actually went away (kept: R0..R118 and
-        # the last one; omitted: R119..R123)
-        assert f"R{THINKING_DUMP_MAX_ENTRIES}\n" not in body
+        for i in (0, 1, 99, 100, n - 2, n - 1):
+            assert f"R{i}\n" in body, f"entry R{i} was dropped"
+        # structural markers only — the header prose legitimately contains the
+        # words "truncated"/"dropped" while stating that nothing is.
+        assert "## reasoning" in body
+        assert not [ln for ln in body.splitlines() if ln.startswith("- OMITTED")]
+        assert not [ln for ln in body.splitlines()
+                    if ln.startswith("## reasoning") and "truncated" in ln]
+        assert f"## reasoning {n - 1}\n" in body, "the last entry must be present"
 
-    def test_each_entry_keeps_only_its_head(self, tmp_path):
-        long_text = "HEAD" + "x" * (THINKING_DUMP_ENTRY_HEAD_CHARS * 2)
+    def test_each_entry_is_written_in_full(self, tmp_path):
+        # The decision sits at the END of a long reasoning block (measured on
+        # real sessions), so a head-only slice destroys the very thing this file
+        # exists for. The whole block must be present, tail included.
+        filler = "x" * 20000
+        long_text = "HEAD" + filler + "DECISION_AT_THE_END"
         path = _write_thinking_dump(str(tmp_path / "s"),
                                    _ctx("a.py", messages=[_thinking_msg(long_text)]), "a.py")
         body = open(path, encoding="utf-8").read()
-        assert "HEAD" in body
-        assert body.count("x") <= THINKING_DUMP_ENTRY_HEAD_CHARS + 10
-        assert "[truncated]" in body
+        assert long_text in body, "the entry body was cut somewhere"
+        assert "[truncated]" not in body and "byte ceiling" not in body
+
+    def test_no_byte_ceiling_on_a_huge_session(self, tmp_path):
+        # Storage is cheap: a pathological session must not hit a file ceiling.
+        block = "y" * 5000
+        msgs = [_thinking_msg(block) for _ in range(150)]  # ~750 KB of reasoning
+        path = _write_thinking_dump(str(tmp_path / "s"), _ctx("a.py", messages=msgs), "a.py")
+        body = open(path, encoding="utf-8").read()
+        assert "byte ceiling" not in body
+        assert body.count(block) == 150, "some entries were cut by a size ceiling"
+
+    def test_header_points_at_thinking_search(self, tmp_path):
+        # The file can be large, so the header must name the retrieval tool
+        # instead of telling the reader to read the whole thing.
+        path = _write_thinking_dump(str(tmp_path / "s"),
+                                   _ctx("a.py", messages=[_thinking_msg("A")]), "a.py")
+        body = open(path, encoding="utf-8").read()
+        assert "thinking_search" in body
+        assert "IN FULL" in body
 
 
 class TestInjectCarriesThePath:
