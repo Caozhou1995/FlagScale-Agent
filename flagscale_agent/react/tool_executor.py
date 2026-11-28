@@ -108,6 +108,15 @@ def tool_display_summary(tool_name: str, arguments: dict) -> str:
         return f"{action} step_{step_id}" if step_id else action
     if tool_name == "plan_status":
         return ""
+    if tool_name == "thinking_search":
+        # The query is the discriminating field (two searches must be tellable
+        # apart); entry mode reads one block by index and often has no query.
+        query = (arguments.get("query") or "").strip()
+        mode = arguments.get("mode") or "snippet"
+        entry = arguments.get("entry")
+        if mode == "entry" or entry is not None:
+            return f"entry {entry if entry is not None else '?'}" + (f" · {query}" if query else "")
+        return query or "?"
     if tool_name == "flagscale_train_monitor":
         # Show what's being monitored
         output_dir = arguments.get("output_dir", "")

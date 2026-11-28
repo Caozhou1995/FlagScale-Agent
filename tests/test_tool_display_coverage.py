@@ -97,7 +97,7 @@ def test_summary_missing_args_does_not_crash():
 
 @pytest.mark.parametrize("name", [
     "load_knowledge", "memory_list", "proposal", "recall_search",
-    "inspect_checkpoint", "hard_reset", "resume_child",
+    "inspect_checkpoint", "hard_reset", "resume_child", "thinking_search",
 ])
 def test_dedicated_icon_not_fallback(name):
     icon = _tool_icon(name)
@@ -107,6 +107,6 @@ def test_dedicated_icon_not_fallback(name):
 
 def test_new_icons_distinct_from_each_other():
     names = ["load_knowledge", "memory_list", "proposal", "recall_search",
-             "inspect_checkpoint", "hard_reset", "resume_child"]
+             "inspect_checkpoint", "hard_reset", "resume_child", "thinking_search"]
     icons = [_tool_icon(n) for n in names]
     assert len(set(icons)) == len(icons), "two new tools share one icon"

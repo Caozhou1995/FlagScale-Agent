@@ -344,6 +344,7 @@ _TOOL_ICONS = {
     "memory_list": "📇",
     "proposal": "💡",
     "recall_search": "🔎",
+    "thinking_search": "📜",
     "inspect_checkpoint": "🧪",
     "hard_reset": "♻️",
     # Multi-agent / subagent delegation
