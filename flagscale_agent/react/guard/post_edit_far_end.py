@@ -555,11 +555,45 @@ _MAX_SNAPSHOT_DIRS = 1500
 _MAX_SNAPSHOT_FILES = 8000
 
 
+# Roots that are NEVER a task workspace: walking them records runtime/vendor
+# state (containerd json, procfs, package trees) as if it were the deliverable.
+# Measured 2026-11-28: a shell call issued from `/` made cwd == "/", the walk
+# visited the whole root filesystem and the effect branch reported
+# /run/containerd/io.containerd.runtime.v2.task/.../config.json (11666 bytes) as
+# a changed artifact — pure noise, and my own size line amplified it into the
+# agent's context. A task workspace is a directory with the task's files in it,
+# never one of these.
+_SNAPSHOT_NEVER_ROOTS = frozenset({
+    "/", "/run", "/proc", "/sys", "/dev", "/usr", "/etc", "/boot",
+    "/lib", "/lib64", "/bin", "/sbin", "/var/lib", "/opt",
+})
+# ...and a root under /run or /proc is runtime state even when deeper.
+_SNAPSHOT_NEVER_PREFIXES = ("/run/", "/proc/", "/sys/", "/dev/")
+
+
+def _is_workspace_root(root):
+    """True only for a directory that could plausibly hold THIS task's files."""
+    # Check the path AS GIVEN first: on usrmerge distros /lib and /bin are
+    # symlinks into /usr, so realpath alone would resolve them past the refusal
+    # list and walk a system tree. Measured: /lib realpaths to /usr/lib.
+    raw = os.path.normpath(root)
+    if raw in _SNAPSHOT_NEVER_ROOTS or raw.startswith(_SNAPSHOT_NEVER_PREFIXES):
+        return False
+    try:
+        root = os.path.realpath(root)
+    except OSError:
+        return False
+    if root in _SNAPSHOT_NEVER_ROOTS:
+        return False
+    return not root.startswith(_SNAPSHOT_NEVER_PREFIXES)
+
+
 def _snapshot_roots(extra_roots=None):
     """Bounded {abspath: (mtime_ns, size)} over cwd + caller-declared roots.
 
     Each root gets its OWN budget (a huge first root must not starve a
     declared root). Only files with a deliverable-ish extension are recorded.
+    System roots are refused outright: see _SNAPSHOT_NEVER_ROOTS.
     """
     cand = [os.getcwd()]
     for r in (extra_roots or []):
@@ -567,6 +601,8 @@ def _snapshot_roots(extra_roots=None):
             cand.append(r)
     snap = {}
     for root in dict.fromkeys(cand):
+        if not _is_workspace_root(root):
+            continue
         ndirs = nfiles = 0
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in _SNAPSHOT_SKIP_DIRS]
