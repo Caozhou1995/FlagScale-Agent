@@ -332,8 +332,219 @@ def mark_completed(session_dir: str):
         raise
 
 
+# ── Real user input vs harness-authored user-role messages ──────────────────
+#
+# Not every `role == "user"` message is something the human typed. The kernel and
+# the guards append user-role messages constantly (completion nudges, guard
+# blocks, NEED_USER_INPUT auto-appends, context-compaction summaries, worker
+# contracts, eviction placeholders). A session LIST that shows "the last user
+# message" therefore shows harness plumbing, and — worse — when that last message
+# is a `tool_result` block it has no text at all, so the preview renders EMPTY and
+# a busy session looks like an empty one. MEASURED on the live store
+# (110 sessions): 84 previews were blank for this reason while ZERO sessions
+# were genuinely empty. Treating "blank preview" as "empty session" would have
+# deleted every real conversation.
+
+# Fixed shapes the harness itself authors into `role: user`. Matched as PREFIXES
+# at the start of the message text. Deliberately narrow: a shape we fail to list
+# degrades to "shown as the preview", which is the harmless direction; the
+# harmful direction is hiding a human's own words.
+_HARNESS_USER_PREFIXES = (
+    "[system:",            # auto_appended NEED_USER_INPUT / continuation notices
+    "[worker role]",       # spawned-worker contract (see multi_agent/wiring.py)
+    "[Context Hard Reset",
+    "[evicted |",          # eviction placeholder written back into history
+    "[UltraThink",
+    "[blind-spot reader]",  # background blind-spot adoption notice (agent.py:2896)
+)
+
+# Tool RESULTS that the harness appends into `role: user` as a plain string
+# rather than a tool_result block. Measured case 087f42df / 924e95f3: a 3-message
+# session whose real prompt sits at index 1 and whose newest user message is this
+# tool output, so a backward scan shows tool output where the human's own words
+# belong. The header string is the render contract of
+# tools/read_task_statement.py:_render — keep the two in sync.
+_TOOL_RESULT_PREFIXES = (
+    "independent readings of the task statement",  # matched after a leading count
+)
+
+
+def _is_tool_result_text(text: str) -> bool:
+    """True when a user-role string is a tool's rendered output, not a human turn."""
+    t = " ".join(text.lstrip().split()[:8])
+    return any(p in t for p in _TOOL_RESULT_PREFIXES)
+
+# Harness-authored messages that carry a bracketed guard/plan tag, e.g.
+# "[StartupGuard/Backup] ...", "[Plan] You are about to write ...",
+# "[BackupGuard] ...", "[CompletionGate] ...". A leading "[Tag]" is the house
+# style for injected reminders; a human turn starting with "[" is possible but
+# rare, and showing it is the failure we accept.
+_BRACKETED_TAG_RE = None  # compiled lazily to keep module import cheap
+
+
+def _msg_text(msg: Dict[str, Any]) -> str:
+    """Concatenate the TEXT blocks of one message. '' when it has none.
+
+    A `tool_result`-only user message legitimately has no text — that is the bug
+    that made previews blank, not an error to paper over.
+    """
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text")
+                if isinstance(t, str):
+                    parts.append(t)
+        return "\n".join(parts)
+    return ""
+
+
+def _is_harness_authored(text: str) -> bool:
+    """True when this user-role text was written by the harness, not the human."""
+    global _BRACKETED_TAG_RE
+    t = text.lstrip()
+    if not t:
+        return True
+    for prefix in _HARNESS_USER_PREFIXES:
+        if t.startswith(prefix):
+            return True
+    # "Your previous response contained text but no tool calls..." and
+    # "You have responded N+ times with text only..." are the completion-gate
+    # reminders: prose, no bracket tag, so they need their own predicate.
+    if t.startswith("Your previous response contained text"):
+        return True
+    if t.startswith("You have responded ") and "no tool calls and no stop signal" in t:
+        return True
+    if _BRACKETED_TAG_RE is None:
+        import re
+        _BRACKETED_TAG_RE = re.compile(r"^\[[A-Za-z][\w ./&-]{0,60}\]")
+    return bool(_BRACKETED_TAG_RE.match(t))
+
+
+def real_user_input(data: Dict[str, Any], limit: int = 120) -> str:
+    """The human's own most recent input for this session ('' when unknown).
+
+    Two sources, in order of authority:
+      1. `session_input_history` — literally what was typed at the prompt. It is
+         the strongest signal but only exists for interactive sessions
+         (measured: 23/110), because batch runs never go through the prompt loop.
+      2. otherwise scan `messages` BACKWARDS for the newest user message that has
+         text and is NOT harness-authored. Skipping backwards is what fixes the
+         blank previews: the newest user message is usually a `tool_result` block.
+    """
+    history = data.get("session_input_history") or []
+    for item in reversed(history):
+        if isinstance(item, str) and item.strip():
+            return item.strip()[:limit]
+
+    messages = data.get("messages") or []
+    for msg in reversed(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        text = _msg_text(msg).strip()
+        if not text or _is_harness_authored(text) or _is_tool_result_text(text):
+            continue
+        return text[:limit]
+    return ""
+
+
+def is_worker_session(data: Dict[str, Any], session_dir: str = "") -> bool:
+    """True when this session belongs to a spawned worker (a sub-agent).
+
+    Worker sessions are real conversations, but they are the PARENT's machinery —
+    listing them next to human conversations floods the resume list with entries
+    the user never started. `metadata` cannot decide this (measured: it is `{}`
+    for every session), so the only durable signal is the fixed contract prefix
+    the harness prepends to the worker's first user message. Imported from
+    wiring.py rather than re-typed, so a change there cannot silently desync.
+
+    Eviction complicates it: once history is compacted, the original first user
+    message is replaced by a `[evicted | index=N | role=user | <first 100 chars>
+    | N tokens]` placeholder. The contract prefix survives inside that
+    placeholder (truncated), so the placeholder's own head is inspected too —
+    otherwise a worker session that was compacted becomes indistinguishable from
+    a human one and reappears in the list.
+    """
+    from flagscale_agent.react.multi_agent.wiring import (
+        WORKER_ROLE_PREFIX, WORKER_LEAF_ROLE_PREFIX)
+
+    def _looks_like_contract(text: str) -> bool:
+        t = text.lstrip()
+        if t.startswith(WORKER_ROLE_PREFIX) or t.startswith(WORKER_LEAF_ROLE_PREFIX):
+            return True
+        # An eviction placeholder embeds the original message's head right after
+        # `role=user | `. Match the contract prefix anywhere in the placeholder.
+        if t.startswith("[evicted |"):
+            return (WORKER_ROLE_PREFIX[:40] in t) or (WORKER_LEAF_ROLE_PREFIX[:40] in t)
+        return False
+
+    messages = data.get("messages") or []
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        text = _msg_text(msg)
+        if not text.strip():
+            continue
+        # Only the FIRST text-bearing user message can be the contract; later
+        # ones are the parent's resume messages.
+        if _looks_like_contract(text):
+            return True
+        # A hard reset REPLACES the original first turn with a compaction
+        # summary, so the live history no longer carries the contract — but the
+        # untouched transcript is still on disk next to it under
+        # `conversation_full.json`. Check that before concluding "human session":
+        # measured case 74791ab1 has an all-summary live history and a full
+        # transcript whose first message is the LEAF contract.
+        return _worker_by_full_transcript(session_dir)
+    return False
+
+
+def _worker_by_full_transcript(session_dir: str) -> bool:
+    """Last-resort worker check against conversation_full.json, else False."""
+    if not session_dir:
+        return False
+    path = os.path.join(session_dir, "conversation_full.json")
+    if not os.path.isfile(path):
+        return False
+    try:
+        from flagscale_agent.react.multi_agent.wiring import (
+            WORKER_ROLE_PREFIX, WORKER_LEAF_ROLE_PREFIX)
+        with open(path, "r", encoding="utf-8") as f:
+            full = json.load(f)
+        msgs = full.get("messages") if isinstance(full, dict) else full
+        for msg in msgs or []:
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            text = _msg_text(msg).lstrip()
+            if not text:
+                continue
+            return (text.startswith(WORKER_ROLE_PREFIX)
+                    or text.startswith(WORKER_LEAF_ROLE_PREFIX))
+    except Exception:
+        return False
+    return False
+
+
 def find_resumable_sessions(sessions_root: str = None) -> List[Dict[str, Any]]:
-    """Find sessions with completed=false, sorted by timestamp desc."""
+    """Sessions a human can meaningfully resume, newest first.
+
+    Three filters beyond `completed == false`, each measured against the live
+    store (110 sessions) where the naive version returned 110 rows of which 84
+    had a BLANK preview and 75 were sub-agent machinery:
+
+      · worker sessions are excluded — they are the parent's sub-agents, not
+        conversations the user started (see `is_worker_session`);
+      · a session with no recoverable human input is excluded — that is what
+        "empty" actually means here (nothing to show, nothing to resume to);
+        note the count of human messages is NOT the test, because every session
+        in the store had some;
+      · the preview is the human's own last input (`real_user_input`), not "the
+        last message with role=user" — the latter is usually a tool_result block
+        with no text at all, which is what rendered 84 previews blank.
+    """
     root = sessions_root or _sessions_root()
     if not os.path.isdir(root):
         return []
@@ -350,18 +561,16 @@ def find_resumable_sessions(sessions_root: str = None) -> List[Dict[str, Any]]:
                 data = json.load(f)
             if data.get("completed", True):
                 continue
+            if is_worker_session(data, entry_path):
+                continue
+            last_user = real_user_input(data, limit=100)
+            if not last_user:
+                # No human input recoverable (history was fully compacted away
+                # and no input history was recorded): nothing to resume.
+                continue
             messages = data.get("messages", [])
-            user_msgs = [m for m in messages if m.get("role") == "user"]
-            last_user = ""
-            if user_msgs:
-                content = user_msgs[-1].get("content", "")
-                if isinstance(content, str):
-                    last_user = content[:100]
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            last_user = block.get("text", "")[:100]
-                            break
+            user_msgs = [m for m in messages
+                         if isinstance(m, dict) and m.get("role") == "user"]
             results.append({
                 "session_id": data.get("session_id", entry),
                 "session_dir": entry_path,
@@ -399,9 +608,9 @@ def list_sessions(sessions_root: str = None) -> List[Dict[str, Any]]:
                 "session_dir": entry_path,
                 "timestamp": data.get("timestamp", 0),
                 "completed": data.get("completed", True),
-                "turns": len([m for m in messages if m.get("role") == "user"]),
+                "turns": len([m for m in messages
+                              if isinstance(m, dict) and m.get("role") == "user"]),
             })
         except Exception:
             continue
     return sessions
-

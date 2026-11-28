@@ -52,7 +52,7 @@ from flagscale_agent.react.session import (
     find_resumable_sessions, list_sessions, get_session_dir,
     acquire_session_lock, release_session_lock, get_session_lock_holder,
     SessionLockedError, dir_empty_except_lock, SESSION_LOCK_FILE,
-    clean_stale_empty_sessions,
+    clean_stale_empty_sessions, real_user_input,
 )
 from flagscale_agent.react.skills import SkillManager
 from flagscale_agent.react.tools import ToolRegistry
@@ -2318,8 +2318,19 @@ class WorkerAgent:
                 user_inputs = conv_data.get("session_input_history", [])
                 
                 if not user_inputs:
-                    s["session_summary"] = "(no user input)"
-                    continue
+                    # `session_input_history` only exists for sessions driven
+                    # through the interactive prompt (measured: 23/110 on the
+                    # live store). Batch runs and resumed runs never write it,
+                    # so falling back to "(no user input)" rendered a blank
+                    # preview for a session that has real human turns. Recover
+                    # the human's words from the message history instead —
+                    # same predicate the list filter uses, so tool output and
+                    # harness notices can never become the preview.
+                    fallback = real_user_input(conv_data, limit=80)
+                    if not fallback:
+                        s["session_summary"] = "(no user input)"
+                        continue
+                    user_inputs = [fallback]
                 
                 # Use same truncation logic as _generate_session_summary
                 def truncate_text(text: str, max_len=80):
