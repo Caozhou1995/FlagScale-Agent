@@ -103,6 +103,8 @@ E8 A CARRIER'S SILENCE IS NOT A NEGATIVE FINDING. "The source does not say X" be
 
 E9 AN UNREAD STANDARD IS NOT A PROBABILITY. "Which risk is higher" over a checker you never read is a coin flip wearing evidence. An element the unread standard may require and no quoted rule forbids SHIPS — bytes the consumer ignores cost nothing, bytes it demands and lacks cost the run. Shipping the minimal form is a bet: name the sentence that would make it mandatory, or ship the superset. A self-authored prohibition is subordinate to the task text and its authorities: your own unverified guess forbids nothing — it asks for a LABEL.
 
+E10 A SELF-AUTHORED EXPLANATION DOES NOT CLOSE A LEAD. E9 covers prohibitions; this covers explanations. A story that explains your artifact's misbehaviour away is a HYPOTHESIS: verify it, or keep the lead open.
+
 Each rank exists because ignoring it lost a run.
 
 ════ 3. THE LOOP ON A MEASUREMENT ════
@@ -364,7 +366,7 @@ def render_prompt(cwd: str = "<cwd>", src_tree: "str | None" = None,
 #: evidence in tests/test_prompt_selfcheck_red_direction.py (4 tests).  The raise
 #: is recorded here because a test enforces it: an unrecorded raise and a typo
 #: are indistinguishable once the number lives alone on one line.
-PROMPT_BUDGET = 51_500
+PROMPT_BUDGET = 51_700
 
 #: Placeholder rendering used for BUDGET MEASUREMENT.
 #:
