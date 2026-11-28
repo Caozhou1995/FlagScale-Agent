@@ -733,7 +733,9 @@ class PostEditFarEndGuard(Guard):
         ]
         for p in shown:
             m = self._measure(p)
-            lines.append(f"  · {p}" + (f" — {m}" if m else ""))
+            size = self._size_line(p)
+            detail = " — ".join(x for x in (m, size) if x)
+            lines.append(f"  · {p}" + (f" — {detail}" if detail else ""))
         if len(fresh) > len(shown):
             lines.append(f"  · (+{len(fresh) - len(shown)} more)")
         lines.append(
@@ -897,6 +899,56 @@ class PostEditFarEndGuard(Guard):
         ]
 
     @classmethod
+    def _size_line(cls, path: str) -> str | None:
+        """Report the written file's SIZE in bytes. A measurement, never a verdict.
+
+        WHY (measured 2026-11-28, gpt2-codegolf Kdan3fi): the task states a hard
+        ceiling ("a C file under 5000 bytes"). The agent measured itself ONCE
+        (`wc -c` → 5713 bytes) and its reasoning immediately said "over 5000 …
+        then compact" — but it never compacted, and the size then GREW
+        5713 → 6083 → 6193 over 40+ further tool calls. The gate that decides
+        the reward was the one number nothing in the harness kept in front of it.
+        A comparison run the day before compacted 6452 → 6197 → 5016 → 4970 and
+        cleared that same gate with 16 tool calls instead of 43.
+
+        So this reports the NUMBER on every successful write: byte size, plus the
+        same number expressed in common task-bound units (thousands, KiB) so the
+        agent does not have to convert before comparing. It deliberately does NOT
+        know, parse, or check any bound — the harness reports what it measured,
+        and the agent judges whether that exceeds a requirement. Deciding "does
+        6193 violate <5000" is a semantic judgement about the TASK, and that
+        belongs to the reader, not here.
+
+        Silent when the path is gone or unreadable (a delete is not a write).
+        """
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        if not os.path.isfile(path):
+            return None
+        n = st.st_size
+        # Same quantity in the units task statements most often use, so a bound
+        # written as "5000 bytes", "5 KB" or "under 4000 chars" can all be
+        # compared without a conversion step.
+        #
+        # WORDING CONSTRAINT (measured): three pre-existing tests pin the
+        # contract "when the type check could not run, the inject must contain
+        # NO 'measured now' text" (test_no_check_type_has_no_measurement_line,
+        # test_subprocess_timeout_falls_back_to_plain_reminder,
+        # test_non_structured_type_has_no_roundtrip_line). This line reports a
+        # DIFFERENT observation — the file's size always exists, so it is not a
+        # fallback — but sharing that phrase would make "no measurement line"
+        # unobservable. It therefore uses its own prefix and stays distinguishable.
+        return (
+            f"size: {n} bytes ({n / 1000:.1f} k / {n / 1024:.1f} KiB) "
+            "— the file's own byte count, nothing more. If the task states a "
+            "ceiling on this artifact (bytes / lines / records), compare this "
+            "number against it NOW rather than after the next fix; a ceiling "
+            "is a build constraint, so it comes out of structure, not cleanup."
+        )
+
+    @classmethod
     def _message(cls, path: str, measurement: str | None = None,
                  drift: str | None = None,
                  reasoning_lines: list[str] | None = None) -> str:
@@ -905,6 +957,12 @@ class PostEditFarEndGuard(Guard):
         ]
         if measurement:
             lines.append(f"  · {measurement}")
+        # Size for EVERY path-branch write, independent of whether the type
+        # validity check ran or passed: a file that fails py_compile still has a
+        # size, and a size bound is usually a separate constraint from validity.
+        size = cls._size_line(path)
+        if size:
+            lines.append(f"  · {size}")
         lines.append(f"  · valid-for-type: {cls._hint_for(path)}")
         # Placed BEFORE the far-end block on purpose: the block's first demand
         # is "point at the turn where the decision was made", and the pointer
