@@ -303,11 +303,21 @@ class AnthropicProvider(LLMProvider):
         went unnoticed until the endpoint changed.
 
         Fix is a superset of every reading: normalise assistant content to a
-        block list and ensure a thinking block exists. An empty
+        block list and ensure a reasoning block exists. An empty
         {"type":"thinking","thinking":"","signature":""} is accepted by the
         gateway (measured: probes with signature='' all returned 200), so the
         replay always satisfies the requirement while changing nothing about
         the turn's real text.
+
+        UPDATED 2026-11-28: that empty block is now the FALLBACK, not the rule.
+        A real thinking block whose signature is non-empty is kept verbatim —
+        the vendor doc for thinking-mode tool continuation asks for the full
+        assistant content array to be replayed as-is, and a signed block is the
+        endpoint's own so replaying it is what the doc requires. Blocks whose
+        signature is empty are NOT trustworthy (they cannot be verified against
+        the endpoint) and are dropped, which is what keeps the tokenhub
+        reasoning-field requirement satisfied without shipping a provenance the
+        block does not have.
 
         Gated on third-party base_url: official api.anthropic.com neither needs
         nor is tolerant of synthesized thinking blocks, so its requests stay
@@ -330,25 +340,39 @@ class AnthropicProvider(LLMProvider):
             else:
                 out.append(msg)
                 continue
-            # Drop ANY pre-existing reasoning block, then insert one uniform
-            # empty block. MEASURED (N=4 per arm, real 120-message replay of
-            # this session's own conversation.json):
-            #   strip-all, insert nothing  -> 3 ok / 1 fail
-            #   keep-existing, add if none -> 1 ok / 1 fail  (unstable)
-            #   strip-all, insert empty    -> 4 ok / 0 fail
-            # The middle arm is the one that made an earlier version of this
-            # fix look WORSE than no fix: history carries real thinking blocks
-            # from turns issued under a different model/session, and their
-            # signatures are not trusted by the gateway, so passing them back
-            # is itself a rejection source. Normalising to ONE synthesized empty
-            # block removes that variable instead of adding one.
-            blocks = [b for b in blocks
-                      if not (isinstance(b, dict)
-                              and b.get("type") in ("thinking", "redacted_thinking"))]
-            # Place the reasoning slot first: the gateway reads it as the
-            # turn's reasoning, and an empty payload keeps the text intact.
-            blocks.insert(0, {"type": "thinking", "thinking": "",
-                              "signature": ""})
+            # Keep a REAL reasoning block when it is verifiably the endpoint's
+            # own: a non-empty signature is the proof (see
+            # format_assistant_message for the measured event ordering — the
+            # signature arrives as one trailing signature_delta). MEASURED
+            # 2026-11-28 on flagos, the backend the write-compressor trial ran
+            # on: turn-1 blocks carry thinking_len 11723/14621 with a 32-hex-char
+            # signature, and replaying that full block returns 200.
+            #
+            # This REVERSES the earlier strip-all rule below, and the reversal
+            # is evidence-driven, not a re-reading of the old note: the old
+            # N=4 measurement mixed two different populations — blocks whose
+            # signatures came from a DIFFERENT model/session (not trusted, and
+            # a genuine rejection source) and blocks from this same session
+            # (valid). Dropping only the untrustworthy ones separates them.
+            # The vendor doc says to replay the full content array verbatim;
+            # keeping valid blocks is what satisfies it, and small stray-block
+            # risk is no reason to delete what the authority requires.
+            kept = [b for b in blocks
+                    if not (isinstance(b, dict)
+                            and b.get("type") in ("thinking", "redacted_thinking"))]
+            valid = [b for b in blocks
+                     if isinstance(b, dict)
+                     and b.get("type") == "thinking"
+                     and (b.get("signature") or "").strip()]
+            blocks = valid + kept
+            # Only when NOTHING valid survives — an evicted turn (placeholder
+            # string content) or a turn built text-only — insert one empty
+            # block so a gateway that demands the reasoning field still gets it.
+            # A real-text/empty-signature block is never emitted: that shape
+            # asserts a provenance it does not have.
+            if not valid:
+                blocks.insert(0, {"type": "thinking", "thinking": "",
+                                  "signature": ""})
             if blocks is not content:
                 copy = dict(msg)
                 copy["content"] = blocks
@@ -1054,11 +1078,35 @@ class AnthropicProvider(LLMProvider):
 
     def format_assistant_message(self, response: Dict[str, Any]) -> Dict[str, Any]:
         content_blocks = []
-        if response.get("thinking"):
+        # A thinking block is only VALID when it carries the signature the
+        # endpoint issued for it. MEASURED 2026-11-28 (flagos, the backend the
+        # write-compressor trial actually ran on): the signature arrives as a
+        # SINGLE `signature_delta` at the END of the thinking block, after all
+        # the `thinking_delta`s. Anything that ends the stream early therefore
+        # keeps the text and loses the signature.
+        #
+        # That is exactly what the runtime thinking cap does: agent.py breaks
+        # out of the event loop on a cap hit, so the trailing signature_delta is
+        # never consumed and `response["signature"]` is None while
+        # `response["thinking"]` holds the full real text. Persisting that pair
+        # produced the shape observed in that trial's conversation.json — five
+        # thinking blocks of 47791/63619/307/178/6154 chars, EVERY ONE with
+        # signature == "". A real-text/empty-signature block is the worst of the
+        # available shapes: the vendor documents that the full content array
+        # should be replayed verbatim, so an unverifiable block asserts a
+        # provenance it does not have.
+        #
+        # Dropping it loses nothing: when the cap fires, the kernel re-injects
+        # the accumulated reasoning as a <previous_reasoning> user message
+        # (kernel.py, was_thinking_capped / was_reasoning_only branches), so the
+        # text still reaches the model through a channel that does not pretend
+        # to be a signed thinking block.
+        sig = response.get("signature")
+        if response.get("thinking") and sig:
             content_blocks.append({
                 "type": "thinking",
                 "thinking": response["thinking"],
-                "signature": response.get("signature", ""),
+                "signature": sig,
             })
         if response["content"]:
             content_blocks.append({"type": "text", "text": response["content"]})
