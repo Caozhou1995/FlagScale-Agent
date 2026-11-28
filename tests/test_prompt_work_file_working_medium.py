@@ -1,81 +1,120 @@
-"""The step note is a WORKING MEDIUM, not an archive (anti-decay pins).
+"""The reasoning channel is a SEARCHABLE SOURCE, not a note to transcribe.
 
-Carrier history (both measured on dna-assembly, standard budget):
+Carrier history (all measured, not assumed):
 
 2026-11-26 13:03 trial — carrier = a plain scratch work file.
-  Behaviour: the clause WAS adopted at the counter level (write_file 0 -> 4,
-  plan_update 11..13 -> 0), but the write happened only at "design is settled,
-  time to emit the script": of 9 bouts with >=60s of thinking, only 3/9 were
-  followed by a write as the first action; the other 6 were followed by a shell
-  probe. The plan channel was killed outright (plan_update = 0), so the plan
-  lifecycle never advanced past pending. 2026-11-26 12:28 trial — carrier = the
-  plan step note, reward = 1: the plan completed and the deliverable shipped.
+  The clause WAS adopted at the counter level (write_file 0 -> 4, plan_update
+  11..13 -> 0), but only at "design is settled, time to emit the script": of 9
+  bouts with >=60s of thinking, only 3/9 were followed by a write as the first
+  action. The plan channel was killed outright, so the lifecycle never advanced.
+2026-11-26 12:28 trial — carrier = the plan step note, reward = 1.
 
-So the carrier is the plan step note (the agent does use it, and it does not
-cost the plan lifecycle), and the clause keeps the long-thinking case explicit
-because that is where the measured loss happened: a 240s reasoning stream was
-aborted (`[thinking stream ran 240s ... aborting this stream]`) with the
-load-bearing results ("common prefix 214, common suffix 2040, inserted 1337")
-living only in that stream.
+That history justified a clause telling the agent to write its settled
+conclusions into a step note. 2026-11-28, the clause was measured on its own
+terms and did not survive: across the three trajectories of one job
+(dna-assembly, gcode-to-text, gpt2-codegolf),
+`plan_update(notes=...)` was called 0 times and the phrase "step note" was
+mentioned 0 times. The clause asked the model to re-transcribe its own
+reasoning, and models generally do not do that — the user's words:
+"不要强调step note时写thinking了，这个条款llm一般不遵从".
 
-The gap the clause fills: the prompt already said a step note persists across
-eviction (SS8) and that delivered bytes must carry the transformed value (SS5).
-Neither said to use the note as the MEDIUM the later code is written against,
-nor that a long reasoning bout must be persisted before it can be lost.
+Meanwhile the premise under the clause changed. The harness now writes EVERY
+reasoning block of the session to <session_dir>/thinking_log.md in FULL (no
+per-entry slice, no dropped entries, no byte ceiling), and exposes
+thinking_search(query=..., mode='entry') to locate a block and read it whole.
+So "where did I decide X" is no longer an archaeology problem that a hand-note
+must pre-solve: it is a search over the actual reasoning, at full fidelity.
 
-Honest limit: on the plan-note trial the authority read (plans/plan_*.yaml,
-all 8 steps `notes: ''`) shows the note was NOT used as a working medium
-either. These tests pin the CLAUSE TEXT, not its behavioural uptake; uptake is
-measured by reading an agent log, and by call counts that distinguish
-`plan_update(notes=...)` from `step_done`/`complete`.
+The clause is therefore REWRITTEN, not extended:
+  · the reasoning channel is named as searchable, with the tool and its two
+    modes, so the instruction points at a capability that exists;
+  · the step note keeps only its still-valid half — carrying the VALUES later
+    code must re-read (a value, an offset, an invariant), which is exactly what
+    a search of prose is a poor substitute for;
+  · the measured long-bout risk is kept, because a stream can still be cut off
+    before any tool call, and values living only there are lost.
+
+Honest limit: these tests pin the CLAUSE TEXT and the budget, not behavioural
+uptake. Uptake is measured by reading an agent log — the same way the old clause
+was falsified.
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from flagscale_agent.react.prompt import SYSTEM_PROMPT_STATIC as PROMPT  # noqa: E402
+from flagscale_agent.react.prompt import (  # noqa: E402
+    PROMPT_BUDGET,
+    SYSTEM_PROMPT_STATIC as PROMPT,
+    prompt_len,
+)
 
 FLAT = " ".join(PROMPT.split())
 
 
-def test_step_note_is_named_a_working_medium() -> None:
-    assert "THE STEP NOTE IS A WORKING MEDIUM" in FLAT
+def test_reasoning_is_named_searchable_not_a_note() -> None:
+    assert "YOUR REASONING IS SEARCHABLE, NOT A NOTE TO TRANSCRIBE" in FLAT
 
 
-def test_the_work_file_carrier_is_gone() -> None:
-    """The discarded carrier must not linger as a rival instruction."""
-    assert "THE WORK FILE IS YOUR WORKING MEDIUM" not in FLAT
+def test_the_transcribe_clause_is_gone() -> None:
+    """The discarded instruction must not linger as a rival instruction.
 
-
-def test_conclusions_are_written_as_they_settle() -> None:
-    assert "When reasoning settles a load-bearing result" in FLAT
-    assert "write it to that step's note" in FLAT
-
-
-def test_code_is_written_against_the_note_not_memory() -> None:
-    assert "read the step back" in FLAT
-    assert "code against the note, not your memory of it" in FLAT
-
-
-def test_long_thinking_bout_must_be_persisted_first() -> None:
-    """The measured failure shape: a long stream truncated before any tool call.
-
-    The clause must (a) name the long-thinking case, (b) say the stream can be
-    cut off before a tool call, and (c) require the FIRST call after it to be the
-    note — in that order, since (c) is the action and (a)(b) are its trigger.
+    'write it to that step's note' is precisely the ask the model declined; if
+    it stayed, the prompt would carry both the old ask and its replacement.
     """
-    i = FLAT.find("ESPECIALLY AFTER A LONG THINKING BOUT")
-    j = FLAT.find("cut off before any tool call")
-    k = FLAT.find("the FIRST call after one must be the note")
-    assert 0 <= i < j < k < i + 400
+    assert "THE STEP NOTE IS A WORKING MEDIUM" not in FLAT
+    assert "write it to that step's note" not in FLAT
+    assert "the FIRST call after one must be the note" not in FLAT
+
+
+def test_the_clause_names_the_tool_and_both_modes() -> None:
+    """It must point at a real capability: the tool NAME plus the way to get
+    one block's whole text. A paraphrase without the tool name is unactionable."""
+    i = FLAT.find("YOUR REASONING IS SEARCHABLE")
+    window = FLAT[i:i + 400]
+    assert "thinking_search(query=...)" in window
+    assert "mode='entry'" in window
+
+
+def test_it_says_the_blocks_are_on_disk_in_full() -> None:
+    """The justification for searching rather than transcribing is that the
+    full text is already persisted — not a head slice the reader must guess at."""
+    i = FLAT.find("YOUR REASONING IS SEARCHABLE")
+    assert "on disk in full" in FLAT[i:i + 200]
+
+
+def test_the_note_keeps_its_still_valid_half() -> None:
+    """The note is not abolished: it carries the VALUES later code re-reads,
+    which a search over prose is a poor substitute for."""
+    i = FLAT.find("The step note carries only what later code needs")
+    assert i != -1
+    window = FLAT[i:i + 120]
+    assert "a value" in window and "an offset" in window and "an invariant" in window
+
+
+def test_the_long_bout_risk_is_kept() -> None:
+    """Measured loss shape, still true: a reasoning stream can be cut off before
+    any tool call, so values living only in it are lost. The clause must state
+    the risk AND the action, in that order."""
+    i = FLAT.find("A long bout can be cut off before a tool call")
+    j = FLAT.find("so land those first", i)
+    assert 0 <= i < j < i + 120
 
 
 def test_clause_hangs_off_the_persistence_rule() -> None:
     """It must attach to SS8's existing 'persists on disk across evictions'
     sentence, not float in an unrelated section."""
     i = FLAT.find("it persists on disk across evictions")
-    j = FLAT.find("THE STEP NOTE IS A WORKING MEDIUM")
+    j = FLAT.find("YOUR REASONING IS SEARCHABLE")
     assert 0 <= i < j < i + 700
+
+
+def test_prompt_stays_within_budget() -> None:
+    """The rewrite was sized to fit the EXISTING ceiling, not to raise it.
+
+    User ruling: a new clause must merge with what is there, not lift the
+    budget ("不会轻易抬高prompt预算").
+    """
+    assert prompt_len() <= PROMPT_BUDGET
 
 
 def test_no_task_literal_leaked() -> None:
