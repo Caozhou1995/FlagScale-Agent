@@ -565,7 +565,15 @@ class WorkerAgent:
         # type on the edited file, the consumer's read path, and (for agent source)
         # that the live process still runs old code until /reload. Generic across
         # file types, unlike UnitTestGuard. Never blocks.
-        guard_registry.register(PostEditFarEndGuard())
+        #
+        # session_dir_fn: BEFORE the inject is emitted the guard writes this
+        # session's reasoning to <session_dir>/thinking_log.md and the inject
+        # points at that path. The far-end block demands the agent point at the
+        # EARLIER turn where each decision was made — a demand it had no route to
+        # perform (reasoning is not in the visible history). Callable, not a
+        # snapshot, because resume rebinds the session dir.
+        guard_registry.register(
+            PostEditFarEndGuard(session_dir_fn=lambda: self._session_dir))
         # DeliverableSurvivalGuard (always active, inject-only): after a
         # destructive command (rm/mv/kill/pkill/git clean/reset --hard/
         # truncate) actually executed, demand a re-verification that the

@@ -128,7 +128,10 @@ class TestRegistryWiring:
         assert "PostEditFarEndGuard" in src
         # both import and registration present
         assert "from flagscale_agent.react.guard.post_edit_far_end import" in src
-        assert "guard_registry.register(PostEditFarEndGuard())" in src
+        # Registered WITH the live session dir, which is what lets the guard
+        # write its reasoning dump before the inject is emitted. Asserted as a
+        # callable (not a snapshot) because resume rebinds self._session_dir.
+        assert "PostEditFarEndGuard(session_dir_fn=lambda: self._session_dir)" in src
 
     def test_registry_dedup_keeps_distinct_categories(self):
         from flagscale_agent.react.guard import GuardRegistry

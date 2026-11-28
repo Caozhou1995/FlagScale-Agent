@@ -58,11 +58,14 @@ class GuardContext:
     # LLM response text
     assistant_text: str = ""
 
-    # Reasoning ("thinking") text of the CURRENT LLM iteration. Reasoning never
-    # becomes a history message, so it cannot be recovered from `messages` —
-    # the kernel publishes it on deps.last_thinking_text and _build_ctx copies
-    # it here. Empty when the provider emitted no reasoning this iteration or
-    # when the guard runs before any response (a pre-check at turn start).
+    # Reasoning ("thinking") text of the CURRENT LLM iteration. Since
+    # 2026-11-28 reasoning is ALSO persisted into history as a `thinking`
+    # content block, so earlier turns' reasoning can be re-read from `messages`;
+    # this field is just the current iteration's slice (the kernel publishes it
+    # on deps.last_thinking_text and _build_ctx copies it here), which saves a
+    # guard from scanning the tail of history for it. Empty when the provider
+    # emitted no reasoning this iteration or when the guard runs before any
+    # response (a pre-check at turn start).
     thinking_text: str = ""
 
     # True only when assistant_text is the text the LLM produced THIS turn's

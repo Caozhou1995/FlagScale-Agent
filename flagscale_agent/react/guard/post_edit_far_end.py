@@ -36,6 +36,140 @@ import sys
 
 from . import Guard, GuardContext, GuardVerdict
 
+# ── Reasoning dump, written by the harness BEFORE a far-end inject is emitted ──
+#
+# WHY THIS EXISTS: `_shared_far_end_lines()` tells the agent to "GO BACK FURTHER"
+# and point at the turn where each decision was made. That demand was
+# UNSATISFIABLE as written: reasoning does not live in the conversation history
+# the agent can re-read as its own memory — it lives in the persisted transcript
+# on disk, in the per-iteration stream, and (for older turns) in thinking blocks
+# that carry no addressable turn index the agent could jump to. A reminder that
+# demands a recall the agent has no route to perform is a reminder that teaches
+# the agent to skip the check.
+#
+# So the harness performs the recall FOR it: at the moment the inject is about to
+# fire, the reasoning of this session is materialised into ONE small file inside
+# the session dir, and the inject points at that exact path. The agent then does
+# a bounded `read_file` instead of an impossible archaeology.
+#
+# BOUNDS (deliberate — see the plan's forbidden list):
+#   · total bytes are capped (head-kept per entry, entry count capped), so a
+#     pathological session cannot grow this without limit;
+#   · a per-entry head cap keeps the EARLIEST decision visible, because the
+#     far-end demand is about the EARLY decisions, not the latest thought;
+#   · ANY failure here is swallowed and the ordinary inject is still emitted —
+#     the dump is an enhancement, never a gate.
+THINKING_DUMP_FILENAME = "thinking_log.md"
+THINKING_DUMP_MAX_ENTRIES = 120          # kept entries (BOTH ends, see below)
+THINKING_DUMP_ENTRY_HEAD_CHARS = 1200    # head of each entry (decisions come first)
+THINKING_DUMP_MAX_BYTES = 512 * 1024     # hard ceiling on the whole file
+
+
+def _iter_history_thinking(messages) -> list[str]:
+    """Reasoning texts present in the CURRENT history, oldest first.
+
+    Both shapes are handled because the two providers persist differently:
+    anthropic keeps content blocks (`{"type":"thinking","thinking":...}`), while
+    the openai path stores a flat `thinking` key. A message with neither
+    contributes nothing.
+    """
+    out: list[str] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if (isinstance(block, dict)
+                        and block.get("type") == "thinking"
+                        and isinstance(block.get("thinking"), str)
+                        and block["thinking"].strip()):
+                    out.append(block["thinking"])
+        elif isinstance(content, str) and content.strip():
+            pass  # plain text is not reasoning; nothing to add
+        flat = msg.get("thinking")
+        if isinstance(flat, str) and flat.strip():
+            out.append(flat)
+    return out
+
+
+def _write_thinking_dump(session_dir: str, ctx: GuardContext,
+                         trigger_path: str) -> str | None:
+    """Materialise this session's reasoning next to the session, return the path.
+
+    Returns None on ANY failure or when there is no reasoning to write — the
+    caller then emits the ordinary inject. Never raises.
+    """
+    try:
+        if not session_dir:
+            return None
+        entries = _iter_history_thinking(ctx.messages)
+        current = (getattr(ctx, "thinking_text", "") or "").strip()
+        # The current iteration's reasoning is normally already present in
+        # `messages` (it was appended before this guard ran); append it only if
+        # it is genuinely absent, so the dump has no duplicated block.
+        if current and (not entries or entries[-1].strip() != current):
+            entries.append(current)
+        if not entries:
+            return None
+
+        # Keep the EARLIEST entries plus the most recent one. The far-end
+        # demand is about decisions made EARLY ("go back further"), so a
+        # newest-N window would discard exactly what the reminder asks for —
+        # measured on this session's own history: 986 reasoning blocks exist and
+        # a newest-120 window dropped the first 866, i.e. it dropped the design.
+        # The newest entry is kept because the edit just made may itself be the
+        # decision being persisted.
+        trimmed = len(entries) > THINKING_DUMP_MAX_ENTRIES
+        keep_first = THINKING_DUMP_MAX_ENTRIES - 1
+        omitted = ""
+        if trimmed:
+            omitted = (
+                f"- OMITTED: {len(entries) - THINKING_DUMP_MAX_ENTRIES} reasoning "
+                f"blocks in the MIDDLE (kept the first {keep_first} — where the "
+                "design decisions live — plus the most recent one)")
+            entries = entries[:keep_first] + entries[-1:]
+
+        parts: list[str] = [
+            "# Session reasoning log (auto-written by the harness)",
+            "",
+            "Written immediately BEFORE a post-edit far-end reminder was emitted.",
+            "Purpose: the reminder asks you to point at the turn where each",
+            "decision was made. This file is where that reasoning is, in order,",
+            "so the recall is a read instead of a guess.",
+            "",
+            f"- entries: {len(entries)}",
+            *([omitted] if omitted else []),
+            f"- each entry keeps its first {THINKING_DUMP_ENTRY_HEAD_CHARS} chars "
+            "(decisions are stated up front)",
+            f"- written because this file was just edited: {trigger_path}",
+            "",
+        ]
+        for i, text in enumerate(entries, 1):
+            head = text[:THINKING_DUMP_ENTRY_HEAD_CHARS]
+            cut = len(text) > THINKING_DUMP_ENTRY_HEAD_CHARS
+            parts.append(f"## reasoning {i}" + (" (truncated)" if cut else ""))
+            parts.append(head + ("\n…[truncated]" if cut else ""))
+            parts.append("")
+        blob = "\n".join(parts)
+
+        # Hard ceiling: keep the head of the document (header + earliest
+        # entries = the decisions the far-end check is about), drop the tail.
+        if len(blob) > THINKING_DUMP_MAX_BYTES:
+            blob = blob[:THINKING_DUMP_MAX_BYTES] + (
+                "\n\n…[file truncated at the harness byte ceiling]\n")
+
+        os.makedirs(session_dir, exist_ok=True)
+        path = os.path.join(session_dir, THINKING_DUMP_FILENAME)
+        # Write-then-rename so a concurrent reader never sees a half file.
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(blob)
+        os.replace(tmp, path)
+        return path
+    except Exception:
+        return None
+
 # Per-extension far-end verification commands. The placeholder <path> is replaced
 # with the actual edited path. These are the cheapest validity checks per type;
 # anything else falls back to a re-read reminder.
@@ -479,7 +613,7 @@ class PostEditFarEndGuard(Guard):
     # Only these tools carry an explicit path (rich path-branch semantics)
     WRITE_TOOLS = ("write_file", "edit_file")
 
-    def __init__(self):
+    def __init__(self, session_dir_fn=None):
         # Snapshot captured by check_pre for THIS tool call; consumed by the
         # effect branch in check_post. None => no effect check available (the
         # rich path branch decides on its own).
@@ -489,6 +623,11 @@ class PostEditFarEndGuard(Guard):
         # a target outside cwd (/tmp scripts), so these are stat'd directly.
         self._targets_before = None
         self._fired_paths = set()
+        # Zero-arg callable returning the LIVE session dir (the same pattern
+        # reviewer_feedback.py / reviewer_audit.py use). Called at inject time,
+        # not at construction, because a resume rebinds the session dir. None =>
+        # no session dir is known and the reasoning dump is simply skipped.
+        self._session_dir_fn = session_dir_fn
 
     def reset_turn(self):
         self._snap_before = None
@@ -603,6 +742,7 @@ class PostEditFarEndGuard(Guard):
         # heredoc/redirect/cp/tee write (this branch) can never silently miss a
         # nudge the path branch would have delivered (the write SHAPE does not
         # change the reminders' truth).
+        lines += self._reasoning_dump_lines(ctx, ", ".join(shown))
         lines += self._shared_far_end_lines()
         return GuardVerdict.inject(
             "\n".join(lines),
@@ -650,8 +790,13 @@ class PostEditFarEndGuard(Guard):
 
         measurement = self._measure(path)
         drift = self._citation_drift_note(ctx, path)
+        # The dump is written HERE — immediately before the inject is returned,
+        # which is as late as the guard can get: the kernel emits the verdict
+        # right after check_post returns, so the file exists by the time the
+        # agent can read the reminder.
+        reasoning_lines = self._reasoning_dump_lines(ctx, path)
         return GuardVerdict.inject(
-            self._message(path, measurement, drift),
+            self._message(path, measurement, drift, reasoning_lines),
             reason="post_edit_far_end",
             # Independent category — the registry deduplicates injects by
             # category, so a shared category would silently swallow this
@@ -666,6 +811,31 @@ class PostEditFarEndGuard(Guard):
             if lower.endswith(ext):
                 return hint.replace("<path>", path)
         return _FALLBACK_HINT
+
+    def _reasoning_dump_lines(self, ctx: GuardContext, path: str) -> list[str]:
+        """Write the session's reasoning to disk NOW and return the pointer lines.
+
+        Called at the LAST moment before an inject is emitted, so the file the
+        reminder points at exists by the time the agent can act on it. Returns
+        an empty list when no dump could be written — the caller then emits its
+        ordinary lines, unchanged (the dump must never weaken the reminder).
+        """
+        try:
+            session_dir = self._session_dir_fn() if self._session_dir_fn else None
+        except Exception:
+            session_dir = None
+        dump_path = _write_thinking_dump(session_dir or "", ctx, path)
+        if not dump_path:
+            return []
+        return [
+            f"  · YOUR REASONING, ON DISK — this session's thinking has just been "
+            f"written to {dump_path} (entries in order, each keeping its head; "
+            "bounded in size by the harness). The instruction above asks you to "
+            "point at the EARLIER turn where each decision was made: read that "
+            "file instead of trying to recall. It is the actual reasoning, "
+            "captured as it was produced — not a summary, and not something you "
+            "can reconstruct from the conversation you can see.",
+        ]
 
     @classmethod
     def _shared_far_end_lines(cls) -> list[str]:
@@ -722,13 +892,19 @@ class PostEditFarEndGuard(Guard):
 
     @classmethod
     def _message(cls, path: str, measurement: str | None = None,
-                 drift: str | None = None) -> str:
+                 drift: str | None = None,
+                 reasoning_lines: list[str] | None = None) -> str:
         lines = [
             f"[Post-edit] {path} edited. Verify the FAR end now:",
         ]
         if measurement:
             lines.append(f"  · {measurement}")
         lines.append(f"  · valid-for-type: {cls._hint_for(path)}")
+        # Placed BEFORE the far-end block on purpose: the block's first demand
+        # is "point at the turn where the decision was made", and the pointer
+        # to the reasoning dump is what makes that demand performable instead
+        # of a demand the agent has no route to satisfy.
+        lines += (reasoning_lines or [])
         lines += cls._shared_far_end_lines()
         if cls._is_agent_source(path):
             lines.append(

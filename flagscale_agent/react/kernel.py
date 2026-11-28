@@ -66,10 +66,12 @@ class KernelDeps:
     on_response_fn: Callable | None = None  # (response) -> None, called after LLM response appended
     on_tool_results_fn: Callable | None = None  # (tool_calls, results) -> None, called after tool exec
     # Reasoning text of the CURRENT LLM iteration, set by the kernel right after
-    # each response is appended. It exists because provider "thinking" is NOT a
-    # history message (format_assistant_message keeps only text/thinking blocks
-    # as content; the reasoning channel is dropped), so a guard that wants to
-    # read what the model just thought has no other route to it. Overwritten
+    # each response is appended. It exists because a guard needs the reasoning of
+    # the iteration that just ran without re-scanning history for it: since
+    # 2026-11-28 the provider ALSO persists reasoning as a `thinking` content
+    # block (see anthropic_provider.format_assistant_message), so older turns'
+    # reasoning CAN be read back from `messages` — this field is the cheap
+    # pointer to the LATEST one, not the only route to reasoning. Overwritten
     # every iteration — a guard must never treat it as a transcript.
     last_thinking_text: str = ""
     time_budget_stats_fn: Callable | None = None  # () -> {elapsed, budget, remaining, pct} | None
