@@ -1141,6 +1141,55 @@ class WorkerAgent:
         )
         # Save full (pre-eviction) conversation alongside
         self._save_conversation_full()
+        # ...and the session's REASONING at the same instant (user directive
+        # 2026-11-28: the thinking log must persist whenever the conversation
+        # does, not only when a post-edit inject happens to fire).
+        #
+        # WHY a second trigger is needed at all: the post-edit dump fires on a
+        # WRITE, but a long stretch of decisive reasoning often ends in a READ,
+        # a test run, or a turn boundary — no edit, no dump. Those are exactly
+        # the stretches whose reasoning a later "point at the turn where you
+        # decided X" question needs, and they were the ones with no file on
+        # disk. Tying the dump to the conversation save closes that gap: any
+        # moment the transcript is durable, the reasoning behind it is too.
+        #
+        # Same writer as the post-edit path (write_thinking_dump), same file,
+        # same format — thinking_search parses ONE shape, not two. Cost is a
+        # single join+write of text already in memory (~3ms measured on a
+        # 986-entry session), and _save_conversation already runs off the
+        # critical path at turn boundaries and periodic checkpoints.
+        # Looked up rather than called directly: a partial/duck-typed agent
+        # (test stubs, degraded hosts) may carry this save path without the
+        # reasoning hook, and this method's contract is that persisting the
+        # reasoning NEVER decides whether the transcript lands.
+        _save_reasoning = getattr(self, "_save_thinking_log", None)
+        if _save_reasoning is not None:
+            _save_reasoning()
+
+    def _save_thinking_log(self) -> None:
+        """Mirror the session's reasoning next to conversation.json.
+
+        Reads the FULL pre-eviction log (history._full_log) — not the live
+        `messages`, which eviction rewrites — so the file keeps the reasoning
+        that compaction dropped. Best-effort by contract: a failure here must
+        never disturb a conversation save.
+        """
+        try:
+            from flagscale_agent.react.guard.post_edit_far_end import (
+                _iter_history_thinking,
+                write_thinking_dump,
+            )
+            entries = _iter_history_thinking(self.history._full_log)
+            if not entries:
+                return
+            write_thinking_dump(
+                self._session_dir, entries,
+                "Written whenever the conversation is saved (same instant as "
+                "conversation.json / conversation_full.json), and immediately "
+                "before any post-edit far-end reminder.",
+            )
+        except Exception:
+            pass
 
     def _save_conversation_full(self):
         """Save the full pre-eviction conversation to conversation_full.json.
@@ -1230,9 +1279,22 @@ class WorkerAgent:
             # Copy deeply enough that the writer owns its bytes: a shallow
             # list() still shares the inner dicts the loop keeps mutating.
             payload = copy.deepcopy(messages)
+            # Reasoning for the SAME checkpoint, snapshotted here on the main
+            # thread (strings are immutable, so the entries need no deepcopy).
+            # Without this the periodic checkpoint would write a transcript
+            # whose reasoning is absent — the differential that matters on a
+            # timeout kill, where the periodic save is the ONLY save that ran.
+            try:
+                from flagscale_agent.react.guard.post_edit_far_end import (
+                    _iter_history_thinking as _ith,
+                )
+                payload_thinking = _ith(self.history._full_log)
+            except Exception:
+                payload_thinking = []
             self._last_periodic_save_at = now
             self._periodic_save_payload = dict(
                 messages=payload,
+                thinking_entries=payload_thinking,
                 loaded_skills=list(self._loaded_skills),
                 session_input_tokens=self._session_input_tokens,
                 session_output_tokens=self._session_output_tokens,
@@ -1287,6 +1349,23 @@ class WorkerAgent:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 os.replace(tmp, path)
+                # Reasoning alongside the transcript, at the SAME instant (user
+                # directive: the thinking log persists whenever the conversation
+                # does). Same writer as every other trigger, so thinking_search
+                # keeps parsing ONE shape. Best-effort: a failure here must not
+                # lose the transcript that just landed.
+                try:
+                    from flagscale_agent.react.guard.post_edit_far_end import (
+                        write_thinking_dump,
+                    )
+                    write_thinking_dump(
+                        session_dir, payload.get("thinking_entries") or [],
+                        "Written by a periodic intra-turn checkpoint (same "
+                        "instant as conversation.json), and immediately before "
+                        "any post-edit far-end reminder.",
+                    )
+                except Exception:
+                    pass
                 # Append-only receipt, deliberately SEPARATE from
                 # conversation.json: any later turn-boundary save or the
                 # SIGTERM handler calls _save_conversation(), which rewrites

@@ -95,30 +95,33 @@ def _iter_history_thinking(messages) -> list[str]:
     return out
 
 
-def _write_thinking_dump(session_dir: str, ctx: GuardContext,
-                         trigger_path: str) -> str | None:
-    """Materialise this session's reasoning next to the session, return the path.
+def write_thinking_dump(session_dir: str, entries: list[str],
+                       trigger_line: str) -> str | None:
+    """Materialise a reasoning list to <session_dir>/thinking_log.md.
 
-    Returns None on ANY failure or when there is no reasoning to write — the
-    caller then emits the ordinary inject. Never raises.
+    The CORE, deliberately independent of GuardContext so every caller that
+    holds a reasoning list can persist it: the post-edit guard (it has
+    ctx.messages) AND the conversation-save path in agent.py (it has
+    history._full_log). Keeping one writer means the two trigger points can
+    never drift into two different file formats — a second, hand-rolled writer
+    would make thinking_search's parser valid for one trigger and silently
+    wrong for the other.
+
+    `trigger_line` states WHY this write happened; it goes into the header so a
+    reader (and a future session) can tell a post-edit dump from a
+    conversation-save dump without guessing from timestamps.
+
+    Returns the path, or None on ANY failure / when there is no reasoning to
+    write. Never raises: a dump is an enhancement, never a gate.
     """
     try:
-        if not session_dir:
-            return None
-        entries = _iter_history_thinking(ctx.messages)
-        current = (getattr(ctx, "thinking_text", "") or "").strip()
-        # The current iteration's reasoning is normally already present in
-        # `messages` (it was appended before this guard ran); append it only if
-        # it is genuinely absent, so the dump has no duplicated block.
-        if current and (not entries or entries[-1].strip() != current):
-            entries.append(current)
-        if not entries:
+        if not session_dir or not entries:
             return None
 
         parts: list[str] = [
             "# Session reasoning log (auto-written by the harness)",
             "",
-            "Written immediately BEFORE a post-edit far-end reminder was emitted.",
+            trigger_line,
             "Purpose: the reminder asks you to point at the turn where each",
             "decision was made. This file is where that reasoning is, in order,",
             "so the recall is a read instead of a guess.",
@@ -130,7 +133,6 @@ def _write_thinking_dump(session_dir: str, ctx: GuardContext,
             "- the file may be large: locate an entry by keyword with",
             "  thinking_search(query='...') and read ONE entry at a time,",
             "  instead of reading the whole file",
-            f"- written because this file was just edited: {trigger_path}",
             "",
         ]
         for i, text in enumerate(entries, 1):
@@ -149,6 +151,28 @@ def _write_thinking_dump(session_dir: str, ctx: GuardContext,
         return path
     except Exception:
         return None
+
+
+def _write_thinking_dump(session_dir: str, ctx: GuardContext,
+                         trigger_path: str) -> str | None:
+    """Post-edit trigger: materialise this session's reasoning next to the
+    session, return the path.
+
+    Returns None on ANY failure or when there is no reasoning to write — the
+    caller then emits the ordinary inject. Never raises.
+    """
+    entries = _iter_history_thinking(ctx.messages)
+    current = (getattr(ctx, "thinking_text", "") or "").strip()
+    # The current iteration's reasoning is normally already present in
+    # `messages` (it was appended before this guard ran); append it only if
+    # it is genuinely absent, so the dump has no duplicated block.
+    if current and (not entries or entries[-1].strip() != current):
+        entries.append(current)
+    return write_thinking_dump(
+        session_dir, entries,
+        f"Written immediately BEFORE a post-edit far-end reminder was emitted "
+        f"for this file: {trigger_path}",
+    )
 
 # Per-extension far-end verification commands. The placeholder <path> is replaced
 # with the actual edited path. These are the cheapest validity checks per type;
