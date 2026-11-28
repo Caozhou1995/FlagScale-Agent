@@ -340,36 +340,37 @@ class AnthropicProvider(LLMProvider):
             else:
                 out.append(msg)
                 continue
-            # Keep a REAL reasoning block when it is verifiably the endpoint's
-            # own: a non-empty signature is the proof (see
-            # format_assistant_message for the measured event ordering — the
-            # signature arrives as one trailing signature_delta). MEASURED
-            # 2026-11-28 on flagos, the backend the write-compressor trial ran
-            # on: turn-1 blocks carry thinking_len 11723/14621 with a 32-hex-char
-            # signature, and replaying that full block returns 200.
+            # Keep every reasoning block that CARRIES TEXT — signed or not.
+            # The signature is preserved when present and left as "" when the
+            # endpoint never issued one; it is never fabricated.
             #
-            # This REVERSES the earlier strip-all rule below, and the reversal
-            # is evidence-driven, not a re-reading of the old note: the old
-            # N=4 measurement mixed two different populations — blocks whose
-            # signatures came from a DIFFERENT model/session (not trusted, and
-            # a genuine rejection source) and blocks from this same session
-            # (valid). Dropping only the untrustworthy ones separates them.
-            # The vendor doc says to replay the full content array verbatim;
-            # keeping valid blocks is what satisfies it, and small stray-block
-            # risk is no reason to delete what the authority requires.
+            # REVERSES the earlier "keep only if signed" rule, on evidence:
+            #   * MEASURED 2026-11-28 (tokenhub + flagos, three arms): replaying
+            #     {"type":"thinking","thinking":<real text>,"signature":""}
+            #     returns HTTP 200 — identical to a real or fake signature. So
+            #     the rejection this rule was defending against does not exist
+            #     on either endpoint.
+            #   * tokenhub emits NO signature_delta at all (n=5), so "unsigned
+            #     means untrustworthy" deleted 100% of its reasoning on every
+            #     replay — the very erasure bug this file must not have.
+            #   * The old N=4 note mixed two populations: blocks signed by a
+            #     DIFFERENT model/session (genuinely suspect) and blocks from
+            #     this same session. Text presence separates them cleanly, and
+            #     the vendor doc asks for the full content array to be replayed.
             kept = [b for b in blocks
                     if not (isinstance(b, dict)
                             and b.get("type") in ("thinking", "redacted_thinking"))]
             valid = [b for b in blocks
                      if isinstance(b, dict)
                      and b.get("type") == "thinking"
-                     and (b.get("signature") or "").strip()]
+                     and (b.get("thinking") or "").strip()]
+            for b in valid:
+                b["signature"] = b.get("signature") or ""
             blocks = valid + kept
-            # Only when NOTHING valid survives — an evicted turn (placeholder
-            # string content) or a turn built text-only — insert one empty
-            # block so a gateway that demands the reasoning field still gets it.
-            # A real-text/empty-signature block is never emitted: that shape
-            # asserts a provenance it does not have.
+            # Only when NO reasoning block with text survives — an evicted turn
+            # (placeholder string content) or a turn built text-only — insert
+            # one empty block so a gateway that demands the reasoning field
+            # still gets it. This is the FALLBACK, not the rule.
             if not valid:
                 blocks.insert(0, {"type": "thinking", "thinking": "",
                                   "signature": ""})
@@ -1078,31 +1079,34 @@ class AnthropicProvider(LLMProvider):
 
     def format_assistant_message(self, response: Dict[str, Any]) -> Dict[str, Any]:
         content_blocks = []
-        # A thinking block is only VALID when it carries the signature the
-        # endpoint issued for it. MEASURED 2026-11-28 (flagos, the backend the
-        # write-compressor trial actually ran on): the signature arrives as a
-        # SINGLE `signature_delta` at the END of the thinking block, after all
-        # the `thinking_delta`s. Anything that ends the stream early therefore
-        # keeps the text and loses the signature.
+        # A thinking block is persisted whenever there is real thinking TEXT.
+        # The signature is carried when the endpoint issued one, and left as ""
+        # when it did not — NEVER fabricated.
         #
-        # That is exactly what the runtime thinking cap does: agent.py breaks
-        # out of the event loop on a cap hit, so the trailing signature_delta is
-        # never consumed and `response["signature"]` is None while
-        # `response["thinking"]` holds the full real text. Persisting that pair
-        # produced the shape observed in that trial's conversation.json — five
-        # thinking blocks of 47791/63619/307/178/6154 chars, EVERY ONE with
-        # signature == "". A real-text/empty-signature block is the worst of the
-        # available shapes: the vendor documents that the full content array
-        # should be replayed verbatim, so an unverifiable block asserts a
-        # provenance it does not have.
+        # MEASURED 2026-11-28: the signature arrives as a SINGLE
+        # `signature_delta` at the END of the thinking block, after all the
+        # `thinking_delta`s. So anything that ends the stream early (the runtime
+        # thinking cap in agent.py `break`s out) keeps the text and loses the
+        # signature.
         #
-        # Dropping it loses nothing: when the cap fires, the kernel re-injects
-        # the accumulated reasoning as a <previous_reasoning> user message
-        # (kernel.py, was_thinking_capped / was_reasoning_only branches), so the
-        # text still reaches the model through a channel that does not pretend
-        # to be a signed thinking block.
-        sig = response.get("signature")
-        if response.get("thinking") and sig:
+        # WHY THE EARLIER RULE ("only persist when signed") WAS WRONG — both of
+        # its premises were measured false:
+        #   1. It claimed dropping lost nothing, because the kernel re-injects
+        #      the reasoning via <previous_reasoning>. That re-injection exists
+        #      ONLY on the cap branch (kernel.py:1041/1083/1099/1739) and
+        #      carries a TRUNCATED tail, not the full stream. On the ordinary
+        #      non-cap path (and on every endpoint that never issues a
+        #      signature) nothing re-injects it, so the thought was destroyed.
+        #   2. It assumed a real-text/empty-signature block risks a rejection.
+        #      MEASURED on both tokenhub and flagos: replaying
+        #      {"type":"thinking","thinking":<real text>,"signature":""}
+        #      returns HTTP 200 — same as with a real or fake signature.
+        # tokenhub never emits a signature at all (n=5, no signature_delta
+        # event), so under the old rule its thinking was dropped 100% of the
+        # time. Content is never discarded; only the signature is left empty,
+        # which is the honest report of "the endpoint did not sign this".
+        sig = response.get("signature") or ""
+        if response.get("thinking"):
             content_blocks.append({
                 "type": "thinking",
                 "thinking": response["thinking"],

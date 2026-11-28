@@ -1,26 +1,29 @@
-"""Thinking blocks must go on the wire ONLY when the endpoint signed them.
+"""Thinking blocks must never be ERASED by the harness, and never FABRICATED.
 
-MEASURED 2026-11-28 on flagos (the backend the write-compressor trial ran on):
-the signature arrives as ONE trailing ``signature_delta``, after every
-``thinking_delta``. So any early exit from the event loop — notably the runtime
-thinking cap in agent.py, which ``break``s out — keeps the real thinking TEXT
-and loses the SIGNATURE.
+This file replaces the earlier contract ("a thinking block goes on the wire only
+when the endpoint signed it"). That rule was measured wrong on BOTH of its
+premises on 2026-11-28:
 
-Two defects followed from that, and both are pinned here:
+  1. "Dropping it loses nothing — the kernel re-injects the reasoning via
+     <previous_reasoning>."  False. That re-injection exists ONLY on the runtime
+     cap branch (kernel.py:1041/1083/1099/1739) and carries a TRUNCATED tail,
+     not the full stream. On the ordinary path nothing re-injects it.
+  2. "A real-text/empty-signature block risks a rejection."  False, measured.
+     Replaying {"type":"thinking","thinking":<real text>,"signature":""} returns
+     HTTP 200 on BOTH tokenhub and flagos — identical to a real or fake
+     signature (three arms, all 200).
 
-  BUG A (write side of the response): ``format_assistant_message`` persisted
-  ``{"type":"thinking","thinking":<47791 real chars>,"signature":""}``. That
-  trial's conversation.json carries five such blocks (47791 / 63619 / 307 / 178
-  / 6154 chars) and every one has signature == "". A real-text/empty-signature
-  block asserts a provenance it does not have.
+The old rule had a live victim: tokenhub emits NO signature_delta at all
+(n=5, no such event in the stream), so "unsigned means drop" destroyed 100% of
+its reasoning on every persist and every replay.
 
-  BUG B (replay side): ``_passthrough_thinking`` DELETED every real reasoning
-  block and substituted an empty one, discarding the endpoint's own signed
-  blocks. The vendor doc for thinking-mode tool continuation asks for the full
-  assistant content array to be replayed as-is.
+New contract, split into two independent assertions:
+  A. CONTENT IS NEVER DISCARDED — real thinking text is persisted and replayed.
+  B. THE SIGNATURE IS NEVER FABRICATED — an endpoint that issued none yields
+     signature=="", and a real signature is carried verbatim.
 
-Both are checked with the CONSUMER's own comparison where one exists: the
-replayed block list is asserted field by field, not by stringification.
+Both are checked field by field on the consumer's own block objects (the
+replayed block list / the formatted message), not by stringification.
 """
 
 from flagscale_agent.react.providers.anthropic_provider import AnthropicProvider
@@ -31,135 +34,152 @@ def _provider(base_url="https://api.flagos.net"):
                              base_url=base_url)
 
 
-# ── BUG A: format_assistant_message ────────────────────────────────────────
+def _blocks(msg):
+    return msg["content"] if isinstance(msg["content"], list) else []
 
-def test_capped_thinking_without_signature_is_not_persisted_as_a_block():
-    """The cap-truncated response: real text, no signature -> NO thinking block.
 
-    This is the exact object the live trial produced. Persisting it as a
-    thinking block shipped an unsigned claim of endpoint provenance.
+def _thinking(msg):
+    return [b for b in _blocks(msg) if b.get("type") == "thinking"]
+
+
+# ── A. content is never discarded ─────────────────────────────────────────
+
+def test_unsigned_thinking_is_persisted_not_dropped():
+    """The tokenhub shape: real thinking text, no signature at all.
+
+    Ablation: the pre-fix code required a non-empty signature and emitted no
+    thinking block here, erasing the text.
+    """
+    resp = {"thinking": "real reasoning text", "signature": "",
+            "content": "the answer", "tool_calls": None}
+    blocks = _thinking(_provider().format_assistant_message(resp))
+
+    assert len(blocks) == 1, "the thought must survive even unsigned"
+    assert blocks[0]["thinking"] == "real reasoning text"
+    assert {"type": "text", "text": "the answer"} in _blocks(
+        _provider().format_assistant_message(resp))
+
+
+def test_capped_thinking_without_signature_is_still_persisted():
+    """The exact object the live trial produced: cap `break`s before the
+    trailing signature_delta, so signature is None while thinking is the full
+    real stream. The text must be kept (only the signature is honestly empty).
     """
     resp = {"thinking": "x" * 47791, "signature": None,
             "content": None, "tool_calls": [{"id": "t1", "name": "n", "arguments": {}}]}
     msg = _provider().format_assistant_message(resp)
+    types = [b["type"] for b in _blocks(msg)]
 
-    types = [b["type"] for b in msg["content"]]
-    assert "thinking" not in types, (
-        "an unsigned thinking block must never be persisted; the text is "
-        "re-delivered by the kernel's <previous_reasoning> channel instead")
-    assert types == ["tool_use"], "the rest of the turn must be untouched"
+    assert types == ["thinking", "tool_use"], "capped thought text must survive"
+    assert _thinking(msg)[0]["thinking"] == "x" * 47791
 
 
-def test_signed_thinking_round_trips_verbatim():
-    """Positive bound: a block the endpoint signed survives unchanged."""
-    resp = {"thinking": "real reasoning", "signature": "a642a99f4afa4f338c92e7ec8e2ee8ae",
-            "content": "the answer", "tool_calls": None}
-    msg = _provider().format_assistant_message(resp)
-
-    assert msg["content"][0] == {
-        "type": "thinking",
-        "thinking": "real reasoning",
-        "signature": "a642a99f4afa4f338c92e7ec8e2ee8ae",
-    }, "a signed block must be carried verbatim, signature included"
-    assert msg["content"][1] == {"type": "text", "text": "the answer"}
-
-
-def test_empty_signature_string_is_treated_as_unsigned():
-    """'' and None are the same fact: no signature.
-
-    Ablation guard: a check written as `"signature" in response` would pass the
-    live trial's bytes (the key exists, holding "") and read green while
-    shipping the defect.
-    """
-    for sig in ("", None):
-        msg = _provider().format_assistant_message(
-            {"thinking": "t", "signature": sig, "content": "c", "tool_calls": None})
-        assert [b["type"] for b in msg["content"]] == ["text"], sig
-
-
-def test_thinking_absent_entirely_leaves_turn_unchanged():
-    """A turn with no thinking at all keeps its old shape exactly."""
-    msg = _provider().format_assistant_message(
-        {"content": "c", "tool_calls": None})
-    assert msg["content"] == [{"type": "text", "text": "c"}]
-
-
-# ── BUG B: _passthrough_thinking ──────────────────────────────────────────
-
-def _replay(provider, content):
-    return provider._passthrough_thinking(
-        [{"role": "user", "content": "q"},
-         {"role": "assistant", "content": content}])
-
-
-def test_replay_keeps_a_signed_block_instead_of_replacing_it():
-    """The endpoint's own signed block must survive replay verbatim.
+def test_replay_keeps_an_unsigned_block_with_its_text():
+    """Replay must not swap real text for an empty slot.
 
     Ablation: the pre-fix implementation returned {"thinking":"","signature":""}
-    here and the two assertions below go red.
+    here — the erasure bug.
     """
-    signed = {"type": "thinking", "thinking": "why I chose LZ77",
-              "signature": "970ff9bfd8284d3c9e4531eaebfdf3a0"}
-    out = _replay(_provider(), [signed, {"type": "tool_use", "id": "t", "name": "n", "input": {}}])
+    prov = _provider()
+    out = prov._passthrough_thinking([
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "why I chose LZ77", "signature": ""},
+            {"type": "tool_use", "id": "t", "name": "n", "input": {}}]}])
 
     blocks = out[1]["content"]
     kept = [b for b in blocks if b.get("type") == "thinking"]
     assert len(kept) == 1, "exactly one reasoning slot"
     assert kept[0]["thinking"] == "why I chose LZ77", "real text must survive"
-    assert kept[0]["signature"] == "970ff9bfd8284d3c9e4531eaebfdf3a0", \
-        "the signature is the proof of provenance; dropping it is the bug"
 
 
-def test_replay_drops_an_unsigned_block_and_falls_back_to_empty():
-    """Unsigned real text is not replayable; the gateway still gets a slot."""
-    out = _replay(_provider(), [
-        {"type": "thinking", "thinking": "x" * 47791, "signature": ""},
-        {"type": "text", "text": "answer"},
-    ])
-    blocks = out[1]["content"]
-    thinking = [b for b in blocks if b.get("type") == "thinking"]
-    assert thinking == [{"type": "thinking", "thinking": "", "signature": ""}], \
-        "unsigned text is dropped, one empty slot satisfies the gateway"
-    assert {"type": "text", "text": "answer"} in blocks, "real answer untouched"
+# ── B. the signature is never fabricated ──────────────────────────────────
+
+def test_signature_is_empty_when_the_endpoint_issued_none():
+    """'' and None are the same fact: no signature. Never invent one."""
+    for sig in ("", None):
+        msg = _provider().format_assistant_message(
+            {"thinking": "t", "signature": sig, "content": "c", "tool_calls": None})
+        blocks = _thinking(msg)
+        assert len(blocks) == 1, sig
+        assert blocks[0]["signature"] == "", sig
 
 
-def test_replay_synthesizes_a_slot_when_the_turn_has_none():
-    """A text-only (e.g. evicted/placeholder) turn still gains one slot."""
+def test_real_signature_is_carried_verbatim():
+    """Positive bound: a block the endpoint signed survives unchanged."""
+    sig = "a642a99f4afa4f338c92e7ec8e2ee8ae"
+    msg = _provider().format_assistant_message(
+        {"thinking": "real reasoning", "signature": sig,
+         "content": "the answer", "tool_calls": None})
+    assert msg["content"][0] == {"type": "thinking", "thinking": "real reasoning",
+                                 "signature": sig}
+    assert msg["content"][1] == {"type": "text", "text": "the answer"}
+
+
+def test_replay_keeps_a_signed_block_verbatim():
+    signed = {"type": "thinking", "thinking": "why I chose LZ77",
+              "signature": "970ff9bfd8284d3c9e4531eaebfdf3a0"}
+    out = _replay(_provider(), [signed,
+                                {"type": "tool_use", "id": "t", "name": "n", "input": {}}])
+    kept = [b for b in out[1]["content"] if b.get("type") == "thinking"]
+    assert kept == [signed], "a signed block must round-trip field for field"
+
+
+# ── C. fallback slot only when there is no text at all ────────────────────
+
+def test_replay_synthesizes_a_slot_only_when_no_text_exists():
+    """A text-only (e.g. evicted/placeholder) turn still gains one slot, so a
+    gateway demanding the reasoning field keeps working."""
     out = _replay(_provider(), "evicted assistant turn placeholder")
     blocks = out[1]["content"]
     assert blocks[0] == {"type": "thinking", "thinking": "", "signature": ""}
     assert blocks[1] == {"type": "text", "text": "evicted assistant turn placeholder"}
 
 
-def test_official_endpoint_is_untouched():
-    """Byte-identical for api.anthropic.com: the whole routine must no-op.
+def test_empty_thinking_block_does_not_suppress_the_fallback():
+    """An explicitly EMPTY thinking block carries no text -> fallback slot."""
+    out = _replay(_provider(), [{"type": "thinking", "thinking": "", "signature": ""},
+                                {"type": "text", "text": "answer"}])
+    th = [b for b in out[1]["content"] if b.get("type") == "thinking"]
+    assert th == [{"type": "thinking", "thinking": "", "signature": ""}]
+    assert {"type": "text", "text": "answer"} in out[1]["content"]
 
-    Guards against 'fix the third-party path' silently rewriting official
-    request bytes, which neither needs nor tolerates a synthesized block.
-    """
+
+def test_thinking_absent_entirely_leaves_turn_unchanged():
+    msg = _provider().format_assistant_message({"content": "c", "tool_calls": None})
+    assert msg["content"] == [{"type": "text", "text": "c"}]
+
+
+def test_official_endpoint_is_untouched():
+    """Byte-identical for api.anthropic.com: the whole routine must no-op."""
     msgs = [{"role": "assistant", "content": [
         {"type": "thinking", "thinking": "t", "signature": ""}]}]
     out = _provider("https://api.anthropic.com")._passthrough_thinking(msgs)
     assert out is msgs, "official path must return the caller's object unchanged"
 
 
-# ── the two bugs together: the live trial's actual bytes ──────────────────
+# ── D. the two properties together, over the live trial's shape ───────────
 
-def test_live_trial_shape_never_reaches_the_wire():
-    """End-to-end over the shape the trial produced.
-
-    A capped turn (real text, no signature) is persisted WITHOUT a thinking
-    block, so replay has nothing unsigned to carry — and the request that goes
-    out contains no real-text/empty-signature block anywhere.
-    """
+def test_live_trial_shape_survives_persist_and_replay():
+    """End-to-end: a capped turn is persisted WITH its text, replayed WITH its
+    text, and never claims a signature it does not have."""
     prov = _provider()
     capped = prov.format_assistant_message(
         {"thinking": "y" * 6154, "signature": None,
          "content": None, "tool_calls": [{"id": "t", "name": "n", "arguments": {}}]})
     out = prov._passthrough_thinking([capped])
 
+    found = []
     for msg in out:
-        for b in msg["content"]:
+        for b in (msg["content"] if isinstance(msg["content"], list) else []):
             if isinstance(b, dict) and b.get("type") == "thinking":
-                assert not (b.get("thinking") and not (b.get("signature") or "").strip()), \
-                    "real thinking text must never ride on an empty signature"
+                found.append(b)
+    assert len(found) == 1, "the turn's reasoning must still be on the wire"
+    assert found[0]["thinking"] == "y" * 6154, "text preserved through replay"
+    assert found[0]["signature"] == "", "unsigned stays unsigned — no fabrication"
+
+
+def _replay(provider, content):
+    return provider._passthrough_thinking(
+        [{"role": "user", "content": "q"},
+         {"role": "assistant", "content": content}])
